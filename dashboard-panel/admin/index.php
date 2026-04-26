@@ -7312,7 +7312,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                 case 'settings':
                                     ?>
-                                    <div class="admin-settings-access">
+                                    <div class="admin-settings-access d-none">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></h3>
                                             <p><?php echo admin_e(admin_t($messages, 'settings_site_intro', 'Update the public page name, URL, support email and basic SEO data used across the service.')); ?></p>
