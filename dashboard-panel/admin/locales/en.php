@@ -412,6 +412,8 @@ return [
     'settings_referrals_enabled_help' => 'If OFF, referral links and the referrals page are hidden and new registrations are not attached to referrers.',
     'settings_apps_page_enabled' => 'Apps page',
     'settings_apps_page_enabled_help' => 'If OFF, the Apps page and Apps button are hidden for users.',
+    'settings_customer_type_switch_enabled' => 'Homepage client/reseller test switch',
+    'settings_customer_type_switch_enabled_help' => 'If OFF, the user test switch for changing the account mode between client and reseller is hidden on the homepage.',
     'settings_application_instructions_enabled' => 'Application instructions',
     'settings_application_instructions_enabled_help' => 'If OFF, Smart IPTV, OTT Player and NewLook guides are hidden. Payment instructions remain visible.',
     'settings_history_cleanup_enabled' => 'Auto-clean activity history after 12 months',

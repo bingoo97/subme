@@ -41,6 +41,7 @@ Active user-facing emails:
   - sent when subscription becomes active
 - `live-chat-customer-notify`
   - sent only when admin writes and customer is offline
+  - 15-minute cooldown per conversation recipient
 - `news-broadcast`
   - sent when admin creates a new active public/customer news entry
   - should stay generic and point customer to `/news`
@@ -50,6 +51,8 @@ Active user-facing emails:
 Support/admin emails:
 - `live-chat-admin-notify`
   - sent when customer writes on live chat
+  - skipped when at least one active admin is currently online
+  - 15-minute cooldown per customer inbox burst
 - `support-payment-request-notify`
   - sent when customer starts the payment process
   - used as the lightweight “customer wants to buy / started payment” signal
@@ -71,6 +74,7 @@ Anti-spam rules:
   - `X-Auto-Response-Suppress: All`
 - queue deduplication prevents repeated notifications in short windows
 - customer live-chat email is skipped when presence says customer is online
+- admin live-chat email is skipped when admin presence says someone from the active admin team is online
 
 Operational note:
 - real deliverability still depends on valid SMTP plus SPF, DKIM and DMARC for the sending domain

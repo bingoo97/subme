@@ -412,6 +412,8 @@ return [
     'settings_referrals_enabled_help' => 'Jeśli OFF, reflinki i podstrona poleceń są ukryte, a nowe rejestracje nie są przypisywane do polecających.',
     'settings_apps_page_enabled' => 'Podstrona aplikacje',
     'settings_apps_page_enabled_help' => 'Jeśli OFF, podstrona Aplikacje i przycisk Aplikacje znikają z widoku usera.',
+    'settings_customer_type_switch_enabled' => 'Testowy przełącznik client/reseller na homepage',
+    'settings_customer_type_switch_enabled_help' => 'Jeśli OFF, przełącznik testowy zmiany trybu konta między client i reseller jest ukryty na stronie głównej usera.',
     'settings_application_instructions_enabled' => 'Instrukcje aplikacji',
     'settings_application_instructions_enabled_help' => 'Jeśli OFF, instrukcje Smart IPTV, OTT Player i NewLook są ukryte. Instrukcje płatności pozostają widoczne.',
     'settings_history_cleanup_enabled' => 'Auto-czyszczenie historii po 12 miesiącach',

@@ -998,6 +998,15 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('app_settings', 'reseller_group_chat_limit');
     }
+
+    if (!schema_column_exists($db, 'app_settings', 'customer_type_switch_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN customer_type_switch_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER apps_page_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'customer_type_switch_enabled');
+    }
 }
 
 function app_ensure_customer_runtime_columns(Mysql_ks $db): void
@@ -1125,6 +1134,7 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['contact_form_enabled'] = (int)($settings['contact_form_enabled'] ?? 1);
     $settings['referrals_enabled'] = (int)($settings['referrals_enabled'] ?? 1);
     $settings['apps_page_enabled'] = (int)($settings['apps_page_enabled'] ?? 1);
+    $settings['customer_type_switch_enabled'] = (int)($settings['customer_type_switch_enabled'] ?? 0);
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
     $settings['history_cleanup_enabled'] = (int)($settings['history_cleanup_enabled'] ?? 0);
     $settings['payments_cleanup_enabled'] = (int)($settings['payments_cleanup_enabled'] ?? 0);
@@ -2479,6 +2489,10 @@ function app_queue_live_chat_admin_notification(
     string $messageBody,
     ?string $attachmentPath = null
 ): array {
+    if (app_live_chat_admins_are_currently_online($db)) {
+        return ['ok' => true, 'message' => 'An administrator is online. Email skipped.', 'skipped' => true];
+    }
+
     $settings = app_fetch_settings($db);
     $recipientEmail = app_email_support_recipient($settings);
     if ($recipientEmail === '') {
@@ -2502,7 +2516,7 @@ function app_queue_live_chat_admin_notification(
         ],
         $customerId,
         null,
-        180
+        app_live_chat_email_cooldown_seconds()
     );
 }
 
@@ -2539,8 +2553,53 @@ function app_queue_live_chat_customer_notification_if_offline(
         ],
         $customerId,
         null,
-        180
+        app_live_chat_email_cooldown_seconds()
     );
+}
+
+function app_live_chat_email_cooldown_seconds(): int
+{
+    return 900;
+}
+
+function app_admin_last_seen_is_online(string $lastSeenAt = '', ?int $currentTime = null): bool
+{
+    $currentTime = $currentTime ?? time();
+    $lastSeenAt = trim($lastSeenAt);
+    if ($lastSeenAt === '') {
+        return false;
+    }
+
+    $lastSeenTimestamp = strtotime($lastSeenAt);
+    if ($lastSeenTimestamp === false) {
+        return false;
+    }
+
+    return max(0, $currentTime - $lastSeenTimestamp) <= 180;
+}
+
+function app_live_chat_admins_are_currently_online(Mysql_ks $db): bool
+{
+    if (!schema_object_exists($db, 'admin_users')) {
+        return false;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT last_login_at
+         FROM admin_users
+         WHERE status = 'active'
+         ORDER BY COALESCE(last_login_at, '1970-01-01 00:00:00') DESC, id ASC
+         LIMIT 10"
+    );
+
+    $currentTime = time();
+    foreach ($rows as $row) {
+        if (app_admin_last_seen_is_online((string)($row['last_login_at'] ?? ''), $currentTime)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function app_chat_primary_admin_id(Mysql_ks $db): int

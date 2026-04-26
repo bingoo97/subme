@@ -2601,6 +2601,143 @@ CONTENT
 	color:#fff;
 }
 
+.home-role-switch{
+	padding: 5px;
+}
+
+.home-role-switch .alert{
+	margin: 0 0 12px;
+	border-radius: 1rem;
+}
+
+.home-role-switch__form{
+	margin: 0;
+}
+
+.home-role-switch__card{
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap: 18px;
+	padding: 18px 20px;
+	border: 1px solid #eeeeee;
+	border-radius: 1rem;
+	background: #ffffff;
+}
+
+.home-role-switch__copy{
+	min-width: 0;
+}
+
+.home-role-switch__copy strong{
+	display:block;
+	font-family:'Poppins', sans-serif;
+	font-size: 17px;
+	font-weight: 600;
+	color:#111827;
+	margin: 0 0 6px;
+}
+
+.home-role-switch__copy p{
+	margin: 0;
+	font-size: 14px;
+	color:#4b5563;
+}
+
+.home-role-switch__current{
+	font-weight: 700;
+	color:#111827;
+}
+
+.home-role-switch__meta{
+	display:flex;
+	flex-wrap:wrap;
+	gap: 12px;
+	margin-top: 10px;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: .04em;
+	text-transform: uppercase;
+	color:#6b7280;
+}
+
+.home-role-switch__control{
+	position:relative;
+	margin: 0;
+	cursor:pointer;
+}
+
+.home-role-switch__control input{
+	position:absolute;
+	opacity:0;
+	pointer-events:none;
+}
+
+.home-role-switch__toggle{
+	display:inline-flex;
+	align-items:center;
+	gap: 10px;
+	user-select:none;
+}
+
+.home-role-switch__toggle-text{
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: .08em;
+	color:#6b7280;
+}
+
+.home-role-switch__toggle-track{
+	position:relative;
+	display:block;
+	width: 74px;
+	height: 38px;
+	border-radius: 999px;
+	background:#d7dce2;
+	transition: background-color .2s ease;
+	box-shadow: inset 0 0 0 1px rgba(17, 24, 39, .08);
+}
+
+.home-role-switch__toggle-thumb{
+	position:absolute;
+	top: 4px;
+	left: 4px;
+	width: 30px;
+	height: 30px;
+	border-radius: 50%;
+	background:#ffffff;
+	box-shadow: 0 6px 18px rgba(17, 24, 39, .18);
+	transition: transform .2s ease;
+}
+
+.home-role-switch__control input:checked + .home-role-switch__toggle .home-role-switch__toggle-track{
+	background:#183331;
+}
+
+.home-role-switch__control input:checked + .home-role-switch__toggle .home-role-switch__toggle-thumb{
+	transform: translateX(36px);
+}
+
+.home-role-switch__control input:checked + .home-role-switch__toggle .home-role-switch__toggle-text--on{
+	color:#111827;
+}
+
+.home-role-switch__control input:not(:checked) + .home-role-switch__toggle .home-role-switch__toggle-text--off{
+	color:#111827;
+}
+
+@media (max-width: 767px){
+	.home-role-switch__card{
+		flex-direction:column;
+		align-items:flex-start;
+		padding: 16px;
+	}
+
+	.home-role-switch__toggle{
+		align-self:flex-start;
+	}
+}
+
 @keyframes newsAlertPulse{
 	0%{
 		border-color:#d7182a;

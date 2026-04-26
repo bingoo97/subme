@@ -239,6 +239,50 @@ $smarty->assign('site', $site);
 $smarty->assign('today', $currentDate);
 $smarty->assign('time_s', $currentTimestamp);
 
+if (
+    !empty($user['logged'])
+    && app_uses_v2_schema($db)
+    && !empty($settings['customer_type_switch_enabled'])
+    && isset($_POST['customer_type_switch_submit'])
+) {
+    if (!app_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
+    } else {
+        $newCustomerType = isset($_POST['customer_type_mode']) && (string)$_POST['customer_type_mode'] === 'reseller'
+            ? 'reseller'
+            : 'client';
+
+        app_ensure_customer_runtime_columns($db);
+        $updatedCustomerType = $db->update_using_id(
+            ['customer_type'],
+            [$newCustomerType],
+            'customers',
+            (int)($user['id'] ?? 0)
+        );
+
+        if ($updatedCustomerType) {
+            $user['customer_type'] = $newCustomerType;
+            $user['is_reseller'] = $newCustomerType === 'reseller' ? 1 : 0;
+            $user['storefront_product_type'] = app_customer_product_type($user);
+
+            $modeLabelKey = $newCustomerType === 'reseller'
+                ? 'customer_type_switch_mode_reseller'
+                : 'customer_type_switch_mode_client';
+
+            $smarty->assign(
+                'alert',
+                localization_translate(
+                    $t,
+                    'customer_type_switch_saved',
+                    ['mode' => localization_translate($t, $modeLabelKey)]
+                )
+            );
+        } else {
+            $smarty->assign('alert_error', localization_translate($t, 'customer_type_switch_save_error'));
+        }
+    }
+}
+
 $user['lang_code'] = $currentLocale;
 $user = tenant_normalize_user_record($user);
 $reseller = tenant_normalize_reseller_record($reseller);

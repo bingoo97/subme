@@ -145,6 +145,11 @@ function admin_apps_page_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'apps_page_enabled', true);
 }
 
+function admin_customer_type_switch_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'customer_type_switch_enabled', false);
+}
+
 function admin_application_instructions_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'application_instructions_enabled', true);
@@ -308,7 +313,27 @@ function admin_load_session_user(Mysql_ks $db): ?array
         return null;
     }
 
+    admin_touch_session_activity($db, (int)$row['id']);
+    $row['last_login_at'] = date('Y-m-d H:i:s');
+
     return $row;
+}
+
+function admin_touch_session_activity(Mysql_ks $db, int $adminUserId): void
+{
+    if ($adminUserId <= 0 || !schema_object_exists($db, 'admin_users')) {
+        return;
+    }
+
+    $nowTs = time();
+    $lastTouchTs = isset($_SESSION['admin_last_seen_touch_ts']) ? (int)$_SESSION['admin_last_seen_touch_ts'] : 0;
+    if ($lastTouchTs > 0 && ($nowTs - $lastTouchTs) < 60) {
+        return;
+    }
+
+    $now = date('Y-m-d H:i:s', $nowTs);
+    $db->update_using_id(['last_login_at'], [$now], 'admin_users', $adminUserId);
+    $_SESSION['admin_last_seen_touch_ts'] = $nowTs;
 }
 
 function admin_request_ip(): string
@@ -916,6 +941,7 @@ function admin_login(array $adminUser, string $locale): void
     session_regenerate_id(true);
     $_SESSION['admin_user_id'] = (int)$adminUser['id'];
     $_SESSION['admin_locale'] = admin_normalize_locale($locale);
+    $_SESSION['admin_last_seen_touch_ts'] = time();
 }
 
 function admin_logout(): void

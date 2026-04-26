@@ -36,7 +36,8 @@
 					 <div id="select_product"></div>
                      <div class="form-group">
 							 <div class="col-lg-6">
-								 <textarea class="form-control" name="note" rows="5" placeholder="{$t.orders_note|default:'Note'}"></textarea>
+								 <p class="mt-4">{$t.orders_note_label|default:'Provide additional information below'}</p>
+								 <textarea class="form-control" name="note" rows="5" placeholder="{$t.orders_note_placeholder|default:'e.g. provide MAC or application name ...'}"></textarea>
 								 <p class="text-muted mt-2" id="selected_product_price_note" style="display:none;"></p>
 							 </div>
 					 </div>

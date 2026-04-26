@@ -346,6 +346,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $contactFormEnabled = isset($_POST['contact_form_enabled']) ? 1 : 0;
         $referralsEnabled = isset($_POST['referrals_enabled']) ? 1 : 0;
         $appsPageEnabled = isset($_POST['apps_page_enabled']) ? 1 : 0;
+        $customerTypeSwitchEnabled = isset($_POST['customer_type_switch_enabled']) ? 1 : 0;
         $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
         $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
         $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
@@ -374,6 +375,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 'contact_form_enabled',
                 'referrals_enabled',
                 'apps_page_enabled',
+                'customer_type_switch_enabled',
                 'application_instructions_enabled',
                 'history_cleanup_enabled',
                 'payments_cleanup_enabled',
@@ -396,6 +398,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $contactFormEnabled,
                 $referralsEnabled,
                 $appsPageEnabled,
+                $customerTypeSwitchEnabled,
                 $applicationInstructionsEnabled,
                 $historyCleanupEnabled,
                 $paymentsCleanupEnabled,
@@ -4244,9 +4247,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?>">
                                                                 <div class="d-flex align-items-center gap-2">
-                                                                    <?php if (!empty($row['provider_logo_url'])): ?>
-                                                                        <img src="/<?php echo admin_e((string)($row['provider_logo_url'] ?? '')); ?>" alt="<?php echo admin_e((string)($row['provider_name'] ?? '')); ?>" class="admin-provider-logo" style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover;">
-                                                                    <?php endif; ?>
                                                                     <strong style="color: <?php echo admin_e($providerColor); ?>;"><?php echo admin_e($providerName); ?></strong>
                                                                 </div>
                                                             </td>
@@ -7545,6 +7545,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-check-label" for="apps_page_enabled"><?php echo admin_e(admin_t($messages, 'settings_apps_page_enabled', 'Apps page ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_apps_page_enabled_help', 'If OFF, the Apps page and Apps button are hidden for users.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_type_switch_enabled" name="customer_type_switch_enabled"<?php echo admin_customer_type_switch_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="customer_type_switch_enabled"><?php echo admin_e(admin_t($messages, 'settings_customer_type_switch_enabled', 'Homepage client/reseller test switch')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_type_switch_enabled_help', 'If OFF, the user test switch for changing account mode between client and reseller is hidden on the homepage.')); ?></small>
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
