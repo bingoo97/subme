@@ -534,6 +534,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var body = q('[data-admin-chat-conversation-body]', root);
         var title = q('[data-admin-chat-conversation-title]', root);
         var status = q('[data-admin-chat-conversation-status]', root);
+        var conversationBadge = q('[data-admin-chat-conversation-badge]', root);
         var composerAlert = q('[data-admin-chat-alert]', root);
         var composerInput = q('[data-admin-chat-input]', root);
         var composerPreview = q('[data-admin-chat-link-preview]', root);
@@ -1402,9 +1403,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 title.textContent = payload.title || title.textContent;
                 title.setAttribute('href', activeConversationType === 'live_chat' && activeCustomerId > 0 ? '/admin/?page=live-chat&user_id=' + activeCustomerId : '#');
             }
+            if (conversationBadge) {
+                conversationBadge.textContent = root.getAttribute('data-group-chat-badge') || 'Admin group';
+                setHidden(conversationBadge, activeConversationType !== 'group_chat');
+            }
             if (status) {
+                var groupPresenceLabel = root.getAttribute('data-group-chat-status-label') || 'Group chat';
                 status.innerHTML = activeConversationType === 'group_chat'
-                    ? renderPresenceDot({ class_name: 'admin-chat-presence admin-chat-presence--online', label: 'Group chat' })
+                    ? renderPresenceDot({ class_name: 'admin-chat-presence admin-chat-presence--online', label: groupPresenceLabel })
                     : renderPresenceDot(payload.presence || null);
             }
             if (readonlyToggle) {

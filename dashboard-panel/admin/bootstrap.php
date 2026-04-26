@@ -2285,6 +2285,151 @@ function admin_customer_activity_rows(Mysql_ks $db, int $customerId, int $limit 
     );
 }
 
+function admin_customer_group_chat_rows(Mysql_ks $db, int $customerId, int $limit = 20): array
+{
+    chat_ensure_group_chat_runtime($db);
+    if (
+        $customerId <= 0
+        || $limit <= 0
+        || !schema_object_exists($db, 'support_conversations')
+        || !schema_object_exists($db, 'support_conversation_members')
+    ) {
+        return [];
+    }
+
+    $limit = max(1, min(100, $limit));
+    $participantKey = $db->escape(chat_participant_key_for_customer($customerId));
+
+    return $db->select_full_user(
+        "SELECT
+            support_conversation_members.id AS member_id,
+            support_conversation_members.conversation_id,
+            support_conversation_members.role_code,
+            support_conversation_members.invite_status,
+            support_conversation_members.responded_at,
+            support_conversation_members.joined_at,
+            support_conversation_members.left_at,
+            support_conversations.group_name,
+            support_conversations.subject,
+            support_conversations.status AS conversation_status,
+            support_conversations.is_group_read_only,
+            support_conversations.group_created_by_customer_id,
+            support_conversations.group_created_by_admin_user_id,
+            support_conversations.created_at,
+            support_conversations.updated_at,
+            inviter_customers.email AS invited_by_customer_email,
+            inviter_admins.login_name AS invited_by_admin_login,
+            inviter_admins.public_handle AS invited_by_admin_handle,
+            creator_customers.email AS created_by_customer_email,
+            creator_admins.login_name AS created_by_admin_login,
+            creator_admins.public_handle AS created_by_admin_handle
+         FROM support_conversation_members
+         INNER JOIN support_conversations
+            ON support_conversations.id = support_conversation_members.conversation_id
+         LEFT JOIN customers AS inviter_customers
+            ON inviter_customers.id = support_conversation_members.invited_by_customer_id
+         LEFT JOIN admin_users AS inviter_admins
+            ON inviter_admins.id = support_conversation_members.invited_by_admin_user_id
+         LEFT JOIN customers AS creator_customers
+            ON creator_customers.id = support_conversations.group_created_by_customer_id
+         LEFT JOIN admin_users AS creator_admins
+            ON creator_admins.id = support_conversations.group_created_by_admin_user_id
+         WHERE support_conversation_members.participant_key = '{$participantKey}'
+           AND support_conversations.conversation_type = 'group_chat'
+           AND support_conversation_members.invite_status IN ('pending', 'accepted')
+         ORDER BY
+            CASE support_conversation_members.invite_status
+                WHEN 'pending' THEN 0
+                ELSE 1
+            END,
+            COALESCE(support_conversation_members.responded_at, support_conversations.updated_at, support_conversations.created_at) DESC,
+            support_conversation_members.id DESC
+         LIMIT {$limit}"
+    );
+}
+
+function admin_customer_group_chat_invite_response(
+    Mysql_ks $db,
+    int $customerId,
+    int $conversationId,
+    string $decision,
+    int $adminUserId,
+    string $ipAddress = ''
+): array {
+    chat_ensure_group_chat_runtime($db);
+    if ($customerId <= 0 || $conversationId <= 0) {
+        return ['ok' => false, 'message' => 'Group invitation not found.'];
+    }
+
+    $participantKey = chat_participant_key_for_customer($customerId);
+    $member = chat_group_member_row($db, $conversationId, $participantKey);
+    if (!$member || (int)($member['customer_id'] ?? 0) !== $customerId || trim((string)($member['invite_status'] ?? '')) !== 'pending') {
+        return ['ok' => false, 'message' => 'Group invitation not found.'];
+    }
+
+    $normalizedDecision = strtolower(trim($decision)) === 'accept' ? 'accepted' : 'rejected';
+    $result = chat_update_group_invite_status($db, $conversationId, $participantKey, $normalizedDecision);
+    if (!empty($result['ok'])) {
+        $conversation = chat_group_conversation_row($db, $conversationId);
+        $title = chat_group_conversation_title((array)$conversation, 'Group chat');
+        admin_log_customer_and_admin(
+            $db,
+            $customerId,
+            $adminUserId,
+            $normalizedDecision === 'accepted' ? 'customer_group_chat_invite_accepted' : 'customer_group_chat_invite_rejected',
+            ($normalizedDecision === 'accepted' ? 'Accepted' : 'Rejected') . ' group invitation "' . $title . '" from admin profile.',
+            $ipAddress
+        );
+    }
+
+    return [
+        'ok' => !empty($result['ok']),
+        'message' => !empty($result['ok'])
+            ? ($normalizedDecision === 'accepted' ? 'Invitation accepted successfully.' : 'Invitation rejected successfully.')
+            : (string)($result['message'] ?? 'Unable to update the group invitation.'),
+    ];
+}
+
+function admin_customer_leave_group_chat(
+    Mysql_ks $db,
+    int $customerId,
+    int $conversationId,
+    int $adminUserId,
+    string $ipAddress = ''
+): array {
+    chat_ensure_group_chat_runtime($db);
+    if ($customerId <= 0 || $conversationId <= 0) {
+        return ['ok' => false, 'message' => 'Group conversation not found.'];
+    }
+
+    $participantKey = chat_participant_key_for_customer($customerId);
+    $member = chat_group_member_row($db, $conversationId, $participantKey);
+    if (!$member || (int)($member['customer_id'] ?? 0) !== $customerId || trim((string)($member['invite_status'] ?? '')) !== 'accepted') {
+        return ['ok' => false, 'message' => 'Group conversation not found.'];
+    }
+
+    $result = chat_leave_group_conversation($db, $conversationId, $participantKey);
+    if (!empty($result['ok'])) {
+        $conversation = chat_group_conversation_row($db, $conversationId);
+        $title = chat_group_conversation_title((array)$conversation, 'Group chat');
+        admin_log_customer_and_admin(
+            $db,
+            $customerId,
+            $adminUserId,
+            'customer_group_chat_left',
+            'Left group chat "' . $title . '" from admin profile.',
+            $ipAddress
+        );
+    }
+
+    return [
+        'ok' => !empty($result['ok']),
+        'message' => !empty($result['ok'])
+            ? 'Customer left the group successfully.'
+            : (string)($result['message'] ?? 'Unable to leave the group chat.'),
+    ];
+}
+
 function admin_delete_customer_wallet_assignment(
     Mysql_ks $db,
     int $customerId,
@@ -8222,7 +8367,6 @@ function admin_chat_conversation_row(Mysql_ks $db, int $conversationId): ?array
          FROM support_conversations
          LEFT JOIN customers ON customers.id = support_conversations.customer_id
          WHERE support_conversations.id = {$conversationId}
-           AND support_conversations.conversation_type = 'live_chat'
          LIMIT 1"
     );
 
@@ -8870,6 +9014,7 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
 
 function admin_render_chat_conversation_html(array $conversationRow, array $messageRows, array $messages): string
 {
+    $isGroupConversation = (string)($conversationRow['conversation_type'] ?? '') === 'group_chat';
     ob_start();
     ?>
     <div class="admin-chat-conversation" data-admin-chat-conversation data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>">
@@ -8895,6 +9040,16 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                         [],
                         admin_t($messages, 'chat_inbox_title', 'Live chat inbox')
                     );
+                    $senderBadgeLabel = '';
+                    $senderBadgeClass = '';
+                    if ($isGroupConversation) {
+                        $senderBadgeLabel = $isCustomer
+                            ? admin_t($messages, 'chat_group_sender_reseller_badge', 'Reseller')
+                            : admin_t($messages, 'chat_group_sender_admin_badge', 'Admin');
+                        $senderBadgeClass = $isCustomer
+                            ? 'admin-chat-conversation__sender-badge--reseller'
+                            : 'admin-chat-conversation__sender-badge--admin';
+                    }
                     $isRead = (int)($messageRow['is_read'] ?? 0) === 1;
                     $receiptClass = $isRead ? 'is-read' : 'is-pending';
                     $receiptIcon = $isRead ? 'bi bi-check2-all' : 'bi bi-check2';
@@ -8905,7 +9060,12 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     ?>
                     <div class="admin-chat-conversation__message <?php echo admin_e($bubbleClass); ?>" data-admin-chat-message data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
                         <div class="admin-chat-conversation__bubble">
-                            <div class="admin-chat-conversation__sender"><?php echo admin_e($senderLabel); ?></div>
+                            <div class="admin-chat-conversation__sender">
+                                <span class="admin-chat-conversation__sender-name"><?php echo admin_e($senderLabel); ?></span>
+                                <?php if ($senderBadgeLabel !== ''): ?>
+                                    <span class="admin-chat-conversation__sender-badge <?php echo admin_e($senderBadgeClass); ?>"><?php echo admin_e($senderBadgeLabel); ?></span>
+                                <?php endif; ?>
+                            </div>
                             <?php if ($attachmentPath !== ''): ?>
                                 <a href="<?php echo admin_e($attachmentPath); ?>" target="_blank" rel="noopener noreferrer" class="admin-chat-conversation__image-link">
                                     <img src="<?php echo admin_e($attachmentPath); ?>" alt="attachment" class="admin-chat-conversation__image">

@@ -2175,12 +2175,48 @@ if ($route === 'users') {
         }
     }
 
+    if ($selectedCustomerId > 0 && isset($_POST['admin_customer_group_invite_action'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $groupInviteResult = admin_customer_group_chat_invite_response(
+                $db,
+                $selectedCustomerId,
+                (int)($_POST['conversation_id'] ?? 0),
+                (string)($_POST['invite_decision'] ?? ''),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($groupInviteResult['message'] ?? admin_t($messages, 'customer_group_chat_action_error', 'Unable to update the group invitation.'));
+            $pageAlertType = !empty($groupInviteResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_customer_leave_group_chat'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $leaveGroupResult = admin_customer_leave_group_chat(
+                $db,
+                $selectedCustomerId,
+                (int)($_POST['conversation_id'] ?? 0),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($leaveGroupResult['message'] ?? admin_t($messages, 'customer_group_chat_leave_error', 'Unable to leave the group chat.'));
+            $pageAlertType = !empty($leaveGroupResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
     if ($selectedCustomerId > 0) {
         $selectedCustomer = admin_customer_detail_row($db, $selectedCustomerId);
         if ($selectedCustomer) {
             $selectedCustomerSummary = admin_customer_management_summary($db, $selectedCustomerId);
             $selectedCustomerOrders = admin_customer_order_rows($db, $selectedCustomerId);
             $selectedCustomerPayments = admin_customer_payment_activity($db, $selectedCustomerId);
+            $selectedCustomerGroupChats = admin_customer_group_chat_rows($db, $selectedCustomerId);
             $selectedCustomerWallets = admin_customer_wallet_rows($db, $selectedCustomerId);
             $selectedCustomerBankAccounts = admin_customer_bank_rows($db, $selectedCustomerId);
             $selectedCustomerActivity = admin_customer_activity_rows($db, $selectedCustomerId);
@@ -2594,6 +2630,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-group-invite-error="<?php echo admin_e(admin_t($messages, 'group_chat_invite_error', 'Unable to update the invitation.')); ?>"
                         data-chat-group-leave-error="<?php echo admin_e(admin_t($messages, 'group_chat_leave_error', 'Unable to leave the group chat.')); ?>"
                         data-chat-group-readonly-error="<?php echo admin_e(admin_t($messages, 'group_chat_readonly_error', 'Unable to update read only mode.')); ?>"
+                        data-group-chat-badge="<?php echo admin_e(admin_t($messages, 'chat_group_header_badge', 'Admin group')); ?>"
+                        data-group-chat-status-label="<?php echo admin_e(admin_t($messages, 'group_chat_badge', 'Group chat')); ?>"
                         data-chat-payment-create-label="<?php echo admin_e(admin_t($messages, 'chat_payment_send_button', 'Send to chat')); ?>">
                         <button type="button" class="admin-chat-inbox__toggle" data-admin-chat-toggle aria-expanded="false" aria-controls="adminChatInboxPanel">
                             <i class="bi bi-envelope" aria-hidden="true"></i>
@@ -2705,6 +2743,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <div class="admin-chat-inbox__conversation-title-wrap">
                                         <span data-admin-chat-conversation-status><?php echo admin_chat_presence_dot_html(['class_name' => 'admin-chat-presence admin-chat-presence--offline', 'label' => admin_t($messages, 'chat_presence_offline', 'Offline')]); ?></span>
                                         <a href="#" class="admin-chat-inbox__conversation-title" data-admin-chat-conversation-title><?php echo admin_e(admin_t($messages, 'chat_inbox_title', 'Live chat inbox')); ?></a>
+                                        <span class="admin-chat-inbox__conversation-badge" data-admin-chat-conversation-badge hidden><?php echo admin_e(admin_t($messages, 'chat_group_header_badge', 'Admin group')); ?></span>
                                     </div>
                                     <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
                                         <div class="admin-chat-inbox__header-crypto-wrap" style="position: relative;">
@@ -4849,6 +4888,119 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                     <?php else: ?>
                                                         <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+
+                                                <section class="admin-user-detail__section">
+                                                    <div class="admin-section-title">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_group_chats_title', 'Messenger groups')); ?></h4>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerGroupChats ?? [])); ?></span>
+                                                    </div>
+                                                    <?php if (!empty($selectedCustomerGroupChats)): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table admin-user-detail-table admin-user-detail-table--records align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'customer_group_chat_column_group', 'Group')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'customer_group_chat_column_invited_by', 'Created / invited by')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach (($selectedCustomerGroupChats ?? []) as $row): ?>
+                                                                        <?php
+                                                                        $groupTitle = trim((string)($row['group_name'] ?? ''));
+                                                                        if ($groupTitle === '') {
+                                                                            $groupTitle = trim((string)($row['subject'] ?? ''));
+                                                                        }
+                                                                        if ($groupTitle === '') {
+                                                                            $groupTitle = admin_t($messages, 'group_chat_badge', 'Group chat');
+                                                                        }
+                                                                        $groupInviteStatus = strtolower(trim((string)($row['invite_status'] ?? 'pending')));
+                                                                        $groupStatusLabel = $groupInviteStatus === 'accepted'
+                                                                            ? admin_t($messages, 'customer_group_chat_status_accepted', 'Accepted')
+                                                                            : admin_t($messages, 'customer_group_chat_status_pending', 'Pending invitation');
+                                                                        $groupStatusClass = $groupInviteStatus === 'accepted'
+                                                                            ? 'admin-status-pill--available'
+                                                                            : 'admin-status-pill--warning';
+                                                                        $groupCreatedBy = trim((string)($row['created_by_customer_email'] ?? $row['created_by_admin_handle'] ?? $row['created_by_admin_login'] ?? ''));
+                                                                        if ($groupCreatedBy === '') {
+                                                                            $groupCreatedBy = admin_t($messages, 'customer_group_chat_unknown_creator', 'Unknown creator');
+                                                                        }
+                                                                        $groupInvitedBy = trim((string)($row['invited_by_customer_email'] ?? $row['invited_by_admin_handle'] ?? $row['invited_by_admin_login'] ?? ''));
+                                                                        if ($groupInvitedBy === '') {
+                                                                            $groupInvitedBy = $groupCreatedBy;
+                                                                        }
+                                                                        $groupDateLabel = admin_compact_datetime_label((string)($row['responded_at'] ?? $row['joined_at'] ?? $row['updated_at'] ?? $row['created_at'] ?? ''));
+                                                                        $groupReadOnly = !empty($row['is_group_read_only']);
+                                                                        $groupIsOwner = (int)($row['group_created_by_customer_id'] ?? 0) === (int)$selectedCustomer['id'];
+                                                                        $groupConversationId = (int)($row['conversation_id'] ?? 0);
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__cell">
+                                                                                    <strong><?php echo admin_e($groupTitle); ?></strong>
+                                                                                    <span class="admin-user-detail-table__muted">
+                                                                                        <?php echo admin_e($groupReadOnly ? admin_t($messages, 'customer_group_chat_read_only', 'Read only for reseller') : admin_t($messages, 'group_chat_badge', 'Group chat')); ?>
+                                                                                        <?php if ($groupIsOwner): ?>
+                                                                                            · <?php echo admin_e(admin_t($messages, 'customer_group_chat_role_owner', 'Owner')); ?>
+                                                                                        <?php endif; ?>
+                                                                                    </span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__cell">
+                                                                                    <strong><?php echo admin_e($groupCreatedBy); ?></strong>
+                                                                                    <span class="admin-user-detail-table__muted"><?php echo admin_e(admin_t($messages, 'customer_group_chat_invited_by', 'Invited by')); ?>: <?php echo admin_e($groupInvitedBy); ?></span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <span class="admin-status-pill <?php echo admin_e($groupStatusClass); ?>"><?php echo admin_e($groupStatusLabel); ?></span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <span class="admin-user-detail-table__mono"><?php echo admin_e($groupDateLabel); ?></span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__actions">
+                                                                                    <?php if ($groupInviteStatus === 'pending' && $groupConversationId > 0): ?>
+                                                                                        <form method="post" class="d-inline">
+                                                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                            <input type="hidden" name="conversation_id" value="<?php echo admin_e((string)$groupConversationId); ?>">
+                                                                                            <input type="hidden" name="invite_decision" value="accept">
+                                                                                            <button type="submit" class="btn btn-dark btn-sm" name="admin_customer_group_invite_action">
+                                                                                                <?php echo admin_e(admin_t($messages, 'group_chat_invite_accept', 'Accept')); ?>
+                                                                                            </button>
+                                                                                        </form>
+                                                                                        <form method="post" class="d-inline">
+                                                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                            <input type="hidden" name="conversation_id" value="<?php echo admin_e((string)$groupConversationId); ?>">
+                                                                                            <input type="hidden" name="invite_decision" value="reject">
+                                                                                            <button type="submit" class="btn btn-outline-dark btn-sm" name="admin_customer_group_invite_action" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_group_chat_reject_confirm', 'Reject this group invitation for the customer?')); ?>');">
+                                                                                                <?php echo admin_e(admin_t($messages, 'group_chat_invite_reject', 'Reject')); ?>
+                                                                                            </button>
+                                                                                        </form>
+                                                                                    <?php elseif ($groupInviteStatus === 'accepted' && !$groupIsOwner && $groupConversationId > 0): ?>
+                                                                                        <form method="post" class="d-inline">
+                                                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                            <input type="hidden" name="conversation_id" value="<?php echo admin_e((string)$groupConversationId); ?>">
+                                                                                            <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_customer_leave_group_chat" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_group_chat_leave_confirm', 'Remove the customer from this group chat?')); ?>');">
+                                                                                                <?php echo admin_e(admin_t($messages, 'group_chat_leave', 'Leave group')); ?>
+                                                                                            </button>
+                                                                                        </form>
+                                                                                    <?php else: ?>
+                                                                                        <span class="admin-user-detail-table__muted"><?php echo admin_e($groupIsOwner ? admin_t($messages, 'customer_group_chat_owner_note', 'Customer is the group owner.') : '—'); ?></span>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'customer_group_chat_empty_state', 'This customer is not in any messenger groups right now.')); ?></div>
                                                     <?php endif; ?>
                                                 </section>
 

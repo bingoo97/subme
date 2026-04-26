@@ -710,6 +710,21 @@ body.admin-login-page{
     font-size: 15px;
 }
 
+.admin-chat-inbox__conversation-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    padding:.18rem .55rem;
+    border-radius:999px;
+    background:#e7f0ff;
+    color:#214b8f;
+    font-size:.68rem;
+    font-weight:800;
+    letter-spacing:.03em;
+    text-transform:uppercase;
+    white-space:nowrap;
+}
+
 .admin-chat-inbox__item-head strong{
     font-size:.95rem;
     font-weight:800;
@@ -984,6 +999,10 @@ body.admin-login-page{
 }
 
 .admin-chat-conversation__sender{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:.4rem;
     margin-bottom:.35rem;
     font-size:.7rem;
     font-weight:800;
@@ -994,6 +1013,28 @@ body.admin-login-page{
 
 .admin-chat-conversation__message.is-admin .admin-chat-conversation__sender{
     color:rgba(255,255,255,.72);
+}
+
+.admin-chat-conversation__sender-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    padding:.14rem .45rem;
+    border-radius:999px;
+    font-size:.62rem;
+    font-weight:900;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+}
+
+.admin-chat-conversation__sender-badge--admin{
+    background:rgba(255,255,255,.18);
+    color:#ffffff;
+}
+
+.admin-chat-conversation__sender-badge--reseller{
+    background:#e7eefb;
+    color:#23447f;
 }
 
 .admin-chat-conversation__message.is-admin .admin-chat-conversation__bubble{
