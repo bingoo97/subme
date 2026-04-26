@@ -5862,9 +5862,12 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
     }
 
     $assetCode = strtoupper(trim($assetCode));
-    $assetFilter = '';
+    $viewAssetFilter = '';
+    $baseAssetFilter = '';
     if ($assetCode !== '') {
-        $assetFilter = " AND crypto_asset_code = '" . $db->escape($assetCode) . "'";
+        $escapedAssetCode = $db->escape($assetCode);
+        $viewAssetFilter = " AND crypto_asset_code = '" . $escapedAssetCode . "'";
+        $baseAssetFilter = " AND asset.code = '" . $escapedAssetCode . "'";
     }
 
     $rows = [];
@@ -5887,7 +5890,7 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
              FROM customer_crypto_wallets
              WHERE customer_id = {$customerId}
                AND status IN ('reserved', 'active')
-               {$assetFilter}
+               {$viewAssetFilter}
              ORDER BY assigned_at DESC, wallet_assignment_id DESC"
         );
     }
@@ -5929,7 +5932,7 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
            ON customer.id = assignment.customer_id
          WHERE assignment.customer_id = {$customerId}
            AND assignment.status IN ('reserved', 'active')
-           {$assetFilter}
+           {$baseAssetFilter}
          ORDER BY assignment.assigned_at DESC, assignment.id DESC"
     );
 }
