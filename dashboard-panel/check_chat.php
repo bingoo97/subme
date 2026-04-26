@@ -670,7 +670,7 @@ if ($faqKey !== '') {
 
 if (app_uses_v2_schema($db)) {
     if (isset($_POST['user']) || $action === 'read') {
-        if ($requestedConversationId > 0) {
+        if ($requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
             chat_mark_group_read_for_customer($db, $currentCustomerId, $requestedConversationId);
         } else {
             chat_mark_admin_messages_read($db, $currentCustomerId);
