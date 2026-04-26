@@ -1,12 +1,6 @@
 <?php
-$appRoot = realpath(__DIR__ . '/../dashboard-panel');
-if ($appRoot === false) {
-    http_response_code(500);
-    exit('Application bootstrap path is invalid.');
-}
+require __DIR__ . '/_bootstrap_backend.php';
 
-// Keep legacy relative includes working while backend stays outside web root.
-chdir($appRoot);
 require $appRoot . '/config/mysql.php';
 require $appRoot . '/bootstrap/session.php';
 app_start_session();
