@@ -1,5 +1,11 @@
 <div class="content-box payment-wizard">
 {include file='alert.tpl'}
+{if $payment_test_mode_notice_enabled|default:false}
+<div class="alert alert-warning">
+    <strong>{$t.payment_test_mode_notice_title|default:'Payment test mode'}</strong><br />
+    {$t.payment_test_mode_notice_text|default:'You can still generate payment requests and test the full flow, but please do not send any money right now. The payment details are displayed for testing only.'}
+</div>
+{/if}
 {if $payment_redirect_url|default:''}
 <script>
 window.location.replace('{$payment_redirect_url|escape:'javascript'}');

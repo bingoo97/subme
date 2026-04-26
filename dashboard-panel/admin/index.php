@@ -349,6 +349,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $customerTypeSwitchEnabled = isset($_POST['customer_type_switch_enabled']) ? 1 : 0;
         $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
         $pageGuidanceEnabled = isset($_POST['page_guidance_enabled']) ? 1 : 0;
+        $paymentTestModeNoticeEnabled = isset($_POST['payment_test_mode_notice_enabled']) ? 1 : 0;
         $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
         $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
         $expiredOrdersCleanupEnabled = isset($_POST['expired_orders_cleanup_enabled']) ? 1 : 0;
@@ -379,6 +380,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 'customer_type_switch_enabled',
                 'application_instructions_enabled',
                 'page_guidance_enabled',
+                'payment_test_mode_notice_enabled',
                 'history_cleanup_enabled',
                 'payments_cleanup_enabled',
                 'expired_orders_cleanup_enabled',
@@ -403,6 +405,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $customerTypeSwitchEnabled,
                 $applicationInstructionsEnabled,
                 $pageGuidanceEnabled,
+                $paymentTestModeNoticeEnabled,
                 $historyCleanupEnabled,
                 $paymentsCleanupEnabled,
                 $expiredOrdersCleanupEnabled,
@@ -7845,6 +7848,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-check-label" for="page_guidance_enabled"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled', 'Page guidance and homepage overview')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled_help', 'If OFF, the blue help box under pages and the large homepage overview for guests are hidden.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="payment_test_mode_notice_enabled" name="payment_test_mode_notice_enabled"<?php echo admin_payment_test_mode_notice_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="payment_test_mode_notice_enabled"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled', 'Payment test mode warning')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled_help', 'If ON, users still can generate bank and crypto payment requests, but a yellow warning says the service is in test mode and they should not send any money.')); ?></small>
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">

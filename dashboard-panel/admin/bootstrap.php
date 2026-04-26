@@ -160,6 +160,11 @@ function admin_page_guidance_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'page_guidance_enabled', true);
 }
 
+function admin_payment_test_mode_notice_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'payment_test_mode_notice_enabled', false);
+}
+
 function admin_crypto_wallet_shared_assignments_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'crypto_wallet_shared_assignments_enabled', false);

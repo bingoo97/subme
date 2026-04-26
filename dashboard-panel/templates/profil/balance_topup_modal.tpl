@@ -8,6 +8,12 @@
                 <h3 class="modal-title">{$t.balance_topup_modal_title|default:'Top up balance'}</h3>
             </div>
             <div class="modal-body">
+                {if $payment_test_mode_notice_enabled|default:false}
+                <div class="alert alert-warning">
+                    <strong>{$t.payment_test_mode_notice_title|default:'Payment test mode'}</strong><br />
+                    {$t.payment_test_mode_notice_text|default:'You can still generate payment requests and test the full flow, but please do not send any money right now. The payment details are displayed for testing only.'}
+                </div>
+                {/if}
                 <p class="balance-topup-modal__intro">{$t.balance_topup_modal_intro|default:'Choose the payment method, cryptocurrency and top-up amount.'}</p>
 
                 {if $balance_topup_crypto_assets|@count gt 0}

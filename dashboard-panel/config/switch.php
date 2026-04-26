@@ -46,9 +46,11 @@
 	$content_inner_class = in_array($site, ['login', 'register', 'password'], true) ? 'content-inner-auth' : '';
 	$smarty->assign("content_inner_class", $content_inner_class);
 	$page_guidance_enabled = app_page_guidance_enabled(is_array($settings ?? null) ? $settings : []);
+	$payment_test_mode_notice_enabled = app_payment_test_mode_notice_enabled(is_array($settings ?? null) ? $settings : []);
 	$page_helper_site = trim((string)$site) !== '' ? (string)$site : 'homepage';
 	$page_helper_content = $page_guidance_enabled ? app_page_helper_content($page_helper_site, !empty($user['logged'])) : [];
 	$smarty->assign("page_guidance_enabled", $page_guidance_enabled);
+	$smarty->assign("payment_test_mode_notice_enabled", $payment_test_mode_notice_enabled);
 	$smarty->assign("page_helper_content", $page_helper_content);
 	
 	$smarty->display("header.tpl");

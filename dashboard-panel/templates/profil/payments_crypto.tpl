@@ -7,6 +7,12 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
 {if $active_v2_crypto_request}
 <div class="content-box payment-wizard">
     <div class="payment-wizard__section">
+        {if $payment_test_mode_notice_enabled|default:false}
+        <div class="alert alert-warning">
+            <strong>{$t.payment_test_mode_notice_title|default:'Payment test mode'}</strong><br />
+            {$t.payment_test_mode_notice_text|default:'You can still generate payment requests and test the full flow, but please do not send any money right now. The payment details are displayed for testing only.'}
+        </div>
+        {/if}
         <div class="payment-wizard__header payment-wizard__header--inline-title">
             <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.topbar_pending_payment|default:'Pending payment'}</h1>
             <p>{$t.payment_crypto_details_intro|default:'Use the assigned wallet details below to complete your payment.'}</p>

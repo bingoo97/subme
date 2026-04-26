@@ -437,6 +437,8 @@ return [
     'settings_application_instructions_enabled_help' => 'If OFF, Smart IPTV, OTT Player and NewLook guides are hidden. Payment instructions remain visible.',
     'settings_page_guidance_enabled' => 'Page guidance and homepage overview',
     'settings_page_guidance_enabled_help' => 'If OFF, the blue helper box below pages and the large guest homepage overview are hidden.',
+    'settings_payment_test_mode_notice_enabled' => 'Payment test mode warning',
+    'settings_payment_test_mode_notice_enabled_help' => 'If ON, users still can generate bank and crypto payment requests, but they see a yellow warning that the service is in test mode and they should not send any money.',
     'settings_history_cleanup_enabled' => 'Auto-clean activity history after 12 months',
     'settings_history_cleanup_enabled_help' => 'If ON, customer activity and history logs older than 12 months are deleted automatically.',
     'settings_payments_cleanup_enabled' => 'Auto-clean payments after 12 months',

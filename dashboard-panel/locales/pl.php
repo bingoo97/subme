@@ -72,6 +72,8 @@ return [
         'top_up' => 'Doładuj',
         'balance_topup_modal_title' => 'Doładuj konto',
         'balance_topup_modal_intro' => 'Wybierz metodę płatności, kryptowalutę i kwotę doładowania.',
+        'payment_test_mode_notice_title' => 'Tryb testowy płatności',
+        'payment_test_mode_notice_text' => 'Możesz generować requesty płatności i sprawdzać cały proces, ale prosimy teraz nic nie wpłacać. Dane płatnicze są pokazane tylko do testów.',
         'balance_topup_amount_step_title' => 'Wpisz kwotę doładowania',
         'balance_topup_amount_placeholder' => 'Wpisz kwotę',
         'balance_topup_presets_label' => 'Szybki wybór',
