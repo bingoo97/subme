@@ -588,6 +588,264 @@ function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
     return $releasedTotal;
 }
 
+function app_create_crypto_deposit_request($db, array $payload): int
+{
+    if (!schema_object_exists($db, 'crypto_deposit_requests')) {
+        return 0;
+    }
+
+    $fields = [
+        'customer_id',
+        'order_id',
+        'crypto_asset_id',
+        'wallet_address_id',
+        'wallet_assignment_id',
+        'requested_fiat_amount',
+        'fiat_currency_id',
+        'exchange_rate',
+        'requested_crypto_amount',
+    ];
+    $values = [
+        (int)($payload['customer_id'] ?? 0),
+        !empty($payload['order_id']) ? (int)$payload['order_id'] : null,
+        (int)($payload['crypto_asset_id'] ?? 0),
+        (int)($payload['wallet_address_id'] ?? 0),
+        !empty($payload['wallet_assignment_id']) ? (int)$payload['wallet_assignment_id'] : null,
+        (float)($payload['requested_fiat_amount'] ?? 0),
+        (int)($payload['fiat_currency_id'] ?? 0),
+        (float)($payload['exchange_rate'] ?? 0),
+        (float)($payload['requested_crypto_amount'] ?? 0),
+    ];
+
+    if (
+        (int)$values[0] <= 0
+        || (int)$values[2] <= 0
+        || (int)$values[3] <= 0
+        || (int)$values[6] <= 0
+        || (float)$values[5] <= 0
+        || (float)$values[7] <= 0
+        || (float)$values[8] <= 0
+    ) {
+        return 0;
+    }
+
+    $optionalColumns = [
+        'assignment_mode',
+        'status',
+        'created_by_admin_user_id',
+        'requested_at',
+        'expires_at',
+        'confirmed_at',
+        'cancelled_at',
+        'legacy_source_table',
+        'legacy_source_id',
+        'request_note',
+    ];
+
+    foreach ($optionalColumns as $columnName) {
+        if (!array_key_exists($columnName, $payload) || !schema_column_exists($db, 'crypto_deposit_requests', $columnName)) {
+            continue;
+        }
+
+        $fields[] = $columnName;
+        $value = $payload[$columnName];
+        if (in_array($columnName, ['created_by_admin_user_id', 'legacy_source_id'], true)) {
+            $value = $value !== null && $value !== '' ? (int)$value : null;
+        }
+        $values[] = $value;
+    }
+
+    $inserted = $db->insert($fields, $values, 'crypto_deposit_requests');
+    if (!$inserted || (int)$db->id() <= 0) {
+        return 0;
+    }
+
+    return (int)$db->id();
+}
+
+function app_load_customer_bank_accounts($db, int $customerId, string $currencyCode = '', array $settings = []): array
+{
+    $currencyCode = strtoupper(trim($currencyCode));
+    $sharedEnabled = !empty($settings['bank_account_shared_assignments_enabled']);
+    $hasCustomerBankView = schema_object_exists($db, 'customer_bank_accounts');
+
+    if (
+        $customerId <= 0
+        || (
+            !$hasCustomerBankView
+            && (
+                !schema_object_exists($db, 'bank_account_assignments')
+                || !schema_object_exists($db, 'bank_accounts')
+            )
+        )
+    ) {
+        return [];
+    }
+
+    if ($hasCustomerBankView) {
+        $assignedBankAccounts = $db->select_full_user(
+            "SELECT
+                bank_account_assignment_id,
+                bank_account_id,
+                customer_id,
+                customer_email,
+                currency_code,
+                label,
+                account_holder_name,
+                bank_name,
+                bank_address,
+                country_code,
+                iban,
+                account_number,
+                routing_number,
+                swift_bic,
+                payment_reference_template,
+                transfer_instructions,
+                status,
+                assigned_at
+             FROM customer_bank_accounts
+             WHERE customer_id = {$customerId}
+               AND status IN ('reserved', 'active')
+             ORDER BY assigned_at DESC, bank_account_assignment_id DESC"
+        );
+    } else {
+        $assignedBankAccounts = $db->select_full_user(
+            "SELECT
+                assignment.id AS bank_account_assignment_id,
+                assignment.bank_account_id,
+                assignment.customer_id,
+                currency.code AS currency_code,
+                account.label,
+                account.account_holder_name,
+                account.bank_name,
+                account.bank_address,
+                account.country_code,
+                account.iban,
+                account.account_number,
+                account.routing_number,
+                account.swift_bic,
+                account.payment_reference_template,
+                account.transfer_instructions,
+                assignment.status,
+                assignment.assigned_at
+             FROM bank_account_assignments AS assignment
+             INNER JOIN bank_accounts AS account
+               ON account.id = assignment.bank_account_id
+             LEFT JOIN currencies AS currency
+               ON currency.id = account.currency_id
+             WHERE assignment.customer_id = {$customerId}
+               AND assignment.status IN ('reserved', 'active')
+             ORDER BY assignment.assigned_at DESC, assignment.id DESC"
+        );
+    }
+
+    if (!is_array($assignedBankAccounts)) {
+        $assignedBankAccounts = [];
+    }
+
+    if ($assignedBankAccounts) {
+        return $assignedBankAccounts;
+    }
+
+    $currencyFilter = $currencyCode !== ''
+        ? " AND currency.code = '" . $db->escape($currencyCode) . "'"
+        : '';
+
+    $baseQuery = $sharedEnabled
+        ? "SELECT
+                account.id AS bank_account_id,
+                currency.code AS currency_code,
+                account.label,
+                account.account_holder_name,
+                account.bank_name,
+                account.bank_address,
+                account.country_code,
+                account.iban,
+                account.account_number,
+                account.routing_number,
+                account.swift_bic,
+                account.payment_reference_template,
+                account.transfer_instructions
+             FROM bank_accounts AS account
+             LEFT JOIN currencies AS currency
+               ON currency.id = account.currency_id
+             LEFT JOIN bank_transfer_requests AS open_request
+               ON open_request.bank_account_id = account.id
+              AND open_request.status IN ('pending_payment', 'awaiting_review')
+             WHERE account.disabled_at IS NULL
+               AND account.status IN ('available', 'assigned')
+               AND open_request.id IS NULL"
+        : "SELECT
+                account.id AS bank_account_id,
+                currency.code AS currency_code,
+                account.label,
+                account.account_holder_name,
+                account.bank_name,
+                account.bank_address,
+                account.country_code,
+                account.iban,
+                account.account_number,
+                account.routing_number,
+                account.swift_bic,
+                account.payment_reference_template,
+                account.transfer_instructions
+             FROM bank_accounts AS account
+             LEFT JOIN currencies AS currency
+               ON currency.id = account.currency_id
+             LEFT JOIN bank_account_assignments AS assignment
+               ON assignment.bank_account_id = account.id
+              AND assignment.status IN ('reserved', 'active')
+             LEFT JOIN bank_transfer_requests AS open_request
+               ON open_request.bank_account_id = account.id
+              AND open_request.status IN ('pending_payment', 'awaiting_review')
+             WHERE account.disabled_at IS NULL
+               AND account.status = 'available'
+               AND assignment.id IS NULL
+               AND open_request.id IS NULL";
+
+    $availableAccounts = $db->select_full_user(
+        $baseQuery . $currencyFilter . "
+         ORDER BY account.label ASC, account.bank_name ASC, account.id ASC"
+    );
+
+    if ((!is_array($availableAccounts) || !$availableAccounts) && $currencyCode !== '') {
+        $availableAccounts = $db->select_full_user(
+            $baseQuery . "
+             ORDER BY account.label ASC, account.bank_name ASC, account.id ASC"
+        );
+    }
+
+    if (!is_array($availableAccounts)) {
+        $availableAccounts = [];
+    }
+
+    $rows = [];
+    foreach ($availableAccounts as $availableAccount) {
+        $rows[] = [
+            'bank_account_assignment_id' => 0 - (int)($availableAccount['bank_account_id'] ?? 0),
+            'bank_account_id' => (int)($availableAccount['bank_account_id'] ?? 0),
+            'customer_id' => $customerId,
+            'customer_email' => '',
+            'currency_code' => (string)($availableAccount['currency_code'] ?? ''),
+            'label' => (string)($availableAccount['label'] ?? ''),
+            'account_holder_name' => (string)($availableAccount['account_holder_name'] ?? ''),
+            'bank_name' => (string)($availableAccount['bank_name'] ?? ''),
+            'bank_address' => (string)($availableAccount['bank_address'] ?? ''),
+            'country_code' => (string)($availableAccount['country_code'] ?? ''),
+            'iban' => (string)($availableAccount['iban'] ?? ''),
+            'account_number' => (string)($availableAccount['account_number'] ?? ''),
+            'routing_number' => (string)($availableAccount['routing_number'] ?? ''),
+            'swift_bic' => (string)($availableAccount['swift_bic'] ?? ''),
+            'payment_reference_template' => (string)($availableAccount['payment_reference_template'] ?? ''),
+            'transfer_instructions' => (string)($availableAccount['transfer_instructions'] ?? ''),
+            'status' => 'available',
+            'assigned_at' => '',
+        ];
+    }
+
+    return $rows;
+}
+
 function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrency = 'USD', array $settings = []): array
 {
     $hasCustomerWalletView = schema_object_exists($db, 'customer_crypto_wallets');

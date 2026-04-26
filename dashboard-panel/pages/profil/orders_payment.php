@@ -811,40 +811,12 @@ if (app_uses_v2_schema($db)) {
             is_array($settings ?? null) ? $settings : []
         );
 
-        $bankAccounts = $db->select_full_user(
-            "SELECT *
-             FROM customer_bank_accounts
-             WHERE customer_id = " . (int)$user['id'] . "
-               AND status = 'active'
-             ORDER BY assigned_at DESC"
+        $bankAccounts = app_load_customer_bank_accounts(
+            $db,
+            (int)$user['id'],
+            (string)($selectedProduct['currency_code'] ?? $selected['currency_code'] ?? ''),
+            is_array($settings ?? null) ? $settings : []
         );
-
-        if (!$bankAccounts) {
-            $selectedCurrencyCode = strtoupper(trim((string)($selectedProduct['currency_code'] ?? $selected['currency_code'] ?? '')));
-            $availableBankAccounts = orders_payment_available_bank_account_rows($db, $selectedCurrencyCode);
-            foreach ($availableBankAccounts as $availableBankAccount) {
-                $bankAccounts[] = [
-                    'bank_account_assignment_id' => 0 - (int)($availableBankAccount['id'] ?? 0),
-                    'bank_account_id' => (int)($availableBankAccount['id'] ?? 0),
-                    'customer_id' => (int)$user['id'],
-                    'customer_email' => (string)($user['email'] ?? ''),
-                    'currency_code' => (string)($availableBankAccount['currency_code'] ?? ''),
-                    'label' => (string)($availableBankAccount['label'] ?? ''),
-                    'account_holder_name' => (string)($availableBankAccount['account_holder_name'] ?? ''),
-                    'bank_name' => (string)($availableBankAccount['bank_name'] ?? ''),
-                    'bank_address' => (string)($availableBankAccount['bank_address'] ?? ''),
-                    'country_code' => (string)($availableBankAccount['country_code'] ?? ''),
-                    'iban' => (string)($availableBankAccount['iban'] ?? ''),
-                    'account_number' => (string)($availableBankAccount['account_number'] ?? ''),
-                    'routing_number' => (string)($availableBankAccount['routing_number'] ?? ''),
-                    'swift_bic' => (string)($availableBankAccount['swift_bic'] ?? ''),
-                    'payment_reference_template' => (string)($availableBankAccount['payment_reference_template'] ?? ''),
-                    'transfer_instructions' => (string)($availableBankAccount['transfer_instructions'] ?? ''),
-                    'status' => 'available',
-                    'assigned_at' => '',
-                ];
-            }
-        }
 
         $bankEnabled = !empty($settings['bank_transfers_enabled']);
         $cryptoEnabled = !empty($settings['crypto_payments_enabled']);

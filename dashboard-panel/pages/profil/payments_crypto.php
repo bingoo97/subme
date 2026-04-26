@@ -245,43 +245,24 @@ switch ($site) {
 
                     if ($selectedAsset) {
                     $requestedCryptoAmount = round($requestedAmount / (float)$selectedAsset['rate'], 8);
-                    $createdCryptoRequest = $db->insert(
-                        [
-                            'customer_id',
-                            'order_id',
-                            'crypto_asset_id',
-                            'wallet_address_id',
-                            'wallet_assignment_id',
-                            'requested_fiat_amount',
-                            'fiat_currency_id',
-                            'exchange_rate',
-                            'requested_crypto_amount',
-                            'assignment_mode',
-                            'status',
-                            'requested_at',
-                            'expires_at',
-                            'request_note',
-                        ],
-                        [
-                            (int)$user['id'],
-                            null,
-                            (int)$selectedAsset['crypto_asset_id'],
-                            (int)$selectedAsset['wallet_address_id'],
-                            (int)$selectedAsset['wallet_assignment_id'],
-                            $requestedAmount,
-                            $topupCurrencyId,
-                            (float)$selectedAsset['rate'],
-                            $requestedCryptoAmount,
-                            'manual',
-                            'pending',
-                            date('Y-m-d H:i:s', $time_s),
-                            date('Y-m-d H:i:s', $time_s + 3600),
-                            'Created from balance top-up wizard',
-                        ],
-                        'crypto_deposit_requests'
-                    );
+                    $createdCryptoRequestId = app_create_crypto_deposit_request($db, [
+                        'customer_id' => (int)$user['id'],
+                        'order_id' => null,
+                        'crypto_asset_id' => (int)$selectedAsset['crypto_asset_id'],
+                        'wallet_address_id' => (int)$selectedAsset['wallet_address_id'],
+                        'wallet_assignment_id' => (int)$selectedAsset['wallet_assignment_id'],
+                        'requested_fiat_amount' => $requestedAmount,
+                        'fiat_currency_id' => $topupCurrencyId,
+                        'exchange_rate' => (float)$selectedAsset['rate'],
+                        'requested_crypto_amount' => $requestedCryptoAmount,
+                        'assignment_mode' => 'manual',
+                        'status' => 'pending',
+                        'requested_at' => date('Y-m-d H:i:s', $time_s),
+                        'expires_at' => date('Y-m-d H:i:s', $time_s + 3600),
+                        'request_note' => 'Created from balance top-up wizard',
+                    ]);
 
-                    if ($createdCryptoRequest && (int)$db->id() > 0) {
+                    if ($createdCryptoRequestId > 0) {
                         $paymentRedirectUrl = '/cryptocurrency';
                     }
 
