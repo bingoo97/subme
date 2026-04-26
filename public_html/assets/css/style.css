@@ -2526,6 +2526,14 @@ CONTENT
 	color: #fff!important;
 }
 
+.home_buttons .one_box.has-news-attention:hover,
+.home_buttons .one_box.has-news-attention:visited,
+.home_buttons .one_box.has-news-attention:focus{
+	background-color: #c61121;
+	border: 2px solid #c61121;
+	color: #fff!important;
+}
+
 .home_buttons .one_box p.title{
 	font-family: 'Poppins';
 	text-align: left;
@@ -2588,6 +2596,7 @@ CONTENT
 
 .home_buttons .one_box.has-news-attention p.title .btn{
 	float:right;
+	text-align: right;
 	background-color:#d7182a;
 	color:#fff;
 }
