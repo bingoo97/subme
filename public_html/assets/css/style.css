@@ -4014,6 +4014,111 @@ CONTENT
 	margin-top:16px;
 }
 
+.page-guide-alert{
+	margin:26px 0 6px;
+}
+
+.page-guide-alert__box{
+	margin-bottom:0;
+	padding:18px 20px;
+	border:1px solid rgba(43, 110, 165, 0.18);
+	border-radius:18px;
+	background:linear-gradient(180deg, rgba(235, 246, 255, 0.98) 0%, rgba(220, 239, 255, 0.95) 100%);
+	box-shadow:0 18px 35px rgba(35, 86, 140, 0.08);
+	color:#204d74;
+}
+
+.page-guide-alert__title{
+	margin-bottom:10px;
+	font-size:18px;
+	font-weight:700;
+}
+
+.page-guide-alert__list{
+	margin:0;
+	padding-left:20px;
+}
+
+.page-guide-alert__list li{
+	margin-bottom:8px;
+	line-height:1.7;
+}
+
+.page-guide-alert__list li:last-child{
+	margin-bottom:0;
+}
+
+.homepage-service-overview{
+	margin:34px 0 24px;
+}
+
+.homepage-service-overview__card{
+	max-width:1100px;
+	margin:0 auto;
+	padding:34px 30px;
+	border-radius:28px;
+	background:linear-gradient(180deg, #ffffff 0%, #f3f9ff 100%);
+	box-shadow:0 24px 60px rgba(19, 56, 92, 0.12);
+	border:1px solid rgba(35, 96, 150, 0.10);
+	color:#17324a;
+}
+
+.homepage-service-overview__eyebrow{
+	display:inline-block;
+	margin-bottom:12px;
+	padding:7px 12px;
+	border-radius:999px;
+	background:rgba(45, 125, 198, 0.12);
+	color:#1f5e93;
+	font-size:12px;
+	font-weight:700;
+	letter-spacing:0.08em;
+	text-transform:uppercase;
+}
+
+.homepage-service-overview__card h2{
+	margin:0 0 18px;
+	font-size:32px;
+	line-height:1.25;
+	color:#0f3151;
+}
+
+.homepage-service-overview__card h3{
+	margin:0 0 14px;
+	font-size:21px;
+	line-height:1.35;
+	color:#134268;
+}
+
+.homepage-service-overview__card p{
+	margin:0 0 18px;
+	font-size:16px;
+	line-height:1.9;
+	color:#264661;
+}
+
+.homepage-service-overview__list-block{
+	margin:28px 0;
+	padding:22px 24px;
+	border-radius:22px;
+	background:rgba(214, 234, 250, 0.58);
+}
+
+.homepage-service-overview__list-block ul{
+	margin:0;
+	padding-left:22px;
+}
+
+.homepage-service-overview__list-block li{
+	margin-bottom:12px;
+	line-height:1.8;
+	color:#214765;
+}
+
+.homepage-service-overview__list-block li:last-child{
+	margin-bottom:0;
+}
+
 @media (max-width: 991px) {
 	.orders-table-modern .orders-col-access,
 	.orders-table-modern .orders-col-status{
@@ -4198,6 +4303,43 @@ CONTENT
 	.balance-topup-preset{
 		flex:1 1 calc(50% - 4px);
 		min-width:0;
+	}
+
+	.page-guide-alert{
+		margin-top:22px;
+	}
+
+	.page-guide-alert__box{
+		padding:16px 16px 18px;
+		border-radius:16px;
+	}
+
+	.homepage-service-overview{
+		margin-top:26px;
+	}
+
+	.homepage-service-overview__card{
+		padding:24px 18px;
+		border-radius:22px;
+	}
+
+	.homepage-service-overview__card h2{
+		font-size:26px;
+	}
+
+	.homepage-service-overview__card h3{
+		font-size:19px;
+	}
+
+	.homepage-service-overview__card p,
+	.homepage-service-overview__list-block li{
+		font-size:15px;
+		line-height:1.8;
+	}
+
+	.homepage-service-overview__list-block{
+		padding:18px 16px;
+		border-radius:18px;
 	}
 
 	.crypto-choice-grid{

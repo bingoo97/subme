@@ -9,6 +9,8 @@ if(isset($_GET["wybierz"])){
 }else{
 
 	//////////////////////////////////////
+	$homepageServiceOverviewEnabled = app_application_instructions_enabled(is_array($settings ?? null) ? $settings : []);
+	$smarty->assign('homepage_service_overview_enabled', $homepageServiceOverviewEnabled);
 	
 	if($user["logged"]){
 	
