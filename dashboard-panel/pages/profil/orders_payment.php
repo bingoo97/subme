@@ -490,13 +490,7 @@ if (!function_exists('orders_payment_assign_crypto_wallet_customer')) {
 
             foreach ($sameAssetAssignments as $assignment) {
                 if (!empty($assignment['id'])) {
-                    $db->query(
-                        "UPDATE crypto_wallet_assignments
-                         SET status = 'released',
-                             released_at = NOW(),
-                             assignment_note = CONCAT(COALESCE(assignment_note, ''), '\nMoved from customer payment wizard')
-                         WHERE id = " . (int)$assignment['id']
-                    );
+                    app_release_crypto_wallet_assignment_if_unused($db, (int)$assignment['id'], 'Moved from customer payment wizard');
                 }
             }
         }

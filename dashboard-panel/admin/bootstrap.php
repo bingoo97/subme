@@ -2300,6 +2300,7 @@ function admin_delete_customer_wallet_assignment(
     $assignment = $db->select_user(
         "SELECT
             wallet_assignment_id,
+            wallet_address_id,
             crypto_asset_code,
             crypto_asset_name,
             address
@@ -2324,6 +2325,7 @@ function admin_delete_customer_wallet_assignment(
     );
 
     if ($deleted) {
+        app_sync_crypto_wallet_address_statuses($db, (int)($assignment['wallet_address_id'] ?? 0));
         $assetLabel = trim((string)($assignment['crypto_asset_name'] ?? ''));
         if ($assetLabel === '') {
             $assetLabel = strtoupper(trim((string)($assignment['crypto_asset_code'] ?? '')));
@@ -4317,6 +4319,8 @@ function admin_crypto_wallet_free_count(Mysql_ks $db): int
         return 0;
     }
 
+    app_sync_crypto_wallet_address_statuses($db);
+
     $row = $db->select_user(
         "SELECT COUNT(*) AS total
          FROM crypto_wallet_addresses
@@ -5906,6 +5910,8 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
         return null;
     }
 
+    app_sync_crypto_wallet_address_statuses($db);
+
     $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
     $currentCustomerFilter = $customerId > 0
         ? " AND current_customer_assignment.customer_id = {$customerId}"
@@ -6830,7 +6836,14 @@ function admin_release_crypto_wallet_assignment(Mysql_ks $db, int $assignmentId,
 {
     $safeNote = $db->escape($note);
 
-    return (bool)$db->query(
+    $assignment = $db->select_user(
+        "SELECT wallet_address_id
+         FROM crypto_wallet_assignments
+         WHERE id = {$assignmentId}
+         LIMIT 1"
+    );
+
+    $released = (bool)$db->query(
         "UPDATE crypto_wallet_assignments
          SET status = 'released',
              released_at = NOW(),
@@ -6838,6 +6851,12 @@ function admin_release_crypto_wallet_assignment(Mysql_ks $db, int $assignmentId,
              assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
          WHERE id = {$assignmentId}"
     );
+
+    if ($released) {
+        app_sync_crypto_wallet_address_statuses($db, (int)($assignment['wallet_address_id'] ?? 0));
+    }
+
+    return $released;
 }
 
 function admin_bank_account_find(Mysql_ks $db, int $accountId): ?array

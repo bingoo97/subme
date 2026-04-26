@@ -313,11 +313,41 @@ function app_crypto_network_label(string $networkCode): string
     return $labels[$networkCode] ?? ucfirst(str_replace('-', ' ', $networkCode));
 }
 
+function app_sync_crypto_wallet_address_statuses($db, int $walletId = 0): void
+{
+    if (
+        !schema_object_exists($db, 'crypto_wallet_addresses')
+        || !schema_object_exists($db, 'crypto_wallet_assignments')
+    ) {
+        return;
+    }
+
+    $walletFilter = $walletId > 0 ? " AND wallet.id = {$walletId}" : '';
+
+    $db->query(
+        "UPDATE crypto_wallet_addresses AS wallet
+         LEFT JOIN (
+            SELECT wallet_address_id, COUNT(*) AS active_total
+            FROM crypto_wallet_assignments
+            WHERE status IN ('reserved', 'active')
+            GROUP BY wallet_address_id
+         ) AS active_assignments
+           ON active_assignments.wallet_address_id = wallet.id
+         SET wallet.status = CASE
+            WHEN COALESCE(active_assignments.active_total, 0) > 0 THEN 'assigned'
+            ELSE 'available'
+         END
+         WHERE wallet.disabled_at IS NULL{$walletFilter}"
+    );
+}
+
 function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $customerId = 0, array $settings = []): ?array
 {
     if ($assetId <= 0 || !schema_object_exists($db, 'crypto_wallet_addresses')) {
         return null;
     }
+
+    app_sync_crypto_wallet_address_statuses($db);
 
     $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
     $currentCustomerFilter = $customerId > 0
@@ -452,13 +482,7 @@ function app_assign_customer_crypto_wallet(
 
         foreach ($sameAssetAssignments as $assignment) {
             if (!empty($assignment['id'])) {
-                $db->query(
-                    "UPDATE crypto_wallet_assignments
-                     SET status = 'released',
-                         released_at = NOW(),
-                         assignment_note = CONCAT(COALESCE(assignment_note, ''), '\nMoved automatically')
-                     WHERE id = " . (int)$assignment['id']
-                );
+                app_release_crypto_wallet_assignment_if_unused($db, (int)$assignment['id'], 'Moved automatically');
             }
         }
     }
@@ -535,20 +559,7 @@ function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, 
         return false;
     }
 
-    $walletId = (int)$assignment['wallet_address_id'];
-    $remainingRow = $db->select_user(
-        "SELECT COUNT(*) AS total
-         FROM crypto_wallet_assignments
-         WHERE wallet_address_id = {$walletId}
-           AND status IN ('reserved', 'active')"
-    );
-    $walletStatus = (int)($remainingRow['total'] ?? 0) > 0 ? 'assigned' : 'available';
-    $db->update_using_id(
-        ['status', 'disabled_at'],
-        [$walletStatus, null],
-        'crypto_wallet_addresses',
-        $walletId
-    );
+    app_sync_crypto_wallet_address_statuses($db, (int)$assignment['wallet_address_id']);
 
     return true;
 }
