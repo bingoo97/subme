@@ -558,6 +558,7 @@ if (!function_exists('orders_payment_assign_bank_account_customer')) {
         if (!$inserted || (int)$db->id() <= 0) {
             return 0;
         }
+        $assignmentId = (int)$db->id();
 
         $db->update_using_id(
             ['status', 'last_assigned_at', 'disabled_at'],
@@ -566,7 +567,7 @@ if (!function_exists('orders_payment_assign_bank_account_customer')) {
             $bankAccountId
         );
 
-        return (int)$db->id();
+        return $assignmentId;
     }
 }
 

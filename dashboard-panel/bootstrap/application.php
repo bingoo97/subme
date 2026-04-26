@@ -502,6 +502,7 @@ function app_assign_customer_crypto_wallet(
     if (!$inserted || (int)$db->id() <= 0) {
         return 0;
     }
+    $assignmentId = (int)$db->id();
 
     $db->update_using_id(
         ['status', 'last_assigned_at', 'disabled_at'],
@@ -510,7 +511,7 @@ function app_assign_customer_crypto_wallet(
         $walletId
     );
 
-    return (int)$db->id();
+    return $assignmentId;
 }
 
 function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, string $note = 'Released automatically'): bool
