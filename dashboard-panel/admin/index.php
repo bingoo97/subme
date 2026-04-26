@@ -5347,7 +5347,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </thead>
                                             <tbody>
                                                 <?php foreach ($cryptoAssetRows as $row): ?>
-                                                    <?php $assetLogo = admin_crypto_asset_logo_url((string)($row['code'] ?? '')); ?>
+                                                    <?php $assetLogo = admin_payment_asset_logo_url((string)($row['code'] ?? ''), (string)($row['logo_url'] ?? '')); ?>
                                                     <tr>
                                                         <td data-label="<?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?>">
                                                             <div class="admin-asset-cell">
@@ -6435,7 +6435,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php
                                                             $assetName = (string)($row['asset_name'] ?? '');
                                                             $assetCode = strtoupper((string)($row['asset_code'] ?? ''));
-                                                            $assetLogo = admin_crypto_asset_logo_url($assetCode);
+                                                            $assetLogo = admin_payment_asset_logo_url($assetCode, (string)($row['asset_logo_url'] ?? ''));
                                                             $walletAddress = trim((string)($row['address'] ?? ''));
                                                             $walletAddressShort = strlen($walletAddress) > 14
                                                                 ? substr($walletAddress, 0, 7) . '...' . substr($walletAddress, -7)

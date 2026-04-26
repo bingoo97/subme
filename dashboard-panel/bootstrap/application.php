@@ -550,9 +550,8 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
            AND status = 'active'
          ORDER BY assigned_at DESC"
     );
-
-    if (!$assignedCryptoWallets) {
-        return [];
+    if (!is_array($assignedCryptoWallets)) {
+        $assignedCryptoWallets = [];
     }
 
     $activeAssetsByCode = [];

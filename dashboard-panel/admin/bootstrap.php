@@ -4353,6 +4353,7 @@ function admin_crypto_wallet_rows(Mysql_ks $db, int $limit = 20, int $offset = 0
             crypto_wallet_addresses.notes,
             crypto_assets.code AS asset_code,
             crypto_assets.name AS asset_name,
+            crypto_assets.logo_url AS asset_logo_url,
             (
                 SELECT customer_crypto_wallets.customer_email
                 FROM customer_crypto_wallets
