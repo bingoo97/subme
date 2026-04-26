@@ -1178,20 +1178,22 @@ if (app_uses_v2_schema($db)) {
         $bankRequest = $db->select_user(
             "SELECT
                 bank_transfer_requests.*,
-                customer_bank_accounts.currency_code,
-                customer_bank_accounts.label,
-                customer_bank_accounts.account_holder_name,
-                customer_bank_accounts.bank_name,
-                customer_bank_accounts.bank_address,
-                customer_bank_accounts.country_code,
-                customer_bank_accounts.iban,
-                customer_bank_accounts.account_number,
-                customer_bank_accounts.routing_number,
-                customer_bank_accounts.swift_bic,
-                customer_bank_accounts.transfer_instructions
+                currencies.code AS currency_code,
+                bank_accounts.label,
+                bank_accounts.account_holder_name,
+                bank_accounts.bank_name,
+                bank_accounts.bank_address,
+                bank_accounts.country_code,
+                bank_accounts.iban,
+                bank_accounts.account_number,
+                bank_accounts.routing_number,
+                bank_accounts.swift_bic,
+                bank_accounts.transfer_instructions
              FROM bank_transfer_requests
-             LEFT JOIN customer_bank_accounts
-                ON customer_bank_accounts.bank_account_assignment_id = bank_transfer_requests.bank_account_assignment_id
+             LEFT JOIN bank_accounts
+                ON bank_accounts.id = bank_transfer_requests.bank_account_id
+             LEFT JOIN currencies
+                ON currencies.id = bank_transfer_requests.currency_id
              WHERE bank_transfer_requests.customer_id = " . (int)$user['id'] . "
                AND bank_transfer_requests.order_id = " . (int)$selected['id'] . "
              ORDER BY bank_transfer_requests.id DESC
