@@ -155,6 +155,11 @@ function admin_application_instructions_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'application_instructions_enabled', true);
 }
 
+function admin_page_guidance_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'page_guidance_enabled', true);
+}
+
 function admin_crypto_wallet_shared_assignments_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'crypto_wallet_shared_assignments_enabled', false);

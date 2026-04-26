@@ -432,6 +432,8 @@ return [
     'settings_customer_type_switch_enabled_help' => 'Jeśli OFF, przełącznik testowy zmiany trybu konta między client i reseller jest ukryty na stronie głównej usera.',
     'settings_application_instructions_enabled' => 'Instrukcje aplikacji',
     'settings_application_instructions_enabled_help' => 'Jeśli OFF, instrukcje Smart IPTV, OTT Player i NewLook są ukryte. Instrukcje płatności pozostają widoczne.',
+    'settings_page_guidance_enabled' => 'Podpowiedzi podstron i opis homepage',
+    'settings_page_guidance_enabled_help' => 'Jeśli OFF, znikają niebieskie boksy pomocy pod treścią stron oraz duży opis serwisu na stronie głównej dla gościa.',
     'settings_history_cleanup_enabled' => 'Auto-czyszczenie historii po 12 miesiącach',
     'settings_history_cleanup_enabled_help' => 'Jeśli ON, logi aktywności i historia userów starsze niż 12 miesięcy są automatycznie usuwane.',
     'settings_payments_cleanup_enabled' => 'Auto-czyszczenie płatności po 12 miesiącach',

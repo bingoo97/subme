@@ -348,6 +348,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $appsPageEnabled = isset($_POST['apps_page_enabled']) ? 1 : 0;
         $customerTypeSwitchEnabled = isset($_POST['customer_type_switch_enabled']) ? 1 : 0;
         $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
+        $pageGuidanceEnabled = isset($_POST['page_guidance_enabled']) ? 1 : 0;
         $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
         $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
         $expiredOrdersCleanupEnabled = isset($_POST['expired_orders_cleanup_enabled']) ? 1 : 0;
@@ -377,6 +378,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 'apps_page_enabled',
                 'customer_type_switch_enabled',
                 'application_instructions_enabled',
+                'page_guidance_enabled',
                 'history_cleanup_enabled',
                 'payments_cleanup_enabled',
                 'expired_orders_cleanup_enabled',
@@ -400,6 +402,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $appsPageEnabled,
                 $customerTypeSwitchEnabled,
                 $applicationInstructionsEnabled,
+                $pageGuidanceEnabled,
                 $historyCleanupEnabled,
                 $paymentsCleanupEnabled,
                 $expiredOrdersCleanupEnabled,
@@ -7683,6 +7686,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-check-label" for="application_instructions_enabled"><?php echo admin_e(admin_t($messages, 'settings_application_instructions_enabled', 'Application instructions ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_application_instructions_enabled_help', 'If OFF, Smart IPTV, OTT Player and NewLook guides are hidden. Payment instructions stay visible.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="page_guidance_enabled" name="page_guidance_enabled"<?php echo admin_page_guidance_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="page_guidance_enabled"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled', 'Page guidance and homepage overview')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled_help', 'If OFF, the blue help box under pages and the large homepage overview for guests are hidden.')); ?></small>
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">

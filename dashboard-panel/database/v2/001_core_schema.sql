@@ -73,6 +73,7 @@ CREATE TABLE `app_settings` (
   `apps_page_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `customer_type_switch_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `application_instructions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `page_guidance_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `history_cleanup_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `payments_cleanup_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `expired_orders_cleanup_enabled` TINYINT(1) NOT NULL DEFAULT 0,

@@ -1700,6 +1700,15 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'application_instructions_enabled');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'page_guidance_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN page_guidance_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER application_instructions_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'page_guidance_enabled');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'history_cleanup_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
@@ -1891,6 +1900,7 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['apps_page_enabled'] = (int)($settings['apps_page_enabled'] ?? 1);
     $settings['customer_type_switch_enabled'] = (int)($settings['customer_type_switch_enabled'] ?? 0);
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
+    $settings['page_guidance_enabled'] = (int)($settings['page_guidance_enabled'] ?? 1);
     $settings['history_cleanup_enabled'] = (int)($settings['history_cleanup_enabled'] ?? 0);
     $settings['payments_cleanup_enabled'] = (int)($settings['payments_cleanup_enabled'] ?? 0);
     $settings['expired_orders_cleanup_enabled'] = (int)($settings['expired_orders_cleanup_enabled'] ?? 0);
@@ -2870,6 +2880,15 @@ function app_application_instructions_enabled(array $settings): bool
 {
     if (array_key_exists('application_instructions_enabled', $settings)) {
         return !empty($settings['application_instructions_enabled']);
+    }
+
+    return true;
+}
+
+function app_page_guidance_enabled(array $settings): bool
+{
+    if (array_key_exists('page_guidance_enabled', $settings)) {
+        return !empty($settings['page_guidance_enabled']);
     }
 
     return true;
