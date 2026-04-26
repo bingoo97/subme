@@ -37,6 +37,61 @@ function app_format_logo_path(string $path): string
     return '/' . ltrim($path, '/');
 }
 
+function app_backend_root_path(): string
+{
+    $path = realpath(dirname(__DIR__));
+    return $path !== false ? $path : dirname(__DIR__);
+}
+
+function app_public_root_path(): string
+{
+    static $resolvedRoot = null;
+    if (is_string($resolvedRoot) && $resolvedRoot !== '') {
+        return $resolvedRoot;
+    }
+
+    $backendRoot = app_backend_root_path();
+    $candidates = [];
+
+    $envOverride = trim((string)getenv('APP_PUBLIC_ROOT'));
+    if ($envOverride !== '') {
+        $candidates[] = $envOverride;
+    }
+
+    $pointerFile = $backendRoot . '/.public-root-path';
+    if (is_file($pointerFile)) {
+        $fileOverride = trim((string)file_get_contents($pointerFile));
+        if ($fileOverride !== '') {
+            $candidates[] = $fileOverride;
+        }
+    }
+
+    $candidates[] = dirname($backendRoot) . '/public_html';
+
+    foreach ($candidates as $candidate) {
+        $resolved = realpath($candidate);
+        if ($resolved !== false && is_dir($resolved)) {
+            $resolvedRoot = $resolved;
+            return $resolvedRoot;
+        }
+    }
+
+    $resolvedRoot = dirname($backendRoot) . '/public_html';
+    return $resolvedRoot;
+}
+
+function app_public_path(string $relativePath = ''): string
+{
+    $relativePath = ltrim($relativePath, '/');
+    $basePath = rtrim(app_public_root_path(), '/');
+
+    if ($relativePath === '') {
+        return $basePath;
+    }
+
+    return $basePath . '/' . $relativePath;
+}
+
 function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): string
 {
     $code = strtoupper(trim($assetCode));
@@ -58,7 +113,7 @@ function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): 
     ];
 
     if (isset($fileMap[$code])) {
-        $absolutePath = dirname(__DIR__, 2) . '/public_html/img/crypto/' . $fileMap[$code];
+        $absolutePath = app_public_path('img/crypto/' . $fileMap[$code]);
         if (is_file($absolutePath)) {
             return '/img/crypto/' . $fileMap[$code];
         }
@@ -538,18 +593,59 @@ function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
 
 function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrency = 'USD', array $settings = []): array
 {
-    if ($customerId <= 0 || !schema_object_exists($db, 'customer_crypto_wallets')) {
+    $hasCustomerWalletView = schema_object_exists($db, 'customer_crypto_wallets');
+    if (
+        $customerId <= 0
+        || (
+            !$hasCustomerWalletView
+            && (
+                !schema_object_exists($db, 'crypto_wallet_assignments')
+                || !schema_object_exists($db, 'crypto_wallet_addresses')
+                || !schema_object_exists($db, 'crypto_assets')
+            )
+        )
+    ) {
         return [];
     }
 
     $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
-    $assignedCryptoWallets = $db->select_full_user(
-        "SELECT *
-         FROM customer_crypto_wallets
-         WHERE customer_id = {$customerId}
-           AND status = 'active'
-         ORDER BY assigned_at DESC"
-    );
+    if ($hasCustomerWalletView) {
+        $assignedCryptoWallets = $db->select_full_user(
+            "SELECT *
+             FROM customer_crypto_wallets
+             WHERE customer_id = {$customerId}
+               AND status = 'active'
+             ORDER BY assigned_at DESC"
+        );
+    } else {
+        $assignedCryptoWallets = $db->select_full_user(
+            "SELECT
+                assignment.id AS wallet_assignment_id,
+                assignment.customer_id,
+                asset.code AS crypto_asset_code,
+                asset.name AS crypto_asset_name,
+                wallet.id AS wallet_address_id,
+                wallet.label,
+                wallet.owner_full_name,
+                wallet.address,
+                wallet.network_code,
+                wallet.memo_tag,
+                wallet.wallet_provider,
+                assignment.assignment_reason,
+                assignment.status,
+                assignment.assigned_at,
+                assignment.released_at,
+                assignment.assignment_note
+             FROM crypto_wallet_assignments AS assignment
+             INNER JOIN crypto_wallet_addresses AS wallet
+               ON wallet.id = assignment.wallet_address_id
+             INNER JOIN crypto_assets AS asset
+               ON asset.id = wallet.crypto_asset_id
+             WHERE assignment.customer_id = {$customerId}
+               AND assignment.status = 'active'
+             ORDER BY assignment.assigned_at DESC"
+        );
+    }
     if (!is_array($assignedCryptoWallets)) {
         $assignedCryptoWallets = [];
     }

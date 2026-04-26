@@ -97,6 +97,7 @@ mkdir -p "${APP_DIR}/templates_c"
 mkdir -p "${WEB_DIR}/uploads"
 cp "${MYSQL_CONFIG_FILE}" "${APP_DIR}/config/mysql.php"
 printf '%s\n' "${APP_DIR}" > "${BACKEND_POINTER_FILE}"
+printf '%s\n' "${WEB_DIR}" > "${APP_DIR}/.public-root-path"
 
 find "${APP_DIR}/templates_c" -mindepth 1 -delete 2>/dev/null || true
 

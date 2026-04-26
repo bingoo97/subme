@@ -38,7 +38,9 @@ if (!function_exists('orders_payment_crypto_logo_by_code')) {
         ];
 
         if (isset($fileMap[$code])) {
-            $absolutePath = dirname(__DIR__, 3) . '/public_html/img/crypto/' . $fileMap[$code];
+            $absolutePath = function_exists('app_public_path')
+                ? app_public_path('img/crypto/' . $fileMap[$code])
+                : (dirname(__DIR__, 3) . '/public_html/img/crypto/' . $fileMap[$code]);
             if (is_file($absolutePath)) {
                 return '/img/crypto/' . $fileMap[$code];
             }

@@ -9650,7 +9650,7 @@ function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20):
 function admin_crypto_asset_logo_url(string $assetCode): string
 {
     $assetCode = strtolower(trim($assetCode));
-    $baseDir = dirname(__DIR__, 2) . '/public_html/img/crypto/';
+    $baseDir = rtrim(function_exists('app_public_root_path') ? app_public_root_path() : (dirname(__DIR__, 2) . '/public_html'), '/') . '/img/crypto/';
     $direct = $assetCode !== '' ? $baseDir . $assetCode . '.png' : '';
 
     if ($direct !== '' && is_file($direct)) {
