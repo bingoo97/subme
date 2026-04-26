@@ -663,6 +663,30 @@ function app_create_crypto_deposit_request($db, array $payload): int
     return (int)$db->id();
 }
 
+function app_effective_currency_id(array $settings, ...$candidates): int
+{
+    foreach ($candidates as $candidate) {
+        $value = (int)$candidate;
+        if ($value > 0) {
+            return $value;
+        }
+    }
+
+    $fallbacks = [
+        $settings['default_currency_id'] ?? 0,
+        $settings['currency'] ?? 0,
+    ];
+
+    foreach ($fallbacks as $fallback) {
+        $value = (int)$fallback;
+        if ($value > 0) {
+            return $value;
+        }
+    }
+
+    return 0;
+}
+
 function app_load_customer_bank_accounts($db, int $customerId, string $currencyCode = '', array $settings = []): array
 {
     $currencyCode = strtoupper(trim($currencyCode));

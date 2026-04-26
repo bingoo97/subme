@@ -799,6 +799,11 @@ if (app_uses_v2_schema($db)) {
             $selectedProduct = $availableProducts[0];
             $selectedProductId = (int)$selectedProduct['id'];
         }
+        $selectedProductCurrencyId = app_effective_currency_id(
+            is_array($settings ?? null) ? $settings : [],
+            (int)($selectedProduct['currency_id'] ?? 0),
+            (int)($selected['currency_id'] ?? 0)
+        );
 
         $selectedCurrencyCode = strtoupper(trim((string)($selectedProduct['currency_code'] ?? $selected['currency_code'] ?? 'USD')));
         if ($selectedCurrencyCode === '') {
@@ -919,12 +924,15 @@ if (app_uses_v2_schema($db)) {
                     $smarty->assign('alert_error', 'Exchange rate is unavailable for the selected cryptocurrency.');
                 } else {
                     if ((int)($selectedAsset['wallet_assignment_id'] ?? 0) <= 0) {
-                        $assignedWalletId = orders_payment_assign_crypto_wallet_customer(
+                        $assignedWalletId = app_assign_customer_crypto_wallet(
                             $db,
                             (int)($selectedAsset['wallet_address_id'] ?? 0),
                             (int)$user['id'],
                             is_array($settings ?? null) ? $settings : [],
-                            (int)$selected['id']
+                            (int)$selected['id'],
+                            'Assigned from customer payment wizard',
+                            'deposit',
+                            'active'
                         );
                         if ($assignedWalletId <= 0) {
                             $smarty->assign('alert_error', 'No wallet could be assigned to your account for this cryptocurrency right now.');
@@ -972,42 +980,23 @@ if (app_uses_v2_schema($db)) {
                         $paymentRedirectUrl = '/order-payment-' . (int)$selected['id'];
                     } else {
                         $requestedCryptoAmount = round(((float)$selectedProduct['price']) / (float)$selectedAsset['rate'], 8);
-                        $createdCryptoRequest = $db->insert(
-                            [
-                                'customer_id',
-                                'order_id',
-                                'crypto_asset_id',
-                                'wallet_address_id',
-                                'wallet_assignment_id',
-                                'requested_fiat_amount',
-                                'fiat_currency_id',
-                                'exchange_rate',
-                                'requested_crypto_amount',
-                                'assignment_mode',
-                                'status',
-                                'requested_at',
-                                'expires_at',
-                                'request_note',
-                            ],
-                            [
-                                (int)$user['id'],
-                                (int)$selected['id'],
-                                (int)$selectedAsset['crypto_asset_id'],
-                                (int)$selectedAsset['wallet_address_id'],
-                                (int)$selectedAsset['wallet_assignment_id'],
-                                (float)$selectedProduct['price'],
-                                (int)$selectedProduct['currency_id'],
-                                (float)$selectedAsset['rate'],
-                                $requestedCryptoAmount,
-                                'manual',
-                                'pending',
-                                date('Y-m-d H:i:s', $time_s),
-                                date('Y-m-d H:i:s', $time_s + 3600),
-                                'Created from customer payment wizard',
-                            ],
-                            'crypto_deposit_requests'
-                        );
-                        if ($createdCryptoRequest && (int)$db->id() > 0) {
+                        $createdCryptoRequestId = app_create_crypto_deposit_request($db, [
+                            'customer_id' => (int)$user['id'],
+                            'order_id' => (int)$selected['id'],
+                            'crypto_asset_id' => (int)$selectedAsset['crypto_asset_id'],
+                            'wallet_address_id' => (int)$selectedAsset['wallet_address_id'],
+                            'wallet_assignment_id' => (int)$selectedAsset['wallet_assignment_id'],
+                            'requested_fiat_amount' => (float)$selectedProduct['price'],
+                            'fiat_currency_id' => $selectedProductCurrencyId,
+                            'exchange_rate' => (float)$selectedAsset['rate'],
+                            'requested_crypto_amount' => $requestedCryptoAmount,
+                            'assignment_mode' => 'manual',
+                            'status' => 'pending',
+                            'requested_at' => date('Y-m-d H:i:s', $time_s),
+                            'expires_at' => date('Y-m-d H:i:s', $time_s + 3600),
+                            'request_note' => 'Created from customer payment wizard',
+                        ]);
+                        if ($createdCryptoRequestId > 0) {
                             app_queue_payment_request_notification($db, (int)$selected['id'], (int)$user['id']);
                             app_queue_support_payment_request_notification($db, (int)$selected['id'], (int)$user['id'], 'crypto');
                             app_queue_crypto_payment_live_chat_message(
@@ -1126,7 +1115,7 @@ if (app_uses_v2_schema($db)) {
                             (int)$selectedBankAccount['bank_account_id'],
                             (int)$selectedBankAccount['bank_account_assignment_id'],
                             (float)$selectedProduct['price'],
-                            (int)$selectedProduct['currency_id'],
+                            $selectedProductCurrencyId,
                             '',
                             'pending_payment',
                             date('Y-m-d H:i:s', $time_s),

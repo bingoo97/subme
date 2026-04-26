@@ -51,6 +51,7 @@ switch ($site) {
         if ($topupCurrencyCode === '') {
             $topupCurrencyCode = 'USD';
         }
+        $topupCurrencyId = app_effective_currency_id(is_array($settings ?? null) ? $settings : [], $topupCurrencyId);
         $topupCryptoAssets = [];
 
         if ($v2CryptoRequestsEnabled) {
