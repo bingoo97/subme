@@ -43,6 +43,7 @@
 		groupCreationKind: 'direct',
 		groupTargetConversationId: 0,
 		resellerViewMode: 'list',
+		conversationTransitionTimer: null,
 		initDone: false,
 
 		config: function () {
@@ -104,6 +105,14 @@
 
 		conversationBody: function () {
 			return $('[data-chat-conversation-body]');
+		},
+
+		conversationStage: function () {
+			return $('[data-chat-conversation-stage]');
+		},
+
+		conversationTransition: function () {
+			return $('[data-chat-conversation-transition]');
 		},
 
 		chatScroll: function () {
@@ -787,6 +796,7 @@
 			}
 
 			this.resellerViewMode = 'list';
+			this.setConversationLoadingState(false);
 			this.listView().prop('hidden', false);
 			this.conversationView().prop('hidden', true);
 		},
@@ -799,6 +809,44 @@
 			this.resellerViewMode = 'conversation';
 			this.listView().prop('hidden', true);
 			this.conversationView().prop('hidden', false);
+		},
+
+		setConversationLoadingState: function (isLoading) {
+			var $chatBox = this.chatBox();
+			var $loader = this.conversationTransition();
+			var $stage = this.conversationStage();
+			var loading = !!isLoading;
+
+			if ($chatBox.length) {
+				$chatBox.toggleClass('is-conversation-loading', loading);
+			}
+
+			if ($loader.length) {
+				$loader.prop('hidden', !loading).toggleClass('is-visible', loading);
+			}
+
+			if ($stage.length) {
+				$stage.toggleClass('is-dimmed', loading);
+			}
+		},
+
+		playConversationEntryAnimation: function () {
+			var self = this;
+			var $stage = this.conversationStage();
+
+			if (!$stage.length) {
+				return;
+			}
+
+			window.clearTimeout(this.conversationTransitionTimer);
+			$stage.removeClass('is-entering');
+			if ($stage[0] && typeof $stage[0].offsetWidth !== 'undefined') {
+				$stage[0].offsetWidth;
+			}
+			$stage.addClass('is-entering');
+			this.conversationTransitionTimer = window.setTimeout(function () {
+				self.conversationStage().removeClass('is-entering');
+			}, 280);
 		},
 
 		updateComposerAvailability: function () {
@@ -1306,6 +1354,10 @@
 					}
 				}
 				this.startDeleteCountdowns();
+				this.setConversationLoadingState(false);
+				if (options.animateConversation) {
+					this.playConversationEntryAnimation();
+				}
 				if (this.faqPendingKey) {
 					this.showTypingIndicator();
 				}
@@ -1362,7 +1414,8 @@
 				if (payload && payload.ok) {
 					self.renderPayload(payload, {
 						force: !!options.force,
-						scrollToBottom: !!options.scrollToBottom
+						scrollToBottom: !!options.scrollToBottom,
+						animateConversation: !!options.animateConversation
 					});
 				} else if (payload && payload.cooldown_active) {
 					self.applyCooldown(payload.cooldown_seconds || 30, payload.message || '');
@@ -1667,16 +1720,17 @@
 			this.activeConversationType = nextConversationType;
 			if (this.hasResellerInboxLayout()) {
 				this.showConversationView();
-				if (this.conversationBody().length) {
-					this.conversationBody().html('<div class="messenger-conversation-loading">Ładowanie rozmowy...</div>');
-				}
+				this.setConversationLoadingState(true);
 			}
 			this.fetch({
 				force: true,
 				conversationId: nextConversationId,
-				scrollToBottom: true
+				scrollToBottom: true,
+				animateConversation: true
 			}).done(function () {
 				self.markRead(nextConversationId);
+			}).always(function () {
+				self.setConversationLoadingState(false);
 			});
 			return false;
 		},

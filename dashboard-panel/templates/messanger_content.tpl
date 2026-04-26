@@ -93,6 +93,10 @@
                 {/foreach}
             </div>
             <div class="admin-chat-inbox__conversation-body messenger-inbox__conversation-body" data-chat-conversation-body>
+                <div class="messenger-conversation-transition" data-chat-conversation-transition hidden aria-live="polite" aria-busy="true">
+                    <span class="messenger-conversation-transition__pulse" aria-hidden="true"></span>
+                </div>
+                <div class="messenger-conversation-stage" data-chat-conversation-stage>
         {/if}
         {if $chat_active_conversation_is_group|default:false}
         <div class="messenger-conversation-meta">
@@ -236,6 +240,7 @@
                 {/section}
 			</ul>
 		</div>
+                </div>
         {if $user.customer_type|default:'client' eq 'reseller' && isset($chat_conversations) && $chat_conversations|@count gt 0}
             </div>
         </div>
