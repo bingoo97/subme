@@ -7279,6 +7279,21 @@ function admin_save_news(Mysql_ks $db, int $newsId, array $input): array
     ];
 }
 
+function admin_delete_news(Mysql_ks $db, int $newsId): array
+{
+    $news = admin_news_find($db, $newsId);
+    if (!is_array($news) || empty($news['id'])) {
+        return ['ok' => false, 'message' => 'News post not found.'];
+    }
+
+    $deleted = $db->delete_using_id('news_posts', $newsId);
+
+    return [
+        'ok' => (bool)$deleted,
+        'message' => $deleted ? 'News post deleted successfully.' : 'Unable to delete news post.',
+    ];
+}
+
 function admin_live_chat_rows(Mysql_ks $db, int $limit = 12): array
 {
     if (!schema_object_exists($db, 'support_conversations')) {
