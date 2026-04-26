@@ -5857,7 +5857,7 @@ function admin_customer_has_pending_crypto_payment(Mysql_ks $db, int $customerId
 
 function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId, string $assetCode = ''): array
 {
-    if ($customerId <= 0 || !schema_object_exists($db, 'customer_crypto_wallets')) {
+    if ($customerId <= 0) {
         return [];
     }
 
@@ -5867,26 +5867,70 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
         $assetFilter = " AND crypto_asset_code = '" . $db->escape($assetCode) . "'";
     }
 
+    $rows = [];
+    if (schema_object_exists($db, 'customer_crypto_wallets')) {
+        $rows = $db->select_full_user(
+            "SELECT
+                wallet_assignment_id,
+                wallet_address_id,
+                customer_id,
+                customer_email,
+                crypto_asset_code,
+                crypto_asset_name,
+                label,
+                address,
+                network_code,
+                wallet_provider,
+                owner_full_name,
+                status,
+                assigned_at
+             FROM customer_crypto_wallets
+             WHERE customer_id = {$customerId}
+               AND status IN ('reserved', 'active')
+               {$assetFilter}
+             ORDER BY assigned_at DESC, wallet_assignment_id DESC"
+        );
+    }
+
+    if ($rows) {
+        return $rows;
+    }
+
+    if (
+        !schema_object_exists($db, 'crypto_wallet_assignments')
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
+        || !schema_object_exists($db, 'crypto_assets')
+        || !schema_object_exists($db, 'customers')
+    ) {
+        return [];
+    }
+
     return $db->select_full_user(
         "SELECT
-            wallet_assignment_id,
-            wallet_address_id,
-            customer_id,
-            customer_email,
-            crypto_asset_code,
-            crypto_asset_name,
-            label,
-            address,
-            network_code,
-            wallet_provider,
-            owner_full_name,
-            status,
-            assigned_at
-         FROM customer_crypto_wallets
-         WHERE customer_id = {$customerId}
-           AND status IN ('reserved', 'active')
+            assignment.id AS wallet_assignment_id,
+            wallet.id AS wallet_address_id,
+            assignment.customer_id,
+            customer.email AS customer_email,
+            asset.code AS crypto_asset_code,
+            asset.name AS crypto_asset_name,
+            wallet.label,
+            wallet.address,
+            wallet.network_code,
+            wallet.wallet_provider,
+            wallet.owner_full_name,
+            assignment.status,
+            assignment.assigned_at
+         FROM crypto_wallet_assignments AS assignment
+         INNER JOIN crypto_wallet_addresses AS wallet
+           ON wallet.id = assignment.wallet_address_id
+         INNER JOIN crypto_assets AS asset
+           ON asset.id = wallet.crypto_asset_id
+         INNER JOIN customers AS customer
+           ON customer.id = assignment.customer_id
+         WHERE assignment.customer_id = {$customerId}
+           AND assignment.status IN ('reserved', 'active')
            {$assetFilter}
-         ORDER BY assigned_at DESC, wallet_assignment_id DESC"
+         ORDER BY assignment.assigned_at DESC, assignment.id DESC"
     );
 }
 
@@ -6714,10 +6758,16 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
     }
 
     if ($existingCustomerAssignmentId > 0 && ($sharedEnabled || count($customerAssignments) <= 1)) {
-        return ['ok' => false, 'message' => 'This wallet is already assigned to the selected customer.'];
+        return [
+            'ok' => true,
+            'message' => 'This wallet is already assigned to the selected customer.',
+            'wallet_assignment_id' => $existingCustomerAssignmentId,
+            'wallet_address_id' => $walletId,
+        ];
     }
 
     $db->start();
+    $walletAssignmentId = $existingCustomerAssignmentId;
 
     if (!$sharedEnabled && $activeAssignments) {
         foreach ($activeAssignments as $assignment) {
@@ -6761,6 +6811,12 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'Unable to assign wallet to the selected customer.'];
         }
+
+        $walletAssignmentId = (int)$db->id();
+        if ($walletAssignmentId <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Wallet assignment could not be created.'];
+        }
     }
 
     $db->update_using_id(
@@ -6781,7 +6837,12 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         $ipAddress
     );
 
-    return ['ok' => true, 'message' => 'Wallet assignment updated.'];
+    return [
+        'ok' => true,
+        'message' => 'Wallet assignment updated.',
+        'wallet_assignment_id' => $walletAssignmentId,
+        'wallet_address_id' => $walletId,
+    ];
 }
 
 function admin_remove_crypto_wallet_assignment(Mysql_ks $db, int $walletId, int $assignmentId, int $adminUserId, string $ipAddress = ''): array
@@ -8393,9 +8454,19 @@ function admin_chat_create_crypto_payment_request(
             return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign wallet.')];
         }
 
-        $assignments = admin_customer_active_crypto_assignments($db, $customerId, (string)($preview['asset_code'] ?? ''));
-        $assignment = $assignments ? $assignments[0] : null;
-        $walletAssignmentId = (int)($assignment['wallet_assignment_id'] ?? 0);
+        $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+        if ($walletAssignmentId <= 0) {
+            $assignments = admin_customer_active_crypto_assignments($db, $customerId, (string)($preview['asset_code'] ?? ''));
+            foreach ($assignments as $assignment) {
+                if ((int)($assignment['wallet_address_id'] ?? 0) !== $walletAddressId) {
+                    continue;
+                }
+
+                $walletAssignmentId = (int)($assignment['wallet_assignment_id'] ?? 0);
+                break;
+            }
+        }
+
         if ($walletAssignmentId <= 0) {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
