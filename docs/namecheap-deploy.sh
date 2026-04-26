@@ -98,6 +98,8 @@ mkdir -p "${WEB_DIR}/uploads"
 cp "${MYSQL_CONFIG_FILE}" "${APP_DIR}/config/mysql.php"
 printf '%s\n' "${APP_DIR}" > "${BACKEND_POINTER_FILE}"
 
+find "${APP_DIR}/templates_c" -mindepth 1 -delete 2>/dev/null || true
+
 chmod -R 775 "${APP_DIR}/templates_c"
 chmod -R 775 "${WEB_DIR}/uploads"
 
