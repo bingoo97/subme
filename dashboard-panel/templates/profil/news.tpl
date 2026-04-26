@@ -1,8 +1,5 @@
 <div class="content-box">
     <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.news_title}</h1>
-	<div class="alert alert-dismissible alert-info">
-		<i class="fa fa-info-circle" aria-hidden="true"></i> {$t.news_notice}
-	</div>
 	{if $news}
 	<div id="news">
 		{section name=i loop=$news}

@@ -510,6 +510,7 @@ $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['act
 $faqKey = isset($_POST['faq_key']) ? trim((string)$_POST['faq_key']) : (isset($_GET['faq_key']) ? trim((string)$_GET['faq_key']) : '');
 $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : (isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0);
 $chatLocaleCode = isset($currentLocale) ? (string)$currentLocale : (isset($user['lang_code']) ? (string)$user['lang_code'] : 'en');
+$responseMessage = '';
 
 chat_purge_expired_messages($db, chat_retention_days($settings));
 
@@ -527,6 +528,8 @@ if (
     || $action === 'respond_group_invite'
     || $action === 'leave_group'
     || $action === 'delete_group'
+    || $action === 'set_group_email_notifications'
+    || $action === 'set_group_retention'
     || isset($_POST['user'])
     || isset($_POST['id_usera'])
     || !empty($_FILES['file']['tmp_name'])
@@ -659,6 +662,45 @@ if ($action === 'delete_group') {
     $requestedConversationId = 0;
 }
 
+if ($action === 'set_group_email_notifications') {
+    $conversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
+    if (!$conversation) {
+        chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
+    }
+
+    $enabled = (string)($_POST['enabled'] ?? $_GET['enabled'] ?? '1') !== '0';
+    $result = chat_update_group_member_email_notifications(
+        $db,
+        $requestedConversationId,
+        chat_participant_key_for_customer($currentCustomerId),
+        $enabled
+    );
+    if (empty($result['ok'])) {
+        chat_json_response($result);
+    }
+    $responseMessage = (string)($result['message'] ?? '');
+}
+
+if ($action === 'set_group_retention') {
+    $conversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
+    if (!$conversation) {
+        chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
+    }
+
+    $requestedRetention = trim((string)($_POST['retention_hours'] ?? $_GET['retention_hours'] ?? ''));
+    $retentionHours = $requestedRetention === '' ? null : (int)$requestedRetention;
+    $result = chat_update_group_retention_hours(
+        $db,
+        $requestedConversationId,
+        ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
+        $retentionHours
+    );
+    if (empty($result['ok'])) {
+        chat_json_response($result);
+    }
+    $responseMessage = (string)($result['message'] ?? '');
+}
+
 if ($faqKey !== '') {
     $faqPrompts = chat_load_faq_prompts($db, $chatLocaleCode, 5);
     $selectedFaqPrompt = chat_find_faq_prompt($faqPrompts, $faqKey);
@@ -705,6 +747,12 @@ if (app_uses_v2_schema($db)) {
                     echo '<p>This group is read only.</p>';
                     exit;
                 }
+                chat_queue_group_customer_notifications_if_offline(
+                    $db,
+                    $requestedConversationId,
+                    ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
+                    $messageBody
+                );
                 chat_register_customer_message_sent();
             } else {
                 chat_insert_customer_message($db, $currentCustomerId, $messageBody);
@@ -725,6 +773,13 @@ if (app_uses_v2_schema($db)) {
                     echo '<p>This group is read only.</p>';
                     exit;
                 }
+                chat_queue_group_customer_notifications_if_offline(
+                    $db,
+                    $requestedConversationId,
+                    ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
+                    '',
+                    $publicPath
+                );
             } else {
                 chat_insert_customer_message($db, $currentCustomerId, '', $publicPath);
             }
@@ -825,6 +880,9 @@ if ($responseFormat === 'json') {
         'cooldown_active' => !empty($rateLimitState['is_blocked']),
         'cooldown_seconds' => (int)($rateLimitState['remaining_seconds'] ?? 0),
     ];
+    if ($responseMessage !== '') {
+        $responsePayload['message'] = $responseMessage;
+    }
 
     if ($action === 'faq_prompt' && isset($selectedFaqPrompt)) {
         $responsePayload['faq_answer_text'] = (string)$selectedFaqPrompt['answer'];

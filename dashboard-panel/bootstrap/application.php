@@ -1800,6 +1800,28 @@ function app_ensure_customer_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('customers', 'customer_type');
     }
+
+    if (!schema_column_exists($db, 'customers', 'public_handle')) {
+        @$db->query(
+            "ALTER TABLE customers
+             ADD COLUMN public_handle VARCHAR(80) DEFAULT NULL
+             AFTER email"
+        );
+        schema_forget_column_cache('customers', 'public_handle');
+    }
+
+    if (!schema_column_exists($db, 'customers', 'avatar_url')) {
+        @$db->query(
+            "ALTER TABLE customers
+             ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL
+             AFTER public_handle"
+        );
+        schema_forget_column_cache('customers', 'avatar_url');
+    }
+
+    if (schema_column_exists($db, 'customers', 'public_handle')) {
+        app_backfill_missing_customer_public_handles($db);
+    }
 }
 
 function app_normalize_customer_type($value): string
@@ -1814,6 +1836,317 @@ function app_normalize_customer_type($value): string
     }
 
     return $type;
+}
+
+function app_normalize_customer_public_handle(string $value): string
+{
+    if (function_exists('chat_normalize_public_handle')) {
+        return chat_normalize_public_handle($value);
+    }
+
+    $value = strtolower(trim($value));
+    $value = preg_replace('/[^a-z0-9._-]+/', '-', $value) ?? $value;
+    return trim($value, '-._');
+}
+
+function app_customer_avatar_url(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (function_exists('mb_strlen') && mb_strlen($value) > 255) {
+        $value = mb_substr($value, 0, 255);
+    } elseif (strlen($value) > 255) {
+        $value = substr($value, 0, 255);
+    }
+
+    return trim($value);
+}
+
+function app_customer_avatar_upload_directory(): string
+{
+    return dirname(__DIR__, 2) . '/public_html/uploads/avatars/customers';
+}
+
+function app_customer_avatar_create_image_resource(string $sourcePath, string $mimeType)
+{
+    switch (strtolower(trim($mimeType))) {
+        case 'image/jpeg':
+            return function_exists('imagecreatefromjpeg') ? @imagecreatefromjpeg($sourcePath) : false;
+        case 'image/png':
+            return function_exists('imagecreatefrompng') ? @imagecreatefrompng($sourcePath) : false;
+        case 'image/webp':
+            return function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($sourcePath) : false;
+    }
+
+    return false;
+}
+
+function app_store_customer_avatar_upload(array $file, int $customerId): array
+{
+    $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+    $tmpPath = (string)($file['tmp_name'] ?? '');
+    $maxBytes = 5 * 1024 * 1024;
+
+    if ($customerId <= 0 || $uploadError !== UPLOAD_ERR_OK || $tmpPath === '' || !is_uploaded_file($tmpPath)) {
+        return ['ok' => false, 'code' => 'upload_error'];
+    }
+
+    $fileSize = @filesize($tmpPath);
+    if (!is_int($fileSize) || $fileSize <= 0) {
+        $fileSize = isset($file['size']) ? (int)$file['size'] : 0;
+    }
+
+    if ($fileSize <= 0 || $fileSize > $maxBytes) {
+        return ['ok' => false, 'code' => 'too_large'];
+    }
+
+    $imageInfo = @getimagesize($tmpPath);
+    $mimeType = strtolower(trim((string)($imageInfo['mime'] ?? '')));
+    $allowedMimeTypes = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+    ];
+
+    if (!isset($allowedMimeTypes[$mimeType])) {
+        return ['ok' => false, 'code' => 'invalid_type'];
+    }
+
+    $uploadDirectory = app_customer_avatar_upload_directory();
+    if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+        return ['ok' => false, 'code' => 'upload_error'];
+    }
+
+    $extension = $allowedMimeTypes[$mimeType];
+    $fileName = 'customer_avatar_' . $customerId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $extension;
+    $destinationPath = $uploadDirectory . '/' . $fileName;
+    $saved = false;
+
+    $canResize = function_exists('imagecreatetruecolor')
+        && function_exists('imagecopyresampled')
+        && function_exists('imagedestroy');
+
+    if ($canResize) {
+        $sourceImage = app_customer_avatar_create_image_resource($tmpPath, $mimeType);
+        if ($sourceImage) {
+            $width = imagesx($sourceImage);
+            $height = imagesy($sourceImage);
+
+            if ($width > 0 && $height > 0) {
+                $maxDimension = 512;
+                $scale = min($maxDimension / $width, $maxDimension / $height, 1);
+                $targetWidth = max(1, (int)round($width * $scale));
+                $targetHeight = max(1, (int)round($height * $scale));
+                $targetImage = imagecreatetruecolor($targetWidth, $targetHeight);
+
+                if ($targetImage) {
+                    if ($mimeType === 'image/png' || $mimeType === 'image/webp') {
+                        imagealphablending($targetImage, false);
+                        imagesavealpha($targetImage, true);
+                        $transparent = imagecolorallocatealpha($targetImage, 0, 0, 0, 127);
+                        imagefilledrectangle($targetImage, 0, 0, $targetWidth, $targetHeight, $transparent);
+                    } else {
+                        $background = imagecolorallocate($targetImage, 255, 255, 255);
+                        imagefilledrectangle($targetImage, 0, 0, $targetWidth, $targetHeight, $background);
+                    }
+
+                    imagecopyresampled($targetImage, $sourceImage, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
+
+                    if ($mimeType === 'image/png') {
+                        $saved = function_exists('imagepng') ? imagepng($targetImage, $destinationPath, 6) : false;
+                    } elseif ($mimeType === 'image/webp') {
+                        $saved = function_exists('imagewebp') ? imagewebp($targetImage, $destinationPath, 82) : false;
+                    } else {
+                        $saved = function_exists('imagejpeg') ? imagejpeg($targetImage, $destinationPath, 82) : false;
+                    }
+
+                    imagedestroy($targetImage);
+                }
+            }
+
+            imagedestroy($sourceImage);
+        }
+    }
+
+    if (!$saved) {
+        $saved = move_uploaded_file($tmpPath, $destinationPath);
+    }
+
+    if (!$saved) {
+        return ['ok' => false, 'code' => 'upload_error'];
+    }
+
+    return [
+        'ok' => true,
+        'url' => '/uploads/avatars/customers/' . $fileName,
+    ];
+}
+
+function app_delete_customer_avatar_file(string $publicPath): bool
+{
+    $publicPath = trim($publicPath);
+    if ($publicPath === '' || strpos($publicPath, '/uploads/avatars/customers/') !== 0) {
+        return false;
+    }
+
+    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
+    if ($publicRoot === false) {
+        return false;
+    }
+
+    $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
+    $realFilePath = realpath($filePath);
+    if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/avatars/customers/') !== 0 || !is_file($realFilePath)) {
+        return false;
+    }
+
+    return @unlink($realFilePath);
+}
+
+function app_customer_handle_base_from_email(string $email): string
+{
+    $email = strtolower(trim($email));
+    $localPart = $email;
+    if (strpos($email, '@') !== false) {
+        $localPart = (string)substr($email, 0, strpos($email, '@'));
+    }
+
+    $base = app_normalize_customer_public_handle($localPart);
+    if ($base === '') {
+        $base = 'user';
+    }
+
+    return $base;
+}
+
+function app_customer_public_handle_exists(Mysql_ks $db, string $handle, int $excludeCustomerId = 0): bool
+{
+    $handle = app_normalize_customer_public_handle($handle);
+    if ($handle === '' || !schema_object_exists($db, 'customers') || !schema_column_exists($db, 'customers', 'public_handle')) {
+        return false;
+    }
+
+    $safeHandle = $db->escape($handle);
+    $excludeSql = $excludeCustomerId > 0 ? " AND id <> {$excludeCustomerId}" : '';
+    $row = $db->select_user(
+        "SELECT id
+         FROM customers
+         WHERE public_handle = '{$safeHandle}'{$excludeSql}
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']);
+}
+
+function app_generate_customer_public_handle(Mysql_ks $db, string $email, int $excludeCustomerId = 0): string
+{
+    $base = app_customer_handle_base_from_email($email);
+    $candidate = $base;
+    $suffix = 2;
+
+    while (app_customer_public_handle_exists($db, $candidate, $excludeCustomerId)) {
+        $candidate = $base . $suffix;
+        $suffix++;
+    }
+
+    return $candidate;
+}
+
+function app_resolve_customer_public_handle(Mysql_ks $db, string $handleInput, string $email, int $excludeCustomerId = 0): array
+{
+    $handle = app_normalize_customer_public_handle($handleInput);
+    if ($handle === '') {
+        return [
+            'ok' => true,
+            'handle' => app_generate_customer_public_handle($db, $email, $excludeCustomerId),
+            'generated' => true,
+        ];
+    }
+
+    if (app_customer_public_handle_exists($db, $handle, $excludeCustomerId)) {
+        return ['ok' => false, 'message' => 'This username is already taken.'];
+    }
+
+    return [
+        'ok' => true,
+        'handle' => $handle,
+        'generated' => false,
+    ];
+}
+
+function app_backfill_missing_customer_public_handles(Mysql_ks $db): void
+{
+    static $done = false;
+    if ($done || !schema_object_exists($db, 'customers') || !schema_column_exists($db, 'customers', 'public_handle')) {
+        return;
+    }
+
+    $done = true;
+    $rows = $db->select_full_user(
+        "SELECT id, email
+         FROM customers
+         WHERE public_handle IS NULL
+            OR TRIM(public_handle) = ''
+         ORDER BY id ASC
+         LIMIT 500"
+    );
+
+    foreach ($rows as $row) {
+        $customerId = (int)($row['id'] ?? 0);
+        $email = trim((string)($row['email'] ?? ''));
+        if ($customerId <= 0 || $email === '') {
+            continue;
+        }
+
+        $handle = app_generate_customer_public_handle($db, $email, $customerId);
+        if ($handle === '') {
+            continue;
+        }
+
+        $db->update_using_id(['public_handle'], [$handle], 'customers', $customerId);
+    }
+}
+
+function app_customer_display_label(array $customer): string
+{
+    $handle = app_normalize_customer_public_handle((string)($customer['public_handle'] ?? ''));
+    if ($handle !== '') {
+        return $handle;
+    }
+
+    $email = trim((string)($customer['email'] ?? ''));
+    if ($email !== '') {
+        if (strpos($email, '@') !== false) {
+            $email = (string)substr($email, 0, strpos($email, '@'));
+        }
+        $email = trim($email);
+    }
+
+    return $email !== '' ? $email : 'user';
+}
+
+function app_customer_avatar_initial(array $customer): string
+{
+    $label = app_customer_display_label($customer);
+    if ($label === '') {
+        return 'U';
+    }
+
+    return strtoupper(function_exists('mb_substr') ? mb_substr($label, 0, 1) : substr($label, 0, 1));
+}
+
+function app_customer_avatar_theme(array $customer): string
+{
+    $seed = strtolower(trim((string)($customer['public_handle'] ?? $customer['email'] ?? '')));
+    if ($seed === '') {
+        return 'theme-1';
+    }
+
+    $index = abs((int)crc32($seed)) % 6;
+    return 'theme-' . ($index + 1);
 }
 
 function app_customer_product_type(array $customer): string
@@ -2005,6 +2338,12 @@ function app_email_builtin_templates(): array
             'body' => app_email_builtin_templates_localized('en')['support-payment-request-notify']['body'],
             'placeholders' => ['customer_email', 'order_id', 'id_zamowienia', 'admin_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
         ],
+        'reseller-chat-customer-notify' => [
+            'name' => 'Reseller messenger notification',
+            'subject' => 'You have a new messenger message',
+            'body' => app_email_builtin_templates_localized('en')['reseller-chat-customer-notify']['body'],
+            'placeholders' => ['conversation_title', 'sender_label', 'message_preview', 'chat_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
     ];
 }
 
@@ -2033,6 +2372,7 @@ function app_email_active_template_keys(): array
         'news-broadcast',
         'account-blocked',
         'support-payment-request-notify',
+        'reseller-chat-customer-notify',
     ];
 }
 
@@ -2054,6 +2394,7 @@ function app_email_builtin_templates_localized(string $localeCode): array
             'news-broadcast' => ['subject' => 'Nowa ważna informacja', 'body' => "<h3>Witaj,</h3>\n<p>W Twoim panelu pojawiła się nowa ważna informacja.</p>\n<p>Zaloguj się na swoje konto, aby ją sprawdzić.</p>\n{$footer}"],
             'account-blocked' => ['subject' => 'Twoje konto zostało zablokowane', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że Twoje konto w <strong>%pagename%</strong> zostało zablokowane.</p>\n<p>Jeśli potrzebujesz pomocy, skontaktuj się z nami przez stronę.</p>\n{$footer}"],
             'support-payment-request-notify' => ['subject' => 'Klient rozpoczął płatność [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Klient rozpoczął proces płatności dla zamówienia nr <strong>#%order_id%</strong>.</p>\n<p>Login klienta: <strong>%customer_email%</strong></p>\n<p>Przejdź do panelu administracyjnego, aby sprawdzić szczegóły.</p>\n{$footer}"],
+            'reseller-chat-customer-notify' => ['subject' => 'Masz nową wiadomość w messengerze', 'body' => "<h3>Witaj,</h3>\n<p>Otrzymałeś nową wiadomość od <strong>%sender_label%</strong>.</p>\n<p>Rozmowa: <strong>%conversation_title%</strong></p>\n<p>Podgląd wiadomości: <strong>%message_preview%</strong></p>\n<p>Zaloguj się do swojego konta, aby otworzyć messenger.</p>\n{$footer}"],
         ];
     }
 
@@ -2069,6 +2410,7 @@ function app_email_builtin_templates_localized(string $localeCode): array
         'news-broadcast' => ['subject' => 'New important information', 'body' => "<h3>Hello,</h3>\n<p>A new important information is waiting in your panel.</p>\n<p>Log in to your account to review it.</p>\n{$footer}"],
         'account-blocked' => ['subject' => 'Your account was blocked', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that your account in <strong>%pagename%</strong> has been blocked.</p>\n<p>If you need help, contact us through the website.</p>\n{$footer}"],
         'support-payment-request-notify' => ['subject' => 'Customer started payment [Support]', 'body' => "<h3>Hello,</h3>\n<p>A customer started the payment process for order <strong>#%order_id%</strong>.</p>\n<p>Customer login: <strong>%customer_email%</strong></p>\n<p>Open the admin panel to review the details.</p>\n{$footer}"],
+        'reseller-chat-customer-notify' => ['subject' => 'You have a new messenger message', 'body' => "<h3>Hello,</h3>\n<p>You received a new message from <strong>%sender_label%</strong>.</p>\n<p>Conversation: <strong>%conversation_title%</strong></p>\n<p>Message preview: <strong>%message_preview%</strong></p>\n<p>Log in to your account to open messenger.</p>\n{$footer}"],
     ];
 }
 
@@ -4467,6 +4809,9 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $archive = app_archive_expired_payment_requests($db, $safeNow);
     $expire = app_expire_overdue_orders($db, $safeNow);
     $chat = app_prune_support_chat_messages($db, $safeNow);
+    $messenger = function_exists('chat_prune_group_chat_messages')
+        ? chat_prune_group_chat_messages($db, $safeNow)
+        : ['ok' => true, 'deleted_messages' => 0, 'deleted_files' => 0, 'message' => 'Group messenger cleanup skipped.'];
     $prune = app_prune_retained_data($db, $safeNow);
 
     $steps = [
@@ -4474,6 +4819,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         'archive_requests' => $archive,
         'expire_orders' => $expire,
         'live_chat_cleanup' => $chat,
+        'group_chat_cleanup' => $messenger,
         'retention_cleanup' => $prune,
     ];
 
@@ -4500,6 +4846,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'deleted_chat_messages' => (int)($chat['deleted_messages'] ?? 0),
             'deleted_chat_conversations' => (int)($chat['deleted_empty_conversations'] ?? 0),
             'deleted_chat_files' => (int)($chat['deleted_files'] ?? 0),
+            'deleted_group_chat_messages' => (int)($messenger['deleted_messages'] ?? 0),
+            'deleted_group_chat_files' => (int)($messenger['deleted_files'] ?? 0),
             'deleted_history_logs' => (int)($prune['deleted_history_logs'] ?? 0),
             'deleted_crypto_transactions' => (int)($prune['deleted_crypto_transactions'] ?? 0),
             'deleted_crypto_requests' => (int)($prune['deleted_crypto_requests'] ?? 0),
@@ -5324,9 +5672,11 @@ function app_insert_customer_registration(
     if (app_uses_v2_schema($db)) {
         app_ensure_customer_runtime_columns($db);
         $customerType = app_normalize_customer_type($customerType);
+        $handle = app_generate_customer_public_handle($db, $email);
         $db->insert(
             [
                 'email',
+                'public_handle',
                 'password_hash',
                 'password_hash_algorithm',
                 'locale_code',
@@ -5339,6 +5689,7 @@ function app_insert_customer_registration(
             ],
             [
                 $email,
+                $handle,
                 password_hash($plainPassword, PASSWORD_DEFAULT),
                 'password_hash',
                 $localeCode,

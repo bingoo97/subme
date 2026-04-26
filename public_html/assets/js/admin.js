@@ -616,6 +616,42 @@ document.addEventListener('DOMContentLoaded', function () {
             setHidden(groupAlert, !message);
         }
 
+        function adminChatStorageAvailable() {
+            try {
+                return !!window.localStorage;
+            } catch (error) {
+                return false;
+            }
+        }
+
+        function adminChatPanelStateKey() {
+            return 'admin-chat:panel-open:' + String(window.location.pathname || '/admin/');
+        }
+
+        function saveAdminChatPanelState(isOpen) {
+            if (!adminChatStorageAvailable()) {
+                return;
+            }
+
+            try {
+                window.localStorage.setItem(adminChatPanelStateKey(), isOpen ? '1' : '0');
+            } catch (error) {
+                return;
+            }
+        }
+
+        function restoreAdminChatPanelState() {
+            if (!adminChatStorageAvailable()) {
+                return false;
+            }
+
+            try {
+                return window.localStorage.getItem(adminChatPanelStateKey()) === '1';
+            } catch (error) {
+                return false;
+            }
+        }
+
         function syncPaymentHeaderActions(payload) {
             var isDirectConversation = activeConversationType === 'live_chat' && activeConversationId > 0 && activeCustomerId > 0;
             var hasPendingCryptoPayment = !!(payload && payload.pending_crypto_payment);
@@ -1330,6 +1366,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 toggle.classList.add('is-open');
                 toggle.setAttribute('aria-expanded', 'true');
             }
+            saveAdminChatPanelState(true);
             if (focusSearch && searchInput) {
                 window.setTimeout(function () {
                     searchInput.focus();
@@ -1345,6 +1382,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 toggle.classList.remove('is-open');
                 toggle.setAttribute('aria-expanded', 'false');
             }
+            saveAdminChatPanelState(false);
             closeQuickModal();
             closeAllPaymentModals();
         }
@@ -1533,6 +1571,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     showList();
                 }
             });
+        }
+
+        if (restoreAdminChatPanelState()) {
+            openPanel(false);
+            showList();
         }
 
         qa('[data-admin-chat-open]').forEach(function (button) {

@@ -40,7 +40,9 @@
 		groupEmails: [],
 		groupEmailRequests: {},
 		groupModalMode: 'create',
+		groupCreationKind: 'direct',
 		groupTargetConversationId: 0,
+		resellerViewMode: 'list',
 		initDone: false,
 
 		config: function () {
@@ -92,6 +94,18 @@
 			return $('#chat_box');
 		},
 
+		listView: function () {
+			return $('[data-chat-list-view]');
+		},
+
+		conversationView: function () {
+			return $('[data-chat-conversation-view]');
+		},
+
+		conversationBody: function () {
+			return $('[data-chat-conversation-body]');
+		},
+
 		chatScroll: function () {
 			return $('#chat_scroll');
 		},
@@ -128,6 +142,14 @@
 			return $('#messenger_group_name_field');
 		},
 
+		groupModeSwitch: function () {
+			return $('#messenger_group_mode_switch');
+		},
+
+		groupModeButtons: function () {
+			return $('[data-messenger-group-kind]');
+		},
+
 		groupContextField: function () {
 			return $('#messenger_group_context');
 		},
@@ -152,6 +174,22 @@
 			return $('#messenger_group_email');
 		},
 
+		groupEmailLabel: function () {
+			return $('#messenger_group_email_label');
+		},
+
+		groupHint: function () {
+			return $('#messenger_group_hint');
+		},
+
+		emailNotificationsToggle: function () {
+			return $('[data-chat-email-notifications-toggle]');
+		},
+
+		retentionSelect: function () {
+			return $('[data-chat-retention-select]');
+		},
+
 		groupMembersBox: function () {
 			return $('#messenger_group_members');
 		},
@@ -166,6 +204,41 @@
 
 		isOpen: function () {
 			return this.widget().hasClass('is-open');
+		},
+
+		storageAvailable: function () {
+			try {
+				return !!window.localStorage;
+			} catch (error) {
+				return false;
+			}
+		},
+
+		panelStateStorageKey: function () {
+			var cfg = this.config();
+			return 'messenger:panel-open:' + String(cfg.userId || 0);
+		},
+
+		savePanelState: function (isOpen) {
+			if (!this.storageAvailable()) {
+				return;
+			}
+			try {
+				window.localStorage.setItem(this.panelStateStorageKey(), isOpen ? '1' : '0');
+			} catch (error) {
+				return;
+			}
+		},
+
+		restorePanelState: function () {
+			if (!this.storageAvailable()) {
+				return false;
+			}
+			try {
+				return window.localStorage.getItem(this.panelStateStorageKey()) === '1';
+			} catch (error) {
+				return false;
+			}
 		},
 
 		updateViewportMetrics: function () {
@@ -704,6 +777,30 @@
 			this.updateComposerAvailability();
 		},
 
+		hasResellerInboxLayout: function () {
+			return this.listView().length > 0 && this.conversationView().length > 0;
+		},
+
+		showConversationList: function () {
+			if (!this.hasResellerInboxLayout()) {
+				return;
+			}
+
+			this.resellerViewMode = 'list';
+			this.listView().prop('hidden', false);
+			this.conversationView().prop('hidden', true);
+		},
+
+		showConversationView: function () {
+			if (!this.hasResellerInboxLayout()) {
+				return;
+			}
+
+			this.resellerViewMode = 'conversation';
+			this.listView().prop('hidden', true);
+			this.conversationView().prop('hidden', false);
+		},
+
 		updateComposerAvailability: function () {
 			var writeMessagePlaceholder = window.MESSENGER_BOOTSTRAP.writeMessagePlaceholder || 'Write message...';
 			var readOnlyPlaceholder = window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder || 'This group is read only.';
@@ -765,20 +862,56 @@
 			}).join(''));
 		},
 
+		setGroupCreationKind: function (kind) {
+			var normalizedKind = String(kind || '').toLowerCase() === 'group' ? 'group' : 'direct';
+			var isGroupKind = normalizedKind === 'group';
+
+			this.groupCreationKind = normalizedKind;
+			this.groupModeButtons().removeClass('is-active').attr('aria-pressed', 'false');
+			this.groupModeButtons().filter('[data-messenger-group-kind="' + normalizedKind + '"]').addClass('is-active').attr('aria-pressed', 'true');
+
+			if (this.groupModalMode === 'invite') {
+				return;
+			}
+
+			this.groupNameField().toggle(isGroupKind);
+			this.groupModalTitle().text(isGroupKind
+				? (window.MESSENGER_BOOTSTRAP.groupCreateTitle || 'Create group chat')
+				: (window.MESSENGER_BOOTSTRAP.groupDirectTitle || 'Start direct conversation'));
+			this.groupSubmitLabel().text(isGroupKind
+				? (window.MESSENGER_BOOTSTRAP.groupCreateSubmit || 'Create group')
+				: (window.MESSENGER_BOOTSTRAP.groupDirectSubmit || 'Start conversation'));
+			this.groupEmailLabel().text(isGroupKind
+				? (window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel || 'Add participant by email')
+				: (window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel || 'Add reseller by email'));
+			this.groupHint().text(isGroupKind
+				? (window.MESSENGER_BOOTSTRAP.groupGroupHint || 'Each invitation is valid for 24 hours. If nobody accepts it in time, it is removed automatically.')
+				: (window.MESSENGER_BOOTSTRAP.groupDirectHint || 'Add one reseller email to start a direct conversation right away.'));
+
+			if (!isGroupKind) {
+				this.groupNameInput().val('');
+				if (this.groupEmails.length > 1) {
+					this.groupEmails = this.groupEmails.slice(0, 1);
+					this.renderGroupMembers();
+				}
+			}
+		},
+
 		resetGroupModal: function () {
 			this.groupEmails = [];
 			this.groupEmailRequests = {};
 			this.groupModalMode = 'create';
+			this.groupCreationKind = 'direct';
 			this.groupTargetConversationId = 0;
 			this.groupNameInput().val('');
 			this.groupEmailInput().val('');
+			this.groupModeSwitch().show();
 			this.groupNameField().show();
 			this.groupContextField().hide();
 			this.groupContextTitle().text('');
-			this.groupModalTitle().text(window.MESSENGER_BOOTSTRAP.groupCreateTitle || 'Create group chat');
-			this.groupSubmitLabel().text(window.MESSENGER_BOOTSTRAP.groupCreateSubmit || 'Create group');
 			this.renderGroupMembers();
 			this.showGroupAlert('', false);
+			this.setGroupCreationKind('direct');
 		},
 
 		openGroupModal: function (mode, options) {
@@ -793,6 +926,7 @@
 			this.groupTargetConversationId = parseInt(targetOptions.conversationId || 0, 10) || 0;
 
 			if (this.groupModalMode === 'invite') {
+				this.groupModeSwitch().hide();
 				this.groupNameField().hide();
 				this.groupContextField().show();
 				this.groupContextLabel().text(window.MESSENGER_BOOTSTRAP.groupInviteNameLabel || 'Group');
@@ -804,7 +938,7 @@
 			this.groupModal().addClass('is-open').attr('aria-hidden', 'false');
 			$('body').addClass('messenger-upload-open');
 			window.setTimeout(function () {
-				if (targetMode === 'invite') {
+				if (targetMode === 'invite' || self.groupCreationKind === 'direct') {
 					$('#messenger_group_email').trigger('focus');
 					return;
 				}
@@ -835,6 +969,11 @@
 
 			if (this.groupEmails.indexOf(email) !== -1) {
 				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailDuplicate || 'This invitation is already added.', true);
+				return false;
+			}
+
+			if (this.groupModalMode !== 'invite' && this.groupCreationKind === 'direct' && this.groupEmails.length >= 1) {
+				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupDirectLimit || 'Direct conversation allows only one reseller.', true);
 				return false;
 			}
 
@@ -886,6 +1025,8 @@
 			var $menu = $('[data-chat-group-menu]');
 			var isOpen = $menu.hasClass('is-open');
 
+			this.closeGroupMembersPopover();
+			this.closeGroupSettingsMenu();
 			$button.attr('aria-expanded', isOpen ? 'false' : 'true');
 			$menu.toggleClass('is-open', !isOpen);
 			return false;
@@ -894,6 +1035,40 @@
 		closeGroupMenu: function () {
 			$('[data-chat-group-menu-toggle]').attr('aria-expanded', 'false');
 			$('[data-chat-group-menu]').removeClass('is-open');
+		},
+
+		toggleGroupSettingsMenu: function () {
+			var $button = $('[data-chat-group-settings-toggle]');
+			var $menu = $('[data-chat-group-settings-menu]');
+			var isOpen = $menu.hasClass('is-open');
+
+			this.closeGroupMenu();
+			this.closeGroupMembersPopover();
+			$button.attr('aria-expanded', isOpen ? 'false' : 'true');
+			$menu.toggleClass('is-open', !isOpen);
+			return false;
+		},
+
+		closeGroupSettingsMenu: function () {
+			$('[data-chat-group-settings-toggle]').attr('aria-expanded', 'false');
+			$('[data-chat-group-settings-menu]').removeClass('is-open');
+		},
+
+		toggleGroupMembersPopover: function () {
+			var $button = $('[data-chat-group-members-toggle]');
+			var $popover = $('[data-chat-group-members-popover]');
+			var isOpen = $popover.hasClass('is-open');
+
+			this.closeGroupMenu();
+			this.closeGroupSettingsMenu();
+			$button.attr('aria-expanded', isOpen ? 'false' : 'true');
+			$popover.toggleClass('is-open', !isOpen);
+			return false;
+		},
+
+		closeGroupMembersPopover: function () {
+			$('[data-chat-group-members-toggle]').attr('aria-expanded', 'false');
+			$('[data-chat-group-members-popover]').removeClass('is-open');
 		},
 
 		updateHomeInvites: function (html) {
@@ -1064,6 +1239,13 @@
 
 		open: function () {
 			var self = this;
+			if (this.hasResellerInboxLayout()) {
+				if (this.activeConversationId > 0) {
+					this.showConversationView();
+				} else {
+					this.showConversationList();
+				}
+			}
 			this.refreshOpenLayout(true);
 			this.widget().addClass('is-open');
 			this.heading().attr('aria-expanded', 'true');
@@ -1073,6 +1255,7 @@
 			});
 			this.icon().removeClass('fa-angle-down').addClass('fa-angle-up');
 			this.markRead();
+			this.savePanelState(true);
 			this.fetch({
 				force: true,
 				scrollToBottom: true
@@ -1085,6 +1268,7 @@
 			this.heading().attr('aria-expanded', 'false');
 			this.panel().attr('aria-hidden', 'true').removeClass('in is-visible').stop(true, true).slideUp(180);
 			this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
+			this.savePanelState(false);
 			return false;
 		},
 
@@ -1111,7 +1295,16 @@
 				this.chatBox().html(payload.html);
 				this.lastRenderedHtml = payload.html;
 				this.closeGroupMenu();
+				this.closeGroupSettingsMenu();
+				this.closeGroupMembersPopover();
 				this.syncConversationStateFromMarkup();
+				if (this.hasResellerInboxLayout()) {
+					if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0) {
+						this.showConversationView();
+					} else {
+						this.showConversationList();
+					}
+				}
 				this.startDeleteCountdowns();
 				if (this.faqPendingKey) {
 					this.showTypingIndicator();
@@ -1472,6 +1665,12 @@
 
 			this.activeConversationId = nextConversationId;
 			this.activeConversationType = nextConversationType;
+			if (this.hasResellerInboxLayout()) {
+				this.showConversationView();
+				if (this.conversationBody().length) {
+					this.conversationBody().html('<div class="messenger-conversation-loading">Ładowanie rozmowy...</div>');
+				}
+			}
 			this.fetch({
 				force: true,
 				conversationId: nextConversationId,
@@ -1494,7 +1693,7 @@
 				return false;
 			}
 
-			if (this.groupModalMode !== 'invite' && !groupName) {
+			if (this.groupModalMode !== 'invite' && this.groupCreationKind === 'group' && !groupName) {
 				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupNameRequired || 'Group name is required.', true);
 				return false;
 			}
@@ -1645,6 +1844,88 @@
 			return false;
 		},
 
+		updateGroupEmailNotifications: function (enabled) {
+			var self = this;
+			var cfg = this.config();
+
+			if (!this.activeConversationId || this.activeConversationType !== 'group_chat') {
+				return false;
+			}
+
+			$.ajax({
+				type: 'POST',
+				url: cfg.endpoint,
+				dataType: 'json',
+				data: {
+					action: 'set_group_email_notifications',
+					format: 'json',
+					conversation_id: this.activeConversationId,
+					enabled: enabled ? 1 : 0,
+					_csrf: cfg.csrfToken
+				}
+			}).done(function (payload) {
+				if (!payload || !payload.ok) {
+					self.showNotice((payload && payload.message) || (window.MESSENGER_BOOTSTRAP.groupSettingsError || 'Unable to save settings.'));
+					self.fetch({ force: true });
+					return;
+				}
+
+				self.renderPayload(payload, {
+					force: true,
+					scrollToBottom: false
+				});
+				if (payload.message) {
+					self.showNotice(payload.message);
+				}
+			}).fail(function () {
+				self.showNotice(window.MESSENGER_BOOTSTRAP.groupSettingsError || 'Unable to save settings.');
+				self.fetch({ force: true });
+			});
+
+			return false;
+		},
+
+		updateGroupRetention: function (hours) {
+			var self = this;
+			var cfg = this.config();
+
+			if (!this.activeConversationId || this.activeConversationType !== 'group_chat') {
+				return false;
+			}
+
+			$.ajax({
+				type: 'POST',
+				url: cfg.endpoint,
+				dataType: 'json',
+				data: {
+					action: 'set_group_retention',
+					format: 'json',
+					conversation_id: this.activeConversationId,
+					retention_hours: String(hours || 0),
+					_csrf: cfg.csrfToken
+				}
+			}).done(function (payload) {
+				if (!payload || !payload.ok) {
+					self.showNotice((payload && payload.message) || (window.MESSENGER_BOOTSTRAP.groupRetentionError || 'Unable to save settings.'));
+					self.fetch({ force: true });
+					return;
+				}
+
+				self.renderPayload(payload, {
+					force: true,
+					scrollToBottom: false
+				});
+				if (payload.message) {
+					self.showNotice(payload.message);
+				}
+			}).fail(function () {
+				self.showNotice(window.MESSENGER_BOOTSTRAP.groupRetentionError || 'Unable to save settings.');
+				self.fetch({ force: true });
+			});
+
+			return false;
+		},
+
 		schedulePoll: function () {
 			var self = this;
 			window.clearTimeout(this.pollTimer);
@@ -1782,7 +2063,27 @@
 			$(document).on('click.messengerUi', '[data-chat-conversation-tab]', function (event) {
 				event.preventDefault();
 				self.closeGroupMenu();
+				self.closeGroupSettingsMenu();
+				self.closeGroupMembersPopover();
 				self.selectConversation($(this).attr('data-conversation-id'), $(this).attr('data-conversation-type'));
+			});
+
+			$(document).on('click.messengerUi', '[data-chat-back]', function (event) {
+				event.preventDefault();
+				self.closeGroupMenu();
+				self.closeGroupSettingsMenu();
+				self.closeGroupMembersPopover();
+				self.showConversationList();
+			});
+
+			$(document).on('change.messengerUi', '[data-chat-email-notifications-toggle]', function () {
+				self.closeGroupSettingsMenu();
+				self.updateGroupEmailNotifications($(this).is(':checked'));
+			});
+
+			$(document).on('change.messengerUi', '[data-chat-retention-select]', function () {
+				self.closeGroupSettingsMenu();
+				self.updateGroupRetention(parseInt($(this).val() || '0', 10) || 0);
 			});
 
 			$(document).on('click.messengerUi', '[data-messenger-group-open]', function (event) {
@@ -1805,9 +2106,26 @@
 				self.toggleGroupMenu();
 			});
 
+			$(document).on('click.messengerUi', '[data-chat-group-settings-toggle]', function (event) {
+				event.preventDefault();
+				event.stopPropagation();
+				self.toggleGroupSettingsMenu();
+			});
+
+			$(document).on('click.messengerUi', '[data-chat-group-members-toggle]', function (event) {
+				event.preventDefault();
+				event.stopPropagation();
+				self.toggleGroupMembersPopover();
+			});
+
 			$(document).on('click.messengerUi', '[data-messenger-group-add]', function (event) {
 				event.preventDefault();
 				self.addGroupEmail();
+			});
+
+			$(document).on('click.messengerUi', '[data-messenger-group-kind]', function (event) {
+				event.preventDefault();
+				self.setGroupCreationKind($(this).attr('data-messenger-group-kind'));
 			});
 
 			$(document).on('keydown.messengerUi', '#messenger_group_email', function (event) {
@@ -1840,34 +2158,53 @@
 			$(document).on('click.messengerUi', '[data-chat-leave-group]', function (event) {
 				event.preventDefault();
 				self.closeGroupMenu();
+				self.closeGroupSettingsMenu();
 				self.leaveGroup($(this).attr('data-conversation-id'));
 			});
 
 			$(document).on('click.messengerUi', '[data-chat-delete-group]', function (event) {
 				event.preventDefault();
 				self.closeGroupMenu();
+				self.closeGroupSettingsMenu();
 				self.deleteGroup($(this).attr('data-conversation-id'));
 			});
 
 			$(document).on('click.messengerUi', function (event) {
 				if (!$(event.target).closest('.messenger-conversation-meta__actions').length) {
 					self.closeGroupMenu();
+					self.closeGroupSettingsMenu();
+				}
+				if (!$(event.target).closest('.messenger-conversation-members').length) {
+					self.closeGroupMembersPopover();
 				}
 			});
 		},
 
 		init: function () {
+			var shouldRestoreOpenState;
 			if (this.initDone) {
 				this.refreshOpenLayout(false);
 				this.schedulePoll();
 				return;
 			}
 
+			shouldRestoreOpenState = this.restorePanelState();
 			this.updateViewportMetrics();
 			this.syncConversationStateFromMarkup();
+			if (this.hasResellerInboxLayout()) {
+				if (this.activeConversationId > 0 && shouldRestoreOpenState) {
+					this.showConversationView();
+				} else {
+					this.showConversationList();
+				}
+			}
 			this.resetGroupModal();
 			this.bind();
-			this.fetch({ force: true });
+			if (shouldRestoreOpenState) {
+				this.open();
+			} else {
+				this.fetch({ force: true });
+			}
 			this.schedulePoll();
 			this.initDone = true;
 		}

@@ -2693,6 +2693,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $isUnread = !empty($chatEntry['is_unread']);
                                             $chatTimeLabel = (string)($chatEntry['time_label'] ?? '');
                                             $presence = (array)($chatEntry['presence'] ?? []);
+                                            $chatTitleLabel = trim((string)($chatRow['conversation_type'] ?? '')) === 'group_chat'
+                                                ? $displayName
+                                                : (string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'));
                                             ?>
                                             <div
                                                 class="admin-chat-inbox__item<?php echo $isUnread ? ' is-unread' : ''; ?>"
@@ -2708,7 +2711,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="admin-chat-inbox__item-head">
                                                         <div class="admin-chat-inbox__item-title">
                                                             <span data-admin-chat-presence-dot><?php echo admin_chat_presence_dot_html($presence); ?></span>
-                                                            <strong title="<?php echo admin_e((string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'))); ?>"><?php echo admin_e($displayName); ?></strong>
+                                                            <strong title="<?php echo admin_e($chatTitleLabel); ?>"><?php echo admin_e($displayName); ?></strong>
                                                         </div>
                                                         <span><?php echo admin_e($chatTimeLabel); ?></span>
                                                     </div>
@@ -6978,6 +6981,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $presence = (array)($chatEntry['presence'] ?? []);
                                                         $chatStatus = strtolower(trim((string)($chatRow['status'] ?? 'open')));
                                                         $customerId = (int)($chatRow['customer_id'] ?? 0);
+                                                        $chatTitleLabel = trim((string)($chatRow['conversation_type'] ?? '')) === 'group_chat'
+                                                            ? $displayName
+                                                            : (string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'));
                                                         ?>
                                                         <article class="admin-live-chat-item<?php echo $isUnread ? ' is-unread' : ''; ?>">
                                                             <div class="admin-live-chat-item__main">
@@ -6987,9 +6993,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <div class="admin-live-chat-item__title">
                                                                             <span><?php echo admin_chat_presence_dot_html($presence); ?></span>
                                                                             <?php if ($customerId > 0): ?>
-                                                                                <a href="/admin/?page=live-chat&amp;user_id=<?php echo admin_e((string)$customerId); ?>" class="admin-inline-link" title="<?php echo admin_e((string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'))); ?>"><?php echo admin_e($displayName); ?></a>
+                                                                                <a href="/admin/?page=live-chat&amp;user_id=<?php echo admin_e((string)$customerId); ?>" class="admin-inline-link" title="<?php echo admin_e($chatTitleLabel); ?>"><?php echo admin_e($displayName); ?></a>
                                                                             <?php else: ?>
-                                                                                <strong title="<?php echo admin_e((string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'))); ?>"><?php echo admin_e($displayName); ?></strong>
+                                                                                <strong title="<?php echo admin_e($chatTitleLabel); ?>"><?php echo admin_e($displayName); ?></strong>
                                                                             <?php endif; ?>
                                                                         </div>
                                                                         <span class="admin-live-chat-item__date"><?php echo admin_e($chatTimeLabel); ?></span>

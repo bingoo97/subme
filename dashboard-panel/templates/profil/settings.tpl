@@ -1,17 +1,45 @@
 <div class="content-box settings-view">
     <div class="settings-view__header">
         <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.settings_title}</h1>
-        <p class="settings-view__intro">{$t.settings_language_help}</p>
     </div>
 
     <div class="settings-view__grid">
         <div class="settings-card">
-            <div class="settings-card__head">
-                <h2 class="settings-card__title">{$t.settings_title}</h2>
-                <span class="settings-card__badge">{$t.settings_email}</span>
-            </div>
             <form action="" method="POST" class="settings-form">
                 <input type="hidden" name="_csrf" value="{$csrf_token|default:''}">
+                {if $user.customer_type|default:'client' eq 'reseller'}
+                <div class="settings-form__field">
+                    <div
+                        class="settings-avatar-editor"
+                        data-settings-avatar-editor
+                        data-uploading-label="{$t.settings_avatar_uploading|default:'Trwa wysyłanie avatara...'}"
+                        data-upload-success="{$t.settings_avatar_upload_success|default:'Avatar został zaktualizowany.'}"
+                        data-upload-error="{$t.settings_avatar_upload_error|default:'Nie udało się zaktualizować avatara.'}"
+                        data-upload-invalid-type="{$t.settings_avatar_upload_invalid_type|default:'Wgraj plik JPG, PNG lub WEBP.'}"
+                        data-upload-too-large="{$t.settings_avatar_upload_too_large|default:'Plik jest za duży. Maksymalny rozmiar to 5 MB.'}"
+                        data-max-bytes="5242880"
+                    >
+                        <button type="button" class="settings-avatar-editor__trigger" data-settings-avatar-trigger aria-label="{$t.settings_avatar_trigger|default:'Kliknij avatar, aby wgrać zdjęcie'}">
+                            <div class="settings-avatar-editor__preview">
+                                <img src="{$user.avatar_url|default:''|escape:'html'}" alt="Avatar" class="settings-avatar-editor__image" data-settings-avatar-preview-image{if $user.avatar_url|default:'' eq ''} hidden{/if}>
+                                <span class="settings-avatar-editor__fallback{if $user.avatar_url|default:'' ne ''} is-hidden{/if}" data-settings-avatar-preview-fallback data-fallback-source="{$user.public_handle|default:$user.email|default:'U'|escape:'html'}">U</span>
+                            </div>
+                            <span class="settings-avatar-editor__overlay">
+                                <i class="fa fa-camera" aria-hidden="true"></i>
+                                <span>{$t.settings_avatar_trigger|default:'Kliknij avatar, aby wgrać zdjęcie'}</span>
+                            </span>
+                        </button>
+                        <input type="file" class="settings-avatar-editor__file" accept="image/jpeg,image/png,image/webp" data-settings-avatar-file>
+                        <div class="settings-avatar-editor__status" data-settings-avatar-status aria-live="polite"></div>
+                    </div>
+                    <p class="settings-form__help">{$t.settings_avatar_help}</p>
+                </div>
+                <div class="settings-form__field">
+                    <label class="settings-form__label">{$t.settings_handle_label}</label>
+                    <input type="text" class="form-control settings-form__control" name="public_handle" value="{$user.public_handle|default:''}" placeholder="{$t.settings_handle_placeholder|default:'twoj-login'}" autocomplete="off" data-settings-handle-input>
+                    <p class="settings-form__help">{$t.settings_handle_help}</p>
+                </div>
+                {/if}
                 <div class="settings-form__field">
                     <label class="settings-form__label">{$t.settings_email}</label>
                     <input type="text" class="form-control settings-form__control settings-form__control--readonly" value="{$user.email}" readonly="readonly" />
@@ -118,5 +146,204 @@ $(function () {
     {if $settings_open_password_modal|default:false}
     $('#settingsPasswordModal').modal('show');
     {/if}
+
+    var $avatarEditor = $('[data-settings-avatar-editor]');
+    var $avatarImage = $('[data-settings-avatar-preview-image]');
+    var $avatarFallback = $('[data-settings-avatar-preview-fallback]');
+    var $avatarTrigger = $('[data-settings-avatar-trigger]');
+    var $avatarFileInput = $('[data-settings-avatar-file]');
+    var $avatarStatus = $('[data-settings-avatar-status]');
+    var $handleInput = $('[data-settings-handle-input]');
+    var csrfToken = $('input[name="_csrf"]').first().val() || '';
+    var avatarUploadInFlight = false;
+    var currentAvatarUrl = $.trim($avatarImage.attr('src') || '');
+
+    function settingsAvatarFallback() {
+        var source = '';
+
+        if ($handleInput.length) {
+            source = $.trim($handleInput.val() || '');
+        }
+
+        if (!source && $avatarFallback.length) {
+            source = $.trim($avatarFallback.attr('data-fallback-source') || '');
+        }
+
+        source = source || 'U';
+        return source.charAt(0).toUpperCase();
+    }
+
+    function setSettingsAvatarStatus(message, type) {
+        if (!$avatarStatus.length) {
+            return;
+        }
+
+        $avatarStatus.removeClass('is-error is-success is-loading').text($.trim(message || ''));
+        if (type) {
+            $avatarStatus.addClass('is-' + type);
+        }
+    }
+
+    function showSettingsAvatarFallback() {
+        if ($avatarFallback.length) {
+            $avatarFallback.text(settingsAvatarFallback()).removeClass('is-hidden');
+        }
+        if ($avatarImage.length) {
+            $avatarImage.attr('hidden', 'hidden');
+        }
+    }
+
+    function showSettingsAvatarImage(url) {
+        if (!url) {
+            showSettingsAvatarFallback();
+            return;
+        }
+
+        $avatarImage
+            .off('.settingsAvatar')
+            .on('load.settingsAvatar', function () {
+                $avatarFallback.addClass('is-hidden');
+                $avatarImage.removeAttr('hidden');
+            })
+            .on('error.settingsAvatar', function () {
+                showSettingsAvatarFallback();
+            })
+            .attr('src', url);
+    }
+
+    function restoreSettingsAvatarPreview() {
+        if (currentAvatarUrl) {
+            showSettingsAvatarImage(currentAvatarUrl);
+        } else {
+            showSettingsAvatarFallback();
+        }
+    }
+
+    function applySettingsAvatarUploadSuccess(response, successMessage) {
+        if (!(response && response.ok && response.url)) {
+            return false;
+        }
+
+        currentAvatarUrl = $.trim(response.url || '');
+        showSettingsAvatarImage(currentAvatarUrl + (currentAvatarUrl.indexOf('?') === -1 ? '?v=' : '&v=') + Date.now());
+        setSettingsAvatarStatus(response.message || successMessage, 'success');
+        return true;
+    }
+
+    function parseSettingsAvatarUploadResponse(xhr) {
+        var raw = '';
+
+        if (xhr && xhr.responseJSON && typeof xhr.responseJSON === 'object') {
+            return xhr.responseJSON;
+        }
+
+        raw = xhr && typeof xhr.responseText === 'string' ? $.trim(xhr.responseText) : '';
+        if (!raw) {
+            return null;
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (parseError) {
+            return null;
+        }
+    }
+
+    function uploadSettingsAvatar(file, previewUrl) {
+        var formData = new FormData();
+        var successMessage = $avatarEditor.attr('data-upload-success') || 'Avatar updated.';
+        var errorMessage = $avatarEditor.attr('data-upload-error') || 'Unable to upload avatar.';
+        var uploadingMessage = $avatarEditor.attr('data-uploading-label') || 'Uploading avatar...';
+
+        avatarUploadInFlight = true;
+        $avatarEditor.addClass('is-uploading');
+        setSettingsAvatarStatus(uploadingMessage, 'loading');
+
+        formData.append('action', 'upload_avatar');
+        formData.append('_csrf', csrfToken);
+        formData.append('avatar_file', file);
+
+        $.ajax({
+            url: window.location.href,
+            method: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            dataType: 'json'
+        }).done(function (response) {
+            if (applySettingsAvatarUploadSuccess(response, successMessage)) {
+                return;
+            }
+
+            restoreSettingsAvatarPreview();
+            setSettingsAvatarStatus(response && response.message ? response.message : errorMessage, 'error');
+        }).fail(function (xhr) {
+            var response = parseSettingsAvatarUploadResponse(xhr);
+
+            if (applySettingsAvatarUploadSuccess(response, successMessage)) {
+                return;
+            }
+
+            restoreSettingsAvatarPreview();
+            setSettingsAvatarStatus(response && response.message ? response.message : errorMessage, 'error');
+        }).always(function () {
+            if (previewUrl) {
+                URL.revokeObjectURL(previewUrl);
+            }
+
+            avatarUploadInFlight = false;
+            $avatarEditor.removeClass('is-uploading');
+            $avatarFileInput.val('');
+        });
+    }
+
+    if ($handleInput.length) {
+        $handleInput.on('input', function () {
+            if (!currentAvatarUrl) {
+                showSettingsAvatarFallback();
+            }
+        });
+    }
+
+    if ($avatarEditor.length && $avatarFileInput.length) {
+        $avatarTrigger.on('click', function () {
+            if (avatarUploadInFlight) {
+                return;
+            }
+
+            $avatarFileInput.trigger('click');
+        });
+
+        $avatarFileInput.on('change', function () {
+            var file = this.files && this.files[0] ? this.files[0] : null;
+            var allowedTypes = /^image\/(jpeg|png|webp)$/i;
+            var invalidTypeMessage = $avatarEditor.attr('data-upload-invalid-type') || 'Upload a JPG, PNG or WEBP file.';
+            var tooLargeMessage = $avatarEditor.attr('data-upload-too-large') || 'File is too large.';
+            var maxBytes = parseInt($avatarEditor.attr('data-max-bytes') || '5242880', 10);
+            var previewUrl = '';
+
+            if (!file) {
+                return;
+            }
+
+            if (file.type && !allowedTypes.test(file.type)) {
+                setSettingsAvatarStatus(invalidTypeMessage, 'error');
+                $avatarFileInput.val('');
+                return;
+            }
+
+            if (maxBytes > 0 && file.size > maxBytes) {
+                setSettingsAvatarStatus(tooLargeMessage, 'error');
+                $avatarFileInput.val('');
+                return;
+            }
+
+            previewUrl = URL.createObjectURL(file);
+            showSettingsAvatarImage(previewUrl);
+            uploadSettingsAvatar(file, previewUrl);
+        });
+    }
+
+    restoreSettingsAvatarPreview();
 });
 </script>

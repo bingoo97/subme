@@ -8,6 +8,73 @@ switch ($site) {
         }
 
         $smarty->assign('settings_open_password_modal', false);
+        $sendSettingsJson = static function (array $payload): void {
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+
+            if (!headers_sent()) {
+                header('Content-Type: application/json; charset=utf-8');
+            }
+
+            echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            exit;
+        };
+
+        if (isset($_POST['action']) && (string)$_POST['action'] === 'upload_avatar') {
+            if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
+                $sendSettingsJson([
+                    'ok' => false,
+                    'message' => localization_translate($t, 'csrf_invalid'),
+                ]);
+            }
+
+            $isReseller = app_normalize_customer_type((string)($user['customer_type'] ?? 'client')) === 'reseller';
+            if (!$isReseller) {
+                $sendSettingsJson([
+                    'ok' => false,
+                    'message' => localization_translate($t, 'settings_avatar_upload_error'),
+                ]);
+            }
+
+            $uploadResult = app_store_customer_avatar_upload($_FILES['avatar_file'] ?? [], (int)($user['id'] ?? 0));
+            if (empty($uploadResult['ok'])) {
+                $errorCode = (string)($uploadResult['code'] ?? '');
+                $messageKey = 'settings_avatar_upload_error';
+                if ($errorCode === 'invalid_type') {
+                    $messageKey = 'settings_avatar_upload_invalid_type';
+                } elseif ($errorCode === 'too_large') {
+                    $messageKey = 'settings_avatar_upload_too_large';
+                }
+
+                $sendSettingsJson([
+                    'ok' => false,
+                    'message' => localization_translate($t, $messageKey),
+                ]);
+            }
+
+            $newAvatarUrl = app_customer_avatar_url((string)($uploadResult['url'] ?? ''));
+            $currentAvatarUrl = app_customer_avatar_url((string)($user['avatar_url'] ?? ''));
+            $updated = $db->update_using_id(['avatar_url'], [$newAvatarUrl !== '' ? $newAvatarUrl : null], 'customers', (int)$user['id']);
+
+            if (!$updated) {
+                app_delete_customer_avatar_file($newAvatarUrl);
+                $sendSettingsJson([
+                    'ok' => false,
+                    'message' => localization_translate($t, 'settings_avatar_upload_error'),
+                ]);
+            }
+
+            if ($currentAvatarUrl !== '' && $currentAvatarUrl !== $newAvatarUrl) {
+                app_delete_customer_avatar_file($currentAvatarUrl);
+            }
+
+            $sendSettingsJson([
+                'ok' => true,
+                'url' => $newAvatarUrl,
+                'message' => localization_translate($t, 'settings_avatar_upload_success'),
+            ]);
+        }
 
         if (isset($_POST['change_password'])) {
             if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
@@ -72,6 +139,38 @@ switch ($site) {
 
             $selectedLocale = isset($_POST['lang']) ? localization_normalize_locale($_POST['lang']) : 'en';
             $emailNotificationEnabled = isset($_POST['email_notification']) && (string)($_POST['email_notification'] ?? '') === '1';
+            $isReseller = app_normalize_customer_type((string)($user['customer_type'] ?? 'client')) === 'reseller';
+            $resolvedHandle = [
+                'ok' => true,
+                'handle' => (string)($user['public_handle'] ?? ''),
+            ];
+            $avatarUrl = app_customer_avatar_url((string)($user['avatar_url'] ?? ''));
+
+            if ($isReseller) {
+                $resolvedHandle = app_resolve_customer_public_handle(
+                    $db,
+                    (string)($_POST['public_handle'] ?? ''),
+                    (string)($user['email'] ?? ''),
+                    (int)($user['id'] ?? 0)
+                );
+
+                if (empty($resolvedHandle['ok'])) {
+                    $user['public_handle'] = app_normalize_customer_public_handle((string)($_POST['public_handle'] ?? ''));
+                    $user['avatar_url'] = $avatarUrl;
+                    $user['lang'] = localization_to_legacy_value($selectedLocale);
+                    $user['lang_code'] = $selectedLocale;
+                    $user['locale_code'] = $selectedLocale;
+                    $user['email_notification'] = $emailNotificationEnabled ? 1 : 0;
+                    $user['is_newsletter_subscribed'] = $user['email_notification'];
+                    $_SESSION['lang'] = $selectedLocale;
+                    $smarty->assign('user', $user);
+                    $smarty->assign('current_locale', $selectedLocale);
+                    $smarty->assign('alert_error', (string)($resolvedHandle['message'] ?? localization_translate($t, 'settings_handle_taken', 'This username is already taken.')));
+                    $smarty->display('alert.tpl');
+                    $smarty->display('profil/settings.tpl');
+                    break;
+                }
+            }
 
             $_SESSION['lang'] = $selectedLocale;
             $user['lang'] = localization_to_legacy_value($selectedLocale);
@@ -79,9 +178,21 @@ switch ($site) {
             $user['locale_code'] = $selectedLocale;
             $user['email_notification'] = $emailNotificationEnabled ? 1 : 0;
             $user['is_newsletter_subscribed'] = $user['email_notification'];
+            if ($isReseller) {
+                $user['public_handle'] = (string)($resolvedHandle['handle'] ?? '');
+                $user['avatar_url'] = $avatarUrl;
+            }
 
             app_update_customer_locale($db, (int)$user['id'], $selectedLocale);
             app_update_customer_email_notification($db, (int)$user['id'], $emailNotificationEnabled);
+            if ($isReseller) {
+                $db->update_using_id(
+                    ['public_handle', 'avatar_url'],
+                    [(string)($resolvedHandle['handle'] ?? ''), $avatarUrl !== '' ? $avatarUrl : null],
+                    'customers',
+                    (int)$user['id']
+                );
+            }
 
             $localization = localization_load($selectedLocale, dirname(__DIR__, 2));
             $t = $localization['messages'];

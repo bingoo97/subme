@@ -732,23 +732,12 @@ if (!function_exists('chat_purge_expired_messages')) {
             $retentionDays = 1;
         }
 
-        if (schema_object_exists($db, 'support_messages')) {
-            $db->query(
-                "DELETE FROM support_messages
-                 WHERE created_at < DATE_SUB(NOW(), INTERVAL {$retentionDays} DAY)"
-            );
+        if (function_exists('app_prune_support_chat_messages')) {
+            app_prune_support_chat_messages($db);
         }
 
-        if (schema_object_exists($db, 'support_conversations')) {
-            $db->query(
-                "DELETE support_conversations
-                 FROM support_conversations
-                 LEFT JOIN support_messages
-                    ON support_messages.conversation_id = support_conversations.id
-                 WHERE support_conversations.conversation_type = 'live_chat'
-                   AND support_messages.id IS NULL
-                   AND support_conversations.created_at < DATE_SUB(NOW(), INTERVAL {$retentionDays} DAY)"
-            );
+        if (function_exists('chat_prune_group_chat_messages')) {
+            chat_prune_group_chat_messages($db);
         }
 
         if (schema_object_exists($db, 'produkty_chat')) {
@@ -757,6 +746,45 @@ if (!function_exists('chat_purge_expired_messages')) {
                  WHERE data < DATE_SUB(NOW(), INTERVAL {$retentionDays} DAY)"
             );
         }
+    }
+}
+
+if (!function_exists('chat_message_preview_text')) {
+    function chat_message_preview_text(string $messageBody = '', string $attachmentPath = '', string $defaultAttachmentLabel = 'Image attachment'): string
+    {
+        $messageBody = trim($messageBody);
+        $attachmentPath = trim($attachmentPath);
+        $payload = function_exists('app_chat_card_decode') ? app_chat_card_decode($messageBody) : null;
+
+        if (is_array($payload)) {
+            $kind = trim((string)($payload['kind'] ?? ''));
+            if ($kind === 'payment_request') {
+                $title = trim((string)($payload['title'] ?? ''));
+                return $title !== '' ? $title : 'Payment request';
+            }
+
+            if ($kind === 'link_preview') {
+                $text = trim((string)($payload['text'] ?? ''));
+                $title = trim((string)($payload['title'] ?? ''));
+                if ($text !== '') {
+                    return $text;
+                }
+                if ($title !== '') {
+                    return $title;
+                }
+                return 'Shared link';
+            }
+        }
+
+        if ($messageBody !== '') {
+            return chat_preview_normalize_text($messageBody, 140);
+        }
+
+        if ($attachmentPath !== '') {
+            return $defaultAttachmentLabel;
+        }
+
+        return '';
     }
 }
 

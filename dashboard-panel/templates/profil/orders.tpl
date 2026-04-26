@@ -110,9 +110,15 @@
                                     {/if}
                             </td>
                             <td data-label="{$t.orders_actions|default:'Actions'}" class="orders-user-table__actions-col">
-                                <button type="button" class="btn {if $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 50px; height: 50px;">
+                                {if $wygrane[i].status != 1}
+                                <a href="/order-payment-{$wygrane[i].id}" class="btn btn-danger" aria-label="Pay" style="width: 40px; height: 40px;">
+                                    <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
+                                </a>
+                                {else}
+                                <button type="button" class="btn {if $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 40px; height: 40px;">
                                     <i class="fa fa-search" aria-hidden="true"></i>
                                 </button>
+                                {/if}
                             </td>
                         </tr>
                     {/section}

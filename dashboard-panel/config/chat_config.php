@@ -23,7 +23,7 @@ if (isset($currentLocale)) {
 
 $chatFaqPrompts = chat_load_faq_prompts($db, $chatLocaleCode, 5);
 $smarty->assign('chat_faq_prompts', $chatFaqPrompts);
-$chatSupportLabel = chat_default_support_label($db, $reseller);
+$chatSupportLabel = localization_translate(isset($t) && is_array($t) ? $t : [], 'support', 'Support');
 $smarty->assign('chat_support_label', $chatSupportLabel);
 $requestedConversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 
@@ -41,21 +41,69 @@ if (app_uses_v2_schema($db)) {
     $activeConversationType = (string)($chatActiveConversation['type'] ?? 'live_chat');
     $activeConversationRow = (array)($chatActiveConversation['row'] ?? []);
     $activeCanSend = true;
+    $activeConversationMemberCount = 0;
+    $activeConversationMemberCountLabel = '';
+    $activeConversationMemberEmails = [];
+    $activeConversationTitle = $activeConversationType === 'group_chat' ? chat_group_conversation_title($activeConversationRow) : $chatSupportLabel;
+    $activeConversationSubtitle = $activeConversationType === 'group_chat' ? 'Group' : 'Support';
+    $activeConversationAvatarUrl = '';
+    $activeConversationAvatarText = $activeConversationType === 'group_chat' ? 'G' : 'S';
+    $activeConversationAvatarTheme = 'theme-6';
+    $activeConversationPresence = function_exists('chat_support_presence_payload') ? chat_support_presence_payload($db) : ['key' => 'offline', 'label' => 'Offline', 'class_name' => 'admin-chat-presence admin-chat-presence--offline'];
+    $activeMemberEmailNotificationsEnabled = true;
+    $activeConversationRetentionHours = null;
     if ($activeConversationType === 'group_chat' && !empty($activeConversationRow['is_group_read_only'])) {
         $activeCanSend = false;
+    }
+    if ($activeConversationType !== 'group_chat') {
+        $activeConversationAvatarUrl = function_exists('chat_support_avatar_url') ? chat_support_avatar_url($db) : '';
+    }
+    if ($activeConversationType === 'group_chat' && $activeConversationId > 0) {
+        $summary = chat_group_conversation_summary(
+            $db,
+            $activeConversationId,
+            ['participant_type' => 'customer', 'customer_id' => (int)$user['id'], 'admin_user_id' => 0],
+            $activeConversationRow
+        );
+        $activeConversationMemberCount = chat_group_member_count($db, $activeConversationId);
+        $activeConversationMemberCountLabel = chat_group_member_count_label($db, $activeConversationId);
+        $activeConversationMemberEmails = chat_group_member_emails($db, $activeConversationId);
+        $activeConversationTitle = (string)($summary['title'] ?? $activeConversationTitle);
+        $activeConversationSubtitle = (string)($summary['subtitle'] ?? $activeConversationSubtitle);
+        $activeConversationAvatarUrl = (string)($summary['avatar_url'] ?? '');
+        $activeConversationAvatarText = (string)($summary['avatar_text'] ?? 'G');
+        $activeConversationAvatarTheme = (string)($summary['avatar_theme'] ?? 'theme-6');
+        $activeConversationPresence = is_array($summary['presence'] ?? null) ? $summary['presence'] : $activeConversationPresence;
+        $activeConversationRetentionHours = chat_group_normalize_retention_hours($activeConversationRow['message_retention_hours'] ?? null);
+        $activeMemberRow = chat_group_member_row($db, $activeConversationId, chat_participant_key_for_customer((int)$user['id']));
+        if (is_array($activeMemberRow) && array_key_exists('email_notifications_enabled', $activeMemberRow)) {
+            $activeMemberEmailNotificationsEnabled = (int)($activeMemberRow['email_notifications_enabled'] ?? 1) !== 0;
+        }
     }
 
     $smarty->assign('chat', $normalizedChat);
     $smarty->assign('chat_conversations', $chatConversations);
     $smarty->assign('chat_active_conversation_id', $activeConversationId);
     $smarty->assign('chat_active_conversation_type', $activeConversationType);
-    $smarty->assign('chat_active_conversation_title', $activeConversationType === 'group_chat' ? chat_group_conversation_title($activeConversationRow) : $chatSupportLabel);
+    $smarty->assign('chat_active_conversation_title', $activeConversationTitle);
+    $smarty->assign('chat_active_conversation_subtitle', $activeConversationSubtitle);
     $smarty->assign('chat_active_conversation_is_group', $activeConversationType === 'group_chat');
     $smarty->assign('chat_active_conversation_is_read_only', $activeConversationType === 'group_chat' && !empty($activeConversationRow['is_group_read_only']));
     $smarty->assign('chat_active_conversation_can_send', $activeCanSend);
     $smarty->assign('chat_active_conversation_can_leave', $activeConversationType === 'group_chat');
     $smarty->assign('chat_active_conversation_is_owned', $activeConversationType === 'group_chat' && (int)($activeConversationRow['group_created_by_customer_id'] ?? 0) === (int)$user['id']);
     $smarty->assign('chat_active_conversation_can_manage', $activeConversationType === 'group_chat' && (int)($activeConversationRow['group_created_by_customer_id'] ?? 0) === (int)$user['id']);
+    $smarty->assign('chat_active_conversation_member_count', $activeConversationMemberCount);
+    $smarty->assign('chat_active_conversation_member_count_label', $activeConversationMemberCountLabel);
+    $smarty->assign('chat_active_conversation_member_emails', $activeConversationMemberEmails);
+    $smarty->assign('chat_active_conversation_avatar_url', $activeConversationAvatarUrl);
+    $smarty->assign('chat_active_conversation_avatar_text', $activeConversationAvatarText);
+    $smarty->assign('chat_active_conversation_avatar_theme', $activeConversationAvatarTheme);
+    $smarty->assign('chat_active_conversation_presence_key', (string)($activeConversationPresence['key'] ?? 'offline'));
+    $smarty->assign('chat_active_conversation_presence_label', (string)($activeConversationPresence['label'] ?? 'Offline'));
+    $smarty->assign('chat_active_conversation_presence_class_name', (string)($activeConversationPresence['class_name'] ?? 'admin-chat-presence admin-chat-presence--offline'));
+    $smarty->assign('chat_active_member_email_notifications_enabled', $activeMemberEmailNotificationsEnabled);
+    $smarty->assign('chat_active_conversation_retention_hours', $activeConversationRetentionHours);
     $chatGroupCreationState = chat_customer_group_creation_state($db, $user, is_array($settings ?? null) ? $settings : []);
     $smarty->assign('chat_customer_can_create_groups', !empty($chatGroupCreationState['allowed']));
     $smarty->assign('chat_customer_group_creation_state', $chatGroupCreationState);

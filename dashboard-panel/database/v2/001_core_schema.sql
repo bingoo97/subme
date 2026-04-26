@@ -154,6 +154,8 @@ CREATE TABLE `admin_navigation_items` (
 CREATE TABLE `customers` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `email` VARCHAR(191) NOT NULL,
+  `public_handle` VARCHAR(80) DEFAULT NULL,
+  `avatar_url` VARCHAR(255) DEFAULT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `password_hash_algorithm` VARCHAR(50) NOT NULL DEFAULT 'password_hash',
   `locale_code` VARCHAR(5) NOT NULL DEFAULT 'en',

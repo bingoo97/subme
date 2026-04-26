@@ -5391,7 +5391,7 @@ function admin_customer_basic_row(Mysql_ks $db, int $customerId): ?array
     }
 
     $row = $db->select_user(
-        "SELECT id, email, status, locale_code
+        "SELECT id, email, public_handle, avatar_url, status, locale_code
          FROM customers
          WHERE id = {$customerId}
          LIMIT 1"
@@ -5549,9 +5549,14 @@ function admin_create_customer_account(
         ? (!empty($options['email_notification']) ? 1 : 0)
         : (array_key_exists('is_newsletter_subscribed', $options) ? (!empty($options['is_newsletter_subscribed']) ? 1 : 0) : 1);
     $currentTime = date('Y-m-d H:i:s');
+    $handleResult = app_resolve_customer_public_handle($db, '', $email);
+    if (empty($handleResult['ok'])) {
+        return ['ok' => false, 'message' => (string)($handleResult['message'] ?? 'Unable to generate username.')];
+    }
 
     $insertFields = [
         'email',
+        'public_handle',
         'password_hash',
         'password_hash_algorithm',
         'locale_code',
@@ -5564,6 +5569,7 @@ function admin_create_customer_account(
     ];
     $insertValues = [
         $email,
+        (string)($handleResult['handle'] ?? ''),
         password_hash($plainPassword, PASSWORD_DEFAULT),
         'password_hash',
         $localeCode,
@@ -9119,13 +9125,14 @@ function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $admin
     }
 
     $conversationRow = $db->select_user(
-        "SELECT customer_id
+        "SELECT customer_id, conversation_type
          FROM support_conversations
          WHERE id = {$conversationId}
          LIMIT 1"
     );
 
     $customerId = isset($conversationRow['customer_id']) ? (int)$conversationRow['customer_id'] : 0;
+    $conversationType = trim((string)($conversationRow['conversation_type'] ?? 'live_chat'));
 
     $inserted = $db->insert(
         ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'is_read', 'created_at'],
@@ -9144,7 +9151,15 @@ function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $admin
         $conversationId
     );
 
-    if ($customerId > 0) {
+    if ($conversationType === 'group_chat') {
+        chat_queue_group_customer_notifications_if_offline(
+            $db,
+            $conversationId,
+            ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
+            $messageBody,
+            $attachmentPath
+        );
+    } elseif ($customerId > 0) {
         app_queue_live_chat_customer_notification_if_offline($db, $conversationId, $customerId, $messageBody, $attachmentPath);
     }
 

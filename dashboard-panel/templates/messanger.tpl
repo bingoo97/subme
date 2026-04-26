@@ -35,8 +35,17 @@
                         window.MESSENGER_BOOTSTRAP.linkPreviewOpen = '{$t.chat_link_preview_open|default:"Open link"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.writeMessagePlaceholder = '{$t.chat_write_message|default:"Write message..."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateEnabled = {if $chat_customer_can_create_groups|default:false}true{else}false{/if};
+                        window.MESSENGER_BOOTSTRAP.groupDirectTitle = '{$t.group_chat_direct_title|default:"Start direct conversation"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectSubmit = '{$t.group_chat_direct_submit|default:"Start conversation"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateTitle = '{$t.group_chat_create|default:"Create group chat"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateSubmit = '{$t.group_chat_create_submit|default:"Create group"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectToggle = '{$t.group_chat_direct_toggle|default:"Find reseller"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupGroupToggle = '{$t.group_chat_group_toggle|default:"Create group"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel = '{$t.group_chat_direct_email_label|default:"Add reseller by email"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel = '{$t.group_chat_add_by_email|default:"Add participant by email"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectHint = '{$t.group_chat_direct_hint|default:"Add one reseller email to start a direct conversation right away."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupGroupHint = '{$t.group_chat_invite_expiry_note|default:"Each invitation is valid for 24 hours. If nobody accepts it in time, it is removed automatically."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectLimit = '{$t.group_chat_direct_limit|default:"Direct conversation allows only one reseller."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder = '{$t.group_chat_read_only_placeholder|default:"This group is read only."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateError = '{$t.group_chat_create_error|default:"Unable to create the group chat."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteError = '{$t.group_chat_invite_error|default:"Unable to update the invitation."|escape:'javascript'}';
@@ -54,6 +63,8 @@
                         window.MESSENGER_BOOTSTRAP.groupInviteNameLabel = '{$t.group_chat_invite_name_label|default:"Group"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteSuccess = '{$t.group_chat_invite_success|default:"Invitations sent."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDeleteConfirm = '{$t.group_chat_delete_confirm|default:"Remove this group for all participants?"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupSettingsError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupRetentionError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
                     </script>
                     <div class="messenger-alert" id="messenger_alert" style="display:none;"></div>
                     <div class="messenger-compose">
@@ -82,6 +93,10 @@
                             </div>
                             <div class="messenger-group-body">
                                 <div class="messenger-alert" id="messenger_group_alert" style="display:none;"></div>
+                                <div class="messenger-group-mode" id="messenger_group_mode_switch">
+                                    <button type="button" class="messenger-group-mode__toggle is-active" data-messenger-group-kind="direct" aria-pressed="true">{$t.group_chat_direct_toggle|default:'Znajdź resellera'}</button>
+                                    <button type="button" class="messenger-group-mode__toggle" data-messenger-group-kind="group" aria-pressed="false">{$t.group_chat_group_toggle|default:'Stwórz grupę'}</button>
+                                </div>
                                 <label class="messenger-group-field" id="messenger_group_name_field">
                                     <span>{$t.group_chat_name|default:'Group name'}</span>
                                     <input type="text" class="form-control" id="messenger_group_name" maxlength="20" placeholder="{$t.group_chat_name_placeholder|default:'Example: Team access'}">
@@ -91,12 +106,12 @@
                                     <div class="messenger-group-context" id="messenger_group_context_title"></div>
                                 </div>
                                 <div class="messenger-group-field">
-                                    <span>{$t.group_chat_add_by_email|default:'Add participant by email'}</span>
+                                    <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Dodaj resellera po emailu'}</span>
                                     <div class="messenger-group-add-row">
                                         <input type="email" class="form-control" id="messenger_group_email" placeholder="name@example.com">
                                         <button type="button" class="btn btn-default" data-messenger-group-add>{$t.add|default:'Add'}</button>
                                     </div>
-                                    <small class="messenger-group-hint">{$t.group_chat_invite_expiry_note|default:'Each invitation is valid for 24 hours. If nobody accepts it in time, it is removed automatically.'}</small>
+                                    <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email resellera, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
                                 </div>
                                 <div class="messenger-group-members" id="messenger_group_members"></div>
                                 <div class="messenger-group-actions">
