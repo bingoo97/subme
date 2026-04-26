@@ -9,6 +9,21 @@ require_once __DIR__ . '/class/validator.php';
 
 $translate = '';
 
+$appRootDir = dirname(__DIR__);
+$defaultPublicRoot = realpath($appRootDir . '/../public_html');
+$deployedPublicRoot = null;
+$publicRootPointer = $appRootDir . '/.public-root-path';
+if (is_file($publicRootPointer) && is_readable($publicRootPointer)) {
+    $pointerValue = trim((string)file_get_contents($publicRootPointer));
+    if ($pointerValue !== '') {
+        $resolvedPointerRoot = realpath($pointerValue);
+        if ($resolvedPointerRoot !== false && is_dir($resolvedPointerRoot)) {
+            $deployedPublicRoot = $resolvedPointerRoot;
+        }
+    }
+}
+$publicRootDir = $deployedPublicRoot ?: ($defaultPublicRoot !== false ? $defaultPublicRoot : null);
+
 app_ensure_product_provider_runtime_columns($db);
 chat_ensure_group_chat_runtime($db);
 
@@ -28,9 +43,9 @@ $settings['api_key'] = isset($settings['api_key'])
 $smarty->assign('settings', $settings);
 $smarty->assign('csrf_token', app_csrf_token());
 
-$chatCssPath = realpath(dirname(__DIR__) . '/../public_html/assets/css/messanger.css');
-$chatJsPath = realpath(dirname(__DIR__) . '/../public_html/assets/js/messanger.js');
-$mainCssPath = realpath(dirname(__DIR__) . '/../public_html/assets/css/style.css');
+$chatCssPath = $publicRootDir ? realpath($publicRootDir . '/assets/css/messanger.css') : false;
+$chatJsPath = $publicRootDir ? realpath($publicRootDir . '/assets/js/messanger.js') : false;
+$mainCssPath = $publicRootDir ? realpath($publicRootDir . '/assets/css/style.css') : false;
 $chatAssetVersion = 1;
 $mainAssetVersion = 1;
 if ($mainCssPath !== false && is_file($mainCssPath)) {

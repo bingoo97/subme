@@ -1865,6 +1865,38 @@ function app_customer_avatar_url(string $value): string
     return trim($value);
 }
 
+function app_admin_avatar_url(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (function_exists('mb_strlen') && mb_strlen($value) > 255) {
+        $value = mb_substr($value, 0, 255);
+    } elseif (strlen($value) > 255) {
+        $value = substr($value, 0, 255);
+    }
+
+    if (strpos($value, 'http://') === 0 || strpos($value, 'https://') === 0 || strpos($value, '/') === 0) {
+        return $value;
+    }
+
+    $normalized = ltrim($value, '/');
+    $candidates = [
+        'img/avatary/' . $normalized,
+        'img/' . $normalized,
+    ];
+
+    foreach ($candidates as $candidate) {
+        if (is_file(app_public_path($candidate))) {
+            return '/' . $candidate;
+        }
+    }
+
+    return '/' . $normalized;
+}
+
 function app_customer_avatar_upload_directory(): string
 {
     return dirname(__DIR__, 2) . '/public_html/uploads/avatars/customers';

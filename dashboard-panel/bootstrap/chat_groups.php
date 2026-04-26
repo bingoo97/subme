@@ -232,9 +232,12 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         $label = chat_admin_display_label($row);
         $avatarText = strtoupper(function_exists('mb_substr') ? mb_substr($label, 0, 1) : substr($label, 0, 1));
+        $avatarUrl = function_exists('app_admin_avatar_url')
+            ? app_admin_avatar_url((string)($row['avatar_url'] ?? ''))
+            : trim((string)($row['avatar_url'] ?? ''));
 
         return [
-            'avatar_url' => trim((string)($row['avatar_url'] ?? '')),
+            'avatar_url' => $avatarUrl,
             'avatar_text' => $avatarText !== '' ? $avatarText : 'A',
             'avatar_theme' => 'theme-6',
         ];
@@ -2027,8 +2030,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $entries[] = [
             'id' => $supportConversationId,
             'type' => 'live_chat',
-            'title' => $defaultSupportLabel !== '' ? $defaultSupportLabel : 'Support',
-            'subtitle' => $defaultSupportLabel !== '' ? $defaultSupportLabel : 'Support',
+            'title' => 'Support',
+            'subtitle' => 'Support',
             'unread_count' => $supportUnread,
             'preview' => $supportPreview,
             'updated_at' => $supportUpdatedAt,
