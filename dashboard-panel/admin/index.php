@@ -938,6 +938,11 @@ if ($route === 'news' && isset($_GET['saved_news'])) {
     $pageAlertType = 'success';
 }
 
+if ($route === 'news' && isset($_GET['deleted_news'])) {
+    $pageAlert = admin_t($messages, 'news_delete_success', 'News post deleted successfully.');
+    $pageAlertType = 'success';
+}
+
 if ($route === 'faq' && isset($_GET['created_faq'])) {
     $pageAlert = admin_t($messages, 'faq_create_success', 'FAQ entry created successfully.');
     $pageAlertType = 'success';
@@ -1742,6 +1747,25 @@ if ($route === 'news') {
             }
 
             $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'news_save_error', 'Unable to save news post.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_news'])) {
+        $newsEditorId = (int)($_POST['news_id'] ?? 0);
+        $newsListPage = max(1, (int)($_POST['news_list_page'] ?? $newsListPage));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteResult = admin_delete_news($db, $newsEditorId);
+            if (!empty($deleteResult['ok'])) {
+                header('Location: /admin/?page=news&news_list_page=' . $newsListPage . '&deleted_news=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'news_delete_error', 'Unable to delete news post.'));
             $pageAlertType = 'danger';
         }
     }
@@ -6521,6 +6545,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <i class="bi bi-floppy" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'news_save_button', 'Save news')); ?></span>
                                                     </button>
+                                                    <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_news" formnovalidate onclick="return confirm('<?php echo admin_e(admin_t($messages, 'news_delete_confirm', 'Delete this news post?')); ?>');">
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'news_delete_button', 'Delete news')); ?></span>
+                                                    </button>
                                                 </div>
                                             </form>
                                         </div>
@@ -6577,6 +6605,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <a href="/admin/?page=news&amp;edit_news=<?php echo admin_e((string)$row['id']); ?>&amp;news_list_page=<?php echo admin_e((string)$newsListPage); ?>" class="btn btn-dark btn-sm">
                                                                         <i class="bi bi-pencil-square" aria-hidden="true"></i>
                                                                     </a>
+                                                                    <form method="post" class="d-inline">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="news_id" value="<?php echo admin_e((string)$row['id']); ?>">
+                                                                        <input type="hidden" name="news_list_page" value="<?php echo admin_e((string)$newsListPage); ?>">
+                                                                        <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_news" title="<?php echo admin_e(admin_t($messages, 'news_delete_button', 'Delete news')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'news_delete_confirm', 'Delete this news post?')); ?>');">
+                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </form>
                                                                 </div>
                                                             </td>
                                                         </tr>
