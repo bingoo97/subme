@@ -16,7 +16,7 @@
 						{$news[i].title}
 					</a>
 				</h2>
-				<p class="entry">{$t.news_published} <span>{$news[i].date}</span> {$t.news_by} <span>{$reseller.name}</span></p>
+				<p class="entry">{$t.news_published} <span>{$news[i].date}</span> {$t.news_by} <span>{$news[i].author_label}</span></p>
 			</div>
 			{if $news[i].text}
 			<div class="news_content">

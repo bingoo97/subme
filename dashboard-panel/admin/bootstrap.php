@@ -7053,13 +7053,20 @@ function admin_news_rows(Mysql_ks $db, int $limit = 12, int $offset = 0): array
         return [];
     }
 
+    app_ensure_news_runtime_columns($db);
     $limit = max(1, min(100, $limit));
     $offset = max(0, $offset);
+    $authorSelect = schema_column_exists($db, 'news_posts', 'created_by_admin_user_id') && schema_object_exists($db, 'admin_users')
+        ? app_admin_display_name_sql($db, 'admin_users') . ' AS author_handle'
+        : "'' AS author_handle";
+    $authorJoin = schema_column_exists($db, 'news_posts', 'created_by_admin_user_id') && schema_object_exists($db, 'admin_users')
+        ? ' LEFT JOIN admin_users ON admin_users.id = news_posts.created_by_admin_user_id'
+        : '';
 
     return $db->select_full_user(
-        "SELECT id, title, slug, body, visibility, is_active, published_at, created_at, updated_at
-         FROM news_posts
-         ORDER BY published_at DESC, id DESC
+        "SELECT news_posts.id, news_posts.title, news_posts.slug, news_posts.body, news_posts.visibility, news_posts.is_active, news_posts.published_at, news_posts.created_at, news_posts.updated_at, {$authorSelect}
+         FROM news_posts{$authorJoin}
+         ORDER BY news_posts.published_at DESC, news_posts.id DESC
          LIMIT {$offset}, {$limit}"
     );
 }
@@ -7070,10 +7077,18 @@ function admin_news_find(Mysql_ks $db, int $newsId): ?array
         return null;
     }
 
+    app_ensure_news_runtime_columns($db);
+    $authorSelect = schema_column_exists($db, 'news_posts', 'created_by_admin_user_id') && schema_object_exists($db, 'admin_users')
+        ? app_admin_display_name_sql($db, 'admin_users') . ' AS author_handle'
+        : "'' AS author_handle";
+    $authorJoin = schema_column_exists($db, 'news_posts', 'created_by_admin_user_id') && schema_object_exists($db, 'admin_users')
+        ? ' LEFT JOIN admin_users ON admin_users.id = news_posts.created_by_admin_user_id'
+        : '';
+
     $row = $db->select_user(
-        "SELECT id, title, slug, body, visibility, is_active, published_at, created_at, updated_at
-         FROM news_posts
-         WHERE id = {$newsId}
+        "SELECT news_posts.id, news_posts.title, news_posts.slug, news_posts.body, news_posts.visibility, news_posts.is_active, news_posts.published_at, news_posts.created_at, news_posts.updated_at, {$authorSelect}
+         FROM news_posts{$authorJoin}
+         WHERE news_posts.id = {$newsId}
          LIMIT 1"
     );
 
@@ -7187,6 +7202,7 @@ function admin_create_news(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'News storage is not available.'];
     }
 
+    app_ensure_news_runtime_columns($db);
     $title = trim((string)($input['title'] ?? ''));
     $slugInput = trim((string)($input['slug'] ?? ''));
     $body = trim((string)($input['body'] ?? ''));
@@ -7212,11 +7228,15 @@ function admin_create_news(Mysql_ks $db, array $input): array
 
     $slug = admin_news_unique_slug($db, $title, $slugInput);
 
-    $inserted = $db->insert(
-        ['title', 'slug', 'body', 'visibility', 'is_active', 'published_at'],
-        [$title, $slug, $body, $visibility, $isActive, $publishedAt],
-        'news_posts'
-    );
+    $insertFields = ['title', 'slug', 'body', 'visibility', 'is_active', 'published_at'];
+    $insertValues = [$title, $slug, $body, $visibility, $isActive, $publishedAt];
+
+    if (schema_column_exists($db, 'news_posts', 'created_by_admin_user_id')) {
+        $insertFields[] = 'created_by_admin_user_id';
+        $insertValues[] = isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null;
+    }
+
+    $inserted = $db->insert($insertFields, $insertValues, 'news_posts');
 
     if (!$inserted) {
         return ['ok' => false, 'message' => 'Unable to create news post.'];
@@ -7236,6 +7256,7 @@ function admin_create_news(Mysql_ks $db, array $input): array
 
 function admin_save_news(Mysql_ks $db, int $newsId, array $input): array
 {
+    app_ensure_news_runtime_columns($db);
     $news = admin_news_find($db, $newsId);
     if (!is_array($news) || empty($news['id'])) {
         return ['ok' => false, 'message' => 'News post not found.'];

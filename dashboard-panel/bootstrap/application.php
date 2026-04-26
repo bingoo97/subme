@@ -577,6 +577,37 @@ function app_ensure_product_provider_runtime_columns(Mysql_ks $db): void
     }
 }
 
+function app_ensure_news_runtime_columns(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'news_posts')) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_column_exists($db, 'news_posts', 'created_by_admin_user_id')) {
+        @$db->query(
+            "ALTER TABLE news_posts
+             ADD COLUMN created_by_admin_user_id INT UNSIGNED DEFAULT NULL
+             AFTER legacy_source_id"
+        );
+        schema_forget_column_cache('news_posts', 'created_by_admin_user_id');
+    }
+}
+
+function app_admin_display_name_sql(Mysql_ks $db, string $alias = 'admin_users'): string
+{
+    $alias = preg_replace('/[^a-zA-Z0-9_]+/', '', $alias) ?: 'admin_users';
+
+    if (schema_object_exists($db, 'admin_users') && schema_column_exists($db, 'admin_users', 'public_handle')) {
+        return "COALESCE(NULLIF(TRIM({$alias}.public_handle), ''), NULLIF(TRIM({$alias}.login_name), ''), NULLIF(TRIM({$alias}.email), ''), '')";
+    }
+
+    return "COALESCE(NULLIF(TRIM({$alias}.login_name), ''), NULLIF(TRIM({$alias}.email), ''), '')";
+}
+
 function app_url_starts_with(string $value, string $prefix): bool
 {
     if ($prefix === '') {
@@ -2734,7 +2765,7 @@ function app_queue_news_broadcast(Mysql_ks $db, int $newsId): array
         return ['ok' => false, 'message' => 'News post not found.'];
     }
 
-    $safeNow = $db->escape(date('Y-m-d H:i:s'));
+    $safeNow = $db->escape(app_current_datetime_string());
     $news = $db->select_user(
         "SELECT id, visibility, is_active, published_at
          FROM news_posts

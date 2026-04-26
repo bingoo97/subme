@@ -1,5 +1,52 @@
 <?php
 
+if (!function_exists('app_runtime_timezone_name')) {
+    function app_runtime_timezone_name() {
+        static $timezone = null;
+
+        if ($timezone !== null) {
+            return $timezone;
+        }
+
+        $candidate = trim((string)getenv('APP_TIMEZONE'));
+        if ($candidate === '') {
+            $candidate = 'Europe/Warsaw';
+        }
+
+        try {
+            new DateTimeZone($candidate);
+            $timezone = $candidate;
+        } catch (Throwable $exception) {
+            $timezone = 'Europe/Warsaw';
+        }
+
+        return $timezone;
+    }
+}
+
+if (!function_exists('app_bootstrap_runtime_timezone')) {
+    function app_bootstrap_runtime_timezone() {
+        static $bootstrapped = false;
+
+        if ($bootstrapped) {
+            return;
+        }
+
+        $bootstrapped = true;
+        date_default_timezone_set(app_runtime_timezone_name());
+    }
+}
+
+if (!function_exists('app_mysql_session_timezone_offset')) {
+    function app_mysql_session_timezone_offset() {
+        app_bootstrap_runtime_timezone();
+        $now = new DateTimeImmutable('now', new DateTimeZone(date_default_timezone_get()));
+        return $now->format('P');
+    }
+}
+
+app_bootstrap_runtime_timezone();
+
 class Mysql_ks {
 
 	private $db;
@@ -27,6 +74,9 @@ class Mysql_ks {
 		}
 		
 		$this->set_charset($this->kodowanie);
+
+        $sessionTimezoneOffset = $this->db->real_escape_string(app_mysql_session_timezone_offset());
+        @$this->db->query("SET time_zone = '{$sessionTimezoneOffset}'");
 	}
 	
 	public static function get_instance() {
