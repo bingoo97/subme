@@ -9650,18 +9650,33 @@ function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20):
 function admin_crypto_asset_logo_url(string $assetCode): string
 {
     $assetCode = strtolower(trim($assetCode));
-    $baseDir = rtrim(function_exists('app_public_root_path') ? app_public_root_path() : (dirname(__DIR__, 2) . '/public_html'), '/') . '/img/crypto/';
-    $direct = $assetCode !== '' ? $baseDir . $assetCode . '.png' : '';
+    if ($assetCode !== '') {
+        $directMap = [
+            'btc' => 'btc.png',
+            'bch' => 'btcash.png',
+            'ltc' => 'ltc.png',
+            'eth' => 'eth.png',
+            'doge' => 'doge.png',
+            'bnb' => 'bnb.png',
+            'busd' => 'busd.png',
+            'cro' => 'cro.png',
+            'atom' => 'atom.png',
+            'sol' => 'sol.png',
+            'matic' => 'matic.png',
+            'xrp' => 'xrp.png',
+        ];
 
-    if ($direct !== '' && is_file($direct)) {
-        return '/img/crypto/' . $assetCode . '.png';
+        if (isset($directMap[$assetCode])) {
+            return '/img/crypto/' . $directMap[$assetCode];
+        }
     }
 
     $map = [
         'usdt' => 'tether.png',
+        'usdc' => 'tether.png',
     ];
 
-    if ($assetCode !== '' && isset($map[$assetCode]) && is_file($baseDir . $map[$assetCode])) {
+    if ($assetCode !== '' && isset($map[$assetCode])) {
         return '/img/crypto/' . $map[$assetCode];
     }
 

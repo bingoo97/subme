@@ -38,12 +38,7 @@ if (!function_exists('orders_payment_crypto_logo_by_code')) {
         ];
 
         if (isset($fileMap[$code])) {
-            $absolutePath = function_exists('app_public_path')
-                ? app_public_path('img/crypto/' . $fileMap[$code])
-                : (dirname(__DIR__, 3) . '/public_html/img/crypto/' . $fileMap[$code]);
-            if (is_file($absolutePath)) {
-                return '/img/crypto/' . $fileMap[$code];
-            }
+            return '/img/crypto/' . $fileMap[$code];
         }
 
         return orders_payment_format_logo_path($fallbackPath);
@@ -805,146 +800,16 @@ if (app_uses_v2_schema($db)) {
             $selectedProductId = (int)$selectedProduct['id'];
         }
 
-        $activeAssets = orders_payment_refresh_crypto_rates($db, 'USD');
-        $assignedCryptoWallets = $db->select_full_user(
-            "SELECT *
-             FROM customer_crypto_wallets
-             WHERE customer_id = " . (int)$user['id'] . "
-               AND status = 'active'
-             ORDER BY assigned_at DESC"
+        $selectedCurrencyCode = strtoupper(trim((string)($selectedProduct['currency_code'] ?? $selected['currency_code'] ?? 'USD')));
+        if ($selectedCurrencyCode === '') {
+            $selectedCurrencyCode = 'USD';
+        }
+        $cryptoAssets = app_load_customer_crypto_assets(
+            $db,
+            (int)$user['id'],
+            $selectedCurrencyCode,
+            is_array($settings ?? null) ? $settings : []
         );
-        $activeAssetsByCode = [];
-        foreach ($activeAssets as $asset) {
-            $activeAssetsByCode[(string)($asset['code'] ?? '')] = $asset;
-        }
-
-        foreach ($assignedCryptoWallets as &$wallet) {
-            if (!empty($wallet['network_code'])) {
-                continue;
-            }
-
-            $assetCode = strtoupper(trim((string)($wallet['crypto_asset_code'] ?? '')));
-            $walletAddress = trim((string)($wallet['address'] ?? ''));
-            $inferredNetworkCode = '';
-
-            if ($assetCode === 'BTC') {
-                $inferredNetworkCode = 'bitcoin';
-            } elseif ($assetCode === 'BCH') {
-                $inferredNetworkCode = 'bitcoin-cash';
-            } elseif ($assetCode === 'LTC') {
-                $inferredNetworkCode = 'litecoin';
-            } elseif ($assetCode === 'DOGE') {
-                $inferredNetworkCode = 'dogecoin';
-            } elseif ($assetCode === 'ETH') {
-                $inferredNetworkCode = 'ethereum';
-            } elseif ($assetCode === 'BNB') {
-                $inferredNetworkCode = 'bnb';
-            } elseif ($assetCode === 'CRO') {
-                $inferredNetworkCode = 'cronos';
-            } elseif ($assetCode === 'SOL') {
-                $inferredNetworkCode = 'solana';
-            } elseif ($assetCode === 'MATIC') {
-                $inferredNetworkCode = 'polygon';
-            } elseif ($assetCode === 'XRP') {
-                $inferredNetworkCode = 'ripple';
-            } elseif ($assetCode === 'USDT' || $assetCode === 'USDC') {
-                if (strpos($walletAddress, 'T') === 0) {
-                    $inferredNetworkCode = 'tron';
-                } elseif (stripos($walletAddress, '0x') === 0) {
-                    $inferredNetworkCode = 'ethereum';
-                } elseif (stripos($walletAddress, 'cro') === 0) {
-                    $inferredNetworkCode = 'cronos';
-                } elseif ($walletAddress !== '' && preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,}$/', $walletAddress)) {
-                    $inferredNetworkCode = 'solana';
-                } else {
-                    $inferredNetworkCode = 'ethereum';
-                }
-            }
-
-            if ($inferredNetworkCode !== '' && !empty($wallet['wallet_address_id'])) {
-                $db->update_using_id(['network_code'], [$inferredNetworkCode], 'crypto_wallet_addresses', (int)$wallet['wallet_address_id']);
-                $wallet['network_code'] = $inferredNetworkCode;
-            }
-        }
-        unset($wallet);
-
-        $cryptoAssets = [];
-        foreach ($assignedCryptoWallets as $assignedWallet) {
-            $assetCode = (string)($assignedWallet['crypto_asset_code'] ?? '');
-            $asset = $activeAssetsByCode[$assetCode] ?? null;
-            if (!is_array($asset)) {
-                continue;
-            }
-
-            $networkCode = (string)($assignedWallet['network_code'] ?? '');
-            $cryptoAsset = [
-                'id' => (int)$assignedWallet['wallet_assignment_id'],
-                'crypto_asset_id' => (int)$asset['id'],
-                'code' => $assetCode,
-                'name' => (string)$asset['name'],
-                'network_code' => $networkCode,
-                'network_label' => orders_payment_crypto_network_label($networkCode),
-                'logo_path' => orders_payment_crypto_logo_by_code($assetCode, (string)($asset['logo_url'] ?? '')),
-                'rate' => isset($asset['current_rate_fiat']) ? (float)$asset['current_rate_fiat'] : 0.0,
-                'is_assigned' => true,
-                'wallet_assignment_id' => (int)$assignedWallet['wallet_assignment_id'],
-                'wallet_address_id' => (int)$assignedWallet['wallet_address_id'],
-                'wallet_address' => (string)$assignedWallet['address'],
-                'wallet_memo_tag' => (string)($assignedWallet['memo_tag'] ?? ''),
-                'wallet_label' => (string)($assignedWallet['label'] ?? ''),
-                'wallet_owner_full_name' => (string)($assignedWallet['owner_full_name'] ?? ''),
-                'wallet_provider' => (string)($assignedWallet['wallet_provider'] ?? ''),
-            ];
-            $cryptoAssets[] = $cryptoAsset;
-        }
-
-        $existingWalletIds = [];
-        $existingAssetIds = [];
-        foreach ($cryptoAssets as $cryptoAssetRow) {
-            $existingWalletIds[(int)($cryptoAssetRow['wallet_address_id'] ?? 0)] = true;
-            $existingAssetIds[(int)($cryptoAssetRow['crypto_asset_id'] ?? 0)] = true;
-        }
-
-        foreach ($activeAssets as $asset) {
-            $assetCode = strtoupper((string)($asset['code'] ?? ''));
-            $cryptoAssetId = (int)($asset['id'] ?? 0);
-            if ($assetCode === '' || $cryptoAssetId <= 0 || !empty($existingAssetIds[$cryptoAssetId])) {
-                continue;
-            }
-
-            $availableWallet = orders_payment_available_crypto_wallet_for_asset(
-                $db,
-                $cryptoAssetId,
-                (int)$user['id'],
-                is_array($settings ?? null) ? $settings : []
-            );
-            $availableWalletId = (int)($availableWallet['wallet_address_id'] ?? 0);
-            if (!is_array($availableWallet) || $availableWalletId <= 0 || isset($existingWalletIds[$availableWalletId]) || (float)($asset['current_rate_fiat'] ?? 0) <= 0) {
-                continue;
-            }
-
-            $networkCode = (string)($availableWallet['network_code'] ?? '');
-            $cryptoAssets[] = [
-                'id' => 0 - $availableWalletId,
-                'crypto_asset_id' => $cryptoAssetId,
-                'code' => $assetCode,
-                'name' => (string)($asset['name'] ?? $assetCode),
-                'network_code' => $networkCode,
-                'network_label' => orders_payment_crypto_network_label($networkCode),
-                'logo_path' => orders_payment_crypto_logo_by_code($assetCode, (string)($asset['logo_url'] ?? '')),
-                'rate' => isset($asset['current_rate_fiat']) ? (float)$asset['current_rate_fiat'] : 0.0,
-                'is_assigned' => false,
-                'wallet_assignment_id' => 0,
-                'wallet_address_id' => $availableWalletId,
-                'wallet_address' => (string)($availableWallet['address'] ?? ''),
-                'wallet_memo_tag' => (string)($availableWallet['memo_tag'] ?? ''),
-                'wallet_label' => (string)($availableWallet['label'] ?? ''),
-                'wallet_owner_full_name' => (string)($availableWallet['owner_full_name'] ?? ''),
-                'wallet_provider' => (string)($availableWallet['wallet_provider'] ?? ''),
-            ];
-            $existingWalletIds[$availableWalletId] = true;
-            $existingAssetIds[$cryptoAssetId] = true;
-        }
 
         $bankAccounts = $db->select_full_user(
             "SELECT *

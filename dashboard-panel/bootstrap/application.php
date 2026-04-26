@@ -113,10 +113,7 @@ function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): 
     ];
 
     if (isset($fileMap[$code])) {
-        $absolutePath = app_public_path('img/crypto/' . $fileMap[$code]);
-        if (is_file($absolutePath)) {
-            return '/img/crypto/' . $fileMap[$code];
-        }
+        return '/img/crypto/' . $fileMap[$code];
     }
 
     return app_format_logo_path($fallbackPath);
