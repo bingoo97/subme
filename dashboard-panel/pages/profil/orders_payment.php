@@ -903,6 +903,7 @@ if (app_uses_v2_schema($db)) {
             } elseif (!$selectedProduct) {
                 $smarty->assign('alert_error', 'Choose a package first.');
             } else {
+                $createdWalletAssignmentNow = false;
                 $selectedAssetId = isset($_POST['crypto_wallet_assignment_id']) ? (int)$_POST['crypto_wallet_assignment_id'] : 0;
                 $selectedAsset = null;
                 foreach ($cryptoAssets as $asset) {
@@ -932,6 +933,7 @@ if (app_uses_v2_schema($db)) {
                             $smarty->assign('alert_error', 'No wallet could be assigned to your account for this cryptocurrency right now.');
                             $selectedAsset = null;
                         } else {
+                            $createdWalletAssignmentNow = true;
                             $selectedAsset['wallet_assignment_id'] = $assignedWalletId;
                             $selectedAsset['is_assigned'] = true;
                         }
@@ -1000,6 +1002,9 @@ if (app_uses_v2_schema($db)) {
                                 [
                                     'asset_name' => (string)($selectedAsset['name'] ?? ''),
                                     'asset_code' => (string)($selectedAsset['code'] ?? ''),
+                                    'requested_fiat_amount' => (float)$selectedProduct['price'],
+                                    'currency_symbol' => (string)($selectedProduct['currency_symbol'] ?? $selected['currency_symbol'] ?? ''),
+                                    'currency_code' => (string)($selectedProduct['currency_code'] ?? $selected['currency_code'] ?? ''),
                                     'requested_crypto_amount' => (string)$requestedCryptoAmount,
                                     'wallet_address' => (string)($selectedAsset['wallet_address'] ?? ''),
                                     'wallet_owner_full_name' => (string)($selectedAsset['wallet_owner_full_name'] ?? ''),
@@ -1007,6 +1012,9 @@ if (app_uses_v2_schema($db)) {
                             );
                             $paymentRedirectUrl = '/order-payment-' . (int)$selected['id'];
                         } else {
+                            if ($createdWalletAssignmentNow && !empty($selectedAsset['wallet_assignment_id'])) {
+                                app_release_crypto_wallet_assignment_if_unused($db, (int)$selectedAsset['wallet_assignment_id'], 'Released after failed customer payment request creation');
+                            }
                             $smarty->assign('alert_error', 'Unable to create crypto payment request right now.');
                         }
                     }

@@ -4080,7 +4080,7 @@ function admin_create_product(Mysql_ks $db, array $input): array
     }
 
     if ($productType !== 'credits' && ($durationHoursRaw === '' || !ctype_digit($durationHoursRaw))) {
-        return ['ok' => false, 'message' => 'Duration must be a whole number of hours.'];
+        return ['ok' => false, 'message' => 'Choose a valid subscription period.'];
     }
 
     if ($priceAmountRaw === '' || !is_numeric($priceAmountRaw)) {
@@ -4097,6 +4097,9 @@ function admin_create_product(Mysql_ks $db, array $input): array
 
     $slug = admin_product_unique_slug($db, $name, $slugInput);
     $durationHours = $productType === 'credits' ? 0 : (int)$durationHoursRaw;
+    if ($productType !== 'credits' && admin_product_subscription_requires_trial($durationHours) && $isTrial !== 1) {
+        return ['ok' => false, 'message' => 'Packages with 6h, 12h or 24h duration must be marked as trial.'];
+    }
     if ($productType === 'credits') {
         $isTrial = 0;
     }
@@ -4156,7 +4159,7 @@ function admin_save_product(Mysql_ks $db, int $productId, array $input): array
     }
 
     if ($productType !== 'credits' && ($durationHoursRaw === '' || !ctype_digit($durationHoursRaw))) {
-        return ['ok' => false, 'message' => 'Duration must be a whole number of hours.'];
+        return ['ok' => false, 'message' => 'Choose a valid subscription period.'];
     }
 
     if ($priceAmountRaw === '' || !is_numeric($priceAmountRaw)) {
@@ -4173,6 +4176,9 @@ function admin_save_product(Mysql_ks $db, int $productId, array $input): array
 
     $slug = admin_product_unique_slug($db, $name, $slugInput, $productId);
     $durationHours = $productType === 'credits' ? 0 : (int)$durationHoursRaw;
+    if ($productType !== 'credits' && admin_product_subscription_requires_trial($durationHours) && $isTrial !== 1) {
+        return ['ok' => false, 'message' => 'Packages with 6h, 12h or 24h duration must be marked as trial.'];
+    }
     if ($productType === 'credits') {
         $isTrial = 0;
     }
@@ -4782,6 +4788,11 @@ function admin_duration_label_from_hours(int $hours): string
         return '0h';
     }
 
+    if ($hours % 8760 === 0) {
+        $years = (int)($hours / 8760);
+        return $years . ' ' . ($years === 1 ? 'Year' : 'Years');
+    }
+
     if ($hours % 720 === 0) {
         $months = (int)($hours / 720);
         return $months . ' ' . ($months === 1 ? 'Month' : 'Months');
@@ -4793,6 +4804,30 @@ function admin_duration_label_from_hours(int $hours): string
     }
 
     return $hours . 'h';
+}
+
+function admin_product_duration_options(int $currentHours = 720): array
+{
+    $options = [6, 12, 24, 720, 2160, 4320, 8760];
+    $currentHours = max(0, $currentHours);
+
+    if ($currentHours > 0 && !in_array($currentHours, $options, true)) {
+        $options[] = $currentHours;
+    }
+
+    sort($options, SORT_NUMERIC);
+
+    return array_map(static function (int $hours): array {
+        return [
+            'value' => $hours,
+            'label' => admin_duration_label_from_hours($hours),
+        ];
+    }, $options);
+}
+
+function admin_product_subscription_requires_trial(int $durationHours): bool
+{
+    return $durationHours > 0 && $durationHours <= 24;
 }
 
 function admin_format_product_option_label(array $productRow): string

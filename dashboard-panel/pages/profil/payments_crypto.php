@@ -178,6 +178,7 @@ switch ($site) {
             } elseif ($activePayment > 0) {
                 $paymentRedirectUrl = '/cryptocurrency';
             } else {
+                $createdWalletAssignmentNow = false;
                 $paymentMethod = trim((string)($_POST['payment_method'] ?? ''));
                 $selectedAssetId = isset($_POST['crypto_wallet_assignment_id']) ? (int)$_POST['crypto_wallet_assignment_id'] : 0;
                 $requestedAmountRaw = str_replace(',', '.', trim((string)($_POST['topup_amount'] ?? '')));
@@ -235,6 +236,7 @@ switch ($site) {
                             $smarty->display('alert.tpl');
                             $selectedAsset = null;
                         } else {
+                            $createdWalletAssignmentNow = true;
                             $selectedAsset['wallet_assignment_id'] = $assignedWalletId;
                             $selectedAsset['is_assigned'] = true;
                         }
@@ -268,6 +270,9 @@ switch ($site) {
                     }
 
                     if ($paymentRedirectUrl === '') {
+                        if ($createdWalletAssignmentNow && !empty($selectedAsset['wallet_assignment_id'])) {
+                            app_release_crypto_wallet_assignment_if_unused($db, (int)$selectedAsset['wallet_assignment_id'], 'Released after failed balance top-up payment request creation');
+                        }
                         $smarty->assign('alert_error', localization_translate($t, 'balance_topup_create_error', 'Unable to create the payment request right now.'));
                         $smarty->display('alert.tpl');
                     }

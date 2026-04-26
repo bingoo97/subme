@@ -178,9 +178,28 @@ document.addEventListener('DOMContentLoaded', function () {
     function initProductTypeForms() {
         qa('[data-product-form-scope]').forEach(function (scope) {
             var typeField = q('[data-product-type-select]', scope);
+            var durationField = q('[data-product-duration-select]', scope);
+            var trialField = q('[data-product-trial-toggle]', scope);
             if (!typeField) {
                 return;
             }
+
+            var syncTrialConstraint = function () {
+                var productType = String(typeField.value || 'subscription').toLowerCase() === 'credits' ? 'credits' : 'subscription';
+                var durationHours = parseInt(durationField && durationField.value ? durationField.value : '0', 10) || 0;
+                var trialRequired = productType === 'subscription' && durationHours > 0 && durationHours <= 24;
+
+                if (!trialField) {
+                    return;
+                }
+
+                if (trialRequired) {
+                    trialField.checked = true;
+                    trialField.disabled = true;
+                } else {
+                    trialField.disabled = false;
+                }
+            };
 
             var sync = function () {
                 var productType = String(typeField.value || 'subscription').toLowerCase() === 'credits' ? 'credits' : 'subscription';
@@ -199,9 +218,14 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     });
                 });
+
+                syncTrialConstraint();
             };
 
             typeField.addEventListener('change', sync);
+            if (durationField) {
+                durationField.addEventListener('change', syncTrialConstraint);
+            }
             sync();
         });
     }
@@ -514,6 +538,10 @@ document.addEventListener('DOMContentLoaded', function () {
         var composerInput = q('[data-admin-chat-input]', root);
         var composerPreview = q('[data-admin-chat-link-preview]', root);
         var uploadInput = q('[data-admin-chat-file]', root);
+        var cryptoOpenButton = q('[data-admin-chat-crypto-open]', root);
+        var cryptoLoader = q('[data-admin-chat-crypto-loader]', root);
+        var cryptoTooltip = q('[data-admin-chat-crypto-tooltip]', root);
+        var bankOpenButton = q('[data-admin-chat-bank-open]', root);
         var csrfToken = root.getAttribute('data-csrf-token') || '';
         var activeConversationId = 0;
         var activeCustomerId = 0;
@@ -538,6 +566,34 @@ document.addEventListener('DOMContentLoaded', function () {
         var linkPreviewLoading = false;
         var linkPreviewRequestId = 0;
         var linkPreviewTimer = 0;
+        var paymentModals = {
+            crypto: buildPaymentModalState('crypto'),
+            bank: buildPaymentModalState('bank')
+        };
+
+        function buildPaymentModalState(type) {
+            var modalWrap = q(type === 'crypto' ? '[data-admin-chat-crypto-modal]' : '[data-admin-chat-bank-modal]', root);
+            if (!modalWrap) {
+                return null;
+            }
+
+            return {
+                type: type,
+                wrap: modalWrap,
+                modal: q('[data-admin-chat-payment-modal]', modalWrap),
+                info: q('[data-admin-chat-payment-info]', modalWrap),
+                preview: q('[data-admin-chat-payment-preview]', modalWrap),
+                sendButton: q('[data-admin-chat-payment-send]', modalWrap),
+                amountSelect: q('[data-admin-chat-payment-amount]', modalWrap),
+                assetWrap: q('[data-admin-chat-asset-wrap]', modalWrap),
+                assetSelect: q('[data-admin-chat-payment-asset]', modalWrap),
+                productSelect: q('[data-admin-chat-payment-product]', modalWrap),
+                bankWrap: q('[data-admin-chat-payment-bank-wrap]', modalWrap),
+                bankSelect: q('[data-admin-chat-payment-bank-account]', modalWrap),
+                payload: null,
+                previewPayload: null
+            };
+        }
 
         function showComposerAlert(message, isError) {
             if (!composerAlert) {
@@ -557,6 +613,417 @@ document.addEventListener('DOMContentLoaded', function () {
             groupAlert.classList.toggle('alert-danger', !!isError);
             groupAlert.classList.toggle('alert-success', !isError && !!message);
             setHidden(groupAlert, !message);
+        }
+
+        function syncPaymentHeaderActions(payload) {
+            var isDirectConversation = activeConversationType === 'live_chat' && activeConversationId > 0 && activeCustomerId > 0;
+            var hasPendingCryptoPayment = !!(payload && payload.pending_crypto_payment);
+
+            if (cryptoOpenButton) {
+                setHidden(cryptoOpenButton, !isDirectConversation);
+                cryptoOpenButton.disabled = false;
+                cryptoOpenButton.removeAttribute('data-admin-chat-crypto-disabled');
+            }
+            if (cryptoLoader) {
+                setHidden(cryptoLoader, true);
+            }
+            if (cryptoTooltip) {
+                setHidden(cryptoTooltip, true);
+            }
+            if (cryptoOpenButton && isDirectConversation && hasPendingCryptoPayment) {
+                cryptoOpenButton.disabled = true;
+                cryptoOpenButton.setAttribute('data-admin-chat-crypto-disabled', '1');
+                if (cryptoTooltip) {
+                    cryptoTooltip.textContent = root.getAttribute('data-chat-payment-pending-tooltip') || 'Crypto Payment - Pending...';
+                    setHidden(cryptoTooltip, false);
+                }
+            }
+
+            if (bankOpenButton) {
+                setHidden(bankOpenButton, !isDirectConversation);
+            }
+        }
+
+        function closePaymentModal(type) {
+            var modalState = paymentModals[type];
+            if (!modalState || !modalState.wrap) {
+                return;
+            }
+
+            setHidden(modalState.wrap, true);
+            modalState.payload = null;
+            modalState.previewPayload = null;
+            if (modalState.info) {
+                modalState.info.textContent = '';
+                setHidden(modalState.info, true);
+            }
+            if (modalState.preview) {
+                modalState.preview.innerHTML = '';
+                setHidden(modalState.preview, true);
+            }
+            if (modalState.sendButton) {
+                modalState.sendButton.disabled = false;
+            }
+        }
+
+        function closeAllPaymentModals() {
+            closePaymentModal('crypto');
+            closePaymentModal('bank');
+        }
+
+        function renderPaymentStateHtml(message, isError) {
+            return '<div class="admin-chat-payment-modal__state' + (isError ? ' is-error' : '') + '">' + escapeHtml(message) + '</div>';
+        }
+
+        function setPaymentInfo(modalState, message) {
+            if (!modalState || !modalState.info) {
+                return;
+            }
+
+            modalState.info.textContent = message || '';
+            setHidden(modalState.info, !message);
+        }
+
+        function setPaymentPreview(modalState, html) {
+            if (!modalState || !modalState.preview) {
+                return;
+            }
+
+            modalState.preview.innerHTML = html || '';
+            setHidden(modalState.preview, !html);
+        }
+
+        function ensureSelectHasValue(select, desiredValue, fallbackValue) {
+            var values;
+            var normalizedDesired;
+            var normalizedFallback;
+
+            if (!select) {
+                return;
+            }
+
+            normalizedDesired = String(desiredValue || '');
+            normalizedFallback = String(fallbackValue || '');
+            values = qa('option', select).map(function (option) {
+                return String(option.value || '');
+            });
+
+            if (normalizedDesired && values.indexOf(normalizedDesired) !== -1) {
+                select.value = normalizedDesired;
+                return;
+            }
+
+            if (normalizedFallback && values.indexOf(normalizedFallback) !== -1) {
+                select.value = normalizedFallback;
+                return;
+            }
+
+            if (values.length) {
+                select.value = values[0];
+            }
+        }
+
+        function formatAmountLabel(amount, currency) {
+            var trimmedAmount = String(amount || '').trim();
+            var symbol = currency && currency.symbol ? String(currency.symbol) : '';
+            var code = currency && currency.code ? String(currency.code) : '';
+            if (!trimmedAmount) {
+                return code ? code : '';
+            }
+            return (symbol ? symbol : '') + trimmedAmount + (code ? ' ' + code : '');
+        }
+
+        function populateAmountOptions(select, options, currency, preferredValue) {
+            var amountOptions = Array.isArray(options) ? options : [];
+            if (!select) {
+                return;
+            }
+
+            select.innerHTML = amountOptions.map(function (amount) {
+                var amountValue = String(amount || '');
+                return '<option value="' + escapeHtml(amountValue) + '">' + escapeHtml(formatAmountLabel(amountValue, currency)) + '</option>';
+            }).join('');
+            ensureSelectHasValue(select, preferredValue, amountOptions.length ? amountOptions[0] : '');
+        }
+
+        function populateCryptoProductOptions(modalState, presets) {
+            var defaultLabel;
+            var items = Array.isArray(presets) ? presets : [];
+            if (!modalState || !modalState.productSelect) {
+                return;
+            }
+
+            defaultLabel = modalState.productSelect.getAttribute('data-default-label') || 'Custom amount';
+            modalState.productSelect.innerHTML = '<option value="">' + escapeHtml(defaultLabel) + '</option>' + items.map(function (item) {
+                return '<option value="' + escapeHtml(item.product_id) + '" data-price="' + escapeHtml(item.amount) + '">' + escapeHtml(item.label || '') + '</option>';
+            }).join('');
+            modalState.productSelect.value = '';
+        }
+
+        function syncCryptoProductAmount(modalState) {
+            var selectedOption;
+            var presetAmount;
+
+            if (!modalState || !modalState.productSelect || !modalState.amountSelect) {
+                return;
+            }
+
+            selectedOption = modalState.productSelect.options[modalState.productSelect.selectedIndex] || null;
+            presetAmount = selectedOption ? String(selectedOption.getAttribute('data-price') || '').trim() : '';
+            if (!presetAmount) {
+                return;
+            }
+
+            ensureSelectHasValue(modalState.amountSelect, presetAmount, modalState.amountSelect.value);
+        }
+
+        function populateCryptoAssets(modalState, items) {
+            var rows = Array.isArray(items) ? items : [];
+            if (!modalState || !modalState.assetSelect) {
+                return;
+            }
+
+            modalState.assetSelect.innerHTML = rows.map(function (item) {
+                var label = (item.name || item.code || 'Crypto') + ' (' + (item.code || '') + ')';
+                if (item.rate_label) {
+                    label += ' - ' + item.rate_label;
+                }
+                return '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(label) + '</option>';
+            }).join('');
+            ensureSelectHasValue(modalState.assetSelect, rows.length ? String(rows[0].id) : '', rows.length ? String(rows[0].id) : '');
+        }
+
+        function populateBankAccounts(modalState, assignedAccounts, availableAccounts) {
+            var options = [];
+            if (!modalState || !modalState.bankSelect) {
+                return;
+            }
+
+            (Array.isArray(assignedAccounts) ? assignedAccounts : []).forEach(function (item) {
+                options.push({
+                    value: String(item.bank_account_id || ''),
+                    label: (item.label || item.bank_name || 'Bank account') + ' · ' + (item.account_holder_name || '') + (item.iban ? ' · ' + item.iban : ''),
+                    isAssigned: true
+                });
+            });
+            (Array.isArray(availableAccounts) ? availableAccounts : []).forEach(function (item) {
+                options.push({
+                    value: String(item.bank_account_id || ''),
+                    label: (item.label || item.bank_name || 'Bank account') + ' · ' + (item.account_holder_name || '') + (item.iban ? ' · ' + item.iban : ''),
+                    isAssigned: false
+                });
+            });
+
+            modalState.bankSelect.innerHTML = options.map(function (item) {
+                var prefix = item.isAssigned ? 'Assigned · ' : '';
+                return '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(prefix + item.label) + '</option>';
+            }).join('');
+            ensureSelectHasValue(modalState.bankSelect, options.length ? options[0].value : '', options.length ? options[0].value : '');
+            if (modalState.bankWrap) {
+                setHidden(modalState.bankWrap, options.length <= 1);
+            }
+        }
+
+        function refreshPaymentPreview(type) {
+            var modalState = paymentModals[type];
+            var params;
+
+            if (!modalState || !modalState.payload || !activeConversationId) {
+                return;
+            }
+
+            params = {
+                action: 'payment_preview',
+                conversation_id: activeConversationId,
+                type: type,
+                amount: modalState.amountSelect ? modalState.amountSelect.value : ''
+            };
+
+            if (type === 'crypto') {
+                params.asset_id = modalState.assetSelect ? modalState.assetSelect.value : '';
+                if (!params.asset_id || !params.amount) {
+                    setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-empty') || 'Choose a payment option to see the details.', false));
+                    if (modalState.sendButton) {
+                        modalState.sendButton.disabled = true;
+                    }
+                    return;
+                }
+            } else {
+                params.bank_account_id = modalState.bankSelect ? modalState.bankSelect.value : '';
+                if (!params.amount) {
+                    setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-empty') || 'Choose a payment option to see the details.', false));
+                    if (modalState.sendButton) {
+                        modalState.sendButton.disabled = true;
+                    }
+                    return;
+                }
+            }
+
+            setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-loading') || 'Loading payment options...', false));
+            if (modalState.sendButton) {
+                modalState.sendButton.disabled = true;
+            }
+
+            jsonFetch(chatUrl + '?' + toQuery(params)).then(function (payload) {
+                if (!payload.ok) {
+                    modalState.previewPayload = null;
+                    setPaymentPreview(modalState, payload.preview_html || renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
+                    if (modalState.sendButton) {
+                        modalState.sendButton.disabled = true;
+                    }
+                    return;
+                }
+
+                modalState.previewPayload = payload;
+                setPaymentPreview(modalState, payload.preview_html || '');
+                if (modalState.sendButton) {
+                    modalState.sendButton.disabled = false;
+                }
+            }).catch(function () {
+                modalState.previewPayload = null;
+                setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
+                if (modalState.sendButton) {
+                    modalState.sendButton.disabled = true;
+                }
+            });
+        }
+
+        function hydratePaymentModal(type, payload) {
+            var modalState = paymentModals[type];
+            var infoMessage = '';
+
+            if (!modalState) {
+                return;
+            }
+
+            modalState.payload = payload;
+            modalState.previewPayload = null;
+
+            if (type === 'crypto') {
+                populateCryptoProductOptions(modalState, payload.product_presets || []);
+                populateCryptoAssets(modalState, payload.items || []);
+                populateAmountOptions(modalState.amountSelect, payload.amount_options || [], payload.currency || null, '');
+
+                if (payload.rate_notice && payload.rate_notice.refreshed && payload.rate_notice.label) {
+                    infoMessage = (root.getAttribute('data-chat-payment-rates-updated') || 'Crypto rates were updated: {datetime}.').replace('{datetime}', payload.rate_notice.label);
+                }
+                setPaymentInfo(modalState, infoMessage);
+
+                if (!Array.isArray(payload.items) || !payload.items.length) {
+                    setPaymentPreview(modalState, payload.empty_state_html || renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-empty') || 'Choose a payment option to see the details.', false));
+                    if (modalState.sendButton) {
+                        modalState.sendButton.disabled = true;
+                    }
+                    return;
+                }
+
+                syncCryptoProductAmount(modalState);
+                refreshPaymentPreview(type);
+                return;
+            }
+
+            populateBankAccounts(modalState, payload.assigned_accounts || [], payload.available_accounts || []);
+            populateAmountOptions(modalState.amountSelect, payload.amount_options || [], payload.currency || null, '');
+            setPaymentInfo(modalState, '');
+
+            if ((!payload.assigned_accounts || !payload.assigned_accounts.length) && (!payload.available_accounts || !payload.available_accounts.length)) {
+                setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
+                if (modalState.sendButton) {
+                    modalState.sendButton.disabled = true;
+                }
+                return;
+            }
+
+            refreshPaymentPreview(type);
+        }
+
+        function openPaymentModal(type) {
+            var modalState = paymentModals[type];
+            if (!modalState || !activeConversationId) {
+                return;
+            }
+
+            closeQuickModal();
+            closePaymentModal(type === 'crypto' ? 'bank' : 'crypto');
+            setHidden(modalState.wrap, false);
+            setPaymentInfo(modalState, '');
+            setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-loading') || 'Loading payment options...', false));
+            if (modalState.sendButton) {
+                modalState.sendButton.disabled = true;
+            }
+
+            jsonFetch(chatUrl + '?' + toQuery({
+                action: 'payment_modal',
+                conversation_id: activeConversationId,
+                type: type
+            })).then(function (payload) {
+                if (!payload.ok) {
+                    setPaymentPreview(modalState, renderPaymentStateHtml(payload.message || root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
+                    return;
+                }
+
+                hydratePaymentModal(type, payload);
+            }).catch(function () {
+                setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
+            });
+        }
+
+        function submitPaymentRequest(type) {
+            var modalState = paymentModals[type];
+            var postBody;
+            var errorMessage;
+
+            if (!modalState || !activeConversationId || !modalState.sendButton) {
+                return;
+            }
+
+            if (!modalState.previewPayload || !modalState.previewPayload.ok) {
+                refreshPaymentPreview(type);
+                return;
+            }
+
+            modalState.sendButton.disabled = true;
+            errorMessage = root.getAttribute('data-chat-payment-send-error') || 'Unable to create payment request.';
+            postBody = {
+                conversation_id: activeConversationId,
+                _csrf: csrfToken
+            };
+
+            if (type === 'crypto') {
+                postBody.action = 'create_crypto_payment_request';
+                postBody.asset_id = modalState.assetSelect ? modalState.assetSelect.value : '';
+                postBody.amount = modalState.amountSelect ? modalState.amountSelect.value : '';
+                postBody.product_id = modalState.productSelect ? modalState.productSelect.value : '';
+            } else {
+                postBody.action = 'create_bank_payment_request';
+                postBody.amount = modalState.amountSelect ? modalState.amountSelect.value : '';
+                postBody.bank_account_id = modalState.bankSelect ? modalState.bankSelect.value : '';
+            }
+
+            jsonFetch(chatUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: toQuery(postBody)
+            }).then(function (payload) {
+                var message = payload.message || errorMessage;
+                modalState.sendButton.disabled = false;
+                if (!payload.ok) {
+                    if (message === 'pending_crypto_payment') {
+                        message = root.getAttribute('data-chat-payment-pending-error') || message;
+                    }
+                    setPaymentPreview(modalState, renderPaymentStateHtml(message, true));
+                    showComposerAlert(message, true);
+                    return;
+                }
+
+                closePaymentModal(type);
+                showComposerAlert('', false);
+                renderConversation(payload);
+            }).catch(function () {
+                modalState.sendButton.disabled = false;
+                setPaymentPreview(modalState, renderPaymentStateHtml(errorMessage, true));
+                showComposerAlert(errorMessage, true);
+            });
         }
 
         function renderGroupMembers() {
@@ -878,6 +1345,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 toggle.setAttribute('aria-expanded', 'false');
             }
             closeQuickModal();
+            closeAllPaymentModals();
         }
 
         function showList() {
@@ -901,6 +1369,8 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             resetLinkPreview();
             closeQuickModal();
+            closeAllPaymentModals();
+            syncPaymentHeaderActions(null);
         }
 
         function showConversation() {
@@ -950,6 +1420,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 composerInput.value = '';
             }
             resetLinkPreview();
+            closeAllPaymentModals();
+            syncPaymentHeaderActions(payload);
             showConversation();
             openPanel(false);
             scrollConversationToBottom();
@@ -1102,6 +1574,67 @@ document.addEventListener('DOMContentLoaded', function () {
                 showList();
             });
         }
+
+        if (cryptoOpenButton) {
+            cryptoOpenButton.addEventListener('click', function () {
+                if (cryptoOpenButton.disabled) {
+                    return;
+                }
+                openPaymentModal('crypto');
+            });
+        }
+
+        if (bankOpenButton) {
+            bankOpenButton.addEventListener('click', function () {
+                openPaymentModal('bank');
+            });
+        }
+
+        qa('[data-admin-chat-crypto-close]', root).forEach(function (button) {
+            button.addEventListener('click', function () {
+                closePaymentModal('crypto');
+            });
+        });
+
+        qa('[data-admin-chat-bank-close]', root).forEach(function (button) {
+            button.addEventListener('click', function () {
+                closePaymentModal('bank');
+            });
+        });
+
+        Object.keys(paymentModals).forEach(function (key) {
+            var modalState = paymentModals[key];
+            if (!modalState) {
+                return;
+            }
+
+            if (modalState.productSelect) {
+                modalState.productSelect.addEventListener('change', function () {
+                    syncCryptoProductAmount(modalState);
+                    refreshPaymentPreview(key);
+                });
+            }
+            if (modalState.assetSelect) {
+                modalState.assetSelect.addEventListener('change', function () {
+                    refreshPaymentPreview(key);
+                });
+            }
+            if (modalState.bankSelect) {
+                modalState.bankSelect.addEventListener('change', function () {
+                    refreshPaymentPreview(key);
+                });
+            }
+            if (modalState.amountSelect) {
+                modalState.amountSelect.addEventListener('change', function () {
+                    refreshPaymentPreview(key);
+                });
+            }
+            if (modalState.sendButton) {
+                modalState.sendButton.addEventListener('click', function () {
+                    submitPaymentRequest(key);
+                });
+            }
+        });
 
         if (searchInput && searchResults) {
             var runUserSearch = debounce(function () {

@@ -2476,6 +2476,8 @@ body.admin-login-page{
     color:#7c8496;
     font-size:.74rem;
     line-height:1.45;
+    overflow-wrap:anywhere;
+    word-break:break-word;
 }
 
 .admin-user-detail-table__amount{
@@ -3829,17 +3831,22 @@ body.admin-login-page{
 
 .admin-payment-summary__email,
 .admin-payment-summary__address{
-    display:inline-flex;
+    display:flex;
     align-items:center;
     gap:.3rem;
     color:#7c8496;
     font-size:11px;
     font-weight:700;
     text-decoration:none;
+    max-width:100%;
+    min-width:0;
+    white-space:normal;
+    overflow-wrap:anywhere;
+    word-break:break-word;
 }
 
 .admin-payment-summary__address{
-    width:max-content;
+    width:100%;
 }
 
 .admin-payment-summary__address:hover,

@@ -3914,6 +3914,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <?php
                                             $productDraftType = admin_normalize_product_type((string)($productDraft['product_type'] ?? 'subscription'));
                                             $productDraftTypeOptions = admin_product_type_form_options($appSettings, $productDraftType);
+                                            $productDraftDurationOptions = admin_product_duration_options((int)($productDraft['duration_hours'] ?? 720));
                                             ?>
                                             <form method="post" class="admin-editor-form" data-product-form-scope>
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
@@ -3963,8 +3964,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <input type="text" class="form-control" id="product_slug" name="slug" value="<?php echo admin_e((string)($productDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'product_slug_placeholder', 'generated-from-name')); ?>">
                                                     </div>
                                                     <div class="col-md-4" data-product-type-section="subscription">
-                                                        <label class="form-label" for="product_duration_hours"><?php echo admin_e(admin_t($messages, 'product_duration_hours', 'Duration (hours)')); ?></label>
-                                                        <input type="number" min="0" step="1" class="form-control" id="product_duration_hours" name="duration_hours" value="<?php echo admin_e((string)($productDraft['duration_hours'] ?? '0')); ?>" data-required-when-visible="1">
+                                                        <label class="form-label" for="product_duration_hours"><?php echo admin_e(admin_t($messages, 'product_duration_hours', 'Subscription period')); ?></label>
+                                                        <select class="form-select" id="product_duration_hours" name="duration_hours" data-required-when-visible="1" data-product-duration-select>
+                                                            <?php foreach ($productDraftDurationOptions as $durationOption): ?>
+                                                                <option value="<?php echo admin_e((string)($durationOption['value'] ?? 0)); ?>"<?php echo (int)($productDraft['duration_hours'] ?? 0) === (int)($durationOption['value'] ?? 0) ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($durationOption['label'] ?? '')); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label" for="product_price_amount"><?php echo admin_e(admin_t($messages, 'product_price_label', 'Price')); ?></label>
@@ -3999,9 +4006,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12" data-product-type-section="subscription">
                                                         <label class="admin-check-field">
-                                                            <input type="checkbox" name="is_trial" value="1"<?php echo !empty($productDraft['is_trial']) ? ' checked' : ''; ?>>
+                                                            <input type="checkbox" name="is_trial" value="1"<?php echo !empty($productDraft['is_trial']) ? ' checked' : ''; ?> data-product-trial-toggle>
                                                             <span><?php echo admin_e(admin_t($messages, 'product_is_trial', 'Mark as trial product')); ?></span>
                                                         </label>
+                                                        <small class="text-muted d-block mt-2"><?php echo admin_e(admin_t($messages, 'product_trial_short_duration_help', 'Packages with 6h, 12h or 24h duration can only be saved as trial.')); ?></small>
                                                     </div>
                                                     <div class="col-12" data-product-type-section="credits">
                                                         <div class="admin-form-card">
@@ -4041,6 +4049,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <?php
                                             $productEditorType = admin_normalize_product_type((string)($productEditor['product_type'] ?? 'subscription'));
                                             $productEditorTypeOptions = admin_product_type_form_options($appSettings, $productEditorType);
+                                            $productEditorDurationOptions = admin_product_duration_options((int)($productEditor['duration_hours'] ?? 720));
                                             ?>
                                             <form method="post" class="admin-editor-form" data-product-form-scope>
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
@@ -4090,8 +4099,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <input type="text" class="form-control" id="product_slug" name="slug" value="<?php echo admin_e((string)($productEditor['slug'] ?? '')); ?>">
                                                     </div>
                                                     <div class="col-md-4" data-product-type-section="subscription">
-                                                        <label class="form-label" for="product_duration_hours"><?php echo admin_e(admin_t($messages, 'product_duration_hours', 'Duration (hours)')); ?></label>
-                                                        <input type="number" min="0" step="1" class="form-control" id="product_duration_hours" name="duration_hours" value="<?php echo admin_e((string)($productEditor['duration_hours'] ?? '0')); ?>" data-required-when-visible="1">
+                                                        <label class="form-label" for="product_duration_hours"><?php echo admin_e(admin_t($messages, 'product_duration_hours', 'Subscription period')); ?></label>
+                                                        <select class="form-select" id="product_duration_hours" name="duration_hours" data-required-when-visible="1" data-product-duration-select>
+                                                            <?php foreach ($productEditorDurationOptions as $durationOption): ?>
+                                                                <option value="<?php echo admin_e((string)($durationOption['value'] ?? 0)); ?>"<?php echo (int)($productEditor['duration_hours'] ?? 0) === (int)($durationOption['value'] ?? 0) ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($durationOption['label'] ?? '')); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label" for="product_price_amount"><?php echo admin_e(admin_t($messages, 'product_price_label', 'Price')); ?></label>
@@ -4126,9 +4141,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12" data-product-type-section="subscription">
                                                         <label class="admin-check-field">
-                                                            <input type="checkbox" name="is_trial" value="1"<?php echo !empty($productEditor['is_trial']) ? ' checked' : ''; ?>>
+                                                            <input type="checkbox" name="is_trial" value="1"<?php echo !empty($productEditor['is_trial']) ? ' checked' : ''; ?> data-product-trial-toggle>
                                                             <span><?php echo admin_e(admin_t($messages, 'product_is_trial', 'Mark as trial product')); ?></span>
                                                         </label>
+                                                        <small class="text-muted d-block mt-2"><?php echo admin_e(admin_t($messages, 'product_trial_short_duration_help', 'Packages with 6h, 12h or 24h duration can only be saved as trial.')); ?></small>
                                                     </div>
                                                     <div class="col-12" data-product-type-section="credits">
                                                         <div class="admin-form-card">
@@ -7456,7 +7472,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                 case 'settings':
                                     ?>
-                                    <div class="admin-settings-access d-none">
+                                    <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></h3>
                                             <p><?php echo admin_e(admin_t($messages, 'settings_site_intro', 'Update the public page name, URL, support email and basic SEO data used across the service.')); ?></p>

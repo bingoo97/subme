@@ -347,6 +347,7 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
         return null;
     }
 
+    app_release_stale_auto_crypto_wallet_assignments($db);
     app_sync_crypto_wallet_address_statuses($db);
 
     $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
@@ -592,6 +593,48 @@ function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
     $releasedTotal = 0;
     foreach ($rows as $row) {
         if (app_release_crypto_wallet_assignment_if_unused($db, (int)($row['id'] ?? 0), 'Released after expired customer payment hold')) {
+            $releasedTotal++;
+        }
+    }
+
+    return $releasedTotal;
+}
+
+function app_release_stale_auto_crypto_wallet_assignments($db, ?string $now = null): int
+{
+    if (
+        !schema_object_exists($db, 'crypto_wallet_assignments')
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
+    ) {
+        return 0;
+    }
+
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+
+    $rows = $db->select_full_user(
+        "SELECT crypto_wallet_assignments.id
+         FROM crypto_wallet_assignments
+         LEFT JOIN crypto_deposit_requests AS open_request
+           ON open_request.wallet_assignment_id = crypto_wallet_assignments.id
+          AND open_request.status IN ('pending', 'awaiting_confirmation')
+         WHERE crypto_wallet_assignments.status = 'active'
+           AND crypto_wallet_assignments.assigned_by_admin_user_id IS NULL
+           AND crypto_wallet_assignments.assigned_at <= DATE_SUB('{$safeNowSql}', INTERVAL 1 HOUR)
+           AND open_request.id IS NULL
+           AND (
+                crypto_wallet_assignments.assignment_note LIKE 'Assigned from balance top-up wizard%'
+                OR crypto_wallet_assignments.assignment_note LIKE 'Assigned from customer payment wizard%'
+           )
+         ORDER BY crypto_wallet_assignments.id ASC"
+    );
+
+    $releasedTotal = 0;
+    foreach ($rows as $row) {
+        if (app_release_crypto_wallet_assignment_if_unused($db, (int)($row['id'] ?? 0), 'Released after stale auto payment assignment')) {
             $releasedTotal++;
         }
     }
@@ -897,6 +940,9 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
     ) {
         return [];
     }
+
+    app_release_stale_auto_crypto_wallet_assignments($db);
+    app_sync_crypto_wallet_address_statuses($db);
 
     $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
     if ($hasCustomerWalletView) {
@@ -3413,14 +3459,42 @@ function app_queue_crypto_payment_live_chat_message(
     $amount = trim((string)($assetData['requested_crypto_amount'] ?? ''));
     $walletAddress = trim((string)($assetData['wallet_address'] ?? ''));
     $walletOwner = trim((string)($assetData['wallet_owner_full_name'] ?? ''));
+    $requestedFiatAmount = (float)($assetData['requested_fiat_amount'] ?? 0);
+    $currencySymbol = (string)($assetData['currency_symbol'] ?? '');
+    $currencyCode = (string)($assetData['currency_code'] ?? '');
+
+    if ($orderId > 0 && ($requestedFiatAmount <= 0 || ($currencySymbol === '' && $currencyCode === '')) && schema_object_exists($db, 'orders')) {
+        $orderRow = $db->select_user(
+            "SELECT
+                orders.total_amount,
+                currencies.symbol AS currency_symbol,
+                currencies.code AS currency_code
+             FROM orders
+             LEFT JOIN currencies ON currencies.id = orders.currency_id
+             WHERE orders.id = {$orderId}
+             LIMIT 1"
+        );
+        if (is_array($orderRow)) {
+            if ($requestedFiatAmount <= 0) {
+                $requestedFiatAmount = (float)($orderRow['total_amount'] ?? 0);
+            }
+            if ($currencySymbol === '') {
+                $currencySymbol = (string)($orderRow['currency_symbol'] ?? '');
+            }
+            if ($currencyCode === '') {
+                $currencyCode = (string)($orderRow['currency_code'] ?? '');
+            }
+        }
+    }
+
     $messageBody = app_build_crypto_payment_chat_card_message([
         'asset_name' => $assetName,
         'asset_code' => $assetCode,
         'asset_logo_url' => (string)($assetData['asset_logo_url'] ?? $assetData['logo_url'] ?? ''),
         'requested_crypto_amount' => $amount,
-        'requested_fiat_amount' => $assetData['requested_fiat_amount'] ?? 0,
-        'currency_symbol' => (string)($assetData['currency_symbol'] ?? ''),
-        'currency_code' => (string)($assetData['currency_code'] ?? ''),
+        'requested_fiat_amount' => $requestedFiatAmount,
+        'currency_symbol' => $currencySymbol,
+        'currency_code' => $currencyCode,
         'wallet_address' => $walletAddress,
         'wallet_owner_full_name' => $walletOwner,
         'payment_url' => $paymentUrl,
