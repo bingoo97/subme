@@ -70,7 +70,7 @@ switch ($site) {
         }
 
         if ($v2CryptoRequestsEnabled && !empty($settings['crypto_payments_enabled'])) {
-            $topupCryptoAssets = app_load_customer_crypto_assets($db, (int)$user['id'], $topupCurrencyCode);
+            $topupCryptoAssets = app_load_customer_crypto_assets($db, (int)$user['id'], $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
         }
 
         if ($v2CryptoRequestsEnabled) {
@@ -202,10 +202,48 @@ switch ($site) {
                 } elseif ($topupCurrencyId <= 0) {
                     $smarty->assign('alert_error', localization_translate($t, 'balance_topup_unavailable', 'Balance top-up is currently unavailable.'));
                     $smarty->display('alert.tpl');
-                } elseif ((float)($selectedAsset['rate'] ?? 0) <= 0) {
-                    $smarty->assign('alert_error', localization_translate($t, 'balance_topup_rate_error', 'Exchange rate is unavailable for the selected cryptocurrency.'));
-                    $smarty->display('alert.tpl');
                 } else {
+                    $latestRates = app_refresh_crypto_rates($db, $topupCurrencyCode);
+                    foreach ($latestRates as $rateAsset) {
+                        if ((int)($rateAsset['id'] ?? 0) === (int)($selectedAsset['crypto_asset_id'] ?? 0)) {
+                            $selectedAsset['rate'] = isset($rateAsset['current_rate_fiat']) ? (float)$rateAsset['current_rate_fiat'] : 0.0;
+                            break;
+                        }
+                    }
+
+                    if ((float)($selectedAsset['rate'] ?? 0) <= 0) {
+                        $smarty->assign('alert_error', localization_translate($t, 'balance_topup_rate_error', 'Exchange rate is unavailable for the selected cryptocurrency.'));
+                        $smarty->display('alert.tpl');
+                        $selectedAsset = null;
+                    }
+
+                    if (!$selectedAsset) {
+                        // error already displayed above
+                    } elseif ((int)($selectedAsset['wallet_assignment_id'] ?? 0) <= 0) {
+                        $assignedWalletId = app_assign_customer_crypto_wallet(
+                            $db,
+                            (int)($selectedAsset['wallet_address_id'] ?? 0),
+                            (int)$user['id'],
+                            is_array($settings ?? null) ? $settings : [],
+                            0,
+                            'Assigned from balance top-up wizard'
+                        );
+
+                        if ($assignedWalletId <= 0) {
+                            $smarty->assign('alert_error', localization_translate($t, 'balance_topup_create_error', 'Unable to create the payment request right now.'));
+                            $smarty->display('alert.tpl');
+                            $selectedAsset = null;
+                        } else {
+                            $selectedAsset['wallet_assignment_id'] = $assignedWalletId;
+                            $selectedAsset['is_assigned'] = true;
+                        }
+                    }
+
+                    if ((int)($selectedAsset['wallet_assignment_id'] ?? 0) <= 0) {
+                        $selectedAsset = null;
+                    }
+
+                    if ($selectedAsset) {
                     $requestedCryptoAmount = round($requestedAmount / (float)$selectedAsset['rate'], 8);
                     $createdCryptoRequest = $db->insert(
                         [
@@ -250,6 +288,7 @@ switch ($site) {
                     if ($paymentRedirectUrl === '') {
                         $smarty->assign('alert_error', localization_translate($t, 'balance_topup_create_error', 'Unable to create the payment request right now.'));
                         $smarty->display('alert.tpl');
+                    }
                     }
                 }
             }
@@ -442,6 +481,9 @@ switch ($site) {
         $smarty->assign('active_v2_crypto_request', $activeV2CryptoRequest ?: null);
         $smarty->assign('active_v2_crypto_request_remaining_seconds', $activeV2CryptoRequestRemainingSeconds);
         $smarty->assign('payment_redirect_url', $paymentRedirectUrl);
+        $smarty->assign('balance_topup_enabled', $v2CryptoRequestsEnabled && !empty($settings['crypto_payments_enabled']));
+        $smarty->assign('balance_topup_crypto_assets', $topupCryptoAssets);
+        $smarty->assign('balance_topup_action_url', '/cryptocurrency');
         $smarty->display('profil/payments_crypto.tpl');
         break;
 }

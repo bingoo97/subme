@@ -17,13 +17,13 @@ if(isset($_GET["wybierz"])){
 		$balanceTopupActionUrl = '/cryptocurrency';
 
 		if ((int)($settings['active_sale'] ?? 0) === 1 && app_uses_v2_schema($db) && !empty($settings['crypto_payments_enabled'])) {
+			$balanceTopupEnabled = true;
 			$topupCurrencyCode = strtoupper(trim((string)($reseller['currency_short'] ?? 'USD')));
 			if ($topupCurrencyCode === '') {
 				$topupCurrencyCode = 'USD';
 			}
 
-			$balanceTopupCryptoAssets = app_load_customer_crypto_assets($db, (int)($user['id'] ?? 0), $topupCurrencyCode);
-			$balanceTopupEnabled = !empty($balanceTopupCryptoAssets);
+			$balanceTopupCryptoAssets = app_load_customer_crypto_assets($db, (int)($user['id'] ?? 0), $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
 		}
 
 		$smarty->assign('balance_topup_enabled', $balanceTopupEnabled);

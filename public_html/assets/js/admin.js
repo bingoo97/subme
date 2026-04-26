@@ -389,6 +389,112 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function initWalletCustomerPickers() {
+        qa('[data-admin-wallet-customer-picker]').forEach(function (picker) {
+            var form = closest(picker, 'form');
+            var searchInput = q('[data-admin-wallet-customer-search]', picker);
+            var results = q('[data-admin-wallet-customer-results]', picker);
+            var customerIdInput = q('[data-admin-wallet-customer-id]', picker);
+            var searchUrl = picker.getAttribute('data-search-url') || '';
+            var submitName = picker.getAttribute('data-submit-name') || '';
+            var requestIndex = 0;
+
+            if (!form || !searchInput || !results || !customerIdInput || searchUrl === '' || submitName === '') {
+                return;
+            }
+
+            function renderEmpty(message) {
+                results.innerHTML = '<div class="admin-wallet-customer-picker__empty">' + escapeHtml(message) + '</div>';
+                setHidden(results, false);
+            }
+
+            function renderResults(customers) {
+                if (!customers.length) {
+                    renderEmpty(picker.getAttribute('data-search-empty') || 'No users found.');
+                    return;
+                }
+
+                results.innerHTML = customers.map(function (customer) {
+                    var disabled = !!customer.disabled;
+                    var hint = String(customer.hint || '').trim();
+                    var meta = [customer.email || '', customer.status || ''].filter(Boolean).join(' • ');
+                    return '' +
+                        '<button type="button" class="admin-wallet-customer-picker__result' + (disabled ? ' is-disabled' : '') + '"' +
+                            ' data-admin-wallet-customer-result' +
+                            ' data-customer-id="' + escapeHtml(customer.id) + '"' +
+                            (disabled ? ' disabled' : '') + '>' +
+                            '<strong>' + escapeHtml(customer.email || '') + '</strong>' +
+                            '<span>' + escapeHtml(hint !== '' ? hint : meta) + '</span>' +
+                        '</button>';
+                }).join('');
+                setHidden(results, false);
+            }
+
+            function submitAssignment(customerId) {
+                customerIdInput.value = String(customerId || 0);
+                if (!customerId) {
+                    return;
+                }
+
+                var submitter = document.createElement('button');
+                submitter.type = 'submit';
+                submitter.name = submitName;
+                submitter.value = '1';
+                submitter.hidden = true;
+                form.appendChild(submitter);
+
+                if (typeof form.requestSubmit === 'function') {
+                    form.requestSubmit(submitter);
+                } else {
+                    submitter.click();
+                }
+            }
+
+            searchInput.addEventListener('input', debounce(function () {
+                var query = searchInput.value.trim();
+                customerIdInput.value = '0';
+
+                if (query.length < 2) {
+                    results.innerHTML = '';
+                    setHidden(results, true);
+                    return;
+                }
+
+                requestIndex += 1;
+                var activeRequest = requestIndex;
+                renderEmpty('Loading...');
+
+                jsonFetch(searchUrl + '&' + toQuery({ q: query })).then(function (payload) {
+                    if (activeRequest !== requestIndex) {
+                        return;
+                    }
+
+                    if (!payload.ok) {
+                        renderEmpty(picker.getAttribute('data-search-error') || 'Unable to search users.');
+                        return;
+                    }
+
+                    renderResults(Array.isArray(payload.customers) ? payload.customers : []);
+                }).catch(function () {
+                    if (activeRequest !== requestIndex) {
+                        return;
+                    }
+                    renderEmpty(picker.getAttribute('data-search-error') || 'Unable to search users.');
+                });
+            }, 250));
+
+            results.addEventListener('click', function (event) {
+                var resultButton = closest(event.target, '[data-admin-wallet-customer-result]');
+                if (!resultButton || resultButton.disabled) {
+                    return;
+                }
+
+                event.preventDefault();
+                submitAssignment(parseInt(resultButton.getAttribute('data-customer-id') || '0', 10) || 0);
+            });
+        });
+    }
+
     function initChat() {
         var root = q('[data-admin-chat-inbox]');
         if (!root) {
@@ -1409,6 +1515,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initProviderUrlReplacement();
     initProductTypeForms();
     initOrderStatusForms();
+    initWalletCustomerPickers();
     initSearch();
     initChat();
 });

@@ -37,7 +37,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
         <div class="payment-wizard__section">
             <div class="payment-wizard__section-head">
                 <h3>{$t.payment_choose_method_title|default:'Choose payment method'}</h3>
-                <p>{$t.payment_choose_method_intro|default:'Available methods depend on your assigned payment data.'}</p>
+                <p>{$t.payment_choose_method_intro|default:'Available methods depend on the active payment data configured by the admin.'}</p>
             </div>
 
             {if $payment_can_use_crypto || $payment_can_use_bank}
@@ -94,7 +94,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                     </div>
                                 {else}
                                     <div class="alert alert-warning payment-support-alert">
-                                        {$t.payment_no_crypto_wallet|default:'No crypto wallet is currently assigned to your account. Contact support to activate crypto payment for this order.'}
+                                        {$t.payment_no_crypto_wallet|default:'No crypto wallet is currently available for this order. Contact support to activate crypto payment.'}
                                     </div>
                                     {if $settings.support_chat_enabled == 1}
                                         <button type="button" class="btn btn-default btn-lg payment-support-button" onclick="return openMessengerPanel('{$user.id}');">
@@ -184,7 +184,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                 {/if}
             {else}
                 <div class="alert alert-warning">
-                    {$t.payment_no_method_available|default:'No payment method is currently available for this account. Contact support to assign a crypto wallet or bank account.'}
+                    {$t.payment_no_method_available|default:'No payment method is currently available for this account. Contact support to activate a crypto wallet or bank account.'}
                 </div>
             {/if}
         </div>

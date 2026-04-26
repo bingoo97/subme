@@ -295,6 +295,6 @@ $(function () {
 	</div>
     {/if}
 	{include file = 'profil/how_crypto_modal.tpl'}
-	{include file = 'profil/add_crypto_modal.tpl'}
+	{include file = 'profil/balance_topup_modal.tpl'}
 </div>
 {/if}

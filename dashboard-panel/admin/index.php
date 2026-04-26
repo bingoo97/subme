@@ -770,7 +770,15 @@ if ($route === 'settings' && isset($_POST['admin_reset_sample_data_now'])) {
 $walletEditorId = 0;
 $walletEditor = null;
 $walletAssignments = [];
+$walletDeleteSummary = [
+    'active_assignments_total' => 0,
+    'assignments_total' => 0,
+    'payments_total' => 0,
+    'transactions_total' => 0,
+    'can_delete' => false,
+];
 $walletAssetOptions = [];
+$walletCreateMode = false;
 $walletListPage = 1;
 $walletListPerPage = 20;
 $walletListTotal = 0;
@@ -1784,12 +1792,17 @@ if ($route === 'news') {
 }
 
 if ($route === 'crypto-wallets') {
+    $walletCreateMode = isset($_GET['new_wallet']) && (int)$_GET['new_wallet'] === 1;
     $walletEditorId = isset($_GET['edit_wallet']) ? (int)$_GET['edit_wallet'] : 0;
     $walletListPage = max(1, (int)($_GET['wallet_list_page'] ?? 1));
     $walletListTotal = admin_crypto_wallet_count($db);
     $walletListTotalPages = max(1, (int)ceil($walletListTotal / $walletListPerPage));
     if ($walletListPage > $walletListTotalPages) {
         $walletListPage = $walletListTotalPages;
+    }
+    if (isset($_GET['created_wallet']) && (int)$_GET['created_wallet'] === 1) {
+        $pageAlert = admin_t($messages, 'wallet_create_success', 'Wallet address added successfully.');
+        $pageAlertType = 'success';
     }
 
     if (isset($_POST['admin_save_crypto_wallet'])) {
@@ -1800,6 +1813,10 @@ if ($route === 'crypto-wallets') {
             $walletEditorId = (int)($_POST['wallet_id'] ?? 0);
             $walletListPage = max(1, (int)($_POST['wallet_list_page'] ?? $walletListPage));
             $saveResult = admin_save_crypto_wallet($db, $walletEditorId, $_POST, (int)$adminUser['id'], $requestIp);
+            if (!empty($saveResult['ok']) && $walletEditorId <= 0 && !empty($saveResult['wallet_id'])) {
+                header('Location: /admin/?page=crypto-wallets&wallet_list_page=' . $walletListPage . '&edit_wallet=' . (int)$saveResult['wallet_id'] . '&created_wallet=1');
+                exit;
+            }
             $pageAlert = !empty($saveResult['ok'])
                 ? admin_t($messages, 'wallet_save_success', 'Wallet saved successfully.')
                 : ((string)($saveResult['message'] ?? '') !== ''
@@ -1837,7 +1854,29 @@ if ($route === 'crypto-wallets') {
         }
     }
 
-    $walletAssetOptions = admin_crypto_asset_rows($db);
+    if (isset($_POST['admin_delete_crypto_wallet'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $walletEditorId = (int)($_POST['wallet_id'] ?? 0);
+            $walletListPage = max(1, (int)($_POST['wallet_list_page'] ?? $walletListPage));
+            $deleteResult = admin_delete_crypto_wallet($db, $walletEditorId, (int)$adminUser['id'], $requestIp);
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'wallet_delete_error', 'Unable to delete wallet.'));
+            $pageAlertType = !empty($deleteResult['ok']) ? 'success' : 'danger';
+            if (!empty($deleteResult['ok'])) {
+                $walletEditorId = 0;
+                $walletCreateMode = false;
+            }
+        }
+    }
+
+    $walletAssetOptions = admin_crypto_asset_rows($db, $walletCreateMode);
+    if ($walletCreateMode && !$walletAssetOptions) {
+        $walletCreateMode = false;
+        $pageAlert = admin_t($messages, 'wallet_create_no_active_assets', 'Activate a cryptocurrency first before adding a wallet address.');
+        $pageAlertType = 'warning';
+    }
     if ($cryptoWalletPoolDepleted) {
         $pageAlert = admin_t($messages, 'wallet_pool_empty_warning', 'No free crypto wallets are available right now. Add or release wallet addresses in the pool.');
         $pageAlertType = 'warning';
@@ -1845,6 +1884,22 @@ if ($route === 'crypto-wallets') {
     if ($walletEditorId > 0) {
         $walletEditor = admin_crypto_wallet_find($db, $walletEditorId);
         $walletAssignments = admin_crypto_wallet_active_assignments($db, $walletEditorId);
+        $walletDeleteSummary = admin_crypto_wallet_delete_summary($db, $walletEditorId);
+    } elseif ($walletCreateMode) {
+        $walletEditor = [
+            'id' => 0,
+            'crypto_asset_id' => (int)($walletAssetOptions[0]['id'] ?? 0),
+            'label' => '',
+            'owner_full_name' => '',
+            'address' => '',
+            'network_code' => '',
+            'memo_tag' => '',
+            'wallet_provider' => '',
+            'status' => 'available',
+            'notes' => '',
+            'asset_code' => (string)($walletAssetOptions[0]['code'] ?? ''),
+            'asset_name' => (string)($walletAssetOptions[0]['name'] ?? ''),
+        ];
     }
 }
 
@@ -5975,7 +6030,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="admin-wallet-customer-picker"
                                                          data-admin-wallet-customer-picker
                                                          data-submit-name="admin_assign_bank_account_customer"
-                                                         data-search-url="/admin/bank-accounts.php?action=search_customers&amp;account_id=<?php echo admin_e((string)$bankAccountEditor['id']); ?>"
+                                                         data-search-url="/admin/bank_accounts.php?action=search_customers&amp;account_id=<?php echo admin_e((string)$bankAccountEditor['id']); ?>"
                                                          data-no-customer="<?php echo admin_e(admin_t($messages, 'wallet_no_customer', 'No customer assigned')); ?>"
                                                          data-search-empty="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_empty', 'No users found.')); ?>"
                                                          data-search-error="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_error', 'Unable to search users.')); ?>">
@@ -6129,7 +6184,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     break;
 
                                 case 'crypto-wallets':
-                                    if ($walletEditorId > 0 && is_array($walletEditor) && !empty($walletEditor['id'])):
+                                    if (is_array($walletEditor) && (!empty($walletEditor['id']) || $walletCreateMode)):
                                         ?>
                                         <div class="admin-wallet-editor-page">
                                             <?php
@@ -6137,11 +6192,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             if ($editorOwnerFullName === '') {
                                                 $editorOwnerFullName = admin_random_wallet_owner_name();
                                             }
-                                            $editorExplorerUrl = admin_crypto_wallet_explorer_url(
-                                                (string)($walletEditor['asset_code'] ?? ''),
-                                                (string)($walletEditor['network_code'] ?? ''),
-                                                (string)($walletEditor['address'] ?? '')
-                                            );
+                                            $editorExplorerUrl = !empty($walletEditor['id'])
+                                                ? admin_crypto_wallet_explorer_url(
+                                                    (string)($walletEditor['asset_code'] ?? ''),
+                                                    (string)($walletEditor['network_code'] ?? ''),
+                                                    (string)($walletEditor['address'] ?? '')
+                                                )
+                                                : '';
                                             $editorStatus = strtolower(trim((string)($walletEditor['status'] ?? '')));
                                             if ($editorStatus !== 'disabled') {
                                                 $editorStatus = 'available';
@@ -6154,11 +6211,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 (string)($walletEditor['address'] ?? '')
                                             );
                                             $editorAllowsNetworkChoice = admin_crypto_asset_allows_network_choice($editorAssetCode);
+                                            $editorWalletProvider = trim((string)($walletEditor['wallet_provider'] ?? ''));
+                                            $editorWalletProviderOptions = admin_crypto_wallet_provider_options($editorWalletProvider);
                                             ?>
                                             <aside class="admin-wallet-editor">
                                                 <div class="admin-wallet-editor__header">
                                                     <div>
-                                                        <h3><?php echo admin_e(admin_t($messages, 'wallet_editor_title', 'Edit wallet')); ?></h3>
+                                                        <h3><?php echo admin_e(admin_t($messages, $walletCreateMode ? 'wallet_create_title' : 'wallet_editor_title', $walletCreateMode ? 'Add crypto wallet address' : 'Edit wallet')); ?></h3>
                                                     </div>
                                                     <div class="admin-wallet-editor__header-actions">
                                                         <a href="/admin/?page=crypto-wallets&amp;wallet_list_page=<?php echo admin_e((string)$walletListPage); ?>" class="btn btn-outline-dark btn-sm">
@@ -6207,7 +6266,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="wallet_provider"><?php echo admin_e(admin_t($messages, 'wallet_provider', 'Wallet provider')); ?></label>
-                                                            <input type="text" class="form-control" id="wallet_provider" name="wallet_provider" value="<?php echo admin_e((string)($walletEditor['wallet_provider'] ?? '')); ?>">
+                                                            <select class="form-select" id="wallet_provider" name="wallet_provider">
+                                                                <?php foreach ($editorWalletProviderOptions as $providerValue => $providerLabel): ?>
+                                                                    <option value="<?php echo admin_e($providerValue); ?>"<?php echo $providerValue === $editorWalletProvider ? ' selected' : ''; ?>>
+                                                                        <?php echo admin_e($providerLabel); ?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="wallet_network_code"><?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?></label>
@@ -6242,6 +6307,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                     </div>
 
+                                                    <?php if (!$walletCreateMode && !empty($walletEditor['id'])): ?>
                                                     <div class="admin-wallet-customer-picker"
                                                          data-admin-wallet-customer-picker
                                                          data-submit-name="admin_assign_crypto_wallet_customer"
@@ -6289,14 +6355,39 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <span class="admin-wallet-editor__hint"><?php echo admin_e(admin_t($messages, 'wallet_click_result_hint', 'Click a search result to assign the user immediately.')); ?></span>
                                                         </div>
                                                     </div>
+                                                    <?php endif; ?>
 
                                                     <div class="admin-wallet-editor__actions">
                                                         <button type="submit" class="btn btn-dark btn-lg" name="admin_save_crypto_wallet">
                                                             <i class="bi bi-floppy" aria-hidden="true"></i>
-                                                            <span><?php echo admin_e(admin_t($messages, 'wallet_save_button', 'Save wallet')); ?></span>
+                                                            <span><?php echo admin_e(admin_t($messages, $walletCreateMode ? 'wallet_create_button' : 'wallet_save_button', $walletCreateMode ? 'Add wallet address' : 'Save wallet')); ?></span>
                                                         </button>
                                                     </div>
                                                 </form>
+
+                                                <?php if (!$walletCreateMode && !empty($walletEditor['id'])): ?>
+                                                <section class="admin-wallet-editor__danger">
+                                                    <div class="admin-wallet-editor__danger-copy">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'wallet_delete_section_title', 'Delete from service')); ?></h4>
+                                                        <p><?php echo admin_e(admin_t($messages, 'wallet_delete_section_text', 'Wallet address can be removed only when it has no active assignments, no assignment history and no payment history.')); ?></p>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__danger-meta">
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'wallet_delete_active_assignments', 'Active assignments: {count}', ['count' => (string)((int)($walletDeleteSummary['active_assignments_total'] ?? 0))])); ?></span>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'wallet_delete_assignment_history', 'Assignment history: {count}', ['count' => (string)((int)($walletDeleteSummary['assignments_total'] ?? 0))])); ?></span>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'wallet_delete_payment_history', 'Payment history: {count}', ['count' => (string)((int)($walletDeleteSummary['payments_total'] ?? 0))])); ?></span>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'wallet_delete_transaction_history', 'Transaction history: {count}', ['count' => (string)((int)($walletDeleteSummary['transactions_total'] ?? 0))])); ?></span>
+                                                    </div>
+                                                    <form method="post" class="admin-wallet-editor__actions">
+                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                        <input type="hidden" name="wallet_id" value="<?php echo admin_e((string)$walletEditor['id']); ?>">
+                                                        <input type="hidden" name="wallet_list_page" value="<?php echo admin_e((string)$walletListPage); ?>">
+                                                        <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_crypto_wallet" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'wallet_delete_confirm', 'Delete this wallet address completely? This cannot be undone.')); ?>');"<?php echo !empty($walletDeleteSummary['can_delete']) ? '' : ' disabled'; ?>>
+                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'wallet_delete_button', 'Delete wallet address')); ?></span>
+                                                        </button>
+                                                    </form>
+                                                </section>
+                                                <?php endif; ?>
                                             </aside>
                                         </div>
                                         <?php
@@ -6304,24 +6395,40 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     endif;
 
                                     $walletRows = admin_crypto_wallet_rows($db, $walletListPerPage, ($walletListPage - 1) * $walletListPerPage);
-                                    if (!$walletRows) {
-                                        echo '<div class="admin-empty-state">' . admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')) . '</div>';
-                                        break;
-                                    }
-
                                     ?>
                                     <div class="admin-wallet-workspace">
                                         <div class="admin-wallet-workspace__list">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'page_crypto_wallets_title', 'Crypto wallets')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=crypto-wallets&amp;wallet_list_page=<?php echo admin_e((string)$walletListPage); ?>&amp;new_wallet=1" class="btn btn-dark btn-sm">
+                                                    <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'wallet_create_button', 'Add wallet address')); ?></span>
+                                                </a>
+                                            </div>
+                                            <?php if ($cryptoWalletFreeCount <= 0): ?>
+                                                <div class="alert alert-info" role="alert">
+                                                    <?php echo admin_e(admin_t($messages, 'wallet_pool_empty_inline_alert', 'There are no free crypto wallet addresses in the database right now. Add or release wallet addresses so users can generate new payment requests.')); ?>
+                                                </div>
+                                            <?php elseif ($cryptoWalletFreeCount === 1): ?>
+                                                <div class="alert alert-info" role="alert">
+                                                    <?php echo admin_e(admin_t($messages, 'wallet_pool_low_inline_alert', 'Only 1 free crypto wallet address is left in the database. Add another address now to avoid blocking the next payment request.')); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if (!$walletRows): ?>
+                                                <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'wallet_empty_state', 'No wallet addresses added yet.')); ?></div>
+                                            <?php else: ?>
                                             <div class="table-responsive">
                                                 <table class="table admin-table admin-wallet-table align-middle">
                                                     <thead>
-                                                <tr>
-                                                    <th><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></th>
-                                                    <th><?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?></th>
-                                                    <th><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></th>
-                                                    <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
-                                                    <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
-                                                </tr>
+                                                        <tr>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                        </tr>
                                                     </thead>
                                                     <tbody>
                                                         <?php foreach ($walletRows as $row): ?>
@@ -6393,6 +6500,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </tbody>
                                                 </table>
                                             </div>
+                                            <?php endif; ?>
                                             <?php if ($walletListTotalPages > 1): ?>
                                                 <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_pagination', 'Wallet pages')); ?>">
                                                     <ul class="pagination admin-pagination">

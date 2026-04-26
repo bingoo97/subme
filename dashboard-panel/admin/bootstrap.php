@@ -2203,6 +2203,58 @@ function admin_bank_account_delete_summary(Mysql_ks $db, int $accountId): array
     return $summary;
 }
 
+function admin_crypto_wallet_delete_summary(Mysql_ks $db, int $walletId): array
+{
+    $summary = [
+        'active_assignments_total' => 0,
+        'assignments_total' => 0,
+        'payments_total' => 0,
+        'transactions_total' => 0,
+        'can_delete' => false,
+    ];
+
+    if ($walletId <= 0 || !schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return $summary;
+    }
+
+    if (schema_object_exists($db, 'crypto_wallet_assignments')) {
+        $row = $db->select_user(
+            "SELECT
+                SUM(CASE WHEN status IN ('reserved', 'active') THEN 1 ELSE 0 END) AS active_total,
+                COUNT(*) AS assignments_total
+             FROM crypto_wallet_assignments
+             WHERE wallet_address_id = {$walletId}"
+        );
+        $summary['active_assignments_total'] = (int)($row['active_total'] ?? 0);
+        $summary['assignments_total'] = (int)($row['assignments_total'] ?? 0);
+    }
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $row = $db->select_user(
+            "SELECT COUNT(*) AS total
+             FROM crypto_deposit_requests
+             WHERE wallet_address_id = {$walletId}"
+        );
+        $summary['payments_total'] = (int)($row['total'] ?? 0);
+    }
+
+    if (schema_object_exists($db, 'crypto_deposit_transactions')) {
+        $row = $db->select_user(
+            "SELECT COUNT(*) AS total
+             FROM crypto_deposit_transactions
+             WHERE wallet_address_id = {$walletId}"
+        );
+        $summary['transactions_total'] = (int)($row['total'] ?? 0);
+    }
+
+    $summary['can_delete'] = $summary['active_assignments_total'] === 0
+        && $summary['assignments_total'] === 0
+        && $summary['payments_total'] === 0
+        && $summary['transactions_total'] === 0;
+
+    return $summary;
+}
+
 function admin_customer_activity_rows(Mysql_ks $db, int $customerId, int $limit = 30): array
 {
     if ($customerId <= 0 || !schema_object_exists($db, 'customer_activity_logs')) {
@@ -4632,6 +4684,23 @@ function admin_crypto_network_label(string $networkCode): string
     return $labels[$networkCode] ?? ucfirst(str_replace('-', ' ', $networkCode));
 }
 
+function admin_crypto_wallet_provider_options(?string $currentProvider = null): array
+{
+    $options = [
+        '' => 'Choose provider',
+        'TrustWallet' => 'TrustWallet',
+        'MetaMask' => 'MetaMask',
+        'KrakenWallet' => 'KrakenWallet',
+    ];
+
+    $currentProvider = trim((string)$currentProvider);
+    if ($currentProvider !== '' && !isset($options[$currentProvider])) {
+        $options[$currentProvider] = $currentProvider;
+    }
+
+    return $options;
+}
+
 function admin_infer_stablecoin_network_by_address(string $address): string
 {
     $address = trim($address);
@@ -6474,8 +6543,9 @@ function admin_crypto_wallet_explorer_url(?string $assetCode, ?string $networkNa
 
 function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, int $adminUserId, string $ipAddress = ''): array
 {
-    $wallet = admin_crypto_wallet_find($db, $walletId);
-    if (!is_array($wallet) || empty($wallet['id'])) {
+    $isCreate = $walletId <= 0;
+    $wallet = $isCreate ? null : admin_crypto_wallet_find($db, $walletId);
+    if (!$isCreate && (!is_array($wallet) || empty($wallet['id']))) {
         return ['ok' => false, 'message' => 'Wallet not found.'];
     }
 
@@ -6489,13 +6559,27 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
     $notes = trim((string)($payload['notes'] ?? ''));
     $statusChoice = strtolower(trim((string)($payload['wallet_status'] ?? 'available')));
 
-    $asset = $cryptoAssetId > 0 ? $db->select_user("SELECT id, code FROM crypto_assets WHERE id = {$cryptoAssetId} LIMIT 1") : null;
+    $asset = $cryptoAssetId > 0 ? $db->select_user("SELECT id, code, is_active FROM crypto_assets WHERE id = {$cryptoAssetId} LIMIT 1") : null;
     if ($cryptoAssetId <= 0 || !is_array($asset)) {
         return ['ok' => false, 'message' => 'Invalid crypto asset.'];
+    }
+    if ($isCreate && empty($asset['is_active'])) {
+        return ['ok' => false, 'message' => 'Choose an active cryptocurrency first.'];
     }
 
     if ($address === '') {
         return ['ok' => false, 'message' => 'Wallet address is required.'];
+    }
+
+    $existingAddress = $db->select_user(
+        "SELECT id
+         FROM crypto_wallet_addresses
+         WHERE address = '" . $db->escape($address) . "'
+           AND id <> {$walletId}
+         LIMIT 1"
+    );
+    if (is_array($existingAddress) && !empty($existingAddress['id'])) {
+        return ['ok' => false, 'message' => 'This wallet address already exists in the database.'];
     }
 
     $networkCode = admin_normalize_crypto_wallet_network((string)($asset['code'] ?? ''), $networkCode, $address);
@@ -6511,22 +6595,37 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
         $statusChoice = 'available';
     }
 
-    $activeAssignmentCount = count(admin_crypto_wallet_active_assignments($db, $walletId));
+    $activeAssignmentCount = $isCreate ? 0 : count(admin_crypto_wallet_active_assignments($db, $walletId));
     $finalWalletStatus = $activeAssignmentCount > 0 ? 'assigned' : ($statusChoice === 'disabled' ? 'disabled' : 'available');
     $disabledAtValue = $finalWalletStatus === 'disabled' ? $db->expr('NOW()') : null;
 
     $db->start();
 
-    $updateOk = $db->update_using_id(
-        ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at'],
-        [$cryptoAssetId, $label !== '' ? $label : null, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue],
-        'crypto_wallet_addresses',
-        $walletId
-    );
+    if ($isCreate) {
+        $insertOk = $db->insert(
+            ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at', 'created_by_admin_user_id'],
+            [$cryptoAssetId, $label !== '' ? $label : null, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue, $adminUserId],
+            'crypto_wallet_addresses'
+        );
 
-    if (!$updateOk) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Unable to update wallet.'];
+        if (!$insertOk || (int)$db->id() <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to create wallet.'];
+        }
+
+        $walletId = (int)$db->id();
+    } else {
+        $updateOk = $db->update_using_id(
+            ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at'],
+            [$cryptoAssetId, $label !== '' ? $label : null, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue],
+            'crypto_wallet_addresses',
+            $walletId
+        );
+
+        if (!$updateOk) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to update wallet.'];
+        }
     }
 
     $db->commit();
@@ -6535,12 +6634,12 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
         $db,
         0,
         $adminUserId,
-        'crypto_wallet_updated',
-        'Crypto wallet #' . $walletId . ' saved: ' . ($label !== '' ? $label : $address) . '.',
+        $isCreate ? 'crypto_wallet_created' : 'crypto_wallet_updated',
+        'Crypto wallet #' . $walletId . ($isCreate ? ' created: ' : ' saved: ') . ($label !== '' ? $label : $address) . '.',
         $ipAddress
     );
 
-    return ['ok' => true, 'message' => 'Wallet saved successfully.'];
+    return ['ok' => true, 'message' => $isCreate ? 'Wallet created successfully.' : 'Wallet saved successfully.', 'wallet_id' => $walletId];
 }
 
 function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $customerId, int $adminUserId, array $settings, string $ipAddress = ''): array
@@ -6693,6 +6792,37 @@ function admin_remove_crypto_wallet_assignment(Mysql_ks $db, int $walletId, int 
     );
 
     return ['ok' => true, 'message' => 'Wallet assignment removed.'];
+}
+
+function admin_delete_crypto_wallet(Mysql_ks $db, int $walletId, int $adminUserId, string $ipAddress = ''): array
+{
+    $wallet = admin_crypto_wallet_find($db, $walletId);
+    if (!is_array($wallet) || empty($wallet['id'])) {
+        return ['ok' => false, 'message' => 'Wallet not found.'];
+    }
+
+    $summary = admin_crypto_wallet_delete_summary($db, $walletId);
+    if (empty($summary['can_delete'])) {
+        return ['ok' => false, 'message' => 'This wallet has assignment or payment history and cannot be deleted.'];
+    }
+
+    $deleted = $db->delete_using_id('crypto_wallet_addresses', $walletId);
+    if (!$deleted) {
+        return ['ok' => false, 'message' => 'Unable to delete wallet.'];
+    }
+
+    $walletLabel = trim((string)($wallet['label'] ?? ''));
+    $walletAddress = trim((string)($wallet['address'] ?? ''));
+    admin_activity_log(
+        $db,
+        0,
+        $adminUserId,
+        'crypto_wallet_deleted',
+        'Crypto wallet #' . $walletId . ' deleted: ' . ($walletLabel !== '' ? $walletLabel : $walletAddress) . '.',
+        $ipAddress
+    );
+
+    return ['ok' => true, 'message' => 'Wallet deleted successfully.'];
 }
 
 function admin_release_crypto_wallet_assignment(Mysql_ks $db, int $assignmentId, int $adminUserId, string $note): bool

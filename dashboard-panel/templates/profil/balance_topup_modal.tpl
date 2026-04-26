@@ -10,6 +10,7 @@
             <div class="modal-body">
                 <p class="balance-topup-modal__intro">{$t.balance_topup_modal_intro|default:'Choose the payment method, cryptocurrency and top-up amount.'}</p>
 
+                {if $balance_topup_crypto_assets|@count gt 0}
                 <form action="{$balance_topup_action_url|default:'/cryptocurrency'}" method="post" data-balance-topup-form>
                     <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
                     <input type="hidden" name="create_topup_payment" value="1" />
@@ -46,7 +47,7 @@
                                     <input
                                         type="radio"
                                         name="crypto_wallet_assignment_id"
-                                        value="{$balance_topup_crypto_assets[i].wallet_assignment_id|default:$balance_topup_crypto_assets[i].id}"
+                                        value="{$balance_topup_crypto_assets[i].id}"
                                         data-asset-name="{$balance_topup_crypto_assets[i].name|escape:'html'}"
                                         data-asset-code="{$balance_topup_crypto_assets[i].code|escape:'html'}"
                                         {if $smarty.section.i.first}checked{/if}
@@ -118,6 +119,16 @@
                         </div>
                     </div>
                 </form>
+                {else}
+                <div class="alert alert-warning payment-support-alert">
+                    {$t.balance_topup_unavailable|default:'Balance top-up is currently unavailable.'}
+                </div>
+                {if $settings.support_chat_enabled == 1}
+                    <button type="button" class="btn btn-default btn-lg payment-support-button" onclick="return openMessengerPanel('{$user.id}');">
+                        <i class="fa fa-life-ring" aria-hidden="true"></i> {$t.instructions_contact_support|default:'Contact support'}
+                    </button>
+                {/if}
+                {/if}
             </div>
         </div>
     </div>
