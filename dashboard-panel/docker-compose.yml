@@ -1,0 +1,91 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reseller_web_local
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8088}:80"
+    environment:
+      DB_HOST: db
+      DB_NAME: ${APP_DB_NAME:-reseller_v2}
+      DB_USER: ${MYSQL_USER:-marbodz_reseller}
+      DB_PASS: ${MYSQL_PASSWORD:-Reseller12@}
+    volumes:
+      - ../:/var/www/html
+      - ./php.ini:/usr/local/etc/php/conf.d/custom.ini:ro
+    depends_on:
+      - db
+    networks:
+      - reseller_local_net
+
+  payment_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reseller_payment_worker_local
+    restart: unless-stopped
+    command: >
+      sh -lc "while true; do
+        php /var/www/html/dashboard-panel/scripts/system_maintenance.php;
+        sleep ${PAYMENT_ARCHIVE_CHECK_INTERVAL:-60};
+      done"
+    environment:
+      DB_HOST: db
+      DB_NAME: ${APP_DB_NAME:-reseller_v2}
+      DB_USER: ${MYSQL_USER:-marbodz_reseller}
+      DB_PASS: ${MYSQL_PASSWORD:-Reseller12@}
+      PAYMENT_ARCHIVE_CHECK_INTERVAL: ${PAYMENT_ARCHIVE_CHECK_INTERVAL:-60}
+    volumes:
+      - ../:/var/www/html
+      - ./php.ini:/usr/local/etc/php/conf.d/custom.ini:ro
+    depends_on:
+      - db
+    networks:
+      - reseller_local_net
+
+  db:
+    image: mysql:8.0
+    container_name: reseller_db_local
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-3308}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-reseller_root_local}
+      MYSQL_DATABASE: ${APP_DB_NAME:-reseller_v2}
+      MYSQL_USER: ${MYSQL_USER:-marbodz_reseller}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-Reseller12@}
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - reseller_db_data:/var/lib/mysql
+      - ./database/v2/001_core_schema.sql:/docker-entrypoint-initdb.d/001_core_schema.sql:ro
+      - ./database/v2/002_seed_defaults.sql:/docker-entrypoint-initdb.d/002_seed_defaults.sql:ro
+      - ./database/v2/003_operational_views.sql:/docker-entrypoint-initdb.d/003_operational_views.sql:ro
+      - ./database/v2/005_fix_polish_static_pages_utf8.sql:/docker-entrypoint-initdb.d/005_fix_polish_static_pages_utf8.sql:ro
+    networks:
+      - reseller_local_net
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: reseller_phpmyadmin_local
+    restart: unless-stopped
+    ports:
+      - "${PMA_PORT:-8089}:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: ${MYSQL_USER:-marbodz_reseller}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-Reseller12@}
+    depends_on:
+      - db
+    networks:
+      - reseller_local_net
+
+volumes:
+  reseller_db_data:
+    name: reseller_db_data
+
+networks:
+  reseller_local_net:
+    name: reseller_local_net

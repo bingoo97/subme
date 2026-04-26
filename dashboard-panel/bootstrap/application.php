@@ -1,0 +1,4186 @@
+<?php
+
+function app_format_crypto_rate($value): string
+{
+    if (!is_numeric($value)) {
+        return '—';
+    }
+
+    $rate = (float)$value;
+    if ($rate <= 0) {
+        return '—';
+    }
+
+    $precision = abs($rate) < 1 ? 4 : 2;
+    return number_format($rate, $precision, '.', '');
+}
+
+function app_format_money_value($amount, string $currencySymbol = '', string $currencyCode = ''): string
+{
+    $formattedAmount = number_format((float)$amount, 2, '.', '');
+    $suffix = trim($currencySymbol) !== '' ? trim($currencySymbol) : trim($currencyCode);
+
+    return $suffix !== '' ? trim($formattedAmount . ' ' . $suffix) : $formattedAmount;
+}
+
+function app_format_logo_path(string $path): string
+{
+    $path = trim($path);
+    if ($path === '') {
+        return '/img/no-image.png';
+    }
+
+    if (strpos($path, 'http://') === 0 || strpos($path, 'https://') === 0 || strpos($path, '/') === 0) {
+        return $path;
+    }
+
+    return '/' . ltrim($path, '/');
+}
+
+function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): string
+{
+    $code = strtoupper(trim($assetCode));
+    $fileMap = [
+        'BTC' => 'btc.png',
+        'BCH' => 'btcash.png',
+        'LTC' => 'ltc.png',
+        'ETH' => 'eth.png',
+        'DOGE' => 'doge.png',
+        'BNB' => 'bnb.png',
+        'BUSD' => 'busd.png',
+        'USDT' => 'tether.png',
+        'USDC' => 'tether.png',
+        'CRO' => 'cro.png',
+        'ATOM' => 'atom.png',
+        'SOL' => 'sol.png',
+        'MATIC' => 'matic.png',
+        'XRP' => 'xrp.png',
+    ];
+
+    if (isset($fileMap[$code])) {
+        $absolutePath = dirname(__DIR__, 2) . '/public_html/img/crypto/' . $fileMap[$code];
+        if (is_file($absolutePath)) {
+            return '/img/crypto/' . $fileMap[$code];
+        }
+    }
+
+    return app_format_logo_path($fallbackPath);
+}
+
+function app_default_coingecko_id(string $assetCode): string
+{
+    $assetCode = strtoupper(trim($assetCode));
+    $map = [
+        'BTC' => 'bitcoin',
+        'BCH' => 'bitcoin-cash',
+        'LTC' => 'litecoin',
+        'ETH' => 'ethereum',
+        'DOGE' => 'dogecoin',
+        'BNB' => 'binancecoin',
+        'USDT' => 'tether',
+        'CRO' => 'crypto-com-chain',
+        'SOL' => 'solana',
+        'USDC' => 'usd-coin',
+        'MATIC' => 'matic-network',
+        'XRP' => 'ripple',
+    ];
+
+    return $map[$assetCode] ?? '';
+}
+
+function app_http_json(string $url): ?array
+{
+    if ($url === '') {
+        return null;
+    }
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'User-Agent: Reseller/1.0',
+            ],
+        ]);
+
+        $response = curl_exec($ch);
+        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($response) || $response === '' || $httpCode >= 400) {
+            return null;
+        }
+
+        $decoded = json_decode($response, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 20,
+            'header' => "Accept: application/json\r\nUser-Agent: Reseller/1.0\r\n",
+        ],
+    ]);
+
+    $response = @file_get_contents($url, false, $context);
+    if (!is_string($response) || $response === '') {
+        return null;
+    }
+
+    $decoded = json_decode($response, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl = 900): array
+{
+    if (!schema_object_exists($db, 'crypto_assets')) {
+        return [];
+    }
+
+    $vsCurrency = strtoupper(trim($vsCurrency));
+    if ($vsCurrency === '') {
+        $vsCurrency = 'USD';
+    }
+
+    $vsCurrencyLower = strtolower($vsCurrency);
+    $now = time();
+
+    $rows = $db->select_full_user(
+        "SELECT
+            id,
+            code,
+            name,
+            coingecko_id,
+            logo_url,
+            current_rate_fiat,
+            rate_currency_code,
+            rate_updated_at,
+            is_active
+         FROM crypto_assets
+         WHERE is_active = 1
+         ORDER BY id ASC"
+    );
+
+    if (!$rows) {
+        return [];
+    }
+
+    $needsRefresh = false;
+    $coingeckoIds = [];
+    foreach ($rows as $index => $row) {
+        $code = (string)($row['code'] ?? '');
+        $coingeckoId = trim((string)($row['coingecko_id'] ?? ''));
+        if ($coingeckoId === '') {
+            $coingeckoId = app_default_coingecko_id($code);
+            $rows[$index]['coingecko_id'] = $coingeckoId;
+        }
+
+        if ($coingeckoId !== '') {
+            $coingeckoIds[$coingeckoId] = true;
+        }
+
+        $rate = isset($row['current_rate_fiat']) ? (float)$row['current_rate_fiat'] : 0.0;
+        $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
+        $rateUpdatedAt = !empty($row['rate_updated_at']) ? strtotime((string)$row['rate_updated_at']) : 0;
+
+        if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
+            $needsRefresh = true;
+        }
+    }
+
+    if ($needsRefresh && $coingeckoIds) {
+        $apiUrl = 'https://api.coingecko.com/api/v3/simple/price?ids='
+            . rawurlencode(implode(',', array_keys($coingeckoIds)))
+            . '&vs_currencies=' . rawurlencode($vsCurrencyLower)
+            . '&include_last_updated_at=true&precision=full';
+        $payload = app_http_json($apiUrl);
+
+        if (is_array($payload)) {
+            foreach ($rows as $index => $row) {
+                $assetId = (int)($row['id'] ?? 0);
+                $coingeckoId = (string)($row['coingecko_id'] ?? '');
+                if ($assetId <= 0 || $coingeckoId === '' || empty($payload[$coingeckoId][$vsCurrencyLower])) {
+                    continue;
+                }
+
+                $price = (float)$payload[$coingeckoId][$vsCurrencyLower];
+                $updatedAt = !empty($payload[$coingeckoId]['last_updated_at'])
+                    ? date('Y-m-d H:i:s', (int)$payload[$coingeckoId]['last_updated_at'])
+                    : date('Y-m-d H:i:s', $now);
+
+                $db->update_using_id(
+                    ['coingecko_id', 'current_rate_fiat', 'rate_currency_code', 'rate_updated_at'],
+                    [$coingeckoId, $price, $vsCurrency, $updatedAt],
+                    'crypto_assets',
+                    $assetId
+                );
+
+                $rows[$index]['current_rate_fiat'] = $price;
+                $rows[$index]['rate_currency_code'] = $vsCurrency;
+                $rows[$index]['rate_updated_at'] = $updatedAt;
+            }
+        }
+    } else {
+        foreach ($rows as $row) {
+            $assetId = (int)($row['id'] ?? 0);
+            $coingeckoId = trim((string)($row['coingecko_id'] ?? ''));
+            if ($assetId > 0 && $coingeckoId === '') {
+                $defaultCoingeckoId = app_default_coingecko_id((string)($row['code'] ?? ''));
+                if ($defaultCoingeckoId !== '') {
+                    $db->update_using_id(['coingecko_id'], [$defaultCoingeckoId], 'crypto_assets', $assetId);
+                }
+            }
+        }
+    }
+
+    return $rows;
+}
+
+function app_crypto_network_label(string $networkCode): string
+{
+    $networkCode = strtolower(trim($networkCode));
+    $labels = [
+        'bitcoin' => 'Bitcoin',
+        'bitcoin-cash' => 'Bitcoin Cash',
+        'litecoin' => 'Litecoin',
+        'dogecoin' => 'Dogecoin',
+        'ethereum' => 'Ethereum (ERC20)',
+        'polygon' => 'Polygon',
+        'bnb' => 'BNB Smart Chain',
+        'tron' => 'Tron (TRC20)',
+        'cronos' => 'Cronos',
+        'solana' => 'Solana',
+        'ripple' => 'XRP Ledger',
+    ];
+
+    return $labels[$networkCode] ?? ucfirst(str_replace('-', ' ', $networkCode));
+}
+
+function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrency = 'USD'): array
+{
+    if ($customerId <= 0 || !schema_object_exists($db, 'customer_crypto_wallets')) {
+        return [];
+    }
+
+    $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
+    $assignedCryptoWallets = $db->select_full_user(
+        "SELECT *
+         FROM customer_crypto_wallets
+         WHERE customer_id = {$customerId}
+           AND status = 'active'
+         ORDER BY assigned_at DESC"
+    );
+
+    if (!$assignedCryptoWallets) {
+        return [];
+    }
+
+    $activeAssetsByCode = [];
+    foreach ($activeAssets as $asset) {
+        $activeAssetsByCode[(string)($asset['code'] ?? '')] = $asset;
+    }
+
+    foreach ($assignedCryptoWallets as &$wallet) {
+        if (!empty($wallet['network_code'])) {
+            continue;
+        }
+
+        $assetCode = strtoupper(trim((string)($wallet['crypto_asset_code'] ?? '')));
+        $walletAddress = trim((string)($wallet['address'] ?? ''));
+        $inferredNetworkCode = '';
+
+        if ($assetCode === 'BTC') {
+            $inferredNetworkCode = 'bitcoin';
+        } elseif ($assetCode === 'BCH') {
+            $inferredNetworkCode = 'bitcoin-cash';
+        } elseif ($assetCode === 'LTC') {
+            $inferredNetworkCode = 'litecoin';
+        } elseif ($assetCode === 'DOGE') {
+            $inferredNetworkCode = 'dogecoin';
+        } elseif ($assetCode === 'ETH') {
+            $inferredNetworkCode = 'ethereum';
+        } elseif ($assetCode === 'BNB') {
+            $inferredNetworkCode = 'bnb';
+        } elseif ($assetCode === 'CRO') {
+            $inferredNetworkCode = 'cronos';
+        } elseif ($assetCode === 'SOL') {
+            $inferredNetworkCode = 'solana';
+        } elseif ($assetCode === 'MATIC') {
+            $inferredNetworkCode = 'polygon';
+        } elseif ($assetCode === 'XRP') {
+            $inferredNetworkCode = 'ripple';
+        } elseif ($assetCode === 'USDT' || $assetCode === 'USDC') {
+            if (strpos($walletAddress, 'T') === 0) {
+                $inferredNetworkCode = 'tron';
+            } elseif (stripos($walletAddress, '0x') === 0) {
+                $inferredNetworkCode = 'ethereum';
+            } elseif (stripos($walletAddress, 'cro') === 0) {
+                $inferredNetworkCode = 'cronos';
+            } elseif ($walletAddress !== '' && preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,}$/', $walletAddress)) {
+                $inferredNetworkCode = 'solana';
+            } else {
+                $inferredNetworkCode = 'ethereum';
+            }
+        }
+
+        if ($inferredNetworkCode !== '' && !empty($wallet['wallet_address_id'])) {
+            $db->update_using_id(['network_code'], [$inferredNetworkCode], 'crypto_wallet_addresses', (int)$wallet['wallet_address_id']);
+            $wallet['network_code'] = $inferredNetworkCode;
+        }
+    }
+    unset($wallet);
+
+    $cryptoAssets = [];
+    foreach ($assignedCryptoWallets as $assignedWallet) {
+        $assetCode = (string)($assignedWallet['crypto_asset_code'] ?? '');
+        $asset = $activeAssetsByCode[$assetCode] ?? null;
+        if (!is_array($asset)) {
+            continue;
+        }
+
+        $networkCode = (string)($assignedWallet['network_code'] ?? '');
+        $cryptoAssets[] = [
+            'id' => (int)$assignedWallet['wallet_assignment_id'],
+            'crypto_asset_id' => (int)$asset['id'],
+            'code' => $assetCode,
+            'name' => (string)$asset['name'],
+            'network_code' => $networkCode,
+            'network_label' => app_crypto_network_label($networkCode),
+            'logo_path' => app_crypto_logo_by_code($assetCode, (string)($asset['logo_url'] ?? '')),
+            'rate' => isset($asset['current_rate_fiat']) ? (float)$asset['current_rate_fiat'] : 0.0,
+            'is_assigned' => true,
+            'wallet_assignment_id' => (int)$assignedWallet['wallet_assignment_id'],
+            'wallet_address_id' => (int)$assignedWallet['wallet_address_id'],
+            'wallet_address' => (string)$assignedWallet['address'],
+            'wallet_memo_tag' => (string)($assignedWallet['memo_tag'] ?? ''),
+            'wallet_label' => (string)($assignedWallet['label'] ?? ''),
+            'wallet_owner_full_name' => (string)($assignedWallet['owner_full_name'] ?? ''),
+            'wallet_provider' => (string)($assignedWallet['wallet_provider'] ?? ''),
+        ];
+    }
+
+    return $cryptoAssets;
+}
+
+function app_chat_card_prefix(): string
+{
+    return '[[APP_CHAT_CARD]]';
+}
+
+function app_chat_card_encode(array $payload): string
+{
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json) || $json === '') {
+        return '';
+    }
+
+    return app_chat_card_prefix() . base64_encode($json);
+}
+
+function app_chat_card_decode(string $messageBody): ?array
+{
+    $prefix = app_chat_card_prefix();
+    if (strpos($messageBody, $prefix) !== 0) {
+        return null;
+    }
+
+    $encoded = substr($messageBody, strlen($prefix));
+    if ($encoded === '') {
+        return null;
+    }
+
+    $json = base64_decode($encoded, true);
+    if (!is_string($json) || $json === '') {
+        return null;
+    }
+
+    $payload = json_decode($json, true);
+    return is_array($payload) ? $payload : null;
+}
+
+function app_build_crypto_payment_chat_card_message(array $input, string $localeCode = 'en'): string
+{
+    $localeCode = app_normalize_email_locale($localeCode);
+    $assetName = trim((string)($input['asset_name'] ?? $input['crypto_name'] ?? $input['asset_code'] ?? 'Crypto'));
+    $assetCode = strtoupper(trim((string)($input['asset_code'] ?? $input['crypto_code'] ?? '')));
+    $logoUrl = app_crypto_logo_by_code($assetCode, (string)($input['asset_logo_url'] ?? $input['logo_url'] ?? ''));
+    $cryptoAmountRaw = trim((string)($input['requested_crypto_amount'] ?? ''));
+    $cryptoAmount = is_numeric($cryptoAmountRaw) ? sprintf('%.8f', (float)$cryptoAmountRaw) : $cryptoAmountRaw;
+    $fiatAmount = app_format_money_value(
+        $input['requested_fiat_amount'] ?? 0,
+        (string)($input['currency_symbol'] ?? ''),
+        (string)($input['currency_code'] ?? '')
+    );
+    $walletAddress = trim((string)($input['wallet_address'] ?? ''));
+    $walletOwner = trim((string)($input['wallet_owner_full_name'] ?? ''));
+    $paymentUrl = trim((string)($input['payment_url'] ?? ''));
+
+    $payload = [
+        'kind' => 'payment_request',
+        'payment_kind' => 'crypto',
+        'locale_code' => $localeCode,
+        'title' => $localeCode === 'pl' ? ('Zapłać przez ' . $assetName) : ('Pay with ' . $assetName),
+        'logo_url' => $logoUrl,
+        'button_url' => $paymentUrl,
+        'button_label' => $localeCode === 'pl' ? 'Zapłać kryptowalutą' : 'Open crypto payment',
+        'button_hint' => $localeCode === 'pl' ? '** kliknij aby przejść do płatności...' : '** click to open payment...',
+        'step_text' => $localeCode === 'pl' ? 'Wybierz w Revolut' : 'Choose in Revolut',
+        'step_arrow_text' => $localeCode === 'pl' ? 'Wyślij' : 'Send',
+        'badges' => $localeCode === 'pl' ? ['Portfel innej osoby', 'TrustWallet'] : ['External wallet', 'TrustWallet'],
+        'fields' => [],
+        'note' => $localeCode === 'pl'
+            ? 'W przypadku płatności przez Revolut lub z giełdy kryptowalutowej należy podać imię i nazwisko osoby do której jest wykonywany przelew. Do wyliczonej przez nas kwoty pamiętaj aby dodać kwotę prowizji, wyliczona kwota płatności musi w całości trafić na adres naszego portfela.'
+            : 'If you pay from Revolut or a crypto exchange, provide the recipient full name exactly as shown. Add exchange or wallet fees on top so the full token amount reaches our wallet.',
+    ];
+
+    if ($walletOwner !== '') {
+        $payload['fields'][] = [
+            'label' => $localeCode === 'pl' ? 'Imię i nazwisko' : 'Full name',
+            'value' => $walletOwner,
+            'tone' => 'code',
+        ];
+    }
+
+    $payload['fields'][] = [
+        'label' => $localeCode === 'pl' ? 'Wartość transakcji' : 'Transaction value',
+        'value' => $fiatAmount,
+        'tone' => 'muted',
+    ];
+
+    $payload['fields'][] = [
+        'label' => $localeCode === 'pl' ? 'Kwota do wysłania' : 'Amount to send',
+        'value' => trim($cryptoAmount . ' ' . $assetCode),
+        'tone' => 'code',
+    ];
+
+    $payload['fields'][] = [
+        'label' => $localeCode === 'pl' ? 'Adres portfela' : 'Wallet address',
+        'value' => $walletAddress !== '' ? $walletAddress : '-',
+        'tone' => 'code',
+    ];
+
+    return app_chat_card_encode($payload);
+}
+
+function app_build_bank_payment_chat_card_message(array $input, string $localeCode = 'en'): string
+{
+    $localeCode = app_normalize_email_locale($localeCode);
+    $amount = app_format_money_value(
+        $input['requested_amount'] ?? 0,
+        (string)($input['currency_symbol'] ?? ''),
+        (string)($input['currency_code'] ?? '')
+    );
+    $bankName = trim((string)($input['bank_name'] ?? ''));
+    $holder = trim((string)($input['account_holder_name'] ?? ''));
+    $iban = trim((string)($input['iban'] ?? ''));
+    $swift = trim((string)($input['swift_bic'] ?? ''));
+    $reference = trim((string)($input['payment_reference'] ?? ''));
+    $instructions = trim((string)($input['transfer_instructions'] ?? ''));
+
+    $payload = [
+        'kind' => 'payment_request',
+        'payment_kind' => 'bank',
+        'locale_code' => $localeCode,
+        'title' => $localeCode === 'pl' ? 'Zapłać przelewem bankowym' : 'Pay by bank transfer',
+        'logo_url' => '',
+        'button_url' => '',
+        'button_label' => '',
+        'button_hint' => '',
+        'fields' => [
+            [
+                'label' => $localeCode === 'pl' ? 'Kwota do przelewu' : 'Transfer amount',
+                'value' => $amount,
+                'tone' => 'danger',
+            ],
+        ],
+        'note' => $instructions !== ''
+            ? $instructions
+            : ($localeCode === 'pl'
+                ? 'Po wykonaniu przelewu zachowaj potwierdzenie i poczekaj na weryfikację po naszej stronie.'
+                : 'Keep your transfer confirmation and wait for verification on our side.'),
+    ];
+
+    if ($holder !== '') {
+        $payload['fields'][] = [
+            'label' => $localeCode === 'pl' ? 'Odbiorca' : 'Beneficiary',
+            'value' => $holder,
+            'tone' => 'muted',
+        ];
+    }
+    if ($bankName !== '') {
+        $payload['fields'][] = [
+            'label' => $localeCode === 'pl' ? 'Bank' : 'Bank',
+            'value' => $bankName,
+            'tone' => 'muted',
+        ];
+    }
+    if ($iban !== '') {
+        $payload['fields'][] = [
+            'label' => 'IBAN',
+            'value' => $iban,
+            'tone' => 'code',
+        ];
+    }
+    if ($swift !== '') {
+        $payload['fields'][] = [
+            'label' => 'SWIFT / BIC',
+            'value' => $swift,
+            'tone' => 'code',
+        ];
+    }
+    if ($reference !== '') {
+        $payload['fields'][] = [
+            'label' => $localeCode === 'pl' ? 'Tytuł przelewu' : 'Payment reference',
+            'value' => $reference,
+            'tone' => 'code',
+        ];
+    }
+
+    return app_chat_card_encode($payload);
+}
+
+function app_ensure_product_provider_runtime_columns(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_object_exists($db, 'product_providers')) {
+        return;
+    }
+
+    if (!schema_column_exists($db, 'product_providers', 'url_replacement_from')) {
+        @$db->query(
+            "ALTER TABLE product_providers
+             ADD COLUMN url_replacement_from VARCHAR(255) DEFAULT NULL
+             AFTER supports_url_replacement"
+        );
+        schema_forget_column_cache('product_providers', 'url_replacement_from');
+    }
+
+    if (!schema_column_exists($db, 'product_providers', 'url_replacement_to')) {
+        @$db->query(
+            "ALTER TABLE product_providers
+             ADD COLUMN url_replacement_to VARCHAR(255) DEFAULT NULL
+             AFTER url_replacement_from"
+        );
+        schema_forget_column_cache('product_providers', 'url_replacement_to');
+    }
+}
+
+function app_url_starts_with(string $value, string $prefix): bool
+{
+    if ($prefix === '') {
+        return false;
+    }
+
+    return substr($value, 0, strlen($prefix)) === $prefix;
+}
+
+function app_apply_provider_url_replacement(string $url, array $providerData): string
+{
+    $url = trim($url);
+    if ($url === '' || empty($providerData['supports_url_replacement'])) {
+        return $url;
+    }
+
+    $replaceFrom = trim((string)($providerData['url_replacement_from'] ?? ''));
+    $replaceTo = trim((string)($providerData['url_replacement_to'] ?? ''));
+    if ($replaceFrom === '' || $replaceTo === '') {
+        return $url;
+    }
+
+    if (app_url_starts_with($url, $replaceFrom)) {
+        return $replaceTo . substr($url, strlen($replaceFrom));
+    }
+
+    return $url;
+}
+
+function app_delivery_credentials_from_url(string $url): array
+{
+    $url = trim($url);
+    if ($url === '') {
+        return ['login' => '', 'password' => ''];
+    }
+
+    $login = '';
+    $password = '';
+    $parts = parse_url($url);
+    if (is_array($parts)) {
+        $login = trim((string)($parts['user'] ?? ''));
+        $password = trim((string)($parts['pass'] ?? ''));
+
+        $query = (string)($parts['query'] ?? '');
+        if ($query !== '') {
+            $queryValues = [];
+            parse_str($query, $queryValues);
+            if ($queryValues) {
+                $normalized = [];
+                foreach ($queryValues as $key => $value) {
+                    $normalized[strtolower((string)$key)] = is_scalar($value) ? trim((string)$value) : '';
+                }
+
+                if ($login === '') {
+                    $login = (string)($normalized['username'] ?? $normalized['user'] ?? $normalized['login'] ?? '');
+                }
+
+                if ($password === '') {
+                    $password = (string)($normalized['password'] ?? $normalized['pass'] ?? $normalized['pwd'] ?? '');
+                }
+            }
+        }
+    }
+
+    return [
+        'login' => $login,
+        'password' => $password,
+    ];
+}
+
+function app_order_delivery_payload(array $order): array
+{
+    $rawUrl = trim((string)($order['delivery_link_raw'] ?? $order['delivery_link'] ?? ''));
+    $manualDelivery = !empty($order['supports_manual_delivery']);
+    $showUrl = $rawUrl !== '' && !empty($order['delivery_link_visible']);
+    $effectiveUrl = app_apply_provider_url_replacement($rawUrl, $order);
+    $credentials = app_delivery_credentials_from_url($effectiveUrl !== '' ? $effectiveUrl : $rawUrl);
+    $showCredentials = $manualDelivery && ($credentials['login'] !== '' || $credentials['password'] !== '');
+
+    return [
+        'raw_url' => $rawUrl,
+        'url' => $showUrl ? $effectiveUrl : '',
+        'show_url' => $showUrl,
+        'show_credentials' => $showCredentials,
+        'login' => (string)$credentials['login'],
+        'password' => (string)$credentials['password'],
+    ];
+}
+
+function app_order_progress_data(array $order): array
+{
+    $createdAt = !empty($order['date_add']) ? strtotime((string)$order['date_add']) : (!empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0);
+    $expiresAt = !empty($order['date_end']) ? strtotime((string)$order['date_end']) : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
+    $now = time();
+
+    if ($expiresAt <= 0) {
+        return [
+            'has_expiry' => false,
+            'remaining_seconds' => 0,
+            'remaining_days' => 0,
+            'percent' => 0,
+            'color' => '#d1d5db',
+            'tone' => 'neutral',
+        ];
+    }
+
+    $totalSeconds = max(1, $expiresAt - ($createdAt > 0 ? $createdAt : $now));
+    $remainingSeconds = max(0, $expiresAt - $now);
+    $elapsedSeconds = max(0, $totalSeconds - $remainingSeconds);
+    $percent = (int)round(min(1, $elapsedSeconds / $totalSeconds) * 100);
+    $remainingDays = $remainingSeconds > 0 ? (int)ceil($remainingSeconds / 86400) : 0;
+
+    if ($remainingSeconds <= 0) {
+        $tone = 'expired';
+        $color = '#ef4444';
+        $percent = 100;
+    } elseif ($remainingDays <= 7) {
+        $tone = 'danger';
+        $color = '#ef4444';
+    } elseif ($remainingDays <= 30) {
+        $tone = 'warning';
+        $color = '#f59e0b';
+    } else {
+        $tone = 'success';
+        $color = '#16a34a';
+    }
+
+    return [
+        'has_expiry' => true,
+        'remaining_seconds' => $remainingSeconds,
+        'remaining_days' => $remainingDays,
+        'percent' => $percent,
+        'color' => $color,
+        'tone' => $tone,
+    ];
+}
+
+function app_order_status_visual(array $order): array
+{
+    $status = strtolower(trim((string)($order['status_name'] ?? $order['status'] ?? '')));
+    $paymentStatus = strtolower(trim((string)($order['payment_status_name'] ?? $order['payment_status'] ?? '')));
+    $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status_name'] ?? $order['fulfillment_status'] ?? '')));
+
+    if (($status === 'pending_payment' || (isset($order['status']) && (string)$order['status'] === '0'))
+        && $paymentStatus === 'paid'
+        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)
+    ) {
+        return [
+            'icon' => 'fa fa-check-circle',
+            'class' => 'orders-status-awaiting-activation',
+            'label' => 'Payment confirmed',
+            'label_key' => 'orders_status_payment_confirmed',
+        ];
+    }
+
+    if ($status === 'pending_payment' || $paymentStatus === 'unpaid' || $fulfillmentStatus === 'pending' || (isset($order['status']) && (string)$order['status'] === '0')) {
+        return [
+            'icon' => 'fa fa-refresh',
+            'class' => 'orders-status-pending',
+            'label' => 'Pending',
+            'label_key' => 'orders_status_pending',
+        ];
+    }
+
+    if ($status === 'expired' || (isset($order['status']) && (string)$order['status'] === '2')) {
+        return [
+            'icon' => 'fa fa-minus-circle',
+            'class' => 'orders-status-expired',
+            'label' => 'Expired',
+            'label_key' => 'orders_status_expired',
+        ];
+    }
+
+    if ($status === 'cancelled' || $fulfillmentStatus === 'cancelled') {
+        return [
+            'icon' => 'fa fa-times-circle',
+            'class' => 'orders-status-expired',
+            'label' => 'Cancelled',
+            'label_key' => 'orders_status_cancelled',
+        ];
+    }
+
+    if (($status === 'active' && $paymentStatus === 'paid') || (isset($order['status']) && (string)$order['status'] === '1')) {
+        return [
+            'icon' => 'fa fa-check-circle',
+            'class' => 'orders-status-active',
+            'label' => 'Active',
+            'label_key' => 'orders_status_active',
+        ];
+    }
+
+    return [
+        'icon' => 'fa fa-circle',
+        'class' => 'orders-status-neutral',
+        'label' => 'Status',
+        'label_key' => 'orders_status_default',
+    ];
+}
+
+function app_history_badge(string $label, string $modifier = ''): string
+{
+    $className = 'history-entry__badge';
+    if ($modifier !== '') {
+        $className .= ' history-entry__badge--' . preg_replace('/[^a-z0-9_-]+/i', '', strtolower($modifier));
+    }
+
+    return '<span class="' . htmlspecialchars($className, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
+}
+
+function app_history_event_summary(
+    string $badgeLabel,
+    string $badgeModifier,
+    string $title,
+    array $metaItems = []
+): string {
+    $parts = [];
+    foreach ($metaItems as $item) {
+        $itemLabel = trim((string)($item['label'] ?? ''));
+        if ($itemLabel === '') {
+            continue;
+        }
+
+        $itemClass = 'history-entry__meta-item';
+        if (!empty($item['strong'])) {
+            $itemClass .= ' history-entry__meta-item--strong';
+        }
+
+        $parts[] = '<span class="' . htmlspecialchars($itemClass, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($itemLabel, ENT_QUOTES, 'UTF-8') . '</span>';
+    }
+
+    $metaHtml = '';
+    if ($parts) {
+        $metaHtml = '<div class="history-entry__meta">' . implode('<span class="history-entry__meta-dot"></span>', $parts) . '</div>';
+    }
+
+    return '<div class="history-entry">'
+        . app_history_badge($badgeLabel, $badgeModifier)
+        . '<div class="history-entry__body">'
+        . '<div class="history-entry__title">' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</div>'
+        . $metaHtml
+        . '</div>'
+        . '</div>';
+}
+
+function app_history_payment_summary(
+    array $messages,
+    string $badgeLabel,
+    string $badgeModifier,
+    string $orderLabel,
+    string $fiatLabel,
+    string $secondaryLabel
+): string {
+    return '<div class="history-entry history-entry--payment">'
+        . app_history_badge($badgeLabel, $badgeModifier)
+        . '<div class="history-entry__body">'
+        . '<div class="history-entry__title">'
+        . htmlspecialchars(localization_translate($messages, 'history_payment_request_title'), ENT_QUOTES, 'UTF-8')
+        . ' <strong>' . htmlspecialchars($orderLabel, ENT_QUOTES, 'UTF-8') . '</strong>'
+        . '</div>'
+        . '<div class="history-entry__meta">'
+        . '<span class="history-entry__meta-item">' . htmlspecialchars($fiatLabel, ENT_QUOTES, 'UTF-8') . '</span>'
+        . '<span class="history-entry__meta-dot"></span>'
+        . '<span class="history-entry__meta-item history-entry__meta-item--strong">' . htmlspecialchars($secondaryLabel, ENT_QUOTES, 'UTF-8') . '</span>'
+        . '</div>'
+        . '</div>'
+        . '</div>';
+}
+
+function app_history_is_visible(string $eventDate, int $visibleFromTimestamp): bool
+{
+    if ($eventDate === '') {
+        return false;
+    }
+
+    if ($visibleFromTimestamp <= 0) {
+        return true;
+    }
+
+    $eventTimestamp = strtotime($eventDate);
+    if ($eventTimestamp === false) {
+        return false;
+    }
+
+    return $eventTimestamp >= $visibleFromTimestamp;
+}
+
+function app_uses_v2_schema(Mysql_ks $db): bool
+{
+    return schema_object_exists($db, 'app_settings') && schema_object_exists($db, 'customers');
+}
+
+function app_ensure_settings_runtime_columns(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'app_settings')) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_column_exists($db, 'app_settings', 'contact_form_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN contact_form_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER support_chat_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'contact_form_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'referrals_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN referrals_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER contact_form_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'referrals_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'apps_page_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN apps_page_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER referrals_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'apps_page_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'application_instructions_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN application_instructions_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER apps_page_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'application_instructions_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'history_cleanup_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN history_cleanup_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER application_instructions_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'history_cleanup_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'payments_cleanup_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN payments_cleanup_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER history_cleanup_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'payments_cleanup_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'expired_orders_cleanup_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN expired_orders_cleanup_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER payments_cleanup_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'expired_orders_cleanup_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'support_chat_retention_hours')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN support_chat_retention_hours SMALLINT UNSIGNED NOT NULL DEFAULT 168
+             AFTER support_chat_retention_days"
+        );
+        schema_forget_column_cache('app_settings', 'support_chat_retention_hours');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'credits_sales_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN credits_sales_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER sales_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'credits_sales_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'reseller_group_chat_limit')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN reseller_group_chat_limit TINYINT UNSIGNED NOT NULL DEFAULT 10
+             AFTER support_chat_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'reseller_group_chat_limit');
+    }
+}
+
+function app_ensure_customer_runtime_columns(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'customers')) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_column_exists($db, 'customers', 'customer_type')) {
+        @$db->query(
+            "ALTER TABLE customers
+             ADD COLUMN customer_type VARCHAR(20) NOT NULL DEFAULT 'client'
+             AFTER status"
+        );
+        schema_forget_column_cache('customers', 'customer_type');
+    }
+}
+
+function app_normalize_customer_type($value): string
+{
+    $type = strtolower(trim((string)$value));
+    if ($type === 'customer') {
+        $type = 'client';
+    }
+
+    if (!in_array($type, ['client', 'reseller'], true)) {
+        $type = 'client';
+    }
+
+    return $type;
+}
+
+function app_customer_product_type(array $customer): string
+{
+    return app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller'
+        ? 'credits'
+        : 'subscription';
+}
+
+function app_credits_sales_enabled(array $settings): bool
+{
+    return !empty($settings['credits_sales_enabled']);
+}
+
+function app_customer_sales_enabled(array $customer, array $settings): bool
+{
+    $salesEnabled = !empty($settings['sales_enabled']) || !empty($settings['active_sale']);
+    if (!$salesEnabled) {
+        return false;
+    }
+
+    if (app_customer_product_type($customer) === 'credits') {
+        return app_credits_sales_enabled($settings);
+    }
+
+    return true;
+}
+
+function app_customer_news_visibilities(array $customer): array
+{
+    if (app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller') {
+        return ['public', 'reseller'];
+    }
+
+    return ['public', 'client', 'customer'];
+}
+
+function app_sql_string_list(Mysql_ks $db, array $values): string
+{
+    $safeValues = [];
+    foreach ($values as $value) {
+        $safeValues[] = "'" . $db->escape((string)$value) . "'";
+    }
+
+    return $safeValues ? implode(', ', $safeValues) : "''";
+}
+
+function app_product_type_sql(Mysql_ks $db, array $customer): string
+{
+    return "'" . $db->escape(app_customer_product_type($customer)) . "'";
+}
+
+function app_fetch_settings(Mysql_ks $db): array
+{
+    if (!app_uses_v2_schema($db)) {
+        $settings = $db->select('settings');
+        return is_array($settings) ? $settings : [];
+    }
+
+    app_ensure_settings_runtime_columns($db);
+
+    $settings = $db->select_user(
+        "SELECT
+            app_settings.*,
+            currencies.code AS currency_short,
+            currencies.symbol AS currency_symbol
+         FROM app_settings
+         LEFT JOIN currencies ON currencies.id = app_settings.default_currency_id
+         LIMIT 1"
+    );
+
+    if (!is_array($settings)) {
+        return [];
+    }
+
+    $settings['technical_break'] = (int)($settings['maintenance_mode'] ?? 0);
+    $settings['admin_email'] = $settings['support_email'] ?? '';
+    $settings['page_title'] = $settings['site_title'] ?? '';
+    $settings['page_name'] = $settings['site_name'] ?? '';
+    $settings['page_url'] = $settings['site_url'] ?? '';
+    $settings['page_logo'] = $settings['site_logo_url'] ?? '';
+    $settings['page_desc'] = $settings['site_description'] ?? '';
+    $settings['page_keywords'] = $settings['site_keywords'] ?? '';
+    $settings['currency'] = (int)($settings['default_currency_id'] ?? 0);
+    $settings['liczba_wynikow'] = (int)($settings['results_per_page'] ?? 20);
+    $settings['smtp_login'] = $settings['smtp_username'] ?? '';
+    $settings['smtp_haslo'] = $settings['smtp_password'] ?? '';
+    $settings['active_register'] = (int)($settings['registration_enabled'] ?? 0);
+    $settings['active_sale'] = (int)($settings['sales_enabled'] ?? 0);
+    $settings['active_trials'] = (int)($settings['trials_enabled'] ?? 0);
+    $settings['contact_form_enabled'] = (int)($settings['contact_form_enabled'] ?? 1);
+    $settings['referrals_enabled'] = (int)($settings['referrals_enabled'] ?? 1);
+    $settings['apps_page_enabled'] = (int)($settings['apps_page_enabled'] ?? 1);
+    $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
+    $settings['history_cleanup_enabled'] = (int)($settings['history_cleanup_enabled'] ?? 0);
+    $settings['payments_cleanup_enabled'] = (int)($settings['payments_cleanup_enabled'] ?? 0);
+    $settings['expired_orders_cleanup_enabled'] = (int)($settings['expired_orders_cleanup_enabled'] ?? 0);
+    $settings['active_referrals'] = (int)($settings['referrals_enabled'] ?? 1);
+    $settings['crypto_payments_enabled'] = (int)($settings['crypto_payments_enabled'] ?? 0);
+    $settings['bank_transfers_enabled'] = (int)($settings['bank_transfers_enabled'] ?? 0);
+    $settings['reseller_group_chat_limit'] = (int)($settings['reseller_group_chat_limit'] ?? 10);
+    if ($settings['reseller_group_chat_limit'] < 0) {
+        $settings['reseller_group_chat_limit'] = 0;
+    } elseif ($settings['reseller_group_chat_limit'] > 10) {
+        $settings['reseller_group_chat_limit'] = 10;
+    }
+    $legacyRetentionDays = max(1, min(30, (int)($settings['support_chat_retention_days'] ?? 7)));
+    $settings['support_chat_retention_days'] = $legacyRetentionDays;
+    $settings['support_chat_retention_hours'] = (int)($settings['support_chat_retention_hours'] ?? ($legacyRetentionDays * 24));
+    if (!in_array($settings['support_chat_retention_hours'], [1, 24, 72, 168, 720], true)) {
+        $settings['support_chat_retention_hours'] = 168;
+    }
+    $settings['count_news'] = (int)($settings['news_feed_limit'] ?? 10);
+    $settings['homepage_verify'] = (int)($settings['homepage_verification_enabled'] ?? 0);
+    $settings['apikey'] = $settings['api_key'] ?? '';
+
+    return $settings;
+}
+
+function app_email_builtin_templates(): array
+{
+    return [
+        'account-activation' => [
+            'name' => 'Account created notification',
+            'subject' => 'Your account is active',
+            'body' => app_email_builtin_templates_localized('en')['account-activation']['body'],
+            'placeholders' => ['customer_email', 'email', 'login_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'password-reset' => [
+            'name' => 'Password reset',
+            'subject' => 'Your new password',
+            'body' => app_email_builtin_templates_localized('en')['password-reset']['body'],
+            'placeholders' => ['customer_email', 'email', 'password', 'nowehaslo', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'payment-request-created' => [
+            'name' => 'Payment request notification',
+            'subject' => 'Payment is waiting',
+            'body' => app_email_builtin_templates_localized('en')['payment-request-created']['body'],
+            'placeholders' => ['order_id', 'id_zamowienia', 'payment_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'order-paid' => [
+            'name' => 'Order paid notification',
+            'subject' => 'Payment confirmed',
+            'body' => app_email_builtin_templates_localized('en')['order-paid']['body'],
+            'placeholders' => ['order_id', 'id_zamowienia', 'order_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'order-activated' => [
+            'name' => 'Order activated notification',
+            'subject' => 'Your order is active',
+            'body' => app_email_builtin_templates_localized('en')['order-activated']['body'],
+            'placeholders' => ['order_id', 'id_zamowienia', 'order_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'order-expired' => [
+            'name' => 'Order expired notification',
+            'subject' => 'Your order expired',
+            'body' => app_email_builtin_templates_localized('en')['order-expired']['body'],
+            'placeholders' => ['order_id', 'id_zamowienia', 'order_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'live-chat-admin-notify' => [
+            'name' => 'Live chat admin notification',
+            'subject' => 'You have a new message [Support]',
+            'body' => app_email_builtin_templates_localized('en')['live-chat-admin-notify']['body'],
+            'placeholders' => ['customer_email', 'chat_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'live-chat-customer-notify' => [
+            'name' => 'Live chat customer notification',
+            'subject' => 'You have a new message [Support]',
+            'body' => app_email_builtin_templates_localized('en')['live-chat-customer-notify']['body'],
+            'placeholders' => ['chat_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'news-broadcast' => [
+            'name' => 'News notification',
+            'subject' => 'New important information',
+            'body' => app_email_builtin_templates_localized('en')['news-broadcast']['body'],
+            'placeholders' => ['news_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'account-blocked' => [
+            'name' => 'Account blocked notification',
+            'subject' => 'Your account was blocked',
+            'body' => app_email_builtin_templates_localized('en')['account-blocked']['body'],
+            'placeholders' => ['site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+        'support-payment-request-notify' => [
+            'name' => 'Support payment request notification',
+            'subject' => 'Customer started payment [Support]',
+            'body' => app_email_builtin_templates_localized('en')['support-payment-request-notify']['body'],
+            'placeholders' => ['customer_email', 'order_id', 'id_zamowienia', 'admin_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
+    ];
+}
+
+function app_supported_email_locales(): array
+{
+    return ['en', 'pl'];
+}
+
+function app_normalize_email_locale(?string $localeCode): string
+{
+    $localeCode = strtolower(trim((string)$localeCode));
+    return in_array($localeCode, app_supported_email_locales(), true) ? $localeCode : 'en';
+}
+
+function app_email_active_template_keys(): array
+{
+    return [
+        'account-activation',
+        'password-reset',
+        'payment-request-created',
+        'order-paid',
+        'order-activated',
+        'order-expired',
+        'live-chat-admin-notify',
+        'live-chat-customer-notify',
+        'news-broadcast',
+        'account-blocked',
+        'support-payment-request-notify',
+    ];
+}
+
+function app_email_builtin_templates_localized(string $localeCode): array
+{
+    $localeCode = app_normalize_email_locale($localeCode);
+    $footer = app_email_standard_footer_html($localeCode);
+
+    if ($localeCode === 'pl') {
+        return [
+            'account-activation' => ['subject' => 'Twoje konto jest aktywne', 'body' => "<h3>Witaj,</h3>\n<p>Twoje konto w <strong>%pagename%</strong> jest aktywne.</p>\n<p>Zaloguj się na swoje konto, aby rozpocząć korzystanie z panelu.</p>\n<p>Login: <strong>%email%</strong></p>\n<p>Panel logowania: <strong>%login_url%</strong></p>\n{$footer}"],
+            'password-reset' => ['subject' => 'Twoje nowe hasło', 'body' => "<h3>Witaj,</h3>\n<p>Twoje konto w <strong>%pagename%</strong> jest aktywne.</p>\n<p>Zaloguj się na konto podając nowe hasło:<br /><br /></p>\n<p>Login: <strong>%email%</strong></p>\n<p>Password: <strong>%nowehaslo%</strong></p>\n{$footer}"],
+            'payment-request-created' => ['subject' => 'Płatność oczekuje', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że dla zamówienia nr <strong>#%order_id%</strong> oczekuje płatność.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły i opłacić zamówienie.</p>\n{$footer}"],
+            'order-paid' => ['subject' => 'Płatność została potwierdzona', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że płatność do zamówienia nr <strong>#%order_id%</strong> została potwierdzona.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły.</p>\n{$footer}"],
+            'order-activated' => ['subject' => 'Twoje zamówienie jest aktywne', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że zamówienie nr <strong>#%order_id%</strong> jest aktywne.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły.</p>\n{$footer}"],
+            'order-expired' => ['subject' => 'Twoje zamówienie wygasło', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że Twoje zamówienie nr <strong>#%order_id%</strong> właśnie wygasło.</p>\n<p>Subskrypcję możesz odnowić w dowolnym czasie.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić ofertę.</p>\n{$footer}"],
+            'live-chat-admin-notify' => ['subject' => 'Masz nową wiadomość [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Klient wysłał nową wiadomość przez Live Chat.</p>\n<p>Login klienta: <strong>%customer_email%</strong></p>\n<p>Przejdź do panelu administracyjnego, aby odpowiedzieć.</p>\n{$footer}"],
+            'live-chat-customer-notify' => ['subject' => 'Masz nową wiadomość [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Otrzymałeś nową wiadomość od supportu.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić Live Chat.</p>\n{$footer}"],
+            'news-broadcast' => ['subject' => 'Nowa ważna informacja', 'body' => "<h3>Witaj,</h3>\n<p>W Twoim panelu pojawiła się nowa ważna informacja.</p>\n<p>Zaloguj się na swoje konto, aby ją sprawdzić.</p>\n{$footer}"],
+            'account-blocked' => ['subject' => 'Twoje konto zostało zablokowane', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że Twoje konto w <strong>%pagename%</strong> zostało zablokowane.</p>\n<p>Jeśli potrzebujesz pomocy, skontaktuj się z nami przez stronę.</p>\n{$footer}"],
+            'support-payment-request-notify' => ['subject' => 'Klient rozpoczął płatność [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Klient rozpoczął proces płatności dla zamówienia nr <strong>#%order_id%</strong>.</p>\n<p>Login klienta: <strong>%customer_email%</strong></p>\n<p>Przejdź do panelu administracyjnego, aby sprawdzić szczegóły.</p>\n{$footer}"],
+        ];
+    }
+
+    return [
+        'account-activation' => ['subject' => 'Your account is active', 'body' => "<h3>Hello,</h3>\n<p>Your account in <strong>%pagename%</strong> is active.</p>\n<p>Log in to your account to start using the panel.</p>\n<p>Login: <strong>%email%</strong></p>\n<p>Login page: <strong>%login_url%</strong></p>\n{$footer}"],
+        'password-reset' => ['subject' => 'Your new password', 'body' => "<h3>Hello,</h3>\n<p>Your account in <strong>%pagename%</strong> is active.</p>\n<p>Log in using your new password:<br /><br /></p>\n<p>Login: <strong>%email%</strong></p>\n<p>Password: <strong>%nowehaslo%</strong></p>\n{$footer}"],
+        'payment-request-created' => ['subject' => 'Payment is waiting', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that payment is waiting for order <strong>#%order_id%</strong>.</p>\n<p>Log in to your account to review the details and complete the payment.</p>\n{$footer}"],
+        'order-paid' => ['subject' => 'Payment confirmed', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that payment for order <strong>#%order_id%</strong> has been confirmed.</p>\n<p>Log in to your account to review the details.</p>\n{$footer}"],
+        'order-activated' => ['subject' => 'Your order is active', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that order <strong>#%order_id%</strong> is active.</p>\n<p>Log in to your account to review the details.</p>\n{$footer}"],
+        'order-expired' => ['subject' => 'Your order expired', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that your order <strong>#%order_id%</strong> has just expired.</p>\n<p>You can renew the subscription at any time.</p>\n<p>Log in to your account to review the available offer.</p>\n{$footer}"],
+        'live-chat-admin-notify' => ['subject' => 'You have a new message [Support]', 'body' => "<h3>Hello,</h3>\n<p>A customer sent a new message through Live Chat.</p>\n<p>Customer login: <strong>%customer_email%</strong></p>\n<p>Open the admin panel to reply.</p>\n{$footer}"],
+        'live-chat-customer-notify' => ['subject' => 'You have a new message [Support]', 'body' => "<h3>Hello,</h3>\n<p>You received a new message from support.</p>\n<p>Log in to your account to check Live Chat.</p>\n{$footer}"],
+        'news-broadcast' => ['subject' => 'New important information', 'body' => "<h3>Hello,</h3>\n<p>A new important information is waiting in your panel.</p>\n<p>Log in to your account to review it.</p>\n{$footer}"],
+        'account-blocked' => ['subject' => 'Your account was blocked', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that your account in <strong>%pagename%</strong> has been blocked.</p>\n<p>If you need help, contact us through the website.</p>\n{$footer}"],
+        'support-payment-request-notify' => ['subject' => 'Customer started payment [Support]', 'body' => "<h3>Hello,</h3>\n<p>A customer started the payment process for order <strong>#%order_id%</strong>.</p>\n<p>Customer login: <strong>%customer_email%</strong></p>\n<p>Open the admin panel to review the details.</p>\n{$footer}"],
+    ];
+}
+
+function app_email_standard_footer_html(string $localeCode): string
+{
+    if (app_normalize_email_locale($localeCode) === 'pl') {
+        return "<br />\n<p>Pozdrawiamy</p>\n<p><strong>%pagename%<br /></strong></p>\n<p>%pageurl%</p>\n<p><br /><br />*** Wiadomość została wygenerowana automatycznie. W przypadku dodatkowych pytań zapraszamy do kontaktu na naszej stronie na Live Chat.</p>";
+    }
+
+    return "<br />\n<p>Regards</p>\n<p><strong>%pagename%<br /></strong></p>\n<p>%pageurl%</p>\n<p><br /><br />*** This message was generated automatically. If you have any additional questions, please contact us through Live Chat on our website.</p>";
+}
+
+function app_email_template_meta(string $templateKey): ?array
+{
+    $templates = app_email_builtin_templates();
+    return isset($templates[$templateKey]) ? $templates[$templateKey] : null;
+}
+
+function app_email_template_placeholders(string $templateKey): array
+{
+    $meta = app_email_template_meta($templateKey);
+    if (!is_array($meta) || empty($meta['placeholders']) || !is_array($meta['placeholders'])) {
+        return [];
+    }
+
+    return array_values(array_unique(array_map(static function ($placeholder): string {
+        return trim((string)$placeholder);
+    }, $meta['placeholders'])));
+}
+
+function app_email_plain_text(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    $normalized = str_ireplace(
+        ['<br>', '<br/>', '<br />', '</p>', '</div>', '</li>', '</h1>', '</h2>', '</h3>', '</h4>', '</h5>', '</h6>'],
+        "\n",
+        $value
+    );
+    $normalized = preg_replace('/<li[^>]*>/i', "- ", $normalized);
+    $normalized = preg_replace('/<p[^>]*>/i', '', $normalized);
+    $normalized = preg_replace('/<div[^>]*>/i', '', $normalized);
+    $normalized = preg_replace('/<[^>]+>/', '', $normalized);
+    $normalized = html_entity_decode((string)$normalized, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $normalized = str_replace(["\r\n", "\r"], "\n", $normalized);
+    $normalized = preg_replace("/\n{3,}/", "\n\n", $normalized);
+
+    $lines = array_map(static function ($line): string {
+        return rtrim((string)$line);
+    }, explode("\n", $normalized));
+
+    return trim(implode("\n", $lines));
+}
+
+function app_email_subject(string $value, string $fallback = 'Notification'): string
+{
+    $value = str_replace(["\r", "\n"], ' ', trim($value));
+    $value = preg_replace('/\s+/', ' ', $value);
+    $value = trim((string)$value);
+
+    if ($value === '') {
+        $value = $fallback;
+    }
+
+    if (function_exists('mb_substr')) {
+        return mb_substr($value, 0, 190);
+    }
+
+    return substr($value, 0, 190);
+}
+
+function app_email_site_host(array $settings): string
+{
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+    if ($siteUrl !== '') {
+        $host = (string)parse_url($siteUrl, PHP_URL_HOST);
+        if ($host !== '') {
+            return $host;
+        }
+    }
+
+    $smtpHost = trim((string)($settings['smtp_host'] ?? ''));
+    if ($smtpHost !== '' && $smtpHost !== 'xxx.com') {
+        return preg_replace('/:\d+$/', '', $smtpHost);
+    }
+
+    return isset($_SERVER['HTTP_HOST']) ? trim((string)$_SERVER['HTTP_HOST']) : 'localhost';
+}
+
+function app_email_primary_from(array $settings): string
+{
+    $smtpLogin = trim((string)($settings['smtp_username'] ?? $settings['smtp_login'] ?? ''));
+    if ($smtpLogin !== '' && filter_var($smtpLogin, FILTER_VALIDATE_EMAIL)) {
+        return strtolower($smtpLogin);
+    }
+
+    $supportEmail = trim((string)($settings['support_email'] ?? $settings['admin_email'] ?? ''));
+    if ($supportEmail !== '' && filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) {
+        return strtolower($supportEmail);
+    }
+
+    return 'no-reply@' . app_email_site_host($settings);
+}
+
+function app_email_support_recipient(array $settings): string
+{
+    $supportEmail = trim((string)($settings['support_email'] ?? ''));
+    if ($supportEmail !== '' && filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) {
+        return strtolower($supportEmail);
+    }
+
+    $smtpLogin = trim((string)($settings['smtp_username'] ?? $settings['smtp_login'] ?? ''));
+    if ($smtpLogin !== '' && filter_var($smtpLogin, FILTER_VALIDATE_EMAIL)) {
+        return strtolower($smtpLogin);
+    }
+
+    return '';
+}
+
+function app_email_smtp_is_configured(array $settings): bool
+{
+    $smtpHost = trim((string)($settings['smtp_host'] ?? ''));
+    $smtpPort = (int)($settings['smtp_port'] ?? 0);
+    $smtpLogin = trim((string)($settings['smtp_username'] ?? $settings['smtp_login'] ?? ''));
+    $smtpPassword = trim((string)($settings['smtp_password'] ?? $settings['smtp_haslo'] ?? ''));
+
+    return $smtpHost !== ''
+        && $smtpHost !== 'xxx.com'
+        && $smtpPort > 0
+        && $smtpLogin !== ''
+        && $smtpPassword !== '';
+}
+
+function app_email_require_phpmailer(): void
+{
+    if (class_exists(\PHPMailer\PHPMailer\PHPMailer::class)) {
+        return;
+    }
+
+    require_once dirname(__DIR__) . '/PHPMailer/PHPMailer/src/Exception.php';
+    require_once dirname(__DIR__) . '/PHPMailer/PHPMailer/src/PHPMailer.php';
+    require_once dirname(__DIR__) . '/PHPMailer/PHPMailer/src/SMTP.php';
+}
+
+function app_email_mailer(array $settings): \PHPMailer\PHPMailer\PHPMailer
+{
+    app_email_require_phpmailer();
+
+    $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+    $mail->isSMTP();
+    $mail->SMTPDebug = \PHPMailer\PHPMailer\SMTP::DEBUG_OFF;
+    $mail->Host = trim((string)($settings['smtp_host'] ?? 'localhost'));
+    $mail->Port = (int)($settings['smtp_port'] ?? 465);
+    $mail->SMTPAuth = true;
+    $mail->Username = trim((string)($settings['smtp_username'] ?? $settings['smtp_login'] ?? ''));
+    $mail->Password = trim((string)($settings['smtp_password'] ?? $settings['smtp_haslo'] ?? ''));
+    $mail->Timeout = 20;
+    $mail->CharSet = 'UTF-8';
+    $mail->Encoding = 'base64';
+    $mail->isHTML(true);
+    $mail->ContentType = 'text/html; charset=UTF-8';
+    $mail->SMTPAutoTLS = true;
+
+    if ($mail->Port === 465) {
+        $mail->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS;
+    } elseif ($mail->Port === 587) {
+        $mail->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+    } else {
+        $mail->SMTPSecure = '';
+    }
+
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $fromEmail = app_email_primary_from($settings);
+    $mail->Hostname = app_email_site_host($settings);
+    $mail->setFrom($fromEmail, $siteName);
+    $mail->Sender = $fromEmail;
+    $mail->addReplyTo(app_email_support_recipient($settings) ?: $fromEmail, $siteName);
+    $mail->addCustomHeader('Auto-Submitted', 'auto-generated');
+    $mail->addCustomHeader('X-Auto-Response-Suppress', 'All');
+    $mail->addCustomHeader('X-Entity-Ref-ID', bin2hex(random_bytes(10)));
+
+    return $mail;
+}
+
+function app_email_placeholder_map(array $replacements): array
+{
+    $map = [];
+    foreach ($replacements as $key => $value) {
+        $normalizedKey = trim((string)$key);
+        if ($normalizedKey === '') {
+            continue;
+        }
+
+        if (is_bool($value)) {
+            $value = $value ? '1' : '0';
+        } elseif (!is_scalar($value) && $value !== null) {
+            $value = '';
+        }
+
+        $stringValue = app_email_plain_text((string)($value ?? ''));
+        $map['{' . $normalizedKey . '}'] = $stringValue;
+        $map['{{' . $normalizedKey . '}}'] = $stringValue;
+        $map['%' . $normalizedKey . '%'] = $stringValue;
+    }
+
+    return $map;
+}
+
+function app_email_render(string $templateBody, array $replacements): string
+{
+    return strtr($templateBody, app_email_placeholder_map($replacements));
+}
+
+function app_ensure_email_template_runtime_rows(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'email_templates')) {
+        return;
+    }
+
+    $done = true;
+    app_sync_builtin_email_templates($db, false);
+}
+
+function app_ensure_email_template_runtime_translations(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done) {
+        return;
+    }
+
+    $done = true;
+    app_ensure_email_template_runtime_rows($db);
+
+    if (!schema_object_exists($db, 'email_template_translations')) {
+        @$db->query(
+            "CREATE TABLE IF NOT EXISTS email_template_translations (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                template_id INT UNSIGNED NOT NULL,
+                locale_code VARCHAR(5) NOT NULL,
+                subject VARCHAR(191) NOT NULL,
+                body_text LONGTEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uniq_email_template_translations_template_locale (template_id, locale_code),
+                CONSTRAINT fk_email_template_translations_template FOREIGN KEY (template_id) REFERENCES email_templates (id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['email_template_translations']);
+    }
+
+    if (!schema_object_exists($db, 'email_template_translations')) {
+        return;
+    }
+
+    app_sync_builtin_email_templates_if_needed($db);
+    app_sync_builtin_email_templates($db, false);
+}
+
+function app_email_template_sync_flag_path(): string
+{
+    return dirname(__DIR__) . '/templates_c/.email_templates_sync_20260425_notifications.flag';
+}
+
+function app_customer_notification_storage_column(Mysql_ks $db): string
+{
+    static $cache = [];
+
+    $cacheKey = spl_object_hash($db);
+    if (isset($cache[$cacheKey])) {
+        return $cache[$cacheKey];
+    }
+
+    if (app_uses_v2_schema($db)) {
+        if (schema_column_exists($db, 'customers', 'email_notification')) {
+            return $cache[$cacheKey] = 'email_notification';
+        }
+        if (schema_column_exists($db, 'customers', 'is_newsletter_subscribed')) {
+            return $cache[$cacheKey] = 'is_newsletter_subscribed';
+        }
+
+        return $cache[$cacheKey] = '';
+    }
+
+    if (schema_column_exists($db, 'users', 'email_notification')) {
+        return $cache[$cacheKey] = 'email_notification';
+    }
+    if (schema_column_exists($db, 'users', 'is_newsletter_subscribed')) {
+        return $cache[$cacheKey] = 'is_newsletter_subscribed';
+    }
+
+    return $cache[$cacheKey] = '';
+}
+
+function app_customer_notification_select_sql(Mysql_ks $db, string $tableAlias = ''): string
+{
+    $column = app_customer_notification_storage_column($db);
+    if ($column === '') {
+        return '1 AS email_notification, 1 AS is_newsletter_subscribed';
+    }
+
+    $prefix = trim($tableAlias) !== '' ? rtrim($tableAlias, '.') . '.' : '';
+    return "{$prefix}{$column} AS email_notification, {$prefix}{$column} AS is_newsletter_subscribed";
+}
+
+function app_customer_email_notifications_enabled(array $customer): bool
+{
+    if (array_key_exists('email_notification', $customer)) {
+        if ($customer['email_notification'] === null || $customer['email_notification'] === '') {
+            return true;
+        }
+
+        return (int)$customer['email_notification'] !== 0;
+    }
+
+    if (array_key_exists('is_newsletter_subscribed', $customer)) {
+        if ($customer['is_newsletter_subscribed'] === null || $customer['is_newsletter_subscribed'] === '') {
+            return true;
+        }
+
+        return (int)$customer['is_newsletter_subscribed'] !== 0;
+    }
+
+    return true;
+}
+
+function app_normalize_customer_record(array $customer): array
+{
+    if (!$customer) {
+        return [];
+    }
+
+    $emailNotification = app_customer_email_notifications_enabled($customer) ? 1 : 0;
+    $customer['email_notification'] = $emailNotification;
+    $customer['is_newsletter_subscribed'] = $emailNotification;
+    $customer['customer_type'] = app_normalize_customer_type($customer['customer_type'] ?? '');
+    $customer['is_reseller'] = $customer['customer_type'] === 'reseller' ? 1 : 0;
+    $customer['storefront_product_type'] = app_customer_product_type($customer);
+
+    return $customer;
+}
+
+function app_update_customer_email_notification(Mysql_ks $db, int $customerId, bool $enabled): bool
+{
+    if ($customerId <= 0) {
+        return false;
+    }
+
+    $column = app_customer_notification_storage_column($db);
+    if ($column === '') {
+        return false;
+    }
+
+    $tableName = app_uses_v2_schema($db) ? 'customers' : 'users';
+    return (bool)$db->update_using_id([$column], [$enabled ? 1 : 0], $tableName, $customerId);
+}
+
+function app_email_template_respects_customer_notification_preference(string $templateKey): bool
+{
+    return !in_array($templateKey, [
+        'account-activation',
+        'password-reset',
+        'live-chat-admin-notify',
+        'support-payment-request-notify',
+    ], true);
+}
+
+function app_sync_builtin_email_templates_if_needed(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done) {
+        return;
+    }
+
+    $done = true;
+    $flagPath = app_email_template_sync_flag_path();
+    if (is_file($flagPath)) {
+        return;
+    }
+
+    app_sync_builtin_email_templates($db, true);
+    @file_put_contents($flagPath, date('c'));
+}
+
+function app_sync_builtin_email_templates(Mysql_ks $db, bool $overwriteExisting = false): void
+{
+    if (!schema_object_exists($db, 'email_templates')) {
+        return;
+    }
+
+    foreach (app_email_builtin_templates() as $templateKey => $meta) {
+        if (!in_array($templateKey, app_email_active_template_keys(), true)) {
+            continue;
+        }
+
+        $safeKey = $db->escape($templateKey);
+        $existing = $db->select_user(
+            "SELECT id
+             FROM email_templates
+             WHERE template_key = '{$safeKey}'
+             LIMIT 1"
+        );
+
+        if (is_array($existing) && !empty($existing['id'])) {
+            $templateId = (int)$existing['id'];
+            if ($overwriteExisting) {
+                $db->update_using_id(
+                    ['name', 'subject', 'body_html', 'is_system'],
+                    [
+                        (string)($meta['name'] ?? $templateKey),
+                        (string)($meta['subject'] ?? 'Notification'),
+                        (string)($meta['body'] ?? ''),
+                        1,
+                    ],
+                    'email_templates',
+                    $templateId
+                );
+            }
+        } else {
+            $db->insert(
+                ['template_key', 'name', 'subject', 'body_html', 'is_system', 'is_active'],
+                [
+                    $templateKey,
+                    (string)($meta['name'] ?? $templateKey),
+                    (string)($meta['subject'] ?? 'Notification'),
+                    (string)($meta['body'] ?? ''),
+                    1,
+                    1,
+                ],
+                'email_templates'
+            );
+            $templateId = (int)$db->id();
+        }
+
+        if ($templateId <= 0 || !schema_object_exists($db, 'email_template_translations')) {
+            continue;
+        }
+
+        foreach (app_supported_email_locales() as $localeCode) {
+            $localized = app_email_builtin_templates_localized($localeCode);
+            $localizedMeta = $localized[$templateKey] ?? null;
+            if (!is_array($localizedMeta)) {
+                continue;
+            }
+
+            $safeLocale = $db->escape($localeCode);
+            $existingTranslation = $db->select_user(
+                "SELECT id
+                 FROM email_template_translations
+                 WHERE template_id = {$templateId}
+                   AND locale_code = '{$safeLocale}'
+                 LIMIT 1"
+            );
+
+            if (is_array($existingTranslation) && !empty($existingTranslation['id'])) {
+                if ($overwriteExisting) {
+                    $db->update_using_id(
+                        ['subject', 'body_text'],
+                        [(string)($localizedMeta['subject'] ?? ''), (string)($localizedMeta['body'] ?? '')],
+                        'email_template_translations',
+                        (int)$existingTranslation['id']
+                    );
+                }
+                continue;
+            }
+
+            $db->insert(
+                ['template_id', 'locale_code', 'subject', 'body_text'],
+                [$templateId, $localeCode, (string)($localizedMeta['subject'] ?? ''), (string)($localizedMeta['body'] ?? '')],
+                'email_template_translations'
+            );
+        }
+    }
+}
+
+function app_email_template_translation_row(Mysql_ks $db, int $templateId, string $localeCode): ?array
+{
+    if ($templateId <= 0) {
+        return null;
+    }
+
+    app_ensure_email_template_runtime_translations($db);
+    if (!schema_object_exists($db, 'email_template_translations')) {
+        return null;
+    }
+
+    $localeCode = app_normalize_email_locale($localeCode);
+    $safeLocale = $db->escape($localeCode);
+    $row = $db->select_user(
+        "SELECT id, template_id, locale_code, subject, body_text, updated_at
+         FROM email_template_translations
+         WHERE template_id = {$templateId}
+           AND locale_code = '{$safeLocale}'
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
+function app_email_template_row(Mysql_ks $db, string $templateKey): ?array
+{
+    if ($templateKey === '' || !schema_object_exists($db, 'email_templates')) {
+        return null;
+    }
+
+    app_ensure_email_template_runtime_rows($db);
+    $safeKey = $db->escape($templateKey);
+    $row = $db->select_user(
+        "SELECT id, template_key, name, subject, body_html, is_system, is_active
+         FROM email_templates
+         WHERE template_key = '{$safeKey}'
+         LIMIT 1"
+    );
+
+    if (!is_array($row) || empty($row['id'])) {
+        return null;
+    }
+
+    return $row;
+}
+
+function app_email_recent_duplicate_exists(
+    Mysql_ks $db,
+    int $templateId,
+    string $toEmail,
+    ?int $customerId = null,
+    ?int $orderId = null,
+    int $windowSeconds = 180
+): bool {
+    if ($templateId <= 0 || $toEmail === '' || !schema_object_exists($db, 'outbound_email_queue')) {
+        return false;
+    }
+
+    $safeEmail = $db->escape(strtolower($toEmail));
+    $customerClause = $customerId !== null ? 'customer_id = ' . (int)$customerId : 'customer_id IS NULL';
+    $orderClause = $orderId !== null ? 'order_id = ' . (int)$orderId : 'order_id IS NULL';
+    $cutoff = $db->escape(date('Y-m-d H:i:s', time() - max(30, $windowSeconds)));
+
+    $row = $db->select_user(
+        "SELECT id
+         FROM outbound_email_queue
+         WHERE template_id = {$templateId}
+           AND to_email = '{$safeEmail}'
+           AND {$customerClause}
+           AND {$orderClause}
+           AND status IN ('pending', 'processing', 'sent')
+           AND created_at >= '{$cutoff}'
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']);
+}
+
+function app_email_queue_template(
+    Mysql_ks $db,
+    string $templateKey,
+    string $toEmail,
+    array $replacements = [],
+    ?int $customerId = null,
+    ?int $orderId = null,
+    int $dedupeWindowSeconds = 0,
+    bool $deliverNow = true,
+    ?string $localeCode = null
+): array {
+    $toEmail = strtolower(trim($toEmail));
+    if ($toEmail === '' || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+        return ['ok' => false, 'message' => 'Recipient email is invalid.', 'queued' => false];
+    }
+
+    if (!schema_object_exists($db, 'outbound_email_queue')) {
+        return ['ok' => false, 'message' => 'Outbound email queue table is missing.', 'queued' => false];
+    }
+
+    $template = app_email_template_row($db, $templateKey);
+    if (!is_array($template) || empty($template['id']) || empty($template['is_active'])) {
+        return ['ok' => false, 'message' => 'Email template is missing or disabled.', 'queued' => false];
+    }
+
+    $templateId = (int)$template['id'];
+
+    $settings = app_fetch_settings($db);
+    $customer = null;
+    if ($customerId !== null && $customerId > 0) {
+        $customer = app_find_customer_by_id($db, $customerId);
+    }
+
+    if (
+        $customerId !== null
+        && $customerId > 0
+        && is_array($customer)
+        && app_email_template_respects_customer_notification_preference($templateKey)
+        && !app_customer_email_notifications_enabled($customer)
+    ) {
+        return ['ok' => true, 'message' => 'Customer disabled email notifications.', 'queued' => false, 'skipped' => true];
+    }
+
+    if ($localeCode === null || trim($localeCode) === '') {
+        if (is_array($customer)) {
+            $localeCode = (string)($customer['locale_code'] ?? '');
+        }
+
+        if ($localeCode === null || trim($localeCode) === '') {
+            $localeCode = (string)($settings['default_locale_code'] ?? 'en');
+        }
+    }
+
+    $localeCode = app_normalize_email_locale($localeCode);
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+    $baseReplacements = array_merge([
+        'site_name' => $siteName,
+        'site_url' => $siteUrl,
+        'page_name' => $siteName,
+        'page_url' => $siteUrl,
+        'pagename' => $siteName,
+        'pageurl' => $siteUrl,
+        'support_email' => app_email_support_recipient($settings),
+        'supportemail' => app_email_support_recipient($settings),
+        'email_locale' => $localeCode,
+        'email' => $toEmail,
+    ], $replacements);
+
+    if (!isset($baseReplacements['customer_email']) || trim((string)$baseReplacements['customer_email']) === '') {
+        $baseReplacements['customer_email'] = $toEmail;
+    }
+    if (!isset($baseReplacements['password']) && isset($baseReplacements['nowehaslo'])) {
+        $baseReplacements['password'] = (string)$baseReplacements['nowehaslo'];
+    }
+    if (!isset($baseReplacements['nowehaslo']) && isset($baseReplacements['password'])) {
+        $baseReplacements['nowehaslo'] = (string)$baseReplacements['password'];
+    }
+    if ($orderId !== null && $orderId > 0) {
+        if (!isset($baseReplacements['order_id'])) {
+            $baseReplacements['order_id'] = $orderId;
+        }
+        if (!isset($baseReplacements['id_zamowienia'])) {
+            $baseReplacements['id_zamowienia'] = $orderId;
+        }
+    }
+
+    $translation = app_email_template_translation_row($db, $templateId, $localeCode);
+    $subjectTemplate = is_array($translation) && trim((string)($translation['subject'] ?? '')) !== ''
+        ? (string)$translation['subject']
+        : (string)($template['subject'] ?? 'Notification');
+    $bodyTemplate = is_array($translation) && trim((string)($translation['body_text'] ?? '')) !== ''
+        ? (string)$translation['body_text']
+        : (string)($template['body_html'] ?? '');
+
+    $subject = app_email_subject(
+        app_email_render($subjectTemplate, $baseReplacements),
+        $subjectTemplate
+    );
+    $body = app_email_render($bodyTemplate, $baseReplacements);
+
+    if (app_email_plain_text($body) === '') {
+        return ['ok' => false, 'message' => 'Email body is empty.', 'queued' => false];
+    }
+
+    if ($dedupeWindowSeconds > 0 && app_email_recent_duplicate_exists($db, $templateId, $toEmail, $customerId, $orderId, $dedupeWindowSeconds)) {
+        return ['ok' => true, 'message' => 'Skipped duplicate email notification.', 'queued' => false, 'skipped_duplicate' => true];
+    }
+
+    $smtpConfigured = app_email_smtp_is_configured($settings);
+    $status = $smtpConfigured ? 'pending' : 'failed';
+    $lastError = $smtpConfigured ? null : 'SMTP is not configured.';
+
+    $queued = $db->insert(
+        ['template_id', 'customer_id', 'order_id', 'to_email', 'subject', 'body_html', 'status', 'attempt_count', 'last_error', 'scheduled_at'],
+        [$templateId, $customerId, $orderId, $toEmail, $subject, $body, $status, 0, $lastError, date('Y-m-d H:i:s')],
+        'outbound_email_queue'
+    );
+
+    $queueId = $queued ? (int)$db->id() : 0;
+    if (!$queued || $queueId <= 0) {
+        return ['ok' => false, 'message' => 'Unable to queue email notification.', 'queued' => false];
+    }
+
+    if ($deliverNow && $smtpConfigured) {
+        app_email_process_queue($db, 1, $queueId);
+    }
+
+    return ['ok' => true, 'message' => 'Email queued.', 'queued' => true, 'queue_id' => $queueId];
+}
+
+function app_email_process_queue(Mysql_ks $db, int $limit = 10, ?int $forcedQueueId = null): array
+{
+    $limit = max(1, min(50, $limit));
+    if (!schema_object_exists($db, 'outbound_email_queue')) {
+        return ['ok' => false, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'Outbound email queue table is missing.'];
+    }
+
+    $settings = app_fetch_settings($db);
+    if (!app_email_smtp_is_configured($settings)) {
+        return ['ok' => false, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'SMTP is not configured.'];
+    }
+
+    $safeNow = $db->escape(date('Y-m-d H:i:s'));
+    $where = $forcedQueueId !== null
+        ? 'outbound_email_queue.id = ' . (int)$forcedQueueId
+        : "outbound_email_queue.status IN ('pending', 'failed')
+           AND outbound_email_queue.attempt_count < 5
+           AND (outbound_email_queue.scheduled_at IS NULL OR outbound_email_queue.scheduled_at <= '{$safeNow}')";
+
+    $rows = $db->select_full_user(
+        "SELECT id, to_email, subject, body_html, status, attempt_count
+         FROM outbound_email_queue
+         WHERE {$where}
+         ORDER BY id ASC
+         LIMIT {$limit}"
+    );
+
+    if (!$rows) {
+        return ['ok' => true, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'No outbound emails waiting.'];
+    }
+
+    $processed = 0;
+    $sent = 0;
+    $failed = 0;
+
+    foreach ($rows as $row) {
+        $queueId = (int)($row['id'] ?? 0);
+        if ($queueId <= 0) {
+            continue;
+        }
+
+        $claimResult = $db->query(
+            "UPDATE outbound_email_queue
+             SET status = 'processing'
+             WHERE id = {$queueId}
+               AND status IN ('pending', 'failed')
+             LIMIT 1"
+        );
+
+        if (!$claimResult || (int)$db->affected_rows <= 0) {
+            continue;
+        }
+
+        $processed++;
+
+        try {
+            $mail = app_email_mailer($settings);
+            $mail->addAddress((string)$row['to_email']);
+            $mail->Subject = app_email_subject((string)($row['subject'] ?? 'Notification'));
+            $mail->Body = (string)($row['body_html'] ?? '');
+            $mail->AltBody = app_email_plain_text((string)($row['body_html'] ?? ''));
+            $mail->send();
+
+            $db->update_using_id(
+                ['status', 'sent_at', 'last_error'],
+                ['sent', date('Y-m-d H:i:s'), null],
+                'outbound_email_queue',
+                $queueId
+            );
+            $sent++;
+        } catch (\Throwable $exception) {
+            $attemptCount = (int)($row['attempt_count'] ?? 0) + 1;
+            $nextStatus = $attemptCount >= 5 ? 'failed' : 'pending';
+            $nextScheduledAt = $attemptCount >= 5
+                ? date('Y-m-d H:i:s')
+                : date('Y-m-d H:i:s', time() + 300);
+            $db->update_using_id(
+                ['status', 'attempt_count', 'last_error', 'scheduled_at'],
+                [$nextStatus, $attemptCount, app_email_plain_text($exception->getMessage()), $nextScheduledAt],
+                'outbound_email_queue',
+                $queueId
+            );
+            $failed++;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'processed' => $processed,
+        'sent' => $sent,
+        'failed' => $failed,
+        'message' => $processed > 0 ? 'Processed outbound email queue.' : 'No outbound emails waiting.',
+    ];
+}
+
+function app_contact_form_enabled(array $settings): bool
+{
+    if (array_key_exists('contact_form_enabled', $settings)) {
+        return !empty($settings['contact_form_enabled']);
+    }
+
+    return true;
+}
+
+function app_referrals_enabled(array $settings): bool
+{
+    if (array_key_exists('referrals_enabled', $settings)) {
+        return !empty($settings['referrals_enabled']);
+    }
+
+    if (array_key_exists('active_referrals', $settings)) {
+        return !empty($settings['active_referrals']);
+    }
+
+    return true;
+}
+
+function app_apps_page_enabled(array $settings): bool
+{
+    if (array_key_exists('apps_page_enabled', $settings)) {
+        return !empty($settings['apps_page_enabled']);
+    }
+
+    return true;
+}
+
+function app_application_instructions_enabled(array $settings): bool
+{
+    if (array_key_exists('application_instructions_enabled', $settings)) {
+        return !empty($settings['application_instructions_enabled']);
+    }
+
+    return true;
+}
+
+function app_referral_link(array $settings, int $customerId): string
+{
+    if ($customerId <= 0) {
+        return '';
+    }
+
+    $siteUrl = rtrim(trim((string)($settings['site_url'] ?? $settings['page_url'] ?? '')), '/');
+    if ($siteUrl === '') {
+        return '/ref-' . $customerId;
+    }
+
+    return $siteUrl . '/ref-' . $customerId;
+}
+
+function app_attach_referral_to_customer(Mysql_ks $db, int $referrerCustomerId, int $referredCustomerId): bool
+{
+    if ($referrerCustomerId <= 0 || $referredCustomerId <= 0 || $referrerCustomerId === $referredCustomerId) {
+        return false;
+    }
+
+    if (schema_object_exists($db, 'referrals')) {
+        $existing = $db->select_user(
+            "SELECT id
+             FROM referrals
+             WHERE referred_customer_id = " . (int)$referredCustomerId . "
+             LIMIT 1"
+        );
+        if (is_array($existing) && !empty($existing['id'])) {
+            return false;
+        }
+
+        return (bool)$db->insert(
+            ['referrer_customer_id', 'referred_customer_id', 'status'],
+            [$referrerCustomerId, $referredCustomerId, 'pending'],
+            'referrals'
+        );
+    }
+
+    if (!schema_object_exists($db, 'refy')) {
+        return false;
+    }
+
+    $existing = $db->select_user(
+        "SELECT id
+         FROM refy
+         WHERE (" .
+            (schema_column_exists($db, 'refy', 'referred_user_id') ? 'referred_user_id' : 'user2') .
+         ") = " . (int)$referredCustomerId . "
+         LIMIT 1"
+    );
+    if (is_array($existing) && !empty($existing['id'])) {
+        return false;
+    }
+
+    $referralInsertFields = ['serwis', 'user1', 'user2', 'status'];
+    $referralInsertValues = [0, $referrerCustomerId, $referredCustomerId, 1];
+
+    if (schema_column_exists($db, 'refy', 'service_id')) {
+        $referralInsertFields[] = 'service_id';
+        $referralInsertValues[] = 0;
+    }
+    if (schema_column_exists($db, 'refy', 'referrer_user_id')) {
+        $referralInsertFields[] = 'referrer_user_id';
+        $referralInsertValues[] = $referrerCustomerId;
+    }
+    if (schema_column_exists($db, 'refy', 'referred_user_id')) {
+        $referralInsertFields[] = 'referred_user_id';
+        $referralInsertValues[] = $referredCustomerId;
+    }
+    if (schema_column_exists($db, 'refy', 'is_active')) {
+        $referralInsertFields[] = 'is_active';
+        $referralInsertValues[] = 1;
+    }
+
+    return (bool)$db->insert($referralInsertFields, $referralInsertValues, 'refy');
+}
+
+function app_referral_rows(Mysql_ks $db, int $customerId): array
+{
+    if ($customerId <= 0) {
+        return [];
+    }
+
+    if (schema_object_exists($db, 'referrals') && schema_object_exists($db, 'customers')) {
+        $rows = $db->select_full_user(
+            "SELECT
+                referrals.id,
+                referrals.status AS referral_status,
+                customers.id AS customer_id,
+                customers.email,
+                customers.registered_at,
+                customers.status AS customer_status,
+                (
+                    SELECT COUNT(*)
+                    FROM orders
+                    WHERE orders.customer_id = referrals.referred_customer_id
+                      AND orders.payment_status = 'paid'
+                ) AS paid_orders_count
+             FROM referrals
+             INNER JOIN customers ON customers.id = referrals.referred_customer_id
+             WHERE referrals.referrer_customer_id = " . (int)$customerId . "
+             ORDER BY customers.id DESC"
+        );
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    $referralsTable = schema_read_target($db, 'referrals');
+    if (!schema_object_exists($db, $referralsTable) || !schema_object_exists($db, 'users')) {
+        return [];
+    }
+
+    $serviceIdColumn = schema_read_column($db, 'referrals', 'service_id', 'serwis');
+    $referrerUserIdColumn = schema_read_column($db, 'referrals', 'referrer_user_id', 'user1');
+    $referredUserIdColumn = schema_read_column($db, 'referrals', 'referred_user_id', 'user2');
+    $referralStatusColumn = schema_read_column($db, 'referrals', 'is_active', 'status');
+
+    $rows = $db->select_full_user(
+        "SELECT {$referralsTable}.id,
+                {$referralsTable}.{$referralStatusColumn} AS referral_status,
+                users.id AS customer_id,
+                users.email AS email,
+                users.date_register AS registered_at,
+                users.status AS customer_status,
+                (
+                    SELECT COUNT(id)
+                    FROM produkty_user
+                    WHERE (aukcja <> 1 AND aukcja <> 5 AND aukcja <> 8 AND aukcja <> 9)
+                      AND platnosc = 1
+                      AND produkty_user.user = {$referralsTable}.{$referredUserIdColumn}
+                ) AS paid_orders_count
+         FROM {$referralsTable}
+         INNER JOIN users ON {$referralsTable}.{$referredUserIdColumn} = users.id
+         WHERE {$referralsTable}.{$serviceIdColumn} = 0
+           AND {$referralsTable}.{$referrerUserIdColumn} = " . (int)$customerId . "
+         ORDER BY users.id DESC"
+    );
+
+    return is_array($rows) ? $rows : [];
+}
+
+function app_contact_cooldown_seconds(): int
+{
+    return 120;
+}
+
+function app_contact_rate_limit_remaining(): int
+{
+    $lastSentAt = isset($_SESSION['contact_form_last_sent_at']) ? (int)$_SESSION['contact_form_last_sent_at'] : 0;
+    $cooldown = app_contact_cooldown_seconds();
+    if ($lastSentAt <= 0) {
+        return 0;
+    }
+
+    $remaining = ($lastSentAt + $cooldown) - time();
+    return $remaining > 0 ? $remaining : 0;
+}
+
+function app_contact_mark_sent(): void
+{
+    $_SESSION['contact_form_last_sent_at'] = time();
+}
+
+function app_contact_subject_prefix(array $settings, string $subjectLabel): string
+{
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $subjectLabel = trim($subjectLabel);
+    $prefix = $siteName !== '' ? '[' . $siteName . ' Contact]' : '[Contact]';
+
+    return trim($prefix . ' ' . $subjectLabel);
+}
+
+function app_contact_support_body(array $settings, string $email, string $subjectLabel, string $message, string $clientIp = ''): string
+{
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+    $bodyLines = [
+        'New message from the contact form.',
+        '',
+        'Site: ' . ($siteName !== '' ? $siteName : 'Subscription Panel'),
+        'Email: ' . trim($email),
+        'Subject: ' . trim($subjectLabel),
+    ];
+
+    if ($clientIp !== '') {
+        $bodyLines[] = 'IP: ' . $clientIp;
+    }
+
+    if ($siteUrl !== '') {
+        $bodyLines[] = 'URL: ' . $siteUrl;
+    }
+
+    $bodyLines[] = '';
+    $bodyLines[] = 'Message:';
+    $bodyLines[] = app_email_plain_text($message);
+
+    return implode("\n", $bodyLines);
+}
+
+function app_contact_copy_body(array $settings, string $subjectLabel, string $message): string
+{
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+
+    return implode("\n", [
+        'Hello,',
+        '',
+        'We received your contact form message.',
+        '',
+        'Subject: ' . trim($subjectLabel),
+        '',
+        'Your message:',
+        app_email_plain_text($message),
+        '',
+        'Regards,',
+        $siteName !== '' ? $siteName : 'Subscription Panel',
+        $siteUrl,
+    ]);
+}
+
+function app_customer_presence_key(Mysql_ks $db, int $customerId, string $lastSeenAt = '', ?int $currentTime = null): string
+{
+    $currentTime = $currentTime ?? time();
+    $lastSeenAt = trim($lastSeenAt);
+    $lastSeenTimestamp = $lastSeenAt !== '' ? strtotime($lastSeenAt) : false;
+    $secondsSinceLastSeen = $lastSeenTimestamp !== false ? max(0, $currentTime - $lastSeenTimestamp) : null;
+
+    $hasActiveOnlineEntry = false;
+    if ($customerId > 0 && schema_object_exists($db, 'user_online')) {
+        $onlineEntry = $db->select_user(
+            "SELECT id
+             FROM user_online
+             WHERE user = {$customerId}
+               AND status = 1
+             LIMIT 1"
+        );
+        $hasActiveOnlineEntry = is_array($onlineEntry) && !empty($onlineEntry['id']);
+    }
+
+    if ($hasActiveOnlineEntry && ($secondsSinceLastSeen === null || $secondsSinceLastSeen <= 180)) {
+        return 'online';
+    }
+
+    if ($secondsSinceLastSeen !== null && $secondsSinceLastSeen <= 180) {
+        return 'online';
+    }
+
+    if ($secondsSinceLastSeen !== null && $secondsSinceLastSeen <= 600) {
+        return 'away';
+    }
+
+    return 'offline';
+}
+
+function app_customer_is_currently_online(Mysql_ks $db, int $customerId, string $lastSeenAt = ''): bool
+{
+    return app_customer_presence_key($db, $customerId, $lastSeenAt) === 'online';
+}
+
+function app_order_email_context(Mysql_ks $db, int $orderId): ?array
+{
+    if ($orderId <= 0 || !schema_object_exists($db, 'orders')) {
+        return null;
+    }
+
+    $row = $db->select_user(
+        "SELECT
+            orders.id,
+            orders.customer_id,
+            orders.order_reference,
+            orders.status,
+            orders.payment_status,
+            orders.fulfillment_status,
+            orders.total_amount,
+            orders.expires_at,
+            orders.paid_at,
+            customers.email AS customer_email,
+            products.name AS product_name,
+            product_providers.name AS provider_name,
+            currencies.code AS currency_code,
+            currencies.symbol AS currency_symbol
+         FROM orders
+         LEFT JOIN customers ON customers.id = orders.customer_id
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         LEFT JOIN currencies ON currencies.id = orders.currency_id
+         WHERE orders.id = {$orderId}
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
+function app_queue_order_email(Mysql_ks $db, string $templateKey, int $orderId, array $extraReplacements = [], int $dedupeWindowSeconds = 0): array
+{
+    $order = app_order_email_context($db, $orderId);
+    if (!is_array($order) || empty($order['customer_email'])) {
+        return ['ok' => false, 'message' => 'Order or customer email is missing.'];
+    }
+
+    $settings = app_fetch_settings($db);
+    $replacements = array_merge([
+        'customer_email' => (string)($order['customer_email'] ?? ''),
+        'order_id' => (int)($order['id'] ?? 0),
+        'id_zamowienia' => (int)($order['id'] ?? 0),
+        'order_reference' => (string)($order['order_reference'] ?? ''),
+        'product_name' => (string)($order['product_name'] ?? ''),
+        'provider_name' => (string)($order['provider_name'] ?? ''),
+        'amount' => app_format_money_value($order['total_amount'] ?? 0, (string)($order['currency_symbol'] ?? ''), (string)($order['currency_code'] ?? '')),
+        'status' => (string)($order['status'] ?? ''),
+        'payment_status' => (string)($order['payment_status'] ?? ''),
+        'fulfillment_status' => (string)($order['fulfillment_status'] ?? ''),
+        'expires_at' => (string)($order['expires_at'] ?? ''),
+        'paid_at' => (string)($order['paid_at'] ?? ''),
+        'order_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/orders',
+    ], $extraReplacements);
+
+    return app_email_queue_template(
+        $db,
+        $templateKey,
+        (string)$order['customer_email'],
+        $replacements,
+        (int)($order['customer_id'] ?? 0),
+        $orderId,
+        $dedupeWindowSeconds
+    );
+}
+
+function app_queue_order_created_notification(Mysql_ks $db, int $orderId): array
+{
+    return ['ok' => true, 'message' => 'Order created email is disabled.'];
+}
+
+function app_queue_order_extended_notification(Mysql_ks $db, int $orderId): array
+{
+    return ['ok' => true, 'message' => 'Order extended email is disabled.'];
+}
+
+function app_queue_order_transition_notifications(Mysql_ks $db, array $beforeOrder, array $afterOrder): array
+{
+    $orderId = (int)($afterOrder['id'] ?? $beforeOrder['id'] ?? 0);
+    if ($orderId <= 0) {
+        return [];
+    }
+
+    $beforeStatus = strtolower(trim((string)($beforeOrder['status'] ?? '')));
+    $afterStatus = strtolower(trim((string)($afterOrder['status'] ?? '')));
+    $beforePaymentStatus = strtolower(trim((string)($beforeOrder['payment_status'] ?? '')));
+    $afterPaymentStatus = strtolower(trim((string)($afterOrder['payment_status'] ?? '')));
+
+    $results = [];
+    if ($beforePaymentStatus !== 'paid' && $afterPaymentStatus === 'paid') {
+        $results[] = app_queue_order_email($db, 'order-paid', $orderId, [], 60);
+    }
+
+    if ($beforeStatus !== 'active' && $afterStatus === 'active') {
+        $results[] = app_queue_order_email($db, 'order-activated', $orderId, [], 60);
+    }
+
+    return $results;
+}
+
+function app_queue_live_chat_admin_notification(
+    Mysql_ks $db,
+    int $conversationId,
+    int $customerId,
+    string $messageBody,
+    ?string $attachmentPath = null
+): array {
+    $settings = app_fetch_settings($db);
+    $recipientEmail = app_email_support_recipient($settings);
+    if ($recipientEmail === '') {
+        return ['ok' => false, 'message' => 'Support email is not configured.'];
+    }
+
+    $customer = app_find_customer_by_id($db, $customerId);
+    $messagePreview = trim($messageBody);
+    if ($messagePreview === '' && trim((string)$attachmentPath) !== '') {
+        $messagePreview = 'Customer sent an image attachment.';
+    }
+
+    return app_email_queue_template(
+        $db,
+        'live-chat-admin-notify',
+        $recipientEmail,
+        [
+            'customer_email' => (string)($customer['email'] ?? ''),
+            'conversation_id' => $conversationId,
+            'chat_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/admin/?page=live-chat',
+        ],
+        $customerId,
+        null,
+        180
+    );
+}
+
+function app_queue_live_chat_customer_notification_if_offline(
+    Mysql_ks $db,
+    int $conversationId,
+    int $customerId,
+    string $messageBody,
+    ?string $attachmentPath = null
+): array {
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!is_array($customer) || empty($customer['email'])) {
+        return ['ok' => false, 'message' => 'Customer email is missing.'];
+    }
+
+    if (app_customer_is_currently_online($db, $customerId, (string)($customer['last_login_at'] ?? ''))) {
+        return ['ok' => true, 'message' => 'Customer is online. Email skipped.', 'skipped' => true];
+    }
+
+    $settings = app_fetch_settings($db);
+    $messagePreview = trim($messageBody);
+    if ($messagePreview === '' && trim((string)$attachmentPath) !== '') {
+        $messagePreview = 'Support sent an image attachment.';
+    }
+
+    return app_email_queue_template(
+        $db,
+        'live-chat-customer-notify',
+        (string)$customer['email'],
+        [
+            'conversation_id' => $conversationId,
+            'customer_email' => (string)$customer['email'],
+            'chat_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/',
+        ],
+        $customerId,
+        null,
+        180
+    );
+}
+
+function app_chat_primary_admin_id(Mysql_ks $db): int
+{
+    if (schema_object_exists($db, 'admin_users')) {
+        $admin = $db->select_user("SELECT id FROM admin_users ORDER BY id ASC LIMIT 1");
+        if (is_array($admin) && !empty($admin['id'])) {
+            return (int)$admin['id'];
+        }
+    }
+
+    return 1;
+}
+
+function app_find_or_create_live_chat_conversation(Mysql_ks $db, int $customerId): int
+{
+    if ($customerId <= 0 || !schema_object_exists($db, 'support_conversations')) {
+        return 0;
+    }
+
+    $conversation = $db->select_user(
+        "SELECT id
+         FROM support_conversations
+         WHERE conversation_type = 'live_chat'
+           AND customer_id = {$customerId}
+         ORDER BY id ASC
+         LIMIT 1"
+    );
+
+    if (is_array($conversation) && !empty($conversation['id'])) {
+        return (int)$conversation['id'];
+    }
+
+    $adminId = app_chat_primary_admin_id($db);
+    $subject = 'Customer live chat #' . $customerId;
+
+    $db->insert(
+        ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'status', 'priority'],
+        ['live_chat', $customerId, $adminId, $subject, 'open', 'normal'],
+        'support_conversations'
+    );
+
+    return (int)$db->id();
+}
+
+function app_insert_live_chat_admin_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $createdAt = null): bool
+{
+    $messageBody = trim($messageBody);
+    if ($customerId <= 0 || $messageBody === '' || !schema_object_exists($db, 'support_messages')) {
+        return false;
+    }
+
+    $conversationId = app_find_or_create_live_chat_conversation($db, $customerId);
+    if ($conversationId <= 0) {
+        return false;
+    }
+
+    $createdAt = trim((string)$createdAt);
+    if ($createdAt === '') {
+        $createdAt = app_current_datetime_string();
+    }
+
+    $adminId = app_chat_primary_admin_id($db);
+
+    $inserted = $db->insert(
+        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'is_read', 'created_at'],
+        [$conversationId, 'admin', $customerId, $adminId, $messageBody, null, 0, $createdAt],
+        'support_messages'
+    );
+
+    if (!$inserted) {
+        return false;
+    }
+
+    $db->update_using_id(
+        ['status', 'last_admin_message_at', 'updated_at'],
+        ['open', $createdAt, $createdAt],
+        'support_conversations',
+        $conversationId
+    );
+
+    return true;
+}
+
+function app_queue_crypto_payment_live_chat_message(
+    Mysql_ks $db,
+    int $customerId,
+    int $orderId,
+    array $assetData
+): array {
+    if ($customerId <= 0 || $orderId <= 0) {
+        return ['ok' => false, 'message' => 'Invalid payment chat payload.'];
+    }
+
+    $customer = app_find_customer_by_id($db, $customerId);
+    $localeCode = app_normalize_email_locale((string)($customer['locale_code'] ?? 'en'));
+    $settings = app_fetch_settings($db);
+    $siteUrl = rtrim((string)($settings['site_url'] ?? ''), '/');
+    $paymentUrl = $siteUrl !== '' ? $siteUrl . '/order-payment-' . $orderId : '/order-payment-' . $orderId;
+
+    $assetName = trim((string)($assetData['asset_name'] ?? $assetData['crypto_name'] ?? $assetData['crypto_code'] ?? 'Crypto'));
+    $assetCode = strtoupper(trim((string)($assetData['asset_code'] ?? $assetData['crypto_code'] ?? '')));
+    $amount = trim((string)($assetData['requested_crypto_amount'] ?? ''));
+    $walletAddress = trim((string)($assetData['wallet_address'] ?? ''));
+    $walletOwner = trim((string)($assetData['wallet_owner_full_name'] ?? ''));
+    $messageBody = app_build_crypto_payment_chat_card_message([
+        'asset_name' => $assetName,
+        'asset_code' => $assetCode,
+        'asset_logo_url' => (string)($assetData['asset_logo_url'] ?? $assetData['logo_url'] ?? ''),
+        'requested_crypto_amount' => $amount,
+        'requested_fiat_amount' => $assetData['requested_fiat_amount'] ?? 0,
+        'currency_symbol' => (string)($assetData['currency_symbol'] ?? ''),
+        'currency_code' => (string)($assetData['currency_code'] ?? ''),
+        'wallet_address' => $walletAddress,
+        'wallet_owner_full_name' => $walletOwner,
+        'payment_url' => $paymentUrl,
+    ], $localeCode);
+    if ($messageBody === '') {
+        return ['ok' => false, 'message' => 'Unable to build payment instruction message.'];
+    }
+    $inserted = app_insert_live_chat_admin_message($db, $customerId, $messageBody);
+
+    return [
+        'ok' => $inserted,
+        'message' => $inserted ? 'Payment instruction message created.' : 'Unable to create payment instruction message.',
+    ];
+}
+
+function app_queue_account_created_notification(Mysql_ks $db, int $customerId): array
+{
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!is_array($customer) || empty($customer['email'])) {
+        return ['ok' => false, 'message' => 'Customer email is missing.'];
+    }
+
+    $settings = app_fetch_settings($db);
+
+    return app_email_queue_template(
+        $db,
+        'account-activation',
+        (string)$customer['email'],
+        [
+            'customer_email' => (string)$customer['email'],
+            'login_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/login',
+        ],
+        $customerId,
+        null,
+        300
+    );
+}
+
+function app_queue_account_blocked_notification(Mysql_ks $db, int $customerId): array
+{
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!is_array($customer) || empty($customer['email'])) {
+        return ['ok' => false, 'message' => 'Customer email is missing.'];
+    }
+
+    return app_email_queue_template(
+        $db,
+        'account-blocked',
+        (string)$customer['email'],
+        [
+            'customer_email' => (string)$customer['email'],
+        ],
+        $customerId,
+        null,
+        900
+    );
+}
+
+function app_queue_payment_request_notification(Mysql_ks $db, int $orderId, int $customerId): array
+{
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!is_array($customer) || empty($customer['email'])) {
+        return ['ok' => false, 'message' => 'Customer email is missing.'];
+    }
+
+    $settings = app_fetch_settings($db);
+
+    return app_email_queue_template(
+        $db,
+        'payment-request-created',
+        (string)$customer['email'],
+        [
+            'payment_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/orders',
+        ],
+        $customerId,
+        $orderId,
+        300
+    );
+}
+
+function app_queue_support_payment_request_notification(Mysql_ks $db, int $orderId, int $customerId, string $paymentType): array
+{
+    $settings = app_fetch_settings($db);
+    $recipientEmail = app_email_support_recipient($settings);
+    if ($recipientEmail === '') {
+        return ['ok' => false, 'message' => 'Support email is not configured.'];
+    }
+
+    $customer = app_find_customer_by_id($db, $customerId);
+
+    return app_email_queue_template(
+        $db,
+        'support-payment-request-notify',
+        $recipientEmail,
+        [
+            'customer_email' => (string)($customer['email'] ?? ''),
+            'payment_type' => trim($paymentType) !== '' ? $paymentType : 'payment',
+            'admin_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/admin/?page=payments',
+        ],
+        $customerId,
+        $orderId,
+        300
+    );
+}
+
+function app_queue_news_broadcast(Mysql_ks $db, int $newsId): array
+{
+    if ($newsId <= 0 || !schema_object_exists($db, 'news_posts')) {
+        return ['ok' => false, 'message' => 'News post not found.'];
+    }
+
+    $safeNow = $db->escape(date('Y-m-d H:i:s'));
+    $news = $db->select_user(
+        "SELECT id, visibility, is_active, published_at
+         FROM news_posts
+         WHERE id = {$newsId}
+         LIMIT 1"
+    );
+
+    if (!is_array($news) || empty($news['id'])) {
+        return ['ok' => false, 'message' => 'News post not found.'];
+    }
+
+    $visibility = strtolower(trim((string)($news['visibility'] ?? '')));
+    if (empty($news['is_active']) || !in_array($visibility, ['customer', 'client', 'reseller', 'public'], true) || (string)($news['published_at'] ?? '') > $safeNow) {
+        return ['ok' => true, 'message' => 'News email skipped. Post is not public yet.', 'queued' => 0];
+    }
+
+    app_ensure_customer_runtime_columns($db);
+    $customerTypeWhere = '';
+    if ($visibility === 'customer' || $visibility === 'client') {
+        $customerTypeWhere = " AND customer_type = 'client'";
+    } elseif ($visibility === 'reseller') {
+        $customerTypeWhere = " AND customer_type = 'reseller'";
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT id, email
+         FROM customers
+         WHERE status = 'active'
+         {$customerTypeWhere}
+         ORDER BY id ASC"
+    );
+
+    if (!$rows) {
+        return ['ok' => true, 'message' => 'No active customers found.', 'queued' => 0];
+    }
+
+    $settings = app_fetch_settings($db);
+    $queued = 0;
+    foreach ($rows as $row) {
+        $customerId = (int)($row['id'] ?? 0);
+        $email = trim((string)($row['email'] ?? ''));
+        if ($customerId <= 0 || $email === '') {
+            continue;
+        }
+
+        $result = app_email_queue_template(
+            $db,
+            'news-broadcast',
+            $email,
+            [
+                'news_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/news',
+            ],
+            $customerId,
+            null,
+            300
+        );
+
+        if (!empty($result['queued'])) {
+            $queued++;
+        }
+    }
+
+    return ['ok' => true, 'message' => 'News notification queued.', 'queued' => $queued];
+}
+
+function app_expire_overdue_orders(Mysql_ks $db, ?string $now = null): array
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return [
+            'ok' => false,
+            'time' => '',
+            'expired_orders' => 0,
+            'logged_events' => 0,
+            'message' => 'Orders table is not available.',
+        ];
+    }
+
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+
+    $rows = $db->select_full_user(
+        "SELECT id
+         FROM orders
+         WHERE status = 'active'
+           AND expires_at IS NOT NULL
+           AND expires_at <= '{$safeNowSql}'
+         ORDER BY id ASC"
+    );
+
+    if (!$rows) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'expired_orders' => 0,
+            'logged_events' => 0,
+            'message' => 'No overdue active subscriptions found.',
+        ];
+    }
+
+    $orderIds = [];
+    foreach ($rows as $row) {
+        $orderId = (int)($row['id'] ?? 0);
+        if ($orderId > 0) {
+            $orderIds[] = $orderId;
+        }
+    }
+
+    if (!$orderIds) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'expired_orders' => 0,
+            'logged_events' => 0,
+            'message' => 'No overdue active subscriptions found.',
+        ];
+    }
+
+    $idList = implode(',', $orderIds);
+    $loggedEvents = 0;
+
+    $db->start();
+
+    if (schema_object_exists($db, 'order_status_events')) {
+        $insertEvents = $db->query(
+            "INSERT INTO order_status_events (order_id, admin_user_id, old_status, new_status, event_note, created_at)
+             SELECT orders.id,
+                    NULL,
+                    'active',
+                    'expired',
+                    'Subscription expired automatically by scheduler',
+                    '{$safeNowSql}'
+             FROM orders
+             WHERE orders.id IN ({$idList})
+               AND orders.status = 'active'"
+        );
+
+        if (!$insertEvents) {
+            $db->query('ROLLBACK');
+            return [
+                'ok' => false,
+                'time' => $safeNow,
+                'expired_orders' => 0,
+                'logged_events' => 0,
+                'message' => 'Unable to write order status events.',
+            ];
+        }
+
+        $loggedEvents = (int)$db->affected_rows;
+    }
+
+    $updated = $db->query(
+        "UPDATE orders
+         SET status = 'expired'
+         WHERE id IN ({$idList})
+           AND status = 'active'"
+    );
+
+    if (!$updated) {
+        $db->query('ROLLBACK');
+        return [
+            'ok' => false,
+            'time' => $safeNow,
+            'expired_orders' => 0,
+            'logged_events' => 0,
+            'message' => 'Unable to expire overdue subscriptions.',
+        ];
+    }
+
+    $expiredOrders = (int)$db->affected_rows;
+    $db->commit();
+
+    $emailQueued = 0;
+    foreach ($orderIds as $orderId) {
+        $emailResult = app_queue_order_email($db, 'order-expired', (int)$orderId, [], 60);
+        if (!empty($emailResult['queued'])) {
+            $emailQueued++;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'expired_orders' => $expiredOrders,
+        'logged_events' => $loggedEvents,
+        'email_notifications_queued' => $emailQueued,
+        'message' => $expiredOrders > 0
+            ? 'Overdue subscriptions expired successfully.'
+            : 'No overdue active subscriptions found.',
+    ];
+}
+
+function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null): array
+{
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+
+    $cancelledCrypto = 0;
+    $cancelledBank = 0;
+    $resetOrders = 0;
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoResult = $db->query(
+            "UPDATE crypto_deposit_requests
+             SET status = 'cancelled',
+                 cancelled_at = CASE
+                     WHEN cancelled_at IS NULL THEN '{$safeNowSql}'
+                     ELSE cancelled_at
+                 END
+             WHERE status IN ('pending', 'awaiting_confirmation')
+               AND expires_at IS NOT NULL
+               AND expires_at <= '{$safeNowSql}'"
+        );
+        if ($cryptoResult) {
+            $cancelledCrypto = (int)$db->affected_rows;
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankResult = $db->query(
+            "UPDATE bank_transfer_requests
+             SET status = 'cancelled'
+             WHERE status IN ('pending_payment', 'awaiting_review')
+               AND expires_at IS NOT NULL
+               AND expires_at <= '{$safeNowSql}'"
+        );
+        if ($bankResult) {
+            $cancelledBank = (int)$db->affected_rows;
+        }
+    }
+
+    if (schema_object_exists($db, 'orders')) {
+        $orderResult = $db->query(
+            "UPDATE orders
+             SET payment_method = NULL
+             WHERE payment_status NOT IN ('paid', 'manual_review', 'processing', 'awaiting_confirmation', 'awaiting_review')
+               AND id IN (
+                   SELECT expired_requests.order_id
+                   FROM (
+                       SELECT order_id
+                       FROM crypto_deposit_requests
+                       WHERE status = 'cancelled'
+                         AND expires_at IS NOT NULL
+                         AND expires_at <= '{$safeNowSql}'
+                       UNION
+                       SELECT order_id
+                       FROM bank_transfer_requests
+                       WHERE status = 'cancelled'
+                         AND expires_at IS NOT NULL
+                         AND expires_at <= '{$safeNowSql}'
+                   ) AS expired_requests
+                   WHERE expired_requests.order_id IS NOT NULL
+               )"
+        );
+        if ($orderResult) {
+            $resetOrders = (int)$db->affected_rows;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'archived_crypto_requests' => $cancelledCrypto,
+        'archived_bank_requests' => $cancelledBank,
+        'cancelled_crypto_requests' => $cancelledCrypto,
+        'cancelled_bank_requests' => $cancelledBank,
+        'reset_order_payment_method' => $resetOrders,
+        'message' => ($cancelledCrypto + $cancelledBank + $resetOrders) > 0
+            ? 'Expired payment requests cancelled.'
+            : 'No expired payment requests found.',
+    ];
+}
+
+function app_prune_retained_data(Mysql_ks $db, ?string $now = null): array
+{
+    $settings = app_fetch_settings($db);
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    $cutoffTimestamp = strtotime('-12 months', strtotime($safeNow));
+    if ($cutoffTimestamp === false) {
+        $cutoffTimestamp = strtotime('-365 days');
+    }
+    $cutoff = date('Y-m-d H:i:s', (int)$cutoffTimestamp);
+    $safeCutoff = $db->escape($cutoff);
+
+    $deletedHistoryLogs = 0;
+    $deletedCryptoTransactions = 0;
+    $deletedCryptoRequests = 0;
+    $deletedBankRequests = 0;
+    $deletedExpiredOrders = 0;
+    $errors = [];
+
+    if (!empty($settings['history_cleanup_enabled']) && schema_object_exists($db, 'customer_activity_logs')) {
+        $result = $db->query(
+            "DELETE FROM customer_activity_logs
+             WHERE created_at < '{$safeCutoff}'"
+        );
+        if ($result) {
+            $deletedHistoryLogs = (int)$db->affected_rows;
+        } else {
+            $errors[] = 'history_logs';
+        }
+    }
+
+    if (!empty($settings['payments_cleanup_enabled'])) {
+        if (schema_object_exists($db, 'crypto_deposit_transactions')) {
+            $result = $db->query(
+                "DELETE FROM crypto_deposit_transactions
+                 WHERE received_at < '{$safeCutoff}'"
+            );
+            if ($result) {
+                $deletedCryptoTransactions = (int)$db->affected_rows;
+            } else {
+                $errors[] = 'crypto_transactions';
+            }
+        }
+
+        if (schema_object_exists($db, 'crypto_deposit_requests')) {
+            $result = $db->query(
+                "DELETE FROM crypto_deposit_requests
+                 WHERE requested_at < '{$safeCutoff}'
+                   AND status NOT IN ('pending', 'awaiting_confirmation')"
+            );
+            if ($result) {
+                $deletedCryptoRequests = (int)$db->affected_rows;
+            } else {
+                $errors[] = 'crypto_requests';
+            }
+        }
+
+        if (schema_object_exists($db, 'bank_transfer_requests')) {
+            $result = $db->query(
+                "DELETE FROM bank_transfer_requests
+                 WHERE requested_at < '{$safeCutoff}'
+                   AND status NOT IN ('pending_payment', 'awaiting_review')"
+            );
+            if ($result) {
+                $deletedBankRequests = (int)$db->affected_rows;
+            } else {
+                $errors[] = 'bank_requests';
+            }
+        }
+    }
+
+    if (!empty($settings['expired_orders_cleanup_enabled']) && schema_object_exists($db, 'orders')) {
+        $result = $db->query(
+            "DELETE FROM orders
+             WHERE status = 'expired'
+               AND COALESCE(expires_at, updated_at, created_at) < '{$safeCutoff}'"
+        );
+        if ($result) {
+            $deletedExpiredOrders = (int)$db->affected_rows;
+        } else {
+            $errors[] = 'expired_orders';
+        }
+    }
+
+    return [
+        'ok' => $errors === [],
+        'time' => $safeNow,
+        'cutoff' => $cutoff,
+        'deleted_history_logs' => $deletedHistoryLogs,
+        'deleted_crypto_transactions' => $deletedCryptoTransactions,
+        'deleted_crypto_requests' => $deletedCryptoRequests,
+        'deleted_bank_requests' => $deletedBankRequests,
+        'deleted_expired_orders' => $deletedExpiredOrders,
+        'message' => $errors === []
+            ? 'Retention cleanup finished.'
+            : 'Retention cleanup finished with errors: ' . implode(', ', $errors),
+    ];
+}
+
+function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): array
+{
+    $settings = app_fetch_settings($db);
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    if (!schema_object_exists($db, 'support_messages')) {
+        return [
+            'ok' => false,
+            'time' => $safeNow,
+            'deleted_messages' => 0,
+            'deleted_empty_conversations' => 0,
+            'deleted_files' => 0,
+            'message' => 'Support messages table is not available.',
+        ];
+    }
+
+    $hours = (int)($settings['support_chat_retention_hours'] ?? 168);
+    if (!in_array($hours, [1, 24, 72, 168, 720], true)) {
+        $hours = 168;
+    }
+
+    $cutoffTimestamp = strtotime('-' . $hours . ' hours', strtotime($safeNow));
+    if ($cutoffTimestamp === false) {
+        $cutoffTimestamp = strtotime('-7 days');
+    }
+    $cutoff = date('Y-m-d H:i:s', (int)$cutoffTimestamp);
+    $safeCutoff = $db->escape($cutoff);
+
+    if (schema_object_exists($db, 'support_conversations') && schema_column_exists($db, 'support_conversations', 'conversation_type')) {
+        $rows = $db->select_full_user(
+            "SELECT support_messages.id, support_messages.attachment_path
+             FROM support_messages
+             INNER JOIN support_conversations
+                     ON support_conversations.id = support_messages.conversation_id
+             WHERE support_conversations.conversation_type = 'live_chat'
+               AND support_messages.created_at < '{$safeCutoff}'
+             ORDER BY support_messages.id ASC"
+        );
+    } else {
+        $rows = $db->select_full_user(
+            "SELECT id, attachment_path
+             FROM support_messages
+             WHERE created_at < '{$safeCutoff}'
+             ORDER BY id ASC"
+        );
+    }
+
+    if (!$rows) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'cutoff' => $cutoff,
+            'deleted_messages' => 0,
+            'deleted_empty_conversations' => 0,
+            'deleted_files' => 0,
+            'message' => 'No old live chat messages found.',
+        ];
+    }
+
+    $messageIds = [];
+    $deletedFiles = 0;
+    foreach ($rows as $row) {
+        $messageId = (int)($row['id'] ?? 0);
+        if ($messageId > 0) {
+            $messageIds[] = $messageId;
+        }
+
+        $attachmentPath = trim((string)($row['attachment_path'] ?? ''));
+        if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
+            $absolutePath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
+            if (is_file($absolutePath) && @unlink($absolutePath)) {
+                $deletedFiles++;
+            }
+        }
+    }
+
+    if (!$messageIds) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'cutoff' => $cutoff,
+            'deleted_messages' => 0,
+            'deleted_empty_conversations' => 0,
+            'deleted_files' => $deletedFiles,
+            'message' => 'No old live chat messages found.',
+        ];
+    }
+
+    $idList = implode(',', $messageIds);
+    $db->start();
+
+    $deleteMessages = $db->query("DELETE FROM support_messages WHERE id IN ({$idList})");
+    if (!$deleteMessages) {
+        $db->query('ROLLBACK');
+        return [
+            'ok' => false,
+            'time' => $safeNow,
+            'cutoff' => $cutoff,
+            'deleted_messages' => 0,
+            'deleted_empty_conversations' => 0,
+            'deleted_files' => $deletedFiles,
+            'message' => 'Unable to delete old live chat messages.',
+        ];
+    }
+    $deletedMessages = (int)$db->affected_rows;
+
+    $deletedEmptyConversations = 0;
+    if (schema_object_exists($db, 'support_conversations')) {
+        $deleteEmptyConversations = $db->query(
+            "DELETE FROM support_conversations
+             WHERE conversation_type = 'live_chat'
+               AND id NOT IN (
+                    SELECT DISTINCT conversation_id
+                    FROM support_messages
+               )"
+        );
+        if ($deleteEmptyConversations) {
+            $deletedEmptyConversations = (int)$db->affected_rows;
+        }
+
+        $db->query(
+            "UPDATE support_conversations AS conversation
+             LEFT JOIN (
+                SELECT
+                    conversation_id,
+                    MAX(created_at) AS latest_message_at,
+                    MAX(CASE WHEN sender_type = 'customer' THEN created_at ELSE NULL END) AS latest_customer_message_at,
+                    MAX(CASE WHEN sender_type = 'admin' THEN created_at ELSE NULL END) AS latest_admin_message_at
+                FROM support_messages
+                GROUP BY conversation_id
+             ) AS message_state
+               ON message_state.conversation_id = conversation.id
+             SET conversation.updated_at = COALESCE(message_state.latest_message_at, conversation.updated_at),
+                 conversation.last_customer_message_at = message_state.latest_customer_message_at,
+                 conversation.last_admin_message_at = message_state.latest_admin_message_at
+             WHERE conversation.conversation_type = 'live_chat'"
+        );
+    }
+
+    $db->commit();
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'cutoff' => $cutoff,
+        'deleted_messages' => $deletedMessages,
+        'deleted_empty_conversations' => $deletedEmptyConversations,
+        'deleted_files' => $deletedFiles,
+        'message' => $deletedMessages > 0
+            ? 'Old live chat messages deleted.'
+            : 'No old live chat messages found.',
+    ];
+}
+
+function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
+{
+    $safeNow = trim((string)($options['now'] ?? ''));
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    $emailLimit = (int)($options['email_limit'] ?? 20);
+    if ($emailLimit <= 0) {
+        $emailLimit = 20;
+    }
+
+    $email = app_email_process_queue($db, $emailLimit);
+    $archive = app_archive_expired_payment_requests($db, $safeNow);
+    $expire = app_expire_overdue_orders($db, $safeNow);
+    $chat = app_prune_support_chat_messages($db, $safeNow);
+    $prune = app_prune_retained_data($db, $safeNow);
+
+    $steps = [
+        'email_queue' => $email,
+        'archive_requests' => $archive,
+        'expire_orders' => $expire,
+        'live_chat_cleanup' => $chat,
+        'retention_cleanup' => $prune,
+    ];
+
+    $warnings = [];
+    foreach ($steps as $stepKey => $stepResult) {
+        if (!is_array($stepResult) || !array_key_exists('ok', $stepResult) || !empty($stepResult['ok'])) {
+            continue;
+        }
+        $warnings[] = $stepKey . ': ' . trim((string)($stepResult['message'] ?? 'Unknown error'));
+    }
+
+    return [
+        'ok' => $warnings === [],
+        'time' => $safeNow,
+        'steps' => $steps,
+        'summary' => [
+            'emails_processed' => (int)($email['processed'] ?? 0),
+            'emails_sent' => (int)($email['sent'] ?? 0),
+            'emails_failed' => (int)($email['failed'] ?? 0),
+            'archived_crypto_requests' => (int)($archive['archived_crypto_requests'] ?? 0),
+            'archived_bank_requests' => (int)($archive['archived_bank_requests'] ?? 0),
+            'reset_order_payment_method' => (int)($archive['reset_order_payment_method'] ?? 0),
+            'expired_orders' => (int)($expire['expired_orders'] ?? 0),
+            'deleted_chat_messages' => (int)($chat['deleted_messages'] ?? 0),
+            'deleted_chat_conversations' => (int)($chat['deleted_empty_conversations'] ?? 0),
+            'deleted_chat_files' => (int)($chat['deleted_files'] ?? 0),
+            'deleted_history_logs' => (int)($prune['deleted_history_logs'] ?? 0),
+            'deleted_crypto_transactions' => (int)($prune['deleted_crypto_transactions'] ?? 0),
+            'deleted_crypto_requests' => (int)($prune['deleted_crypto_requests'] ?? 0),
+            'deleted_bank_requests' => (int)($prune['deleted_bank_requests'] ?? 0),
+            'deleted_expired_orders' => (int)($prune['deleted_expired_orders'] ?? 0),
+        ],
+        'message' => $warnings === []
+            ? 'Maintenance cycle finished successfully.'
+            : 'Maintenance cycle finished with warnings: ' . implode(' | ', $warnings),
+    ];
+}
+
+function app_delete_records_by_ids(Mysql_ks $db, string $table, string $column, array $ids): ?int
+{
+    if (!$ids || !schema_object_exists($db, $table) || !schema_column_exists($db, $table, $column)) {
+        return 0;
+    }
+
+    $safeIds = [];
+    foreach ($ids as $id) {
+        $value = (int)$id;
+        if ($value > 0) {
+            $safeIds[] = $value;
+        }
+    }
+
+    if (!$safeIds) {
+        return 0;
+    }
+
+    $idList = implode(',', array_unique($safeIds));
+    $result = $db->query("DELETE FROM {$table} WHERE {$column} IN ({$idList})");
+    return $result ? (int)$db->affected_rows : null;
+}
+
+function app_clear_user_history(Mysql_ks $db, ?string $now = null): array
+{
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    $deletedLogs = 0;
+    if (schema_object_exists($db, 'customer_activity_logs')) {
+        $result = $db->query("DELETE FROM customer_activity_logs");
+        if ($result) {
+            $deletedLogs = (int)$db->affected_rows;
+        }
+    }
+
+    $updatedVisibility = false;
+    if (schema_object_exists($db, 'app_settings') && schema_column_exists($db, 'app_settings', 'history_visible_from')) {
+        $updatedVisibility = (bool)$db->update_using_id(
+            ['history_visible_from'],
+            [$safeNow],
+            'app_settings',
+            1
+        );
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'deleted_activity_logs' => $deletedLogs,
+        'history_visible_from' => $safeNow,
+        'updated_visibility_cutoff' => $updatedVisibility ? 1 : 0,
+        'message' => 'User history has been cleared.',
+    ];
+}
+
+function app_reset_dashboard_sample_data(Mysql_ks $db, ?string $now = null): array
+{
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    if (!schema_object_exists($db, 'customers')) {
+        return ['ok' => false, 'time' => $safeNow, 'message' => 'Customers table is not available.'];
+    }
+
+    $sampleCustomers = $db->select_full_user(
+        "SELECT id
+         FROM customers
+         WHERE legacy_source_table = 'dashboard_sample_customer'
+            OR email LIKE 'dashboard-sample-%@example.test'"
+    );
+    $sampleOrders = schema_object_exists($db, 'orders')
+        ? $db->select_full_user(
+            "SELECT id
+             FROM orders
+             WHERE legacy_source_table = 'dashboard_sample_order'"
+        )
+        : [];
+
+    $customerIds = array_values(array_filter(array_map(static function (array $row): int {
+        return (int)($row['id'] ?? 0);
+    }, $sampleCustomers)));
+    $orderIds = array_values(array_filter(array_map(static function (array $row): int {
+        return (int)($row['id'] ?? 0);
+    }, $sampleOrders)));
+
+    if (!$customerIds && !$orderIds) {
+        return ['ok' => true, 'time' => $safeNow, 'message' => 'No sample data found.', 'deleted' => []];
+    }
+
+    $deleted = [
+        'support_messages' => 0,
+        'support_conversations' => 0,
+        'outbound_email_queue' => 0,
+        'crypto_deposit_transactions' => 0,
+        'crypto_deposit_requests' => 0,
+        'bank_transfer_requests' => 0,
+        'order_status_events' => 0,
+        'customer_activity_logs' => 0,
+        'crypto_wallet_assignments' => 0,
+        'bank_account_assignments' => 0,
+        'orders' => 0,
+        'customers' => 0,
+    ];
+
+    $db->start();
+
+    $safeDelete = static function (string $table, string $column, array $ids) use ($db): ?int {
+        $result = app_delete_records_by_ids($db, $table, $column, $ids);
+        return $result;
+    };
+
+    $conversationIds = [];
+    if ($customerIds && schema_object_exists($db, 'support_conversations') && schema_column_exists($db, 'support_conversations', 'customer_id')) {
+        $rows = $db->select_full_user(
+            "SELECT id
+             FROM support_conversations
+             WHERE customer_id IN (" . implode(',', $customerIds) . ")"
+        );
+        $conversationIds = array_values(array_filter(array_map(static function (array $row): int {
+            return (int)($row['id'] ?? 0);
+        }, $rows)));
+    }
+
+    $cryptoRequestIds = [];
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $where = [];
+        if ($customerIds && schema_column_exists($db, 'crypto_deposit_requests', 'customer_id')) {
+            $where[] = 'customer_id IN (' . implode(',', $customerIds) . ')';
+        }
+        if ($orderIds && schema_column_exists($db, 'crypto_deposit_requests', 'order_id')) {
+            $where[] = 'order_id IN (' . implode(',', $orderIds) . ')';
+        }
+        if ($where) {
+            $rows = $db->select_full_user(
+                "SELECT id
+                 FROM crypto_deposit_requests
+                 WHERE " . implode(' OR ', $where)
+            );
+            $cryptoRequestIds = array_values(array_filter(array_map(static function (array $row): int {
+                return (int)($row['id'] ?? 0);
+            }, $rows)));
+        }
+    }
+
+    if ($conversationIds) {
+        $deletedMessages = $safeDelete('support_messages', 'conversation_id', $conversationIds);
+        $deletedConversations = $safeDelete('support_conversations', 'id', $conversationIds);
+        if ($deletedMessages === null || $deletedConversations === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample support conversations.'];
+        }
+        $deleted['support_messages'] = $deletedMessages;
+        $deleted['support_conversations'] = $deletedConversations;
+    }
+
+    if ($cryptoRequestIds) {
+        $deletedCryptoTransactions = $safeDelete('crypto_deposit_transactions', 'request_id', $cryptoRequestIds);
+        if ($deletedCryptoTransactions === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample crypto transactions.'];
+        }
+        $deleted['crypto_deposit_transactions'] = $deletedCryptoTransactions;
+    }
+
+    if ($customerIds) {
+        $deletedQueueByCustomer = $safeDelete('outbound_email_queue', 'customer_id', $customerIds);
+        $deletedHistoryLogs = $safeDelete('customer_activity_logs', 'customer_id', $customerIds);
+        $deletedWalletAssignments = $safeDelete('crypto_wallet_assignments', 'customer_id', $customerIds);
+        $deletedBankAssignments = $safeDelete('bank_account_assignments', 'customer_id', $customerIds);
+        if ($deletedQueueByCustomer === null || $deletedHistoryLogs === null || $deletedWalletAssignments === null || $deletedBankAssignments === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample customer-related records.'];
+        }
+        $deleted['outbound_email_queue'] += $deletedQueueByCustomer;
+        $deleted['customer_activity_logs'] = $deletedHistoryLogs;
+        $deleted['crypto_wallet_assignments'] = $deletedWalletAssignments;
+        $deleted['bank_account_assignments'] = $deletedBankAssignments;
+    }
+
+    if ($orderIds) {
+        $deletedQueueByOrder = $safeDelete('outbound_email_queue', 'order_id', $orderIds);
+        $deletedStatusEvents = $safeDelete('order_status_events', 'order_id', $orderIds);
+        if ($deletedQueueByOrder === null || $deletedStatusEvents === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample order-related records.'];
+        }
+        $deleted['outbound_email_queue'] += $deletedQueueByOrder;
+        $deleted['order_status_events'] = $deletedStatusEvents;
+    }
+
+    if ($cryptoRequestIds) {
+        $deletedCryptoRequests = $safeDelete('crypto_deposit_requests', 'id', $cryptoRequestIds);
+        if ($deletedCryptoRequests === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample crypto requests.'];
+        }
+        $deleted['crypto_deposit_requests'] = $deletedCryptoRequests;
+    }
+
+    if ($customerIds || $orderIds) {
+        $bankWhere = [];
+        if ($customerIds && schema_object_exists($db, 'bank_transfer_requests') && schema_column_exists($db, 'bank_transfer_requests', 'customer_id')) {
+            $bankWhere[] = 'customer_id IN (' . implode(',', $customerIds) . ')';
+        }
+        if ($orderIds && schema_object_exists($db, 'bank_transfer_requests') && schema_column_exists($db, 'bank_transfer_requests', 'order_id')) {
+            $bankWhere[] = 'order_id IN (' . implode(',', $orderIds) . ')';
+        }
+        if ($bankWhere) {
+            $result = $db->query("DELETE FROM bank_transfer_requests WHERE " . implode(' OR ', $bankWhere));
+            if (!$result) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample bank transfer requests.'];
+            }
+            $deleted['bank_transfer_requests'] = (int)$db->affected_rows;
+        }
+    }
+
+    if ($orderIds) {
+        $deletedOrders = $safeDelete('orders', 'id', $orderIds);
+        if ($deletedOrders === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample orders.'];
+        }
+        $deleted['orders'] = $deletedOrders;
+    }
+
+    if ($customerIds) {
+        $deletedCustomers = $safeDelete('customers', 'id', $customerIds);
+        if ($deletedCustomers === null) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'time' => $safeNow, 'message' => 'Unable to remove sample customers.'];
+        }
+        $deleted['customers'] = $deletedCustomers;
+    }
+
+    if (schema_object_exists($db, 'crypto_wallet_addresses')) {
+        $db->query(
+            "UPDATE crypto_wallet_addresses
+             SET status = 'available'
+             WHERE disabled_at IS NULL
+               AND id NOT IN (
+                    SELECT wallet_address_id
+                    FROM crypto_wallet_assignments
+                    WHERE status IN ('reserved', 'active')
+               )"
+        );
+    }
+
+    $db->commit();
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'deleted' => $deleted,
+        'message' => 'Sample/test data has been removed.',
+    ];
+}
+
+function app_find_customer_by_email(Mysql_ks $db, string $email): ?array
+{
+    $safeEmail = $db->escape($email);
+    $tableName = app_uses_v2_schema($db) ? 'customers' : 'users';
+    if ($tableName === 'customers') {
+        app_ensure_customer_runtime_columns($db);
+    }
+    $customer = $db->select($tableName, '*', "WHERE email = '{$safeEmail}' LIMIT 1");
+    return is_array($customer) ? app_normalize_customer_record($customer) : null;
+}
+
+function app_find_customer_by_id(Mysql_ks $db, int $customerId): ?array
+{
+    if ($customerId <= 0) {
+        return null;
+    }
+
+    $tableName = app_uses_v2_schema($db) ? 'customers' : 'users';
+    if ($tableName === 'customers') {
+        app_ensure_customer_runtime_columns($db);
+    }
+    $customer = $db->select_using_id($tableName, '*', $customerId);
+    return is_array($customer) ? app_normalize_customer_record($customer) : null;
+}
+
+function app_csrf_token(string $scope = 'frontend'): string
+{
+    if (!isset($_SESSION) || !is_array($_SESSION)) {
+        return '';
+    }
+
+    $sessionKey = '__csrf_' . preg_replace('/[^a-z0-9_]+/i', '_', strtolower($scope));
+    $token = isset($_SESSION[$sessionKey]) ? (string)$_SESSION[$sessionKey] : '';
+
+    if ($token === '') {
+        $token = bin2hex(random_bytes(32));
+        $_SESSION[$sessionKey] = $token;
+    }
+
+    return $token;
+}
+
+function app_csrf_is_valid(?string $token, string $scope = 'frontend'): bool
+{
+    if (!isset($_SESSION) || !is_array($_SESSION)) {
+        return false;
+    }
+
+    $sessionKey = '__csrf_' . preg_replace('/[^a-z0-9_]+/i', '_', strtolower($scope));
+    $sessionToken = isset($_SESSION[$sessionKey]) ? (string)$_SESSION[$sessionKey] : '';
+    $token = (string)$token;
+
+    return $sessionToken !== '' && $token !== '' && hash_equals($sessionToken, $token);
+}
+
+function app_customer_status(array $customer): string
+{
+    if (isset($customer['status']) && is_string($customer['status'])) {
+        return strtolower(trim($customer['status']));
+    }
+
+    $legacyStatus = (int)($customer['status'] ?? 0);
+    if ($legacyStatus === 1) {
+        return 'active';
+    }
+    if ($legacyStatus === 2) {
+        return 'blocked';
+    }
+
+    return 'inactive';
+}
+
+function app_customer_is_active(array $customer): bool
+{
+    return app_customer_status($customer) === 'active';
+}
+
+function app_customer_is_blocked(array $customer): bool
+{
+    return app_customer_status($customer) === 'blocked';
+}
+
+function app_verify_customer_password(array $customer, string $plainPassword): bool
+{
+    if (isset($customer['password_hash'])) {
+        $algorithm = (string)($customer['password_hash_algorithm'] ?? 'legacy_sha1');
+        $storedHash = (string)$customer['password_hash'];
+
+        if ($algorithm === 'password_hash') {
+            return password_verify($plainPassword, $storedHash);
+        }
+
+        return sha1('SOOOL' . $plainPassword) === $storedHash;
+    }
+
+    if (isset($customer['password'])) {
+        return sha1('SOOOL' . $plainPassword) === (string)$customer['password'];
+    }
+
+    return false;
+}
+
+function app_generate_customer_password(int $length = 12): string
+{
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+    $alphabetLength = strlen($alphabet);
+    $length = max(10, min(32, $length));
+    $password = '';
+
+    for ($i = 0; $i < $length; $i++) {
+        $password .= $alphabet[random_int(0, $alphabetLength - 1)];
+    }
+
+    return $password;
+}
+
+function app_store_customer_password(Mysql_ks $db, int $customerId, string $plainPassword): bool
+{
+    if (app_uses_v2_schema($db)) {
+        return (bool)$db->update_using_id(
+            ['password_hash', 'password_hash_algorithm'],
+            [password_hash($plainPassword, PASSWORD_DEFAULT), 'password_hash'],
+            'customers',
+            $customerId
+        );
+    }
+
+    return (bool)$db->update_using_id(['password'], [sha1('SOOOL' . $plainPassword)], 'users', $customerId);
+}
+
+function app_restore_customer_password_snapshot(Mysql_ks $db, array $customer): bool
+{
+    $customerId = (int)($customer['id'] ?? 0);
+    if ($customerId <= 0) {
+        return false;
+    }
+
+    if (app_uses_v2_schema($db)) {
+        if (!isset($customer['password_hash'])) {
+            return false;
+        }
+
+        $algorithm = trim((string)($customer['password_hash_algorithm'] ?? 'password_hash'));
+        if ($algorithm === '') {
+            $algorithm = 'password_hash';
+        }
+
+        return (bool)$db->update_using_id(
+            ['password_hash', 'password_hash_algorithm'],
+            [(string)$customer['password_hash'], $algorithm],
+            'customers',
+            $customerId
+        );
+    }
+
+    if (!isset($customer['password'])) {
+        return false;
+    }
+
+    return (bool)$db->update_using_id(['password'], [(string)$customer['password']], 'users', $customerId);
+}
+
+function app_activate_customer(Mysql_ks $db, int $customerId): void
+{
+    if (app_uses_v2_schema($db)) {
+        $db->update_using_id(
+            ['status', 'email_verified_at'],
+            ['active', date('Y-m-d H:i:s')],
+            'customers',
+            $customerId
+        );
+        return;
+    }
+
+    $db->update_using_id(['status'], [1], 'users', $customerId);
+}
+
+function app_update_customer_locale(Mysql_ks $db, int $customerId, string $localeCode): void
+{
+    if (app_uses_v2_schema($db)) {
+        $db->update_using_id(['locale_code'], [$localeCode], 'customers', $customerId);
+        return;
+    }
+
+    $db->update_using_id(['lang'], [localization_to_legacy_value($localeCode)], 'users', $customerId);
+}
+
+function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $currentTime, string $clientIp): void
+{
+    if (app_uses_v2_schema($db)) {
+        $db->update_using_id(['last_login_at', 'ip_address'], [$currentTime, $clientIp], 'customers', $customerId);
+        return;
+    }
+
+    $db->update_using_id(['last_login', 'ip'], [$currentTime, $clientIp], 'users', $customerId);
+}
+
+function app_load_customer_session_record(Mysql_ks $db, int $customerId): ?array
+{
+    if ($customerId <= 0) {
+        return null;
+    }
+
+    if (app_uses_v2_schema($db)) {
+        app_ensure_customer_runtime_columns($db);
+        $query = "
+            SELECT
+                customers.*,
+                1 AS res_id,
+                (
+                    SELECT COUNT(id)
+                    FROM orders
+                    WHERE orders.customer_id = customers.id
+                      AND orders.payment_status = 'paid'
+                ) AS count_paid
+            FROM customers
+            WHERE customers.id = {$customerId}
+            LIMIT 1
+        ";
+    } else {
+        $query = "
+            SELECT
+                users.*,
+                (
+                    SELECT COUNT(id)
+                    FROM products_users
+                    WHERE products_users.user_id = users.id
+                      AND payment = 1
+                      AND shipment = 1
+                ) AS count_paid
+            FROM users
+            WHERE id = {$customerId}
+            LIMIT 1
+        ";
+    }
+
+    $customer = $db->select_user($query);
+    return is_array($customer) ? app_normalize_customer_record($customer) : null;
+}
+
+function app_recent_news_count(Mysql_ks $db, int $tenantId): int
+{
+    $stats = app_recent_news_stats($db, $tenantId);
+    return (int)($stats['count'] ?? 0);
+}
+
+function app_current_datetime_string(): string
+{
+    return date('Y-m-d H:i:s');
+}
+
+function app_recent_news_window_seconds(): int
+{
+    return 86400;
+}
+
+function app_recent_news_stats(Mysql_ks $db, int $tenantId): array
+{
+    return app_recent_news_stats_for_customer($db, $tenantId, []);
+}
+
+function app_recent_news_stats_for_customer(Mysql_ks $db, int $tenantId, array $customer = []): array
+{
+    $visibleNow = $db->escape(app_current_datetime_string());
+    $recentCutoff = $db->escape(date('Y-m-d H:i:s', time() - app_recent_news_window_seconds()));
+
+    if (app_uses_v2_schema($db)) {
+        $visibilityList = app_sql_string_list($db, app_customer_news_visibilities($customer));
+        $row = $db->select_user(
+            "SELECT COUNT(id) AS total, MAX(published_at) AS latest_at
+             FROM news_posts
+             WHERE is_active = 1
+               AND visibility IN ({$visibilityList})
+               AND published_at >= '{$recentCutoff}'
+               AND published_at <= '{$visibleNow}'"
+        );
+
+        return [
+            'count' => isset($row['total']) ? (int)$row['total'] : 0,
+            'latest_at' => isset($row['latest_at']) ? trim((string)$row['latest_at']) : '',
+        ];
+    }
+
+    $row = $db->select_user(
+        "SELECT COUNT(id) AS total, MAX(date) AS latest_at
+         FROM resellers_news
+         WHERE status = 1
+           AND res_id = {$tenantId}
+           AND date >= '{$recentCutoff}'
+           AND date <= '{$visibleNow}'"
+    );
+
+    return [
+        'count' => isset($row['total']) ? (int)$row['total'] : 0,
+        'latest_at' => isset($row['latest_at']) ? trim((string)$row['latest_at']) : '',
+    ];
+}
+
+function app_history_activity_description(array $entry, array $messages): string
+{
+    $actionKey = trim((string)($entry['action_key'] ?? ''));
+    $description = trim((string)($entry['description'] ?? ''));
+
+    switch ($actionKey) {
+        case 'login':
+            return localization_translate($messages, 'history_event_login');
+
+        case 'profile_updated':
+            return localization_translate($messages, 'history_event_profile_updated');
+
+        case 'balance_credit':
+            if (preg_match('/:\s*(.+)$/', $description, $matches)) {
+                return localization_translate($messages, 'history_event_balance_credit', ['details' => $matches[1]]);
+            }
+            return localization_translate($messages, 'history_event_balance_credit_simple');
+
+        case 'balance_debit':
+            if (preg_match('/:\s*(.+)$/', $description, $matches)) {
+                return localization_translate($messages, 'history_event_balance_debit', ['details' => $matches[1]]);
+            }
+            return localization_translate($messages, 'history_event_balance_debit_simple');
+    }
+
+    return $description !== ''
+        ? $description
+        : localization_translate($messages, 'history_event_account_update');
+}
+
+function app_customer_history_rows(Mysql_ks $db, int $customerId, array $messages, array $settings = []): array
+{
+    if ($customerId <= 0) {
+        return [];
+    }
+
+    if (!app_uses_v2_schema($db)) {
+        return [];
+    }
+
+    $history = [];
+    $visibleFromRaw = trim((string)($settings['history_visible_from'] ?? ''));
+    $visibleFromTimestamp = $visibleFromRaw !== '' ? (strtotime($visibleFromRaw) ?: 0) : 0;
+
+    if (schema_object_exists($db, 'customer_activity_logs')) {
+        $activityRows = $db->select_full_user(
+            "SELECT action_key, description, created_at
+             FROM customer_activity_logs
+             WHERE customer_id = {$customerId}
+             ORDER BY id DESC"
+        );
+
+        foreach ($activityRows as $row) {
+            $eventDate = trim((string)($row['created_at'] ?? ''));
+            if (!app_history_is_visible($eventDate, $visibleFromTimestamp)) {
+                continue;
+            }
+
+            $actionKey = trim((string)($row['action_key'] ?? ''));
+            $badgeLabel = localization_translate($messages, 'history_badge_activity');
+            $badgeModifier = 'activity';
+            if ($actionKey === 'login') {
+                $badgeLabel = localization_translate($messages, 'history_badge_login');
+                $badgeModifier = 'login';
+            } elseif ($actionKey === 'balance_credit' || $actionKey === 'balance_debit') {
+                $badgeLabel = localization_translate($messages, 'history_badge_balance');
+                $badgeModifier = 'balance';
+            } elseif ($actionKey === 'profile_updated') {
+                $badgeLabel = localization_translate($messages, 'history_badge_profile');
+                $badgeModifier = 'profile';
+            }
+
+            $history[] = [
+                'desc' => app_history_event_summary(
+                    $badgeLabel,
+                    $badgeModifier,
+                    app_history_activity_description($row, $messages)
+                ),
+                'is_html' => true,
+                'date' => $eventDate,
+                'sort_time' => strtotime($eventDate) ?: 0,
+            ];
+        }
+    }
+
+    if (schema_object_exists($db, 'orders')) {
+        $orderRows = $db->select_full_user(
+            "SELECT orders.id, orders.created_at, orders.started_at, orders.paid_at, products.name AS product_name
+             FROM orders
+             LEFT JOIN products ON products.id = orders.product_id
+             WHERE orders.customer_id = {$customerId}
+             ORDER BY orders.id DESC"
+        );
+
+        foreach ($orderRows as $row) {
+            $orderId = (int)($row['id'] ?? 0);
+            $productName = trim((string)($row['product_name'] ?? ''));
+            $orderLabel = '#' . $orderId . ($productName !== '' ? ' · ' . $productName : '');
+
+            $createdAt = trim((string)($row['created_at'] ?? ''));
+            if (app_history_is_visible($createdAt, $visibleFromTimestamp)) {
+                $history[] = [
+                    'desc' => app_history_event_summary(
+                        localization_translate($messages, 'history_badge_order'),
+                        'order',
+                        localization_translate($messages, 'history_event_order_created', ['order' => $orderLabel])
+                    ),
+                    'is_html' => true,
+                    'date' => $createdAt,
+                    'sort_time' => strtotime($createdAt) ?: 0,
+                ];
+            }
+
+            $startedAt = trim((string)($row['started_at'] ?? ''));
+            if ($startedAt !== '' && $startedAt !== $createdAt && app_history_is_visible($startedAt, $visibleFromTimestamp)) {
+                $history[] = [
+                    'desc' => app_history_event_summary(
+                        localization_translate($messages, 'history_badge_subscription'),
+                        'subscription',
+                        localization_translate($messages, 'history_event_subscription_started', ['order' => $orderLabel])
+                    ),
+                    'is_html' => true,
+                    'date' => $startedAt,
+                    'sort_time' => strtotime($startedAt) ?: 0,
+                ];
+            }
+
+            $paidAt = trim((string)($row['paid_at'] ?? ''));
+            if (app_history_is_visible($paidAt, $visibleFromTimestamp)) {
+                $history[] = [
+                    'desc' => app_history_event_summary(
+                        localization_translate($messages, 'history_badge_payment'),
+                        'payment',
+                        localization_translate($messages, 'history_event_order_paid', ['order' => $orderLabel])
+                    ),
+                    'is_html' => true,
+                    'date' => $paidAt,
+                    'sort_time' => strtotime($paidAt) ?: 0,
+                ];
+            }
+        }
+    }
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoRows = $db->select_full_user(
+            "SELECT
+                crypto_deposit_requests.order_id,
+                crypto_deposit_requests.requested_fiat_amount,
+                crypto_deposit_requests.requested_crypto_amount,
+                crypto_deposit_requests.requested_at,
+                crypto_assets.code AS asset_code,
+                currencies.symbol AS currency_symbol,
+                currencies.code AS currency_code
+             FROM crypto_deposit_requests
+             LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+             LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
+             WHERE crypto_deposit_requests.customer_id = {$customerId}
+             ORDER BY crypto_deposit_requests.id DESC"
+        );
+
+        foreach ($cryptoRows as $row) {
+            $requestedAt = trim((string)($row['requested_at'] ?? ''));
+            if (!app_history_is_visible($requestedAt, $visibleFromTimestamp)) {
+                continue;
+            }
+
+            $history[] = [
+                'desc' => app_history_payment_summary(
+                    $messages,
+                    localization_translate($messages, 'history_badge_crypto'),
+                    'crypto',
+                    '#' . (int)($row['order_id'] ?? 0),
+                    app_format_money_value(
+                        (float)($row['requested_fiat_amount'] ?? 0),
+                        (string)($row['currency_symbol'] ?? ''),
+                        (string)($row['currency_code'] ?? '')
+                    ),
+                    trim(
+                        rtrim(rtrim(number_format((float)($row['requested_crypto_amount'] ?? 0), 8, '.', ''), '0'), '.')
+                        . ' '
+                        . (string)($row['asset_code'] ?? '')
+                    )
+                ),
+                'is_html' => true,
+                'date' => $requestedAt,
+                'sort_time' => strtotime($requestedAt) ?: 0,
+            ];
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankRows = $db->select_full_user(
+            "SELECT bank_transfer_requests.order_id, bank_transfer_requests.requested_amount, bank_transfer_requests.requested_at,
+                    currencies.symbol AS currency_symbol, currencies.code AS currency_code
+             FROM bank_transfer_requests
+             LEFT JOIN currencies ON currencies.id = bank_transfer_requests.currency_id
+             WHERE customer_id = {$customerId}
+             ORDER BY id DESC"
+        );
+
+        foreach ($bankRows as $row) {
+            $requestedAt = trim((string)($row['requested_at'] ?? ''));
+            if (!app_history_is_visible($requestedAt, $visibleFromTimestamp)) {
+                continue;
+            }
+
+            $history[] = [
+                'desc' => app_history_payment_summary(
+                    $messages,
+                    localization_translate($messages, 'history_badge_bank'),
+                    'bank',
+                    '#' . (int)($row['order_id'] ?? 0),
+                    app_format_money_value(
+                        (float)($row['requested_amount'] ?? 0),
+                        (string)($row['currency_symbol'] ?? ''),
+                        (string)($row['currency_code'] ?? '')
+                    ),
+                    localization_translate($messages, 'history_bank_transfer_label')
+                ),
+                'is_html' => true,
+                'date' => $requestedAt,
+                'sort_time' => strtotime($requestedAt) ?: 0,
+            ];
+        }
+    }
+
+    usort($history, static function (array $left, array $right): int {
+        return (int)($right['sort_time'] ?? 0) <=> (int)($left['sort_time'] ?? 0);
+    });
+
+    foreach ($history as &$entry) {
+        unset($entry['sort_time']);
+    }
+    unset($entry);
+
+    return $history;
+}
+
+function app_insert_customer_registration(
+    Mysql_ks $db,
+    string $email,
+    string $plainPassword,
+    string $localeCode,
+    string $currentTime,
+    string $clientIp,
+    int $tenantId = 1,
+    string $customerType = 'client'
+): int {
+    if (app_uses_v2_schema($db)) {
+        app_ensure_customer_runtime_columns($db);
+        $customerType = app_normalize_customer_type($customerType);
+        $db->insert(
+            [
+                'email',
+                'password_hash',
+                'password_hash_algorithm',
+                'locale_code',
+                'ip_address',
+                'status',
+                'customer_type',
+                'email_verified_at',
+                'registered_at',
+                'last_login_at',
+            ],
+            [
+                $email,
+                password_hash($plainPassword, PASSWORD_DEFAULT),
+                'password_hash',
+                $localeCode,
+                $clientIp,
+                'active',
+                $customerType,
+                $currentTime,
+                $currentTime,
+                $currentTime,
+            ],
+            'customers'
+        );
+
+        return (int)$db->id();
+    }
+
+    $db->insert(
+        ['res_id', 'email', 'password', 'last_login', 'ip', 'country', 'lang', 'status'],
+        [$tenantId, $email, sha1('SOOOL' . $plainPassword), $currentTime, $clientIp, '', localization_to_legacy_value($localeCode), 1],
+        'users'
+    );
+
+    return (int)$db->id();
+}

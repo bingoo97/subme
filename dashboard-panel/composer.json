@@ -1,0 +1,10 @@
+{
+    "require": {
+        "smarty/smarty": "^5.8"
+    },
+    "autoload": {
+        "files": [
+            "bootstrap/smarty_compat.php"
+        ]
+    }
+}

@@ -1,0 +1,144 @@
+/* Bootstrap 5 bridge for legacy Bootstrap 3 templates. */
+.img-responsive {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.pull-left {
+  float: left !important;
+}
+
+.pull-right {
+  float: right !important;
+}
+
+.btn-xs {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  border-radius: 0.2rem;
+}
+
+.visible-xs {
+  display: none !important;
+}
+
+.hidden-xs {
+  display: block !important;
+}
+
+tr.hidden-xs {
+  display: table-row !important;
+}
+
+td.hidden-xs,
+th.hidden-xs {
+  display: table-cell !important;
+}
+
+thead.hidden-xs {
+  display: table-header-group !important;
+}
+
+tbody.hidden-xs {
+  display: table-row-group !important;
+}
+
+@media (max-width: 575.98px) {
+  .visible-xs {
+    display: block !important;
+  }
+
+  tr.visible-xs {
+    display: table-row !important;
+  }
+
+  td.visible-xs,
+  th.visible-xs {
+    display: table-cell !important;
+  }
+
+  thead.visible-xs {
+    display: table-header-group !important;
+  }
+
+  tbody.visible-xs {
+    display: table-row-group !important;
+  }
+
+  .hidden-xs {
+    display: none !important;
+  }
+}
+
+.visible-lg {
+  display: none !important;
+}
+
+@media (min-width: 1200px) {
+  .visible-lg {
+    display: inline !important;
+  }
+}
+
+.input-group-addon {
+  display: flex;
+  align-items: center;
+  padding: 0.375rem 0.75rem;
+  margin-bottom: 0;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--bs-body-color);
+  text-align: center;
+  white-space: nowrap;
+  background-color: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.375rem;
+}
+
+.panel {
+  margin-bottom: 1rem;
+  background-color: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 0.375rem;
+}
+
+.panel-heading,
+.panel-footer {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.panel-footer {
+  border-top: 1px solid #dee2e6;
+  border-bottom: 0;
+}
+
+.panel-body {
+  padding: 1rem;
+}
+
+/* Bootstrap 3 xs grid aliases */
+.col-xs-1, .col-xs-2, .col-xs-3, .col-xs-4, .col-xs-5, .col-xs-6,
+.col-xs-7, .col-xs-8, .col-xs-9, .col-xs-10, .col-xs-11, .col-xs-12 {
+  position: relative;
+  min-height: 1px;
+  padding-right: calc(var(--bs-gutter-x) * 0.5);
+  padding-left: calc(var(--bs-gutter-x) * 0.5);
+}
+
+.col-xs-1 { width: 8.33333333%; }
+.col-xs-2 { width: 16.66666667%; }
+.col-xs-3 { width: 25%; }
+.col-xs-4 { width: 33.33333333%; }
+.col-xs-5 { width: 41.66666667%; }
+.col-xs-6 { width: 50%; }
+.col-xs-7 { width: 58.33333333%; }
+.col-xs-8 { width: 66.66666667%; }
+.col-xs-9 { width: 75%; }
+.col-xs-10 { width: 83.33333333%; }
+.col-xs-11 { width: 91.66666667%; }
+.col-xs-12 { width: 100%; }
+

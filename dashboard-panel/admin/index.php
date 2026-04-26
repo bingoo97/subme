@@ -1,0 +1,8027 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/bootstrap.php';
+
+admin_send_security_headers();
+admin_start_session();
+
+$db = Mysql_ks::get_instance();
+app_ensure_product_provider_runtime_columns($db);
+$appSettings = admin_app_settings($db);
+$cryptoWalletFreeCount = admin_crypto_wallet_free_count($db);
+$cryptoWalletPoolDepleted = $cryptoWalletFreeCount <= 0;
+$serviceCurrencies = admin_service_currency_rows($db);
+$adminDefaultCurrencyRow = admin_default_currency_row($db);
+$adminDefaultCurrencyCode = 'USD';
+$adminDefaultCurrencySymbol = '$';
+if (is_array($adminDefaultCurrencyRow) && !empty($adminDefaultCurrencyRow['id'])) {
+    $adminDefaultCurrencyCode = (string)($adminDefaultCurrencyRow['code'] ?? 'USD');
+    $adminDefaultCurrencySymbol = (string)($adminDefaultCurrencyRow['symbol'] ?? '$');
+}
+$adminDefaultCurrencyLabel = trim($adminDefaultCurrencyCode . ' - ' . (string)($adminDefaultCurrencyRow['name'] ?? $adminDefaultCurrencyCode));
+$adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
+$siteName = trim((string)($appSettings['site_name'] ?? 'Reseller'));
+$siteLogoUrl = trim((string)($appSettings['site_logo_url'] ?? ''));
+$sitePreviewUrl = trim((string)($appSettings['site_url'] ?? '/'));
+
+if (isset($_POST['admin_locale']) && admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    $_SESSION['admin_locale'] = admin_normalize_locale((string)$_POST['admin_locale']);
+}
+
+$currentLocale = isset($_SESSION['admin_locale']) ? admin_normalize_locale((string)$_SESSION['admin_locale']) : 'pl';
+$messages = admin_load_messages($currentLocale);
+$csrfToken = admin_csrf_token();
+$requestIp = admin_request_ip();
+
+$loginError = '';
+if (isset($_POST['admin_login'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $loginError = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+    } else {
+        $identity = trim((string)($_POST['identity'] ?? ''));
+        $password = (string)($_POST['password'] ?? '');
+        $adminUser = admin_find_user_by_identity($db, $identity);
+
+        if (
+            !is_array($adminUser)
+            || empty($adminUser['id'])
+            || (string)($adminUser['status'] ?? '') !== 'active'
+            || !admin_verify_password($adminUser, $password)
+        ) {
+            $loginError = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        } else {
+            admin_refresh_password_hash_if_needed($db, $adminUser, $password);
+            $db->update_using_id(['last_login_at'], [date('Y-m-d H:i:s')], 'admin_users', (int)$adminUser['id']);
+            admin_login($adminUser, $currentLocale);
+            admin_activity_log(
+                $db,
+                0,
+                (int)$adminUser['id'],
+                'admin_login',
+                'Administrator logged in to the admin panel.',
+                $requestIp
+            );
+            header('Location: /admin/');
+            exit;
+        }
+    }
+}
+
+if (isset($_POST['admin_logout']) && admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    admin_logout();
+    header('Location: /admin/');
+    exit;
+}
+
+$adminUser = admin_load_session_user($db);
+if ($adminUser === null) {
+    ?>
+    <!doctype html>
+    <html lang="<?php echo admin_e($currentLocale); ?>">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title><?php echo admin_e(admin_t($messages, 'login_title', 'Secure admin access')); ?></title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
+        <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
+        <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/css/admin.css'); ?>">
+    </head>
+    <body class="admin-login-page">
+        <main class="admin-login-shell">
+            <section class="admin-login-card">
+                <div class="admin-login-brand">
+                    <div class="admin-login-brand__badge"><i class="bi bi-shield-lock"></i></div>
+                    <div>
+                        <h1><?php echo admin_e(admin_t($messages, 'brand', 'Admin Panel')); ?></h1>
+                        <p><?php echo admin_e($siteName); ?></p>
+                    </div>
+                </div>
+
+                <?php if ($loginError !== ''): ?>
+                    <div class="alert alert-danger"><?php echo admin_e($loginError); ?></div>
+                <?php endif; ?>
+
+                <form method="post" class="admin-login-form">
+                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+
+                    <div class="mb-3">
+                        <label for="identity" class="form-label"><?php echo admin_e(admin_t($messages, 'login_identity', 'Login or email')); ?></label>
+                        <input type="text" class="form-control form-control-lg" id="identity" name="identity" autocomplete="username" required>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="password" class="form-label"><?php echo admin_e(admin_t($messages, 'login_password', 'Password')); ?></label>
+                        <input type="password" class="form-control form-control-lg" id="password" name="password" autocomplete="current-password" required>
+                    </div>
+
+                    <div class="admin-login-actions">
+                        <button type="submit" class="btn btn-dark btn-lg w-100" name="admin_login"><?php echo admin_e(admin_t($messages, 'login_submit', 'Log in')); ?></button>
+                    </div>
+                </form>
+            </section>
+        </main>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+$route = admin_normalize_route($_GET['page'] ?? 'dashboard');
+$pageAlert = '';
+$pageAlertHtml = '';
+$pageAlertType = 'success';
+$siteSettingsFormState = [
+    'site_name' => trim((string)($appSettings['site_name'] ?? '')),
+    'site_title' => trim((string)($appSettings['site_title'] ?? '')),
+    'site_url' => trim((string)($appSettings['site_url'] ?? '')),
+    'site_logo_url' => trim((string)($appSettings['site_logo_url'] ?? '')),
+    'site_description' => trim((string)($appSettings['site_description'] ?? '')),
+    'site_keywords' => trim((string)($appSettings['site_keywords'] ?? '')),
+    'support_email' => trim((string)($appSettings['support_email'] ?? '')),
+];
+$smtpFormState = [
+    'smtp_host' => trim((string)($appSettings['smtp_host'] ?? '')),
+    'smtp_port' => (string)($appSettings['smtp_port'] ?? ''),
+    'smtp_username' => trim((string)($appSettings['smtp_username'] ?? '')),
+    'smtp_password' => '',
+];
+$adminProfileFormState = [
+    'public_handle' => admin_public_handle_label($adminUser),
+];
+$adminCreateFormState = [
+    'login_name' => '',
+    'email' => '',
+    'public_handle' => '',
+    'role_id' => 0,
+];
+$adminStatusOptions = admin_admin_status_options();
+$adminRoleOptions = admin_role_rows($db);
+$adminUserRows = admin_user_rows($db);
+$adminActiveFullAdminCount = admin_active_full_admin_count($db);
+
+if (!admin_user_can_access_route($adminUser, $route)) {
+    $blockedRoute = $route;
+    $route = 'dashboard';
+    $pageAlert = admin_t(
+        $messages,
+        'access_denied_route',
+        'You do not have access to the "{page}" section.',
+        ['page' => admin_route_label($messages, $blockedRoute)]
+    );
+    $pageAlertType = 'danger';
+}
+
+if ($route === 'settings' && isset($_POST['admin_save_profile_handle'])) {
+    $adminProfileFormState = [
+        'public_handle' => trim((string)($_POST['public_handle'] ?? '')),
+    ];
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $handleResult = admin_resolve_public_handle($db, $adminProfileFormState['public_handle'], (int)$adminUser['id']);
+        if (empty($handleResult['ok'])) {
+            $pageAlert = admin_t($messages, 'admin_handle_save_error', (string)($handleResult['message'] ?? 'Unable to save the live chat handle.'));
+            $pageAlertType = 'danger';
+        } else {
+            $updated = $db->update_using_id(
+                ['public_handle'],
+                [(string)$handleResult['handle']],
+                'admin_users',
+                (int)$adminUser['id']
+            );
+
+            if ($updated) {
+                $pageAlert = admin_t($messages, 'admin_handle_save_success', 'Live chat handle has been updated.');
+                $pageAlertType = 'success';
+                $adminUser = admin_load_session_user($db) ?? $adminUser;
+                $adminProfileFormState = [
+                    'public_handle' => admin_public_handle_label($adminUser),
+                ];
+                $adminUserRows = admin_user_rows($db);
+            } else {
+                $pageAlert = admin_t($messages, 'admin_handle_save_error', 'Unable to save the live chat handle.');
+                $pageAlertType = 'danger';
+            }
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_create_admin_user'])) {
+    $adminCreateFormState = [
+        'login_name' => trim((string)($_POST['login_name'] ?? '')),
+        'email' => strtolower(trim((string)($_POST['email'] ?? ''))),
+        'public_handle' => trim((string)($_POST['public_handle'] ?? '')),
+        'role_id' => (int)($_POST['role_id'] ?? 0),
+    ];
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $createAdminResult = admin_create_admin_user($db, $_POST, (int)($adminUser['id'] ?? 0), $requestIp);
+        if (!empty($createAdminResult['ok'])) {
+            header('Location: /admin/?page=settings&created_admin=1');
+            exit;
+        }
+
+        $pageAlert = admin_t($messages, 'admin_create_error', (string)($createAdminResult['message'] ?? 'Unable to create administrator account.'));
+        $pageAlertType = 'danger';
+        $adminUserRows = admin_user_rows($db);
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_update_admin_user'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $updateAdminResult = admin_update_admin_user(
+            $db,
+            (int)($_POST['admin_user_id'] ?? 0),
+            $_POST,
+            $adminUser,
+            $requestIp
+        );
+
+        if (!empty($updateAdminResult['ok'])) {
+            header('Location: /admin/?page=settings&updated_admin=1');
+            exit;
+        }
+
+        $pageAlert = admin_t($messages, 'admin_update_error', (string)($updateAdminResult['message'] ?? 'Unable to update administrator account.'));
+        $pageAlertType = 'danger';
+        $adminUserRows = admin_user_rows($db);
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_delete_admin_user'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $deleteAdminResult = admin_delete_admin_user(
+            $db,
+            (int)($_POST['admin_user_id'] ?? 0),
+            $adminUser,
+            $requestIp
+        );
+
+        if (!empty($deleteAdminResult['ok'])) {
+            header('Location: /admin/?page=settings&deleted_admin=1');
+            exit;
+        }
+
+        $pageAlert = admin_t($messages, 'admin_delete_error', (string)($deleteAdminResult['message'] ?? 'Unable to delete administrator account.'));
+        $pageAlertType = 'danger';
+        $adminUserRows = admin_user_rows($db);
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_change_password'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $currentPassword = (string)($_POST['current_password'] ?? '');
+        $newPassword = (string)($_POST['new_password'] ?? '');
+        $repeatPassword = (string)($_POST['repeat_password'] ?? '');
+
+        if (!admin_verify_password($adminUser, $currentPassword)) {
+            $pageAlert = admin_t($messages, 'settings_password_invalid', 'Current password is incorrect.');
+            $pageAlertType = 'danger';
+        } elseif (strlen($newPassword) < 8) {
+            $pageAlert = admin_t($messages, 'settings_password_too_short', 'New password must contain at least 8 characters.');
+            $pageAlertType = 'danger';
+        } elseif ($newPassword !== $repeatPassword) {
+            $pageAlert = admin_t($messages, 'settings_password_mismatch', 'New passwords do not match.');
+            $pageAlertType = 'danger';
+        } else {
+            $db->update_using_id(
+                ['password_hash', 'password_hash_algorithm'],
+                [password_hash($newPassword, PASSWORD_DEFAULT), 'password_hash'],
+                'admin_users',
+                (int)$adminUser['id']
+            );
+            $pageAlert = admin_t($messages, 'settings_password_changed', 'Administrator password has been updated.');
+            $pageAlertType = 'success';
+            $adminUser = admin_load_session_user($db) ?? $adminUser;
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } elseif (!schema_object_exists($db, 'app_settings')) {
+        $pageAlert = admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.');
+        $pageAlertType = 'danger';
+    } else {
+        $bankTransfersEnabled = isset($_POST['bank_transfers_enabled']) ? 1 : 0;
+        $cryptoWalletSharedAssignmentsEnabled = isset($_POST['crypto_wallet_shared_assignments_enabled']) ? 1 : 0;
+        $bankAccountSharedAssignmentsEnabled = isset($_POST['bank_account_shared_assignments_enabled']) ? 1 : 0;
+        $maintenanceMode = isset($_POST['maintenance_mode']) ? 1 : 0;
+        $registrationEnabled = isset($_POST['registration_enabled']) ? 1 : 0;
+        $salesEnabled = isset($_POST['sales_enabled']) ? 1 : 0;
+        $creditsSalesEnabled = isset($_POST['credits_sales_enabled']) ? 1 : 0;
+        $trialsEnabled = isset($_POST['trials_enabled']) ? 1 : 0;
+        $supportChatEnabled = isset($_POST['support_chat_enabled']) ? 1 : 0;
+        $resellerGroupChatLimit = (int)($_POST['reseller_group_chat_limit'] ?? 10);
+        if ($resellerGroupChatLimit < 0) {
+            $resellerGroupChatLimit = 0;
+        } elseif ($resellerGroupChatLimit > 10) {
+            $resellerGroupChatLimit = 10;
+        }
+        $supportChatRetentionHours = (int)($_POST['support_chat_retention_hours'] ?? 168);
+        if (!in_array($supportChatRetentionHours, [1, 24, 72, 168, 720], true)) {
+            $supportChatRetentionHours = 168;
+        }
+        $contactFormEnabled = isset($_POST['contact_form_enabled']) ? 1 : 0;
+        $referralsEnabled = isset($_POST['referrals_enabled']) ? 1 : 0;
+        $appsPageEnabled = isset($_POST['apps_page_enabled']) ? 1 : 0;
+        $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
+        $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
+        $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
+        $expiredOrdersCleanupEnabled = isset($_POST['expired_orders_cleanup_enabled']) ? 1 : 0;
+        $selectedCurrencyId = (int)($_POST['default_currency_id'] ?? 0);
+        $allowedCurrencyIds = [];
+        foreach ($serviceCurrencies as $serviceCurrency) {
+            $allowedCurrencyIds[] = (int)($serviceCurrency['id'] ?? 0);
+        }
+        if (!in_array($selectedCurrencyId, $allowedCurrencyIds, true)) {
+            $selectedCurrencyId = 1;
+        }
+
+        $updated = $db->update_using_id(
+            [
+                'default_currency_id',
+                'maintenance_mode',
+                'registration_enabled',
+                'sales_enabled',
+                'credits_sales_enabled',
+                'trials_enabled',
+                'support_chat_enabled',
+                'reseller_group_chat_limit',
+                'support_chat_retention_hours',
+                'support_chat_retention_days',
+                'contact_form_enabled',
+                'referrals_enabled',
+                'apps_page_enabled',
+                'application_instructions_enabled',
+                'history_cleanup_enabled',
+                'payments_cleanup_enabled',
+                'expired_orders_cleanup_enabled',
+                'bank_transfers_enabled',
+                'crypto_wallet_shared_assignments_enabled',
+                'bank_account_shared_assignments_enabled',
+            ],
+            [
+                $selectedCurrencyId,
+                $maintenanceMode,
+                $registrationEnabled,
+                $salesEnabled,
+                $creditsSalesEnabled,
+                $trialsEnabled,
+                $supportChatEnabled,
+                $resellerGroupChatLimit,
+                $supportChatRetentionHours,
+                max(1, (int)ceil($supportChatRetentionHours / 24)),
+                $contactFormEnabled,
+                $referralsEnabled,
+                $appsPageEnabled,
+                $applicationInstructionsEnabled,
+                $historyCleanupEnabled,
+                $paymentsCleanupEnabled,
+                $expiredOrdersCleanupEnabled,
+                $bankTransfersEnabled,
+                $cryptoWalletSharedAssignmentsEnabled,
+                $bankAccountSharedAssignmentsEnabled,
+            ],
+            'app_settings',
+            1
+        );
+
+        if ($updated) {
+            admin_sync_products_currency($db, $selectedCurrencyId);
+            $pageAlert = admin_t($messages, 'settings_features_saved', 'Feature settings have been updated.');
+            $pageAlertType = 'success';
+            $appSettings = admin_app_settings($db);
+            $adminDefaultCurrencyRow = admin_default_currency_row($db);
+            $adminDefaultCurrencyCode = (string)($adminDefaultCurrencyRow['code'] ?? 'USD');
+            $adminDefaultCurrencySymbol = (string)($adminDefaultCurrencyRow['symbol'] ?? '$');
+            $adminDefaultCurrencyLabel = trim($adminDefaultCurrencyCode . ' - ' . (string)($adminDefaultCurrencyRow['name'] ?? $adminDefaultCurrencyCode));
+            $adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
+        } else {
+            $pageAlert = admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.');
+            $pageAlertType = 'danger';
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_save_site_settings'])) {
+    $siteSettingsFormState = [
+        'site_name' => trim((string)($_POST['site_name'] ?? '')),
+        'site_title' => trim((string)($_POST['site_title'] ?? '')),
+        'site_url' => trim((string)($_POST['site_url'] ?? '')),
+        'site_logo_url' => trim((string)($_POST['site_logo_url'] ?? '')),
+        'site_description' => trim((string)($_POST['site_description'] ?? '')),
+        'site_keywords' => trim((string)($_POST['site_keywords'] ?? '')),
+        'support_email' => strtolower(trim((string)($_POST['support_email'] ?? ''))),
+    ];
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } elseif (!schema_object_exists($db, 'app_settings')) {
+        $pageAlert = admin_t($messages, 'settings_site_save_error', 'Unable to save site settings.');
+        $pageAlertType = 'danger';
+    } else {
+        $previousLogoUrl = trim((string)($appSettings['site_logo_url'] ?? ''));
+        $siteNameInput = $siteSettingsFormState['site_name'];
+        $siteTitleInput = $siteSettingsFormState['site_title'] !== '' ? $siteSettingsFormState['site_title'] : $siteNameInput;
+        $siteUrlInput = $siteSettingsFormState['site_url'];
+        $siteLogoUrlInput = $siteSettingsFormState['site_logo_url'];
+        $supportEmailInput = $siteSettingsFormState['support_email'];
+
+        if ($siteNameInput === '') {
+            $pageAlert = admin_t($messages, 'settings_site_name_required', 'Page name is required.');
+            $pageAlertType = 'danger';
+        } elseif ($siteTitleInput === '') {
+            $pageAlert = admin_t($messages, 'settings_site_title_required', 'Page title is required.');
+            $pageAlertType = 'danger';
+        } elseif ($siteUrlInput === '' || filter_var($siteUrlInput, FILTER_VALIDATE_URL) === false) {
+            $pageAlert = admin_t($messages, 'settings_site_url_invalid', 'Page URL must be a valid address.');
+            $pageAlertType = 'danger';
+        } elseif ($supportEmailInput === '' || !filter_var($supportEmailInput, FILTER_VALIDATE_EMAIL)) {
+            $pageAlert = admin_t($messages, 'settings_support_email_invalid', 'Support email must be a valid email address.');
+            $pageAlertType = 'danger';
+        } else {
+            $updated = $db->update_using_id(
+                ['site_name', 'site_title', 'site_url', 'site_logo_url', 'site_description', 'site_keywords', 'support_email'],
+                [
+                    $siteNameInput,
+                    $siteTitleInput,
+                    $siteUrlInput,
+                    $siteLogoUrlInput !== '' ? $siteLogoUrlInput : null,
+                    $siteSettingsFormState['site_description'] !== '' ? $siteSettingsFormState['site_description'] : null,
+                    $siteSettingsFormState['site_keywords'] !== '' ? $siteSettingsFormState['site_keywords'] : null,
+                    $supportEmailInput,
+                ],
+                'app_settings',
+                1
+            );
+
+            if ($updated) {
+                $pageAlert = admin_t($messages, 'settings_site_saved', 'Site settings have been updated.');
+                $pageAlertType = 'success';
+                $appSettings = admin_app_settings($db);
+                $siteSettingsFormState = [
+                    'site_name' => trim((string)($appSettings['site_name'] ?? '')),
+                    'site_title' => trim((string)($appSettings['site_title'] ?? '')),
+                    'site_url' => trim((string)($appSettings['site_url'] ?? '')),
+                    'site_logo_url' => trim((string)($appSettings['site_logo_url'] ?? '')),
+                    'site_description' => trim((string)($appSettings['site_description'] ?? '')),
+                    'site_keywords' => trim((string)($appSettings['site_keywords'] ?? '')),
+                    'support_email' => trim((string)($appSettings['support_email'] ?? '')),
+                ];
+                $smtpFormState = [
+                    'smtp_host' => trim((string)($appSettings['smtp_host'] ?? '')),
+                    'smtp_port' => (string)($appSettings['smtp_port'] ?? ''),
+                    'smtp_username' => trim((string)($appSettings['smtp_username'] ?? '')),
+                    'smtp_password' => '',
+                ];
+                $siteName = trim((string)($appSettings['site_name'] ?? 'Reseller'));
+                $siteLogoUrl = trim((string)($appSettings['site_logo_url'] ?? ''));
+                $sitePreviewUrl = trim((string)($appSettings['site_url'] ?? '/'));
+
+                if ($previousLogoUrl !== '' && $previousLogoUrl !== $siteLogoUrl) {
+                    admin_delete_site_logo_file($previousLogoUrl);
+                }
+            } else {
+                $pageAlert = admin_t($messages, 'settings_site_save_error', 'Unable to save site settings.');
+                $pageAlertType = 'danger';
+            }
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_site_logo_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'settings_site_logo_csrf_error', 'Your session expired. Refresh the page and try again.'),
+        ]);
+        exit;
+    }
+
+    if (!schema_object_exists($db, 'app_settings')) {
+        http_response_code(500);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'settings_site_logo_upload_error', 'Unable to upload the logo right now.'),
+        ]);
+        exit;
+    }
+
+    $logoAction = trim((string)($_POST['logo_action'] ?? ''));
+    $currentLogoUrl = trim((string)($appSettings['site_logo_url'] ?? ''));
+
+    if ($logoAction === 'upload') {
+        $uploadedLogoUrl = admin_site_logo_public_path($_FILES['site_logo_file'] ?? [], (int)$adminUser['id']);
+        if ($uploadedLogoUrl === null) {
+            http_response_code(422);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_site_logo_upload_error', 'Unable to upload the logo right now.'),
+            ]);
+            exit;
+        }
+
+        $updated = $db->update_using_id(['site_logo_url'], [$uploadedLogoUrl], 'app_settings', 1);
+        if (!$updated) {
+            admin_delete_site_logo_file($uploadedLogoUrl);
+            http_response_code(500);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_site_logo_upload_error', 'Unable to upload the logo right now.'),
+            ]);
+            exit;
+        }
+
+        if ($currentLogoUrl !== '' && $currentLogoUrl !== $uploadedLogoUrl) {
+            admin_delete_site_logo_file($currentLogoUrl);
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'url' => $uploadedLogoUrl,
+            'message' => admin_t($messages, 'settings_site_logo_upload_success', 'Logo uploaded successfully.'),
+        ]);
+        exit;
+    }
+
+    if ($logoAction === 'remove') {
+        $updated = $db->update_using_id(['site_logo_url'], [null], 'app_settings', 1);
+        if (!$updated) {
+            http_response_code(500);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_site_logo_remove_error', 'Unable to remove the logo right now.'),
+            ]);
+            exit;
+        }
+
+        if ($currentLogoUrl !== '') {
+            admin_delete_site_logo_file($currentLogoUrl);
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'url' => '',
+            'message' => admin_t($messages, 'settings_site_logo_remove_success', 'Logo removed.'),
+        ]);
+        exit;
+    }
+
+    if ($logoAction === 'set_url') {
+        $newLogoUrl = trim((string)($_POST['site_logo_url'] ?? ''));
+        if ($newLogoUrl !== '' && filter_var($newLogoUrl, FILTER_VALIDATE_URL) === false) {
+            http_response_code(422);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_site_logo_url_invalid', 'Provide a valid direct image URL.'),
+            ]);
+            exit;
+        }
+
+        $updated = $db->update_using_id(['site_logo_url'], [$newLogoUrl !== '' ? $newLogoUrl : null], 'app_settings', 1);
+        if (!$updated) {
+            http_response_code(500);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_site_logo_upload_error', 'Unable to upload the logo right now.'),
+            ]);
+            exit;
+        }
+
+        if ($currentLogoUrl !== '' && $currentLogoUrl !== $newLogoUrl) {
+            admin_delete_site_logo_file($currentLogoUrl);
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'url' => $newLogoUrl,
+            'message' => admin_t($messages, 'settings_site_logo_url_saved', 'Logo URL has been updated.'),
+        ]);
+        exit;
+    }
+
+    http_response_code(400);
+    echo json_encode([
+        'ok' => false,
+        'message' => admin_t($messages, 'settings_site_logo_upload_error', 'Unable to upload the logo right now.'),
+    ]);
+    exit;
+}
+
+if ($route === 'settings' && isset($_POST['admin_save_smtp_settings'])) {
+    $smtpFormState = [
+        'smtp_host' => trim((string)($_POST['smtp_host'] ?? '')),
+        'smtp_port' => trim((string)($_POST['smtp_port'] ?? '')),
+        'smtp_username' => trim((string)($_POST['smtp_username'] ?? '')),
+        'smtp_password' => trim((string)($_POST['smtp_password'] ?? '')),
+    ];
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } elseif (!schema_object_exists($db, 'app_settings')) {
+        $pageAlert = admin_t($messages, 'settings_smtp_save_error', 'Unable to save SMTP settings.');
+        $pageAlertType = 'danger';
+    } else {
+        $smtpHost = $smtpFormState['smtp_host'];
+        $smtpPortRaw = $smtpFormState['smtp_port'];
+        $smtpUsername = strtolower($smtpFormState['smtp_username']);
+        $smtpPasswordInput = $smtpFormState['smtp_password'];
+
+        if ($smtpHost === '') {
+            $pageAlert = admin_t($messages, 'settings_smtp_host_required', 'SMTP host is required.');
+            $pageAlertType = 'danger';
+        } elseif ($smtpPortRaw === '' || !ctype_digit($smtpPortRaw) || (int)$smtpPortRaw < 1 || (int)$smtpPortRaw > 65535) {
+            $pageAlert = admin_t($messages, 'settings_smtp_port_invalid', 'SMTP port must be a valid number between 1 and 65535.');
+            $pageAlertType = 'danger';
+        } elseif ($smtpUsername === '' || !filter_var($smtpUsername, FILTER_VALIDATE_EMAIL)) {
+            $pageAlert = admin_t($messages, 'settings_smtp_username_invalid', 'SMTP login must be a valid email address.');
+            $pageAlertType = 'danger';
+        } else {
+            $smtpPasswordToSave = $smtpPasswordInput !== ''
+                ? $smtpPasswordInput
+                : (string)($appSettings['smtp_password'] ?? '');
+
+            $updated = $db->update_using_id(
+                ['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password'],
+                [$smtpHost, (int)$smtpPortRaw, $smtpUsername, $smtpPasswordToSave],
+                'app_settings',
+                1
+            );
+
+            if ($updated) {
+                $pageAlert = admin_t($messages, 'settings_smtp_saved', 'SMTP settings have been updated.');
+                $pageAlertType = 'success';
+                $appSettings = admin_app_settings($db);
+                $smtpFormState = [
+                    'smtp_host' => trim((string)($appSettings['smtp_host'] ?? '')),
+                    'smtp_port' => (string)($appSettings['smtp_port'] ?? ''),
+                    'smtp_username' => trim((string)($appSettings['smtp_username'] ?? '')),
+                    'smtp_password' => '',
+                ];
+            } else {
+                $pageAlert = admin_t($messages, 'settings_smtp_save_error', 'Unable to save SMTP settings.');
+                $pageAlertType = 'danger';
+            }
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_run_maintenance_cycle'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $maintenanceResult = app_run_maintenance_cycle($db, ['email_limit' => 20]);
+        $summary = (array)($maintenanceResult['summary'] ?? []);
+        $pageAlertHtml =
+            '<strong>' . admin_e(admin_t($messages, 'settings_maintenance_runner_done', 'Maintenance cycle finished.')) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_emails', 'Emails')) . ': <strong>' . admin_e((string)($summary['emails_processed'] ?? 0)) . '</strong> / ' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_sent', 'sent')) . ': <strong>' . admin_e((string)($summary['emails_sent'] ?? 0)) . '</strong> / ' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_failed', 'failed')) . ': <strong>' . admin_e((string)($summary['emails_failed'] ?? 0)) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_archived_requests', 'Archived requests')) . ': <strong>' . admin_e((string)(((int)($summary['archived_crypto_requests'] ?? 0)) + ((int)($summary['archived_bank_requests'] ?? 0)))) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_expired_orders', 'Expired orders')) . ': <strong>' . admin_e((string)($summary['expired_orders'] ?? 0)) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_chat_messages', 'Deleted live chat messages')) . ': <strong>' . admin_e((string)($summary['deleted_chat_messages'] ?? 0)) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_records', 'Deleted records')) . ': <strong>' . admin_e((string)(
+                ((int)($summary['deleted_history_logs'] ?? 0))
+                + ((int)($summary['deleted_crypto_transactions'] ?? 0))
+                + ((int)($summary['deleted_crypto_requests'] ?? 0))
+                + ((int)($summary['deleted_bank_requests'] ?? 0))
+                + ((int)($summary['deleted_expired_orders'] ?? 0))
+            )) . '</strong><br>' .
+            admin_e((string)($maintenanceResult['message'] ?? ''));
+        $pageAlert = (string)($maintenanceResult['message'] ?? admin_t($messages, 'settings_maintenance_runner_done', 'Maintenance cycle finished.'));
+        $pageAlertType = !empty($maintenanceResult['ok']) ? 'success' : 'warning';
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_clear_history_now'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } elseif (trim((string)($_POST['danger_confirmation'] ?? '')) !== 'CLEAR HISTORY') {
+        $pageAlert = admin_t($messages, 'settings_clear_history_phrase', 'Type: CLEAR HISTORY');
+        $pageAlertType = 'danger';
+    } else {
+        $result = app_clear_user_history($db);
+        $pageAlert = admin_t($messages, 'settings_clear_history_success', 'User history has been cleared.');
+        $pageAlertType = !empty($result['ok']) ? 'success' : 'danger';
+        $pageAlertHtml =
+            '<strong>' . admin_e(admin_t($messages, 'settings_clear_history_success', 'User history has been cleared.')) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_records', 'Deleted records')) . ': <strong>' . admin_e((string)($result['deleted_activity_logs'] ?? 0)) . '</strong><br>' .
+            admin_e((string)($result['message'] ?? ''));
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_reset_sample_data_now'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } elseif (trim((string)($_POST['danger_confirmation'] ?? '')) !== 'DELETE SAMPLE DATA') {
+        $pageAlert = admin_t($messages, 'settings_reset_sample_data_phrase', 'Type: DELETE SAMPLE DATA');
+        $pageAlertType = 'danger';
+    } else {
+        $result = app_reset_dashboard_sample_data($db);
+        $deleted = (array)($result['deleted'] ?? []);
+        $deletedTotal = 0;
+        foreach ($deleted as $value) {
+            $deletedTotal += (int)$value;
+        }
+        $pageAlert = !empty($result['ok'])
+            ? admin_t($messages, 'settings_reset_sample_data_success', 'Sample/test data has been removed.')
+            : (string)($result['message'] ?? admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.'));
+        $pageAlertType = !empty($result['ok']) ? 'success' : 'danger';
+        $pageAlertHtml =
+            '<strong>' . admin_e($pageAlert) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_records', 'Deleted records')) . ': <strong>' . admin_e((string)$deletedTotal) . '</strong><br>' .
+            admin_e((string)($result['message'] ?? ''));
+    }
+}
+
+$walletEditorId = 0;
+$walletEditor = null;
+$walletAssignments = [];
+$walletAssetOptions = [];
+$walletListPage = 1;
+$walletListPerPage = 20;
+$walletListTotal = 0;
+$walletListTotalPages = 1;
+$bankAccountEditorId = 0;
+$bankAccountEditor = null;
+$bankAccountAssignments = [];
+$bankAccountListPage = 1;
+$bankAccountListPerPage = 20;
+$bankAccountListTotal = 0;
+$bankAccountListTotalPages = 1;
+$selectedCustomerId = 0;
+$selectedCustomer = null;
+$selectedCustomerOrders = [];
+$selectedCustomerPayments = [];
+$selectedCustomerWallets = [];
+$selectedCustomerBankAccounts = [];
+$selectedCustomerActivity = [];
+$orderListPage = 1;
+$orderListPerPage = 20;
+$orderListTotal = 0;
+$orderListTotalPages = 1;
+$orderFilterCustomerId = 0;
+$orderFilterCustomer = null;
+$orderShowCreate = false;
+$orderProviders = [];
+$orderProducts = [];
+$chatPaymentProductPresets = [];
+$orderCreateState = [
+    'customer_id' => 0,
+    'provider_id' => 0,
+    'product_id' => 0,
+    'customer_note' => '',
+    'has_delivery_link' => false,
+    'delivery_link' => '',
+];
+$orderSelectedCustomer = null;
+$orderProductsByProvider = [];
+$productListPage = 1;
+$productListPerPage = 20;
+$productListTotal = 0;
+$productListTotalPages = 1;
+$productProviderEditorId = 0;
+$productProviderEditor = null;
+$productProviderShowCreate = false;
+$productProviderFormState = [
+    'name' => '',
+    'slug' => '',
+    'description' => '',
+    'dashboard_url' => '',
+    'url_replacement_from' => '',
+    'url_replacement_to' => '',
+    'supports_manual_delivery' => 1,
+    'supports_url_replacement' => 0,
+    'is_active' => 1,
+];
+$productEditorId = 0;
+$productEditor = null;
+$productShowCreate = false;
+$productProviders = [];
+$productCurrencies = [];
+$productFormState = [
+    'provider_id' => 0,
+    'name' => '',
+    'slug' => '',
+    'description' => '',
+    'duration_hours' => '720',
+    'price_amount' => '0.00',
+    'currency_id' => $adminDefaultCurrencyId,
+    'product_type' => 'subscription',
+    'provisioning_mode' => 'manual',
+    'is_trial' => 0,
+    'is_active' => 1,
+];
+$cryptoAssetEditorId = 0;
+$cryptoAssetEditor = null;
+$cryptoAssetRows = [];
+$newsEditorId = 0;
+$newsEditor = null;
+$newsShowCreate = false;
+$newsListPage = 1;
+$newsListPerPage = 20;
+$newsListTotal = 0;
+$newsListTotalPages = 1;
+$newsFormState = [
+    'title' => '',
+    'slug' => '',
+    'body' => '',
+    'visibility' => 'client',
+    'is_active' => 1,
+    'published_at' => date('Y-m-d H:i:s'),
+];
+$faqEditorId = 0;
+$faqEditor = null;
+$faqShowCreate = false;
+$faqListPage = 1;
+$faqListPerPage = 20;
+$faqListTotal = 0;
+$faqListTotalPages = 1;
+$faqFormState = [
+    'title' => '',
+    'slug' => '',
+    'body' => '',
+    'is_active' => 1,
+];
+$emailTemplateEditorId = 0;
+$emailTemplateEditor = null;
+$emailTemplateListPage = 1;
+$emailTemplateListPerPage = 20;
+$emailTemplateListTotal = 0;
+$emailTemplateListTotalPages = 1;
+$emailTemplateFormState = [
+    'name' => '',
+    'subject_en' => '',
+    'body_en' => '',
+    'subject_pl' => '',
+    'body_pl' => '',
+    'is_active' => 1,
+];
+$paymentEditorType = '';
+$paymentEditorId = 0;
+$paymentEditor = null;
+$paymentFilterCustomerId = 0;
+$paymentFilterCustomer = null;
+
+if ($route === 'orders' && isset($_GET['created_order'])) {
+    $pageAlert = admin_t($messages, 'order_create_success', 'Order created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'products' && isset($_GET['created_product'])) {
+    $pageAlert = admin_t($messages, 'product_create_success', 'Product created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'products' && isset($_GET['saved_product'])) {
+    $pageAlert = admin_t($messages, 'product_save_success', 'Product saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'products' && isset($_GET['deleted_product'])) {
+    $pageAlert = admin_t($messages, 'product_delete_success', 'Product deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'products' && isset($_GET['created_provider'])) {
+    $pageAlert = admin_t($messages, 'product_provider_create_success', 'Provider created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'products' && isset($_GET['saved_provider'])) {
+    $pageAlert = admin_t($messages, 'product_provider_save_success', 'Provider saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'products' && isset($_GET['deleted_provider'])) {
+    $pageAlert = admin_t($messages, 'product_provider_delete_success', 'Provider deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'news' && isset($_GET['created_news'])) {
+    $pageAlert = admin_t($messages, 'news_create_success', 'News post created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'news' && isset($_GET['saved_news'])) {
+    $pageAlert = admin_t($messages, 'news_save_success', 'News post saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'faq' && isset($_GET['created_faq'])) {
+    $pageAlert = admin_t($messages, 'faq_create_success', 'FAQ entry created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'faq' && isset($_GET['saved_faq'])) {
+    $pageAlert = admin_t($messages, 'faq_save_success', 'FAQ entry saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'faq' && isset($_GET['deleted_faq'])) {
+    $pageAlert = admin_t($messages, 'faq_delete_success', 'FAQ entry deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'payments' && isset($_GET['saved_payment'])) {
+    $pageAlert = admin_t($messages, 'payment_save_success', 'Payment request saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'payments' && isset($_GET['deleted_payment'])) {
+    $pageAlert = admin_t($messages, 'payment_delete_success', 'Payment request deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'email-templates' && isset($_GET['saved_template'])) {
+    $pageAlert = admin_t($messages, 'email_template_save_success', 'Email template saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'settings' && isset($_GET['created_admin'])) {
+    $pageAlert = admin_t($messages, 'admin_create_success', 'Administrator account created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'settings' && isset($_GET['updated_admin'])) {
+    $pageAlert = admin_t($messages, 'admin_update_success', 'Administrator account updated successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'settings' && isset($_GET['deleted_admin'])) {
+    $pageAlert = admin_t($messages, 'admin_delete_success', 'Administrator account deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'users' && isset($_GET['deleted_user'])) {
+    $pageAlert = admin_t($messages, 'customer_delete_success', 'User account deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'live-chat' && isset($_GET['created_quick_reply'])) {
+    $pageAlert = admin_t($messages, 'chat_quick_reply_create_success', 'Quick reply created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'live-chat' && isset($_GET['saved_quick_reply'])) {
+    $pageAlert = admin_t($messages, 'chat_quick_reply_save_success', 'Quick reply saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'live-chat' && isset($_GET['deleted_quick_reply'])) {
+    $pageAlert = admin_t($messages, 'chat_quick_reply_delete_success', 'Quick reply deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'live-chat' && isset($_GET['sent_quick_reply'])) {
+    $pageAlert = admin_t($messages, 'chat_quick_reply_send_success', 'Quick reply sent successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'live-chat') {
+    $orderProducts = admin_product_active_rows($db);
+    $orderProducts = array_filter($orderProducts, function($product) {
+        $isTrial = !empty($product['is_trial']);
+        $price = (float)($product['price_amount'] ?? 0);
+        return !$isTrial && $price > 0;
+    });
+    $chatPaymentProductPresets = admin_chat_payment_product_presets($db, admin_chat_payment_currency_context($db));
+}
+
+if ($route === 'orders') {
+    $orderFilterCustomerId = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : 0;
+    if ($orderFilterCustomerId > 0) {
+        $orderFilterCustomer = admin_customer_basic_row($db, $orderFilterCustomerId);
+        if (!$orderFilterCustomer) {
+            $orderFilterCustomerId = 0;
+        }
+    }
+
+    $orderListPage = max(1, (int)($_GET['order_list_page'] ?? 1));
+    $orderListTotal = admin_order_count($db, $orderFilterCustomerId);
+    $orderListTotalPages = max(1, (int)ceil($orderListTotal / $orderListPerPage));
+    if ($orderListPage > $orderListTotalPages) {
+        $orderListPage = $orderListTotalPages;
+    }
+
+    $orderShowCreate = (string)($_GET['view'] ?? '') === 'create';
+    $orderProviders = admin_product_provider_rows($db);
+    $orderProducts = admin_product_active_rows($db);
+    foreach ($orderProducts as $orderProduct) {
+        $providerId = (int)($orderProduct['provider_id'] ?? 0);
+        if ($providerId <= 0) {
+            continue;
+        }
+        if (!admin_order_product_can_extend($orderProduct)) {
+            continue;
+        }
+        if (!isset($orderProductsByProvider[$providerId])) {
+            $orderProductsByProvider[$providerId] = [];
+        }
+        $orderProductsByProvider[$providerId][] = $orderProduct;
+    }
+
+    if (isset($_POST['admin_save_order_info'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_order_info($db, (int)($_POST['order_id'] ?? 0), $_POST, (int)($adminUser['id'] ?? 0), $requestIp);
+            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'order_update_error', 'Unable to update order.'));
+            $pageAlertType = !empty($saveResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_extend_order'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $extendResult = admin_extend_order($db, (int)($_POST['order_id'] ?? 0), (int)($_POST['extend_product_id'] ?? 0));
+            $pageAlert = (string)($extendResult['message'] ?? admin_t($messages, 'order_extend_error', 'Unable to extend subscription.'));
+            $pageAlertType = !empty($extendResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_order'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteResult = admin_delete_order($db, (int)($_POST['order_id'] ?? 0), (int)($adminUser['id'] ?? 0), $requestIp);
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'order_delete_error', 'Unable to delete order.'));
+            $pageAlertType = !empty($deleteResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($orderShowCreate) {
+        $orderCreateState['customer_id'] = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : 0;
+    }
+
+    if (isset($_POST['admin_create_order'])) {
+        $orderShowCreate = true;
+        $orderCreateState = [
+            'customer_id' => (int)($_POST['customer_id'] ?? 0),
+            'provider_id' => (int)($_POST['provider_id'] ?? 0),
+            'product_id' => (int)($_POST['product_id'] ?? 0),
+            'customer_note' => trim((string)($_POST['customer_note'] ?? '')),
+            'has_delivery_link' => isset($_POST['has_delivery_link']) && (string)$_POST['has_delivery_link'] === '1',
+            'delivery_link' => trim((string)($_POST['delivery_link'] ?? '')),
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createResult = admin_create_order($db, [
+                'customer_id' => $orderCreateState['customer_id'],
+                'product_id' => $orderCreateState['product_id'],
+                'customer_note' => $orderCreateState['customer_note'],
+                'has_delivery_link' => $orderCreateState['has_delivery_link'] ? '1' : '0',
+                'delivery_link' => $orderCreateState['delivery_link'],
+            ]);
+
+            if (!empty($createResult['ok'])) {
+                header('Location: /admin/?page=orders&created_order=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'order_create_error', 'Unable to create order.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($orderShowCreate && (int)$orderCreateState['customer_id'] > 0) {
+        $orderSelectedCustomer = admin_customer_basic_row($db, (int)$orderCreateState['customer_id']);
+    }
+
+    if ((int)$orderCreateState['provider_id'] <= 0 && (int)$orderCreateState['product_id'] > 0) {
+        foreach ($orderProducts as $orderProduct) {
+            if ((int)($orderProduct['id'] ?? 0) === (int)$orderCreateState['product_id']) {
+                $orderCreateState['provider_id'] = (int)($orderProduct['provider_id'] ?? 0);
+                break;
+            }
+        }
+    }
+}
+
+if ($route === 'products') {
+    if ($adminDefaultCurrencyId > 0) {
+        admin_sync_products_currency($db, $adminDefaultCurrencyId);
+    }
+
+    $productListPage = max(1, (int)($_GET['product_list_page'] ?? 1));
+    $productListTotal = admin_product_count($db);
+    $productListTotalPages = max(1, (int)ceil($productListTotal / $productListPerPage));
+    if ($productListPage > $productListTotalPages) {
+        $productListPage = $productListTotalPages;
+    }
+
+    $productEditorId = isset($_GET['edit_product']) ? (int)($_GET['edit_product']) : 0;
+    $productShowCreate = (string)($_GET['view'] ?? '') === 'create';
+    $productProviderEditorId = isset($_GET['edit_provider']) ? (int)($_GET['edit_provider']) : 0;
+    $productProviderShowCreate = (string)($_GET['provider_view'] ?? '') === 'create';
+    $productProviders = admin_product_provider_rows($db);
+
+    if (isset($_POST['admin_create_product_provider'])) {
+        $productProviderShowCreate = true;
+        $productListPage = max(1, (int)($_POST['product_list_page'] ?? $productListPage));
+        $productProviderFormState = [
+            'name' => trim((string)($_POST['name'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'description' => trim((string)($_POST['description'] ?? '')),
+            'dashboard_url' => trim((string)($_POST['dashboard_url'] ?? '')),
+            'url_replacement_from' => trim((string)($_POST['url_replacement_from'] ?? '')),
+            'url_replacement_to' => trim((string)($_POST['url_replacement_to'] ?? '')),
+            'supports_manual_delivery' => isset($_POST['supports_manual_delivery']) && (string)$_POST['supports_manual_delivery'] === '1' ? 1 : 0,
+            'supports_url_replacement' => isset($_POST['supports_url_replacement']) && (string)$_POST['supports_url_replacement'] === '1' ? 1 : 0,
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createProviderResult = admin_create_product_provider($db, $_POST);
+            if (!empty($createProviderResult['ok']) && !empty($createProviderResult['provider_id'])) {
+                header('Location: /admin/?page=products&edit_provider=' . (int)$createProviderResult['provider_id'] . '&product_list_page=' . $productListPage . '&created_provider=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createProviderResult['message'] ?? admin_t($messages, 'product_provider_create_error', 'Unable to create provider.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_product_provider'])) {
+        $productProviderEditorId = (int)($_POST['provider_id'] ?? 0);
+        $productListPage = max(1, (int)($_POST['product_list_page'] ?? $productListPage));
+        $productProviderFormState = [
+            'name' => trim((string)($_POST['name'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'description' => trim((string)($_POST['description'] ?? '')),
+            'dashboard_url' => trim((string)($_POST['dashboard_url'] ?? '')),
+            'url_replacement_from' => trim((string)($_POST['url_replacement_from'] ?? '')),
+            'url_replacement_to' => trim((string)($_POST['url_replacement_to'] ?? '')),
+            'supports_manual_delivery' => isset($_POST['supports_manual_delivery']) && (string)$_POST['supports_manual_delivery'] === '1' ? 1 : 0,
+            'supports_url_replacement' => isset($_POST['supports_url_replacement']) && (string)$_POST['supports_url_replacement'] === '1' ? 1 : 0,
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveProviderResult = admin_save_product_provider($db, $productProviderEditorId, $_POST);
+            if (!empty($saveProviderResult['ok'])) {
+                header('Location: /admin/?page=products&edit_provider=' . $productProviderEditorId . '&product_list_page=' . $productListPage . '&saved_provider=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveProviderResult['message'] ?? admin_t($messages, 'product_provider_save_error', 'Unable to save provider.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_product_provider'])) {
+        $productProviderEditorId = (int)($_POST['provider_id'] ?? 0);
+        $productListPage = max(1, (int)($_POST['product_list_page'] ?? $productListPage));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteProviderResult = admin_delete_product_provider($db, $productProviderEditorId);
+            if (!empty($deleteProviderResult['ok'])) {
+                header('Location: /admin/?page=products&product_list_page=' . $productListPage . '&deleted_provider=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteProviderResult['message'] ?? admin_t($messages, 'product_provider_delete_error', 'Unable to delete provider.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_create_product'])) {
+        $productShowCreate = true;
+        $productListPage = max(1, (int)($_POST['product_list_page'] ?? $productListPage));
+        $productFormState = [
+            'provider_id' => (int)($_POST['provider_id'] ?? 0),
+            'name' => trim((string)($_POST['name'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'description' => trim((string)($_POST['description'] ?? '')),
+            'duration_hours' => trim((string)($_POST['duration_hours'] ?? '0')),
+            'price_amount' => trim((string)($_POST['price_amount'] ?? '0')),
+            'currency_id' => $adminDefaultCurrencyId,
+            'product_type' => trim((string)($_POST['product_type'] ?? 'subscription')),
+            'provisioning_mode' => trim((string)($_POST['provisioning_mode'] ?? 'manual')),
+            'is_trial' => isset($_POST['is_trial']) && (string)$_POST['is_trial'] === '1' ? 1 : 0,
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createResult = admin_create_product($db, $_POST);
+            if (!empty($createResult['ok']) && !empty($createResult['product_id'])) {
+                header('Location: /admin/?page=products&edit_product=' . (int)$createResult['product_id'] . '&product_list_page=' . $productListPage . '&created_product=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'product_create_error', 'Unable to create product.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_product'])) {
+        $productEditorId = (int)($_POST['product_id'] ?? 0);
+        $productListPage = max(1, (int)($_POST['product_list_page'] ?? $productListPage));
+        $productFormState = [
+            'provider_id' => (int)($_POST['provider_id'] ?? 0),
+            'name' => trim((string)($_POST['name'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'description' => trim((string)($_POST['description'] ?? '')),
+            'duration_hours' => trim((string)($_POST['duration_hours'] ?? '0')),
+            'price_amount' => trim((string)($_POST['price_amount'] ?? '0')),
+            'currency_id' => $adminDefaultCurrencyId,
+            'product_type' => trim((string)($_POST['product_type'] ?? 'subscription')),
+            'provisioning_mode' => trim((string)($_POST['provisioning_mode'] ?? 'manual')),
+            'is_trial' => isset($_POST['is_trial']) && (string)$_POST['is_trial'] === '1' ? 1 : 0,
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_product($db, $productEditorId, $_POST);
+            if (!empty($saveResult['ok'])) {
+                header('Location: /admin/?page=products&edit_product=' . $productEditorId . '&product_list_page=' . $productListPage . '&saved_product=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'product_save_error', 'Unable to save product.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_product'])) {
+        $productEditorId = (int)($_POST['product_id'] ?? 0);
+        $productListPage = max(1, (int)($_POST['product_list_page'] ?? $productListPage));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteResult = admin_delete_product($db, $productEditorId);
+            if (!empty($deleteResult['ok'])) {
+                header('Location: /admin/?page=products&product_list_page=' . $productListPage . '&deleted_product=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'product_delete_error', 'Unable to delete product.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($productEditorId > 0) {
+        $productEditor = admin_product_find($db, $productEditorId);
+        if (!$productEditor) {
+            $productEditorId = 0;
+        } elseif (isset($_POST['admin_save_product'])) {
+            $productEditor = array_merge($productEditor, $productFormState);
+        } elseif ($adminDefaultCurrencyId > 0) {
+            $productEditor['currency_id'] = $adminDefaultCurrencyId;
+        }
+
+        if ($productEditor && (int)($productEditor['provider_id'] ?? 0) > 0) {
+            $providerPresent = false;
+            foreach ($productProviders as $providerRow) {
+                if ((int)($providerRow['id'] ?? 0) === (int)($productEditor['provider_id'] ?? 0)) {
+                    $providerPresent = true;
+                    break;
+                }
+            }
+
+            if (!$providerPresent) {
+                $currentProvider = admin_product_provider_find($db, (int)$productEditor['provider_id']);
+                if ($currentProvider) {
+                    $productProviders[] = $currentProvider;
+                }
+            }
+        }
+
+        if ($productEditor) {
+            $productDeleteSummary = admin_product_delete_summary($db, (int)($productEditor['id'] ?? 0));
+        }
+    }
+
+    if ($productProviderEditorId > 0) {
+        $productProviderEditor = admin_product_provider_find($db, $productProviderEditorId);
+        if (!$productProviderEditor) {
+            $productProviderEditorId = 0;
+        } elseif (isset($_POST['admin_save_product_provider'])) {
+            $productProviderEditor = array_merge($productProviderEditor, $productProviderFormState);
+        }
+    }
+}
+
+if ($route === 'email-templates') {
+    $emailTemplateListPage = max(1, (int)($_GET['template_list_page'] ?? 1));
+    $emailTemplateListTotal = admin_email_template_count($db);
+    $emailTemplateListTotalPages = max(1, (int)ceil($emailTemplateListTotal / $emailTemplateListPerPage));
+    if ($emailTemplateListPage > $emailTemplateListTotalPages) {
+        $emailTemplateListPage = $emailTemplateListTotalPages;
+    }
+
+    $emailTemplateEditorId = isset($_GET['edit_template']) ? (int)($_GET['edit_template']) : 0;
+
+    if (isset($_POST['admin_save_email_template'])) {
+        $emailTemplateEditorId = (int)($_POST['template_id'] ?? 0);
+        $emailTemplateListPage = max(1, (int)($_POST['template_list_page'] ?? $emailTemplateListPage));
+        $emailTemplateFormState = [
+            'name' => trim((string)($_POST['name'] ?? '')),
+            'subject_en' => trim((string)($_POST['subject_en'] ?? '')),
+            'body_en' => trim((string)($_POST['body_en'] ?? '')),
+            'subject_pl' => trim((string)($_POST['subject_pl'] ?? '')),
+            'body_pl' => trim((string)($_POST['body_pl'] ?? '')),
+            'is_active' => isset($_POST['is_active']) && (string)($_POST['is_active'] ?? '') === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveTemplateResult = admin_save_email_template($db, $emailTemplateEditorId, $_POST);
+            if (!empty($saveTemplateResult['ok'])) {
+                header('Location: /admin/?page=email-templates&edit_template=' . $emailTemplateEditorId . '&template_list_page=' . $emailTemplateListPage . '&saved_template=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveTemplateResult['message'] ?? admin_t($messages, 'email_template_save_error', 'Unable to save email template.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($emailTemplateEditorId > 0) {
+        $emailTemplateEditor = admin_email_template_find($db, $emailTemplateEditorId);
+        if (!$emailTemplateEditor) {
+            $emailTemplateEditorId = 0;
+        } elseif (isset($_POST['admin_save_email_template'])) {
+            $emailTemplateEditor = array_merge($emailTemplateEditor, $emailTemplateFormState);
+        }
+    }
+}
+
+if ($route === 'live-chat') {
+    admin_ensure_chat_quick_replies_runtime_table($db);
+
+    $chatSelectedUserId = max(0, (int)($_GET['user_id'] ?? $_POST['user_id'] ?? 0));
+    $chatQuickReplyEditId = max(0, (int)($_GET['edit_quick_reply'] ?? $_POST['quick_reply_id'] ?? 0));
+    $chatQuickReplyFormState = [
+        'locale_code' => admin_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
+        'title' => trim((string)($_POST['title'] ?? '')),
+        'message_body' => trim((string)($_POST['message_body'] ?? '')),
+        'sort_order' => (string)($_POST['sort_order'] ?? '100'),
+        'is_active' => isset($_POST['is_active']) && (string)($_POST['is_active'] ?? '') === '1' ? 1 : 0,
+    ];
+    $chatQuickReplyEditor = null;
+    $chatSelectedCustomer = null;
+    $chatSelectedConversationId = 0;
+    $chatSelectedConversationRow = null;
+    $chatSelectedMessages = [];
+    $chatSelectedPresence = ['class_name' => 'admin-chat-presence admin-chat-presence--offline', 'label' => admin_t($messages, 'chat_presence_offline', 'Offline')];
+
+    $buildLiveChatUrl = static function (array $overrides = []) use ($chatSelectedUserId, $chatQuickReplyEditId): string {
+        $params = ['page' => 'live-chat'];
+        if ($chatSelectedUserId > 0) {
+            $params['user_id'] = $chatSelectedUserId;
+        }
+        if ($chatQuickReplyEditId > 0) {
+            $params['edit_quick_reply'] = $chatQuickReplyEditId;
+        }
+
+        foreach ($overrides as $key => $value) {
+            if ($value === null || $value === '') {
+                unset($params[$key]);
+                continue;
+            }
+
+            $params[$key] = $value;
+        }
+
+        return '/admin/?' . http_build_query($params);
+    };
+
+    if (isset($_POST['admin_create_chat_quick_reply'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createReplyResult = admin_create_chat_quick_reply($db, $_POST);
+            if (!empty($createReplyResult['ok'])) {
+                header('Location: ' . $buildLiveChatUrl(['edit_quick_reply' => null, 'created_quick_reply' => 1]));
+                exit;
+            }
+
+            $pageAlert = (string)($createReplyResult['message'] ?? admin_t($messages, 'chat_quick_reply_create_error', 'Unable to create quick reply.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_chat_quick_reply'])) {
+        $chatQuickReplyEditId = max(0, (int)($_POST['quick_reply_id'] ?? $chatQuickReplyEditId));
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveReplyResult = admin_save_chat_quick_reply($db, $chatQuickReplyEditId, $_POST);
+            if (!empty($saveReplyResult['ok'])) {
+                header('Location: ' . $buildLiveChatUrl(['edit_quick_reply' => $chatQuickReplyEditId, 'saved_quick_reply' => 1]));
+                exit;
+            }
+
+            $pageAlert = (string)($saveReplyResult['message'] ?? admin_t($messages, 'chat_quick_reply_save_error', 'Unable to save quick reply.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_chat_quick_reply'])) {
+        $chatQuickReplyEditId = max(0, (int)($_POST['quick_reply_id'] ?? $chatQuickReplyEditId));
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteReplyResult = admin_delete_chat_quick_reply($db, $chatQuickReplyEditId);
+            if (!empty($deleteReplyResult['ok'])) {
+                header('Location: ' . $buildLiveChatUrl(['edit_quick_reply' => null, 'deleted_quick_reply' => 1]));
+                exit;
+            }
+
+            $pageAlert = (string)($deleteReplyResult['message'] ?? admin_t($messages, 'chat_quick_reply_delete_error', 'Unable to delete quick reply.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_send_chat_quick_reply'])) {
+        $chatSelectedUserId = max(0, (int)($_POST['user_id'] ?? $chatSelectedUserId));
+        $sendQuickReplyId = max(0, (int)($_POST['quick_reply_id'] ?? 0));
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } elseif ($chatSelectedUserId <= 0) {
+            $pageAlert = admin_t($messages, 'chat_quick_reply_send_missing_user', 'Select a user conversation first.');
+            $pageAlertType = 'danger';
+        } else {
+            $sendReply = admin_chat_quick_reply_find($db, $sendQuickReplyId);
+            if (!$sendReply || empty($sendReply['is_active'])) {
+                $pageAlert = admin_t($messages, 'chat_quick_reply_send_error', 'Unable to send quick reply.');
+                $pageAlertType = 'danger';
+            } else {
+                $chatSelectedConversationId = admin_find_or_create_chat_conversation($db, $chatSelectedUserId, (int)$adminUser['id']);
+                $sent = $chatSelectedConversationId > 0
+                    ? admin_chat_insert_message($db, $chatSelectedConversationId, (int)$adminUser['id'], (string)($sendReply['message_body'] ?? ''))
+                    : false;
+                if ($sent) {
+                    header('Location: ' . $buildLiveChatUrl(['user_id' => $chatSelectedUserId, 'sent_quick_reply' => 1]));
+                    exit;
+                }
+
+                $pageAlert = admin_t($messages, 'chat_quick_reply_send_error', 'Unable to send quick reply.');
+                $pageAlertType = 'danger';
+            }
+        }
+    }
+
+    if ($chatSelectedUserId > 0) {
+        $chatSelectedCustomer = admin_customer_detail_row($db, $chatSelectedUserId);
+        if ($chatSelectedCustomer) {
+            $chatSelectedConversationId = admin_find_or_create_chat_conversation($db, $chatSelectedUserId, (int)$adminUser['id']);
+            if ($chatSelectedConversationId > 0) {
+                admin_mark_chat_conversation_read($db, $chatSelectedConversationId);
+                $chatSelectedConversationRow = admin_chat_conversation_row($db, $chatSelectedConversationId);
+                $chatSelectedMessages = admin_chat_conversation_messages($db, $chatSelectedConversationId);
+                $chatSelectedPresence = admin_chat_customer_presence(
+                    $db,
+                    $chatSelectedUserId,
+                    (string)($chatSelectedCustomer['last_login_at'] ?? ''),
+                    $messages
+                );
+            }
+        } else {
+            $chatSelectedUserId = 0;
+        }
+    }
+
+    $chatQuickReplyRows = $chatSelectedCustomer && !empty($chatSelectedCustomer['locale_code'])
+        ? admin_chat_quick_reply_rows_for_locale($db, (string)$chatSelectedCustomer['locale_code'], false)
+        : admin_chat_quick_reply_rows($db, false);
+
+    if ($chatQuickReplyEditId > 0) {
+        $chatQuickReplyEditor = admin_chat_quick_reply_find($db, $chatQuickReplyEditId);
+        if (!$chatQuickReplyEditor) {
+            $chatQuickReplyEditId = 0;
+        } elseif (isset($_POST['admin_save_chat_quick_reply'])) {
+            $chatQuickReplyEditor = array_merge($chatQuickReplyEditor, $chatQuickReplyFormState);
+        }
+    }
+}
+
+if ($route === 'faq') {
+    $faqListPage = max(1, (int)($_GET['faq_list_page'] ?? 1));
+    $faqListTotal = admin_faq_count($db);
+    $faqListTotalPages = max(1, (int)ceil($faqListTotal / $faqListPerPage));
+    if ($faqListPage > $faqListTotalPages) {
+        $faqListPage = $faqListTotalPages;
+    }
+
+    $faqEditorId = isset($_GET['edit_faq']) ? (int)$_GET['edit_faq'] : 0;
+    $faqShowCreate = (string)($_GET['view'] ?? '') === 'create';
+
+    if (isset($_POST['admin_create_faq'])) {
+        $faqShowCreate = true;
+        $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
+        $faqFormState = [
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'body' => trim((string)($_POST['body'] ?? '')),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createResult = admin_create_faq($db, $_POST);
+            if (!empty($createResult['ok']) && !empty($createResult['faq_id'])) {
+                header('Location: /admin/?page=faq&edit_faq=' . (int)$createResult['faq_id'] . '&faq_list_page=' . $faqListPage . '&created_faq=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'faq_create_error', 'Unable to create FAQ entry.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_faq'])) {
+        $faqEditorId = (int)($_POST['faq_id'] ?? 0);
+        $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
+        $faqFormState = [
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'body' => trim((string)($_POST['body'] ?? '')),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_faq($db, $faqEditorId, $_POST);
+            if (!empty($saveResult['ok'])) {
+                header('Location: /admin/?page=faq&edit_faq=' . $faqEditorId . '&faq_list_page=' . $faqListPage . '&saved_faq=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'faq_save_error', 'Unable to save FAQ entry.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_faq'])) {
+        $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteResult = admin_delete_faq($db, (int)($_POST['faq_id'] ?? 0));
+            if (!empty($deleteResult['ok'])) {
+                header('Location: /admin/?page=faq&faq_list_page=' . $faqListPage . '&deleted_faq=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'faq_delete_error', 'Unable to delete FAQ entry.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($faqEditorId > 0) {
+        $faqEditor = admin_faq_find($db, $faqEditorId);
+        if (!$faqEditor) {
+            $faqEditorId = 0;
+        } elseif (isset($_POST['admin_save_faq'])) {
+            $faqEditor = array_merge($faqEditor, $faqFormState);
+        }
+    }
+}
+
+if ($route === 'cryptocurrencies') {
+    $cryptoAssetEditorId = isset($_GET['edit_asset']) ? (int)$_GET['edit_asset'] : 0;
+
+    if (isset($_POST['admin_toggle_crypto_asset'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $toggleResult = admin_toggle_crypto_asset($db, (int)($_POST['admin_toggle_crypto_asset'] ?? 0));
+            $pageAlert = (string)($toggleResult['message'] ?? '');
+            $pageAlertType = !empty($toggleResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_crypto_asset'])) {
+        $cryptoAssetEditorId = (int)($_POST['crypto_asset_id'] ?? 0);
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_crypto_asset($db, $cryptoAssetEditorId, $_POST);
+            $pageAlert = (string)($saveResult['message'] ?? '');
+            $pageAlertType = !empty($saveResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    $cryptoAssetRows = admin_crypto_asset_rows($db, true);
+    if ($cryptoAssetEditorId > 0) {
+        $cryptoAssetEditor = admin_crypto_asset_find($db, $cryptoAssetEditorId);
+        if (!$cryptoAssetEditor) {
+            $cryptoAssetEditorId = 0;
+        }
+    }
+}
+
+if ($route === 'news') {
+    $newsEditorId = isset($_GET['edit_news']) ? (int)($_GET['edit_news']) : 0;
+    $newsShowCreate = (string)($_GET['view'] ?? '') === 'create';
+    $newsListPage = max(1, (int)($_GET['news_list_page'] ?? $_POST['news_list_page'] ?? 1));
+    $newsListTotal = admin_news_count($db);
+    $newsListTotalPages = max(1, (int)ceil($newsListTotal / $newsListPerPage));
+    if ($newsListPage > $newsListTotalPages) {
+        $newsListPage = $newsListTotalPages;
+    }
+
+    if (isset($_POST['admin_create_news'])) {
+        $newsShowCreate = true;
+        $newsListPage = max(1, (int)($_POST['news_list_page'] ?? $newsListPage));
+        $newsFormState = [
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'body' => trim((string)($_POST['body'] ?? '')),
+            'visibility' => strtolower(trim((string)($_POST['visibility'] ?? 'client'))),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+            'published_at' => admin_normalize_datetime_input($_POST['published_at'] ?? null) ?? date('Y-m-d H:i:s'),
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createResult = admin_create_news($db, $_POST);
+            if (!empty($createResult['ok']) && !empty($createResult['news_id'])) {
+                header('Location: /admin/?page=news&edit_news=' . (int)$createResult['news_id'] . '&news_list_page=' . $newsListPage . '&created_news=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'news_create_error', 'Unable to create news post.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_news'])) {
+        $newsEditorId = (int)($_POST['news_id'] ?? 0);
+        $newsListPage = max(1, (int)($_POST['news_list_page'] ?? $newsListPage));
+        $newsFormState = [
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'body' => trim((string)($_POST['body'] ?? '')),
+            'visibility' => strtolower(trim((string)($_POST['visibility'] ?? 'client'))),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+            'published_at' => admin_normalize_datetime_input($_POST['published_at'] ?? null) ?? date('Y-m-d H:i:s'),
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_news($db, $newsEditorId, $_POST);
+            if (!empty($saveResult['ok'])) {
+                header('Location: /admin/?page=news&edit_news=' . $newsEditorId . '&news_list_page=' . $newsListPage . '&saved_news=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'news_save_error', 'Unable to save news post.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($newsEditorId > 0) {
+        $newsEditor = admin_news_find($db, $newsEditorId);
+        if (!$newsEditor) {
+            $newsEditorId = 0;
+        } elseif (isset($_POST['admin_save_news'])) {
+            $newsEditor = array_merge($newsEditor, $newsFormState);
+        }
+    }
+}
+
+if ($route === 'crypto-wallets') {
+    $walletEditorId = isset($_GET['edit_wallet']) ? (int)$_GET['edit_wallet'] : 0;
+    $walletListPage = max(1, (int)($_GET['wallet_list_page'] ?? 1));
+    $walletListTotal = admin_crypto_wallet_count($db);
+    $walletListTotalPages = max(1, (int)ceil($walletListTotal / $walletListPerPage));
+    if ($walletListPage > $walletListTotalPages) {
+        $walletListPage = $walletListTotalPages;
+    }
+
+    if (isset($_POST['admin_save_crypto_wallet'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $walletEditorId = (int)($_POST['wallet_id'] ?? 0);
+            $walletListPage = max(1, (int)($_POST['wallet_list_page'] ?? $walletListPage));
+            $saveResult = admin_save_crypto_wallet($db, $walletEditorId, $_POST, (int)$adminUser['id'], $requestIp);
+            $pageAlert = !empty($saveResult['ok'])
+                ? admin_t($messages, 'wallet_save_success', 'Wallet saved successfully.')
+                : ((string)($saveResult['message'] ?? '') !== ''
+                    ? (string)$saveResult['message']
+                    : admin_t($messages, 'wallet_save_error', 'Unable to save wallet.'));
+            $pageAlertType = !empty($saveResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_assign_crypto_wallet_customer'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $walletEditorId = (int)($_POST['wallet_id'] ?? 0);
+            $walletListPage = max(1, (int)($_POST['wallet_list_page'] ?? $walletListPage));
+            $assignCustomerId = (int)($_POST['assignment_customer_id'] ?? 0);
+            $assignResult = admin_assign_crypto_wallet_customer($db, $walletEditorId, $assignCustomerId, (int)$adminUser['id'], $appSettings, $requestIp);
+            $pageAlert = (string)($assignResult['message'] ?? '');
+            $pageAlertType = !empty($assignResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_remove_crypto_wallet_assignment'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $walletEditorId = (int)($_POST['wallet_id'] ?? 0);
+            $walletListPage = max(1, (int)($_POST['wallet_list_page'] ?? $walletListPage));
+            $assignmentId = (int)($_POST['admin_remove_crypto_wallet_assignment'] ?? 0);
+            $removeResult = admin_remove_crypto_wallet_assignment($db, $walletEditorId, $assignmentId, (int)$adminUser['id'], $requestIp);
+            $pageAlert = (string)($removeResult['message'] ?? '');
+            $pageAlertType = !empty($removeResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    $walletAssetOptions = admin_crypto_asset_rows($db);
+    if ($cryptoWalletPoolDepleted) {
+        $pageAlert = admin_t($messages, 'wallet_pool_empty_warning', 'No free crypto wallets are available right now. Add or release wallet addresses in the pool.');
+        $pageAlertType = 'warning';
+    }
+    if ($walletEditorId > 0) {
+        $walletEditor = admin_crypto_wallet_find($db, $walletEditorId);
+        $walletAssignments = admin_crypto_wallet_active_assignments($db, $walletEditorId);
+    }
+}
+
+if ($route === 'bank-accounts') {
+    $bankAccountEditorId = isset($_GET['edit_account']) ? (int)$_GET['edit_account'] : 0;
+    $bankAccountListPage = max(1, (int)($_GET['account_list_page'] ?? 1));
+    $bankAccountListTotal = admin_bank_account_count($db);
+    $bankAccountListTotalPages = max(1, (int)ceil($bankAccountListTotal / $bankAccountListPerPage));
+    if ($bankAccountListPage > $bankAccountListTotalPages) {
+        $bankAccountListPage = $bankAccountListTotalPages;
+    }
+
+    if (isset($_POST['admin_save_bank_account'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $bankAccountEditorId = (int)($_POST['bank_account_id'] ?? 0);
+            $bankAccountListPage = max(1, (int)($_POST['account_list_page'] ?? $bankAccountListPage));
+            $saveResult = admin_save_bank_account($db, $bankAccountEditorId, $_POST, (int)$adminUser['id'], $requestIp);
+            $pageAlert = (string)($saveResult['message'] ?? '');
+            $pageAlertType = !empty($saveResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_assign_bank_account_customer'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $bankAccountEditorId = (int)($_POST['bank_account_id'] ?? 0);
+            $bankAccountListPage = max(1, (int)($_POST['account_list_page'] ?? $bankAccountListPage));
+            $assignCustomerId = (int)($_POST['assignment_customer_id'] ?? 0);
+            $assignResult = admin_assign_bank_account_customer($db, $bankAccountEditorId, $assignCustomerId, (int)$adminUser['id'], $appSettings, $requestIp);
+            $pageAlert = (string)($assignResult['message'] ?? '');
+            $pageAlertType = !empty($assignResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_remove_bank_account_assignment'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $bankAccountEditorId = (int)($_POST['bank_account_id'] ?? 0);
+            $bankAccountListPage = max(1, (int)($_POST['account_list_page'] ?? $bankAccountListPage));
+            $assignmentId = (int)($_POST['admin_remove_bank_account_assignment'] ?? 0);
+            $removeResult = admin_remove_bank_account_assignment($db, $bankAccountEditorId, $assignmentId, (int)$adminUser['id'], $requestIp);
+            $pageAlert = (string)($removeResult['message'] ?? '');
+            $pageAlertType = !empty($removeResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_bank_account'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $bankAccountEditorId = (int)($_POST['bank_account_id'] ?? 0);
+            $bankAccountListPage = max(1, (int)($_POST['account_list_page'] ?? $bankAccountListPage));
+            $deleteResult = admin_delete_bank_account($db, $bankAccountEditorId, (int)$adminUser['id'], $requestIp);
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'bank_delete_error', 'Unable to delete bank account.'));
+            $pageAlertType = !empty($deleteResult['ok']) ? 'success' : 'danger';
+            if (!empty($deleteResult['ok'])) {
+                $bankAccountEditorId = 0;
+            }
+        }
+    }
+
+    if ($bankAccountEditorId > 0) {
+        $bankAccountEditor = admin_bank_account_find($db, $bankAccountEditorId);
+        $bankAccountAssignments = admin_bank_account_active_assignments($db, $bankAccountEditorId);
+        $bankAccountDeleteSummary = admin_bank_account_delete_summary($db, $bankAccountEditorId);
+    }
+}
+
+if ($route === 'users') {
+    $userQuickCreateState = [
+        'email' => trim((string)($_POST['quick_email'] ?? '')),
+        'password' => (string)($_POST['quick_password'] ?? ''),
+        'locale_code' => admin_normalize_locale((string)($_POST['quick_locale_code'] ?? 'pl')),
+        'status' => strtolower(trim((string)($_POST['quick_status'] ?? 'active'))),
+        'send_password_email' => isset($_POST['quick_send_password_email']) ? 1 : 0,
+    ];
+    $userImportState = [
+        'source_text' => trim((string)($_POST['import_source_text'] ?? '')),
+        'locale_code' => admin_normalize_locale((string)($_POST['import_locale_code'] ?? 'pl')),
+        'status' => strtolower(trim((string)($_POST['import_status'] ?? 'active'))),
+    ];
+
+    if (isset($_POST['admin_quick_create_customer'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $quickCreateResult = admin_create_customer_account(
+                $db,
+                (string)($userQuickCreateState['email'] ?? ''),
+                (string)($userQuickCreateState['password'] ?? ''),
+                [
+                    'locale_code' => (string)($userQuickCreateState['locale_code'] ?? 'pl'),
+                    'status' => (string)($userQuickCreateState['status'] ?? 'active'),
+                    'send_password_email' => !empty($userQuickCreateState['send_password_email']),
+                ],
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlertType = !empty($quickCreateResult['ok']) ? 'success' : 'danger';
+            if (!empty($quickCreateResult['ok'])) {
+                $pageAlert = admin_t($messages, 'users_quick_add_success', 'User created successfully.')
+                    . ' Email: ' . (string)($quickCreateResult['email'] ?? '')
+                    . ' Password: ' . (string)($quickCreateResult['password'] ?? '') . '.';
+                $pageAlertHtml = admin_e(admin_t($messages, 'users_quick_add_success', 'User created successfully.'))
+                    . ' Email: <strong>' . admin_e((string)($quickCreateResult['email'] ?? '')) . '</strong>'
+                    . ' Password: <strong>' . admin_e((string)($quickCreateResult['password'] ?? '')) . '</strong>.';
+                if (!empty($userQuickCreateState['send_password_email'])) {
+                    $emailNotificationText = !empty($quickCreateResult['email_notification']['ok']) || !empty($quickCreateResult['email_notification']['queued'])
+                        ? admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')
+                        : admin_t($messages, 'users_email_password_queue_failed', 'Password email could not be queued.');
+                    $pageAlert .= ' ' . $emailNotificationText;
+                    $pageAlertHtml .= ' ' . admin_e($emailNotificationText);
+                }
+                $userQuickCreateState = [
+                    'email' => '',
+                    'password' => '',
+                    'locale_code' => admin_normalize_locale((string)($userQuickCreateState['locale_code'] ?? 'pl')),
+                    'status' => strtolower(trim((string)($userQuickCreateState['status'] ?? 'active'))),
+                    'send_password_email' => 1,
+                ];
+            } else {
+                $pageAlert = (string)($quickCreateResult['message'] ?? '');
+            }
+        }
+    }
+
+    if (isset($_POST['admin_import_customers'])) {
+        $importSourceText = trim((string)($_POST['import_source_text'] ?? ''));
+        if ($importSourceText === '' && !empty($_FILES['import_source_file']['tmp_name']) && is_uploaded_file($_FILES['import_source_file']['tmp_name'])) {
+            $importSourceText = (string)file_get_contents($_FILES['import_source_file']['tmp_name']);
+        }
+        $userImportState['source_text'] = $importSourceText;
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $importResult = admin_import_customer_accounts(
+                $db,
+                $importSourceText,
+                [
+                    'locale_code' => (string)($userImportState['locale_code'] ?? 'pl'),
+                    'status' => (string)($userImportState['status'] ?? 'active'),
+                ],
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($importResult['message'] ?? '');
+            $pageAlertType = !empty($importResult['ok']) ? 'success' : 'danger';
+            if (!empty($importResult['ok'])) {
+                $userImportState['source_text'] = '';
+            }
+        }
+    }
+
+    $selectedCustomerId = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : 0;
+    if ($selectedCustomerId > 0 && isset($_POST['admin_save_customer_profile'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_customer_profile(
+                $db,
+                $selectedCustomerId,
+                $_POST,
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($saveResult['message'] ?? '');
+            $pageAlertType = !empty($saveResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_adjust_customer_balance'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $balanceResult = admin_adjust_customer_balance(
+                $db,
+                $selectedCustomerId,
+                $_POST,
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($balanceResult['message'] ?? '');
+            $pageAlertType = !empty($balanceResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_delete_customer'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteCustomerResult = admin_delete_customer_account(
+                $db,
+                $selectedCustomerId,
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+
+            if (!empty($deleteCustomerResult['ok'])) {
+                header('Location: /admin/?page=users&deleted_user=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteCustomerResult['message'] ?? '');
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_delete_customer_wallet_assignment'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteWalletResult = admin_delete_customer_wallet_assignment(
+                $db,
+                $selectedCustomerId,
+                (int)($_POST['wallet_assignment_id'] ?? 0),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($deleteWalletResult['message'] ?? admin_t($messages, 'customer_wallet_delete_error', 'Unable to remove wallet assignment.'));
+            $pageAlertType = !empty($deleteWalletResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_delete_customer_bank_assignment'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteBankResult = admin_delete_customer_bank_assignment(
+                $db,
+                $selectedCustomerId,
+                (int)($_POST['bank_account_assignment_id'] ?? 0),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($deleteBankResult['message'] ?? admin_t($messages, 'customer_bank_delete_error', 'Unable to remove bank account assignment.'));
+            $pageAlertType = !empty($deleteBankResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_delete_customer_activity_entry'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteActivityResult = admin_delete_customer_activity_entry(
+                $db,
+                $selectedCustomerId,
+                (int)($_POST['activity_id'] ?? 0),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($deleteActivityResult['message'] ?? admin_t($messages, 'customer_activity_delete_error', 'Unable to remove history entry.'));
+            $pageAlertType = !empty($deleteActivityResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0) {
+        $selectedCustomer = admin_customer_detail_row($db, $selectedCustomerId);
+        if ($selectedCustomer) {
+            $selectedCustomerSummary = admin_customer_management_summary($db, $selectedCustomerId);
+            $selectedCustomerOrders = admin_customer_order_rows($db, $selectedCustomerId);
+            $selectedCustomerPayments = admin_customer_payment_activity($db, $selectedCustomerId);
+            $selectedCustomerWallets = admin_customer_wallet_rows($db, $selectedCustomerId);
+            $selectedCustomerBankAccounts = admin_customer_bank_rows($db, $selectedCustomerId);
+            $selectedCustomerActivity = admin_customer_activity_rows($db, $selectedCustomerId);
+        }
+    }
+}
+
+if ($route === 'payments') {
+    $bankTransfersVisibleInPayments = admin_bank_transfers_enabled($appSettings);
+    $paymentFilterCustomerId = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : 0;
+    if ($paymentFilterCustomerId > 0) {
+        $paymentFilterCustomer = admin_customer_basic_row($db, $paymentFilterCustomerId);
+        if (!$paymentFilterCustomer) {
+            $paymentFilterCustomerId = 0;
+        }
+    }
+
+    $paymentScope = strtolower(trim((string)($_GET['payment_scope'] ?? 'open')));
+    if (!in_array($paymentScope, ['open', 'new', 'review', 'archived', 'all'], true)) {
+        $paymentScope = 'open';
+    }
+
+    $paymentTypeFilter = strtolower(trim((string)($_GET['payment_type_filter'] ?? '')));
+    if (!in_array($paymentTypeFilter, ['', 'crypto', 'bank'], true)) {
+        $paymentTypeFilter = '';
+    }
+    if (!$bankTransfersVisibleInPayments && $paymentTypeFilter === 'bank') {
+        $paymentTypeFilter = '';
+    }
+
+    $buildPaymentsListUrl = static function (array $overrides = []) use ($paymentFilterCustomerId, $paymentScope, $paymentTypeFilter): string {
+        $query = [
+            'page' => 'payments',
+            'customer_id' => $paymentFilterCustomerId > 0 ? $paymentFilterCustomerId : null,
+            'payment_scope' => $paymentScope !== 'open' ? $paymentScope : null,
+            'payment_type_filter' => $paymentTypeFilter !== '' ? $paymentTypeFilter : null,
+        ];
+
+        foreach ($overrides as $key => $value) {
+            $query[$key] = $value;
+        }
+
+        foreach ($query as $key => $value) {
+            if ($value === null || $value === '') {
+                unset($query[$key]);
+            }
+        }
+
+        return '/admin/?' . http_build_query($query);
+    };
+
+    $paymentEditorType = strtolower(trim((string)($_GET['payment_type'] ?? '')));
+    if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+        $paymentEditorType = '';
+    }
+    if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
+        $paymentEditorType = '';
+    }
+    $paymentEditorId = isset($_GET['payment_id']) ? (int)$_GET['payment_id'] : 0;
+
+    if (isset($_POST['admin_payment_quick_action'])) {
+        $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
+        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+            $paymentEditorType = '';
+        }
+        if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
+            $paymentEditorType = '';
+        }
+        $paymentEditorId = (int)($_POST['payment_id'] ?? $paymentEditorId);
+        $paymentFilterCustomerId = max(0, (int)($_POST['customer_id'] ?? $paymentFilterCustomerId));
+        $paymentScope = strtolower(trim((string)($_POST['payment_scope'] ?? $paymentScope)));
+        if (!in_array($paymentScope, ['open', 'new', 'review', 'archived', 'all'], true)) {
+            $paymentScope = 'open';
+        }
+        $paymentTypeFilter = strtolower(trim((string)($_POST['payment_type_filter'] ?? $paymentTypeFilter)));
+        if (!in_array($paymentTypeFilter, ['', 'crypto', 'bank'], true)) {
+            $paymentTypeFilter = '';
+        }
+        if (!$bankTransfersVisibleInPayments && $paymentTypeFilter === 'bank') {
+            $paymentTypeFilter = '';
+        }
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } elseif ($paymentEditorType === '') {
+            $pageAlert = admin_t($messages, 'payment_bank_disabled_hidden', 'Bank transfer payments are currently hidden.');
+            $pageAlertType = 'danger';
+        } else {
+            $quickActionResult = admin_payment_apply_quick_action(
+                $db,
+                $paymentEditorType,
+                $paymentEditorId,
+                (string)($_POST['quick_action'] ?? ''),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+
+            if (!empty($quickActionResult['ok'])) {
+                header('Location: ' . $buildPaymentsListUrl([
+                    (string)($_POST['quick_action'] ?? '') === 'delete' ? 'deleted_payment' : 'saved_payment' => 1,
+                ]));
+                exit;
+            }
+
+            $pageAlert = (string)($quickActionResult['message'] ?? admin_t($messages, 'payment_save_error', 'Unable to save payment request.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_payment'])) {
+        $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
+        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+            $paymentEditorType = '';
+        }
+        if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
+            $paymentEditorType = '';
+        }
+        $paymentEditorId = (int)($_POST['payment_id'] ?? $paymentEditorId);
+        $paymentFilterCustomerId = max(0, (int)($_POST['customer_id'] ?? $paymentFilterCustomerId));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } elseif ($paymentEditorType === '') {
+            $pageAlert = admin_t($messages, 'payment_bank_disabled_hidden', 'Bank transfer payments are currently hidden.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_payment($db, $paymentEditorType, $paymentEditorId, $_POST, (int)($adminUser['id'] ?? 0), $requestIp);
+            if (!empty($saveResult['ok'])) {
+                $redirect = $buildPaymentsListUrl([
+                    'payment_type' => $paymentEditorType,
+                    'payment_id' => $paymentEditorId,
+                    'saved_payment' => 1,
+                ]);
+                header('Location: ' . $redirect);
+                exit;
+            }
+
+            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'payment_save_error', 'Unable to save payment request.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_payment'])) {
+        $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
+        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+            $paymentEditorType = '';
+        }
+        if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
+            $paymentEditorType = '';
+        }
+        $paymentEditorId = (int)($_POST['payment_id'] ?? $paymentEditorId);
+        $paymentFilterCustomerId = max(0, (int)($_POST['customer_id'] ?? $paymentFilterCustomerId));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } elseif ($paymentEditorType === '') {
+            $pageAlert = admin_t($messages, 'payment_bank_disabled_hidden', 'Bank transfer payments are currently hidden.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteResult = admin_delete_payment($db, $paymentEditorType, $paymentEditorId, (int)($adminUser['id'] ?? 0), $requestIp);
+            if (!empty($deleteResult['ok'])) {
+                $redirect = $buildPaymentsListUrl(['deleted_payment' => 1]);
+                header('Location: ' . $redirect);
+                exit;
+            }
+
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'payment_delete_error', 'Unable to delete payment request.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($paymentEditorType !== '' && $paymentEditorId > 0) {
+        $paymentEditor = admin_payment_find($db, $paymentEditorType, $paymentEditorId);
+        if (!$paymentEditor) {
+            $paymentEditorType = '';
+            $paymentEditorId = 0;
+        } elseif (isset($_POST['admin_save_payment'])) {
+            $paymentEditor = array_merge($paymentEditor, $_POST);
+        }
+    }
+}
+
+$navigation = admin_navigation_config($appSettings, $adminUser);
+$assetVersion = admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/css/admin.css');
+$scriptVersion = admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/js/admin.js');
+$metrics = admin_dashboard_metrics($db);
+$dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
+$dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
+$dashboardSalesSeriesPath = admin_dashboard_chart_path($dashboardSalesSeries);
+$dashboardSalesSeriesPoints = admin_dashboard_chart_points($dashboardSalesSeries);
+$dashboardProviderBreakdowns = admin_dashboard_provider_breakdowns($db, 6, 4);
+$recentOrders = admin_recent_orders($db);
+$chatInboxRows = admin_chat_inbox_rows($db, 12, (int)($adminUser['id'] ?? 0));
+$chatInboxUnreadCount = admin_chat_inbox_unread_count($chatInboxRows);
+$chatPendingGroupInvites = admin_chat_group_pending_invites($db, (int)($adminUser['id'] ?? 0));
+$chatInboxEntries = [];
+$chatOnlineCount = 0;
+$chatActiveCount = 0;
+
+foreach ($chatInboxRows as $chatRow) {
+    if ((string)($chatRow['conversation_type'] ?? 'live_chat') === 'group_chat') {
+        $chatPresence = ['key' => 'online', 'label' => admin_t($messages, 'group_chat_badge', 'Group chat'), 'class_name' => 'admin-chat-presence admin-chat-presence--online'];
+    } else {
+        $chatPresence = admin_chat_customer_presence(
+            $db,
+            (int)($chatRow['customer_id'] ?? 0),
+            (string)($chatRow['customer_last_login_at'] ?? ''),
+            $messages
+        );
+        $chatPresenceKey = (string)($chatPresence['key'] ?? 'offline');
+        if ($chatPresenceKey === 'online') {
+            $chatOnlineCount++;
+            $chatActiveCount++;
+        } elseif ($chatPresenceKey === 'away') {
+            $chatActiveCount++;
+        }
+    }
+
+    $chatInboxEntries[] = [
+        'row' => $chatRow,
+        'display_name' => admin_chat_display_name($chatRow, $messages, 20),
+        'is_unread' => (int)($chatRow['unread_count'] ?? 0) > 0,
+        'time_label' => admin_chat_list_timestamp((string)($chatRow['updated_at'] ?: $chatRow['created_at'])),
+        'presence' => $chatPresence,
+    ];
+}
+$pageCard = admin_page_cards($route, $messages);
+
+if ($route === 'orders' && $orderFilterCustomer && is_array($pageCard)) {
+    $pageCard['text'] = admin_t($messages, 'orders_filtered_for', 'Showing orders for: ') . '<a href="?page=users&customer_id=' . $orderFilterCustomerId . '" class="admin-customer-email-link">' . (string)($orderFilterCustomer['email'] ?? '') . '</a>';
+}
+
+if ($route === 'payments' && $paymentFilterCustomer && is_array($pageCard)) {
+    $pageCard['text'] = admin_t($messages, 'payments_filtered_for', 'Showing payments for: ') . (string)($paymentFilterCustomer['email'] ?? '');
+}
+
+$pageTitleMap = [
+    'dashboard' => admin_t($messages, 'page_dashboard_title', 'Dashboard'),
+    'orders' => admin_t($messages, 'page_orders_title', 'Orders'),
+    'products' => admin_t($messages, 'page_products_title', 'Products'),
+    'users' => admin_t($messages, 'page_users_title', 'Users'),
+    'payments' => admin_t($messages, 'page_payments_title', 'Payments'),
+    'bank-accounts' => admin_t($messages, 'page_bank_accounts_title', 'Bank accounts'),
+    'crypto-wallets' => admin_t($messages, 'page_crypto_wallets_title', 'Crypto wallets'),
+    'cryptocurrencies' => admin_t($messages, 'page_cryptocurrencies_title', 'Cryptocurrencies'),
+    'news' => admin_t($messages, 'page_news_title', 'News'),
+    'live-chat' => admin_t($messages, 'page_live_chat_title', 'Live chat'),
+    'email-templates' => admin_t($messages, 'page_email_templates_title', 'Email templates'),
+    'faq' => admin_t($messages, 'page_faq_title', 'FAQ'),
+    'settings' => admin_t($messages, 'page_settings_title', 'Settings'),
+];
+
+$pageIntroMap = [
+    'dashboard' => admin_t($messages, 'page_dashboard_intro', 'A clean overview of customers, payments and content.'),
+    'orders' => admin_t($messages, 'page_orders_intro', ''),
+    'products' => admin_t($messages, 'page_products_intro', ''),
+    'users' => admin_t($messages, 'page_users_intro', ''),
+    'payments' => admin_t($messages, 'page_payments_intro', ''),
+    'bank-accounts' => admin_t($messages, 'page_bank_accounts_intro', ''),
+    'crypto-wallets' => admin_t($messages, 'page_crypto_wallets_intro', ''),
+    'cryptocurrencies' => admin_t($messages, 'page_cryptocurrencies_intro', ''),
+    'news' => admin_t($messages, 'page_news_intro', ''),
+    'live-chat' => admin_t($messages, 'page_live_chat_intro', ''),
+    'email-templates' => admin_t($messages, 'page_email_templates_intro', ''),
+    'faq' => admin_t($messages, 'page_faq_intro', ''),
+    'settings' => admin_t($messages, 'page_settings_intro', ''),
+];
+
+function admin_render_table(array $headers, array $rows, array $messages): void
+{
+    if (!$rows) {
+        echo '<div class="admin-empty-state">' . admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')) . '</div>';
+        return;
+    }
+
+    echo '<div class="table-responsive"><table class="table admin-table align-middle"><thead><tr>';
+    foreach ($headers as $header) {
+        echo '<th>' . admin_e($header) . '</th>';
+    }
+    echo '</tr></thead><tbody>';
+
+    foreach ($rows as $row) {
+        echo '<tr>';
+        foreach ($row as $value) {
+            echo '<td>' . admin_e((string)$value) . '</td>';
+        }
+        echo '</tr>';
+    }
+
+    echo '</tbody></table></div>';
+}
+
+?>
+<!doctype html>
+<html lang="<?php echo admin_e($currentLocale); ?>">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><?php echo admin_e($pageTitleMap[$route] ?? admin_t($messages, 'brand', 'Admin Panel')); ?></title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
+    <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
+    <link rel="stylesheet" href="/assets/css/font-awesome.min.css">
+    <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo $assetVersion; ?>">
+</head>
+<body class="admin-app-page">
+    <div class="admin-shell">
+        <aside class="admin-sidebar" id="adminSidebar">
+            <div class="admin-sidebar__brand">
+                <div class="admin-sidebar__brand-badge"><i class="bi bi-shield-lock-fill"></i></div>
+                <div>
+                    <strong><?php echo admin_e($siteName); ?></strong>
+                    <span><?php echo admin_e(admin_t($messages, 'brand', 'Admin Panel')); ?></span>
+                </div>
+            </div>
+
+            <a href="<?php echo admin_e($sitePreviewUrl !== '' ? $sitePreviewUrl : '/'); ?>" class="admin-sidebar__preview" target="_blank" rel="noopener noreferrer">
+                <i class="bi bi-box-arrow-up-right"></i>
+                <span><?php echo admin_e(admin_t($messages, 'preview_site', 'View website')); ?></span>
+            </a>
+
+            <nav class="admin-sidebar__nav">
+                <?php foreach ($navigation as $groupKey => $items): ?>
+                    <div class="admin-sidebar__group">
+                        <div class="admin-sidebar__group-label"><?php echo admin_e(admin_t($messages, 'nav_group_' . $groupKey, ucfirst($groupKey))); ?></div>
+                        <?php foreach ($items as $item): ?>
+                            <a href="/admin/?page=<?php echo admin_e($item['route']); ?>" class="admin-sidebar__link<?php echo $route === $item['route'] ? ' is-active' : ''; ?>">
+                                <i class="bi <?php echo admin_e($item['icon']); ?>"></i>
+                                <span><?php echo admin_e(admin_t($messages, $item['label_key'], $item['route'])); ?></span>
+                                <?php if ((string)($item['route'] ?? '') === 'crypto-wallets' && $cryptoWalletPoolDepleted): ?>
+                                    <span class="admin-sidebar__alert-badge" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_pool_empty_badge', 'No free crypto wallets available')); ?>">!</span>
+                                <?php endif; ?>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endforeach; ?>
+            </nav>
+
+            <form method="post" class="admin-sidebar__logout">
+                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                <button type="submit" class="btn btn-link admin-sidebar__logout-button" name="admin_logout">
+                    <i class="bi bi-box-arrow-right"></i>
+                    <span><?php echo admin_e(admin_t($messages, 'logout', 'Log out')); ?></span>
+                </button>
+            </form>
+        </aside>
+
+        <div class="admin-main">
+            <header class="admin-topbar">
+                <div class="admin-topbar__left">
+                    <button type="button" class="btn btn-light admin-mobile-toggle" data-admin-sidebar-toggle>
+                        <i class="bi bi-list"></i>
+                    </button>
+                    <label class="admin-search">
+                        <i class="bi bi-search"></i>
+                        <input
+                            type="search"
+                            placeholder="<?php echo admin_e(admin_t($messages, 'top_search_placeholder', 'Search order ID, customer email or crypto wallet')); ?>"
+                            autocomplete="off"
+                            spellcheck="false"
+                            data-admin-search-input
+                            data-search-url="/admin/search.php"
+                            data-loading-text="<?php echo admin_e(admin_t($messages, 'search_loading', 'Loading results...')); ?>"
+                            data-error-title="<?php echo admin_e(admin_t($messages, 'search_error_title', 'Search error')); ?>"
+                            data-error-text="<?php echo admin_e(admin_t($messages, 'search_error_text', 'Unable to load search results right now.')); ?>">
+                        <button type="button" class="admin-search__reset" data-admin-search-reset hidden aria-label="<?php echo admin_e(admin_t($messages, 'search_clear', 'Clear search')); ?>">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </label>
+                </div>
+
+                <div class="admin-topbar__right">
+                    <div
+                        class="admin-chat-inbox"
+                        data-admin-chat-inbox
+                        data-csrf-token="<?php echo admin_e($csrfToken); ?>"
+                        data-loading-conversation="<?php echo admin_e(admin_t($messages, 'chat_loading_conversation', 'Loading conversation...')); ?>"
+                        data-chat-load-error="<?php echo admin_e(admin_t($messages, 'chat_load_error', 'Unable to load this conversation.')); ?>"
+                        data-chat-send-error="<?php echo admin_e(admin_t($messages, 'chat_send_error', 'Unable to send the message.')); ?>"
+                        data-chat-upload-error="<?php echo admin_e(admin_t($messages, 'chat_upload_error', 'Unable to upload the image.')); ?>"
+                        data-chat-remove-confirm="<?php echo admin_e(admin_t($messages, 'chat_remove_confirm', 'Remove conversation with {name}?')); ?>"
+                        data-chat-remove-error="<?php echo admin_e(admin_t($messages, 'chat_remove_error', 'Unable to remove this conversation.')); ?>"
+                        data-chat-search-empty="<?php echo admin_e(admin_t($messages, 'chat_search_empty', 'No users found.')); ?>"
+                        data-chat-search-error="<?php echo admin_e(admin_t($messages, 'chat_search_error', 'Search failed.')); ?>"
+                        data-chat-unread-label="<?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>"
+                        data-chat-start-error="<?php echo admin_e(admin_t($messages, 'chat_start_error', 'Unable to start conversation.')); ?>"
+                        data-chat-delete-message-confirm="<?php echo admin_e(admin_t($messages, 'chat_delete_message_confirm', 'Delete this message?')); ?>"
+                        data-chat-delete-message-error="<?php echo admin_e(admin_t($messages, 'chat_delete_message_error', 'Unable to delete this message.')); ?>"
+                        data-chat-quick-replies-title="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_title', 'Quick message instructions')); ?>"
+                        data-chat-quick-replies-intro="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_intro', 'Choose one instruction and send it to this user.')); ?>"
+                        data-chat-quick-replies-empty="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_empty', 'No quick replies available for this user language.')); ?>"
+                        data-chat-quick-replies-loading="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_loading', 'Loading quick replies...')); ?>"
+                        data-chat-quick-replies-error="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_error', 'Unable to load quick replies.')); ?>"
+                        data-chat-quick-replies-send-error="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_send_error', 'Unable to send quick reply.')); ?>"
+                        data-chat-payment-loading="<?php echo admin_e(admin_t($messages, 'chat_payment_modal_loading', 'Loading payment options...')); ?>"
+                        data-chat-payment-preview-empty="<?php echo admin_e(admin_t($messages, 'chat_payment_preview_empty', 'Choose a payment option to see the details.')); ?>"
+                        data-chat-payment-preview-error="<?php echo admin_e(admin_t($messages, 'chat_payment_preview_error', 'Unable to prepare payment preview.')); ?>"
+                        data-chat-payment-send-error="<?php echo admin_e(admin_t($messages, 'chat_payment_send_error', 'Unable to create payment request.')); ?>"
+                        data-chat-payment-rates-updated="<?php echo admin_e(admin_t($messages, 'chat_payment_rates_updated', 'Crypto rates were updated: {datetime}.')); ?>"
+                        data-chat-payment-pending-error="<?php echo admin_e(admin_t($messages, 'chat_payment_pending_error', 'Customer already has a pending crypto payment request. Please wait for it to be completed or cancelled.')); ?>"
+                        data-chat-payment-pending-tooltip="<?php echo admin_e(admin_t($messages, 'chat_payment_pending_tooltip', 'Crypto Payment - Pending...')); ?>"
+                        data-chat-link-preview-loading="<?php echo admin_e(admin_t($messages, 'chat_link_preview_loading', 'Loading link preview...')); ?>"
+                        data-chat-link-preview-remove="<?php echo admin_e(admin_t($messages, 'chat_link_preview_remove', 'Send without preview')); ?>"
+                        data-chat-link-preview-open="<?php echo admin_e(admin_t($messages, 'chat_link_preview_open', 'Open link')); ?>"
+                        data-chat-group-create-error="<?php echo admin_e(admin_t($messages, 'group_chat_create_error', 'Unable to create the group chat.')); ?>"
+                        data-chat-group-invite-error="<?php echo admin_e(admin_t($messages, 'group_chat_invite_error', 'Unable to update the invitation.')); ?>"
+                        data-chat-group-leave-error="<?php echo admin_e(admin_t($messages, 'group_chat_leave_error', 'Unable to leave the group chat.')); ?>"
+                        data-chat-group-readonly-error="<?php echo admin_e(admin_t($messages, 'group_chat_readonly_error', 'Unable to update read only mode.')); ?>"
+                        data-chat-payment-create-label="<?php echo admin_e(admin_t($messages, 'chat_payment_send_button', 'Send to chat')); ?>">
+                        <button type="button" class="admin-chat-inbox__toggle" data-admin-chat-toggle aria-expanded="false" aria-controls="adminChatInboxPanel">
+                            <i class="bi bi-envelope" aria-hidden="true"></i>
+                            <?php if ($chatInboxUnreadCount > 0): ?>
+                                <span class="admin-chat-inbox__badge"><?php echo admin_e((string)$chatInboxUnreadCount); ?></span>
+                            <?php endif; ?>
+                        </button>
+
+                        <div class="admin-chat-inbox__panel" id="adminChatInboxPanel" data-admin-chat-panel hidden>
+                            <div class="admin-chat-inbox__list-view" data-admin-chat-list-view>
+                                <div class="admin-chat-inbox__header">
+                                    <div class="admin-chat-inbox__search">
+                                        <i class="bi bi-search" aria-hidden="true"></i>
+                                        <input type="search" data-admin-chat-search-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_search_placeholder', 'Search...')); ?>" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <button type="button" class="admin-chat-inbox__close admin-chat-inbox__close--group" data-admin-chat-group-open aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>" title="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>">
+                                        <i class="bi bi-people" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="admin-chat-inbox__close" data-admin-chat-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+
+                                <div class="admin-chat-inbox__search-results" data-admin-chat-search-results hidden></div>
+                                <?php if ($chatPendingGroupInvites): ?>
+                                    <div class="admin-chat-inbox__group-invites" data-admin-chat-group-invites>
+                                        <?php foreach ($chatPendingGroupInvites as $groupInvite): ?>
+                                            <?php
+                                            $groupInviteTitle = chat_group_conversation_title((array)$groupInvite, admin_t($messages, 'group_chat_badge', 'Group chat'));
+                                            $groupInviteSender = trim((string)($groupInvite['invited_by_customer_email'] ?? $groupInvite['invited_by_admin_handle'] ?? $groupInvite['invited_by_admin_login'] ?? 'Support'));
+                                            ?>
+                                            <div class="admin-chat-inbox__group-invite-card" data-admin-chat-group-invite-card>
+                                                <div>
+                                                    <strong><?php echo admin_e($groupInviteTitle); ?></strong>
+                                                    <p><?php echo admin_e(admin_t($messages, 'group_chat_invite_message', 'You were invited to a group chat by')); ?> <?php echo admin_e($groupInviteSender); ?></p>
+                                                </div>
+                                                <div class="admin-chat-inbox__group-invite-actions">
+                                                    <button type="button" class="btn btn-dark btn-sm" data-admin-chat-group-invite-action="accept" data-conversation-id="<?php echo admin_e((string)($groupInvite['conversation_id'] ?? 0)); ?>"><?php echo admin_e(admin_t($messages, 'group_chat_invite_accept', 'Accept')); ?></button>
+                                                    <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-group-invite-action="reject" data-conversation-id="<?php echo admin_e((string)($groupInvite['conversation_id'] ?? 0)); ?>"><?php echo admin_e(admin_t($messages, 'group_chat_invite_reject', 'Reject')); ?></button>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
+
+                                <div class="admin-chat-inbox__list">
+                                    <?php if (!$chatInboxEntries): ?>
+                                        <div class="admin-chat-inbox__empty">
+                                            <?php echo admin_e(admin_t($messages, 'chat_inbox_empty', 'No live chats available right now.')); ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <?php foreach ($chatInboxEntries as $chatEntry): ?>
+                                            <?php
+                                            $chatRow = (array)($chatEntry['row'] ?? []);
+                                            $displayName = (string)($chatEntry['display_name'] ?? '');
+                                            $isUnread = !empty($chatEntry['is_unread']);
+                                            $chatTimeLabel = (string)($chatEntry['time_label'] ?? '');
+                                            $presence = (array)($chatEntry['presence'] ?? []);
+                                            ?>
+                                            <div
+                                                class="admin-chat-inbox__item<?php echo $isUnread ? ' is-unread' : ''; ?>"
+                                                data-admin-chat-item
+                                                data-conversation-id="<?php echo admin_e((string)$chatRow['id']); ?>"
+                                                data-chat-url="/admin/chat.php"
+                                                data-display-name="<?php echo admin_e($displayName); ?>"
+                                                role="button"
+                                                tabindex="0"
+                                                aria-label="<?php echo admin_e($displayName); ?>">
+                                                <div class="admin-chat-inbox__avatar <?php echo admin_e(admin_chat_avatar_theme($chatRow)); ?>"><?php echo admin_e(admin_chat_avatar_text($chatRow, $messages)); ?></div>
+                                                <div class="admin-chat-inbox__item-content">
+                                                    <div class="admin-chat-inbox__item-head">
+                                                        <div class="admin-chat-inbox__item-title">
+                                                            <span data-admin-chat-presence-dot><?php echo admin_chat_presence_dot_html($presence); ?></span>
+                                                            <strong title="<?php echo admin_e((string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'))); ?>"><?php echo admin_e($displayName); ?></strong>
+                                                        </div>
+                                                        <span><?php echo admin_e($chatTimeLabel); ?></span>
+                                                    </div>
+                                                    <div class="admin-chat-inbox__item-body">
+                                                        <p><?php echo admin_e(admin_chat_message_preview($chatRow, $messages)); ?></p>
+                                                        <div class="admin-chat-inbox__meta">
+                                                            <span><?php echo admin_e((string)($chatRow['status'] ?? 'open')); ?></span>
+                                                            <?php if ($isUnread): ?>
+                                                                <span class="admin-chat-inbox__unread"><?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>: <?php echo admin_e((string)$chatRow['unread_count']); ?></span>
+                                                            <?php endif; ?>
+                                                            <button
+                                                                type="button"
+                                                                class="admin-chat-inbox__remove"
+                                                                data-admin-chat-remove
+                                                                data-conversation-id="<?php echo admin_e((string)$chatRow['id']); ?>"
+                                                                data-display-name="<?php echo admin_e($displayName); ?>"
+                                                                aria-label="<?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove conversation')); ?>">
+                                                                <i class="bi bi-trash3" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove')); ?></span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+
+                            <div class="admin-chat-inbox__conversation-view" data-admin-chat-conversation-view hidden>
+                                <div class="admin-chat-inbox__conversation-header">
+                                    <button type="button" class="admin-chat-inbox__back" data-admin-chat-back>
+                                        <i class="bi bi-arrow-left"></i>
+                                    </button>
+                                    <div class="admin-chat-inbox__conversation-title-wrap">
+                                        <span data-admin-chat-conversation-status><?php echo admin_chat_presence_dot_html(['class_name' => 'admin-chat-presence admin-chat-presence--offline', 'label' => admin_t($messages, 'chat_presence_offline', 'Offline')]); ?></span>
+                                        <a href="#" class="admin-chat-inbox__conversation-title" data-admin-chat-conversation-title><?php echo admin_e(admin_t($messages, 'chat_inbox_title', 'Live chat inbox')); ?></a>
+                                    </div>
+                                    <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
+                                        <div class="admin-chat-inbox__header-crypto-wrap" style="position: relative;">
+                                            <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-crypto-open title="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_button', 'Create crypto payment request')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_button', 'Create crypto payment request')); ?>" hidden>
+                                                <i class="bi bi-currency-bitcoin" data-admin-chat-crypto-icon aria-hidden="true"></i>
+                                                <span class="admin-chat-inbox__header-loader" data-admin-chat-crypto-loader hidden>
+                                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                                </span>
+                                            </button>
+                                            <div class="admin-chat-inbox__header-tooltip" data-admin-chat-crypto-tooltip hidden><?php echo admin_e(admin_t($messages, 'chat_payment_pending_tooltip', 'Crypto Payment - Pending...')); ?></div>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (admin_bank_transfers_enabled($appSettings)): ?>
+                                        <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-bank-open title="<?php echo admin_e(admin_t($messages, 'chat_bank_request_button', 'Send bank transfer details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_bank_request_button', 'Send bank transfer details')); ?>" hidden>
+                                            <i class="bi bi-bank" aria-hidden="true"></i>
+                                        </button>
+                                    <?php endif; ?>
+                                    <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-leave-group title="<?php echo admin_e(admin_t($messages, 'group_chat_leave', 'Leave group')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_leave', 'Leave group')); ?>" hidden>
+                                        <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-readonly-toggle hidden>
+                                        <i class="bi bi-lock" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-quick-open title="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>">
+                                        <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class="admin-chat-inbox__conversation-body" data-admin-chat-conversation-body></div>
+                                <div class="admin-chat-inbox__composer">
+                                    <div class="admin-chat-inbox__composer-alert" data-admin-chat-alert hidden></div>
+                                    <div class="admin-chat-inbox__composer-preview" data-admin-chat-link-preview hidden></div>
+                                    <div class="admin-chat-inbox__composer-row">
+                                        <button type="button" class="admin-chat-inbox__composer-action" data-admin-chat-upload-button title="<?php echo admin_e(admin_t($messages, 'chat_upload_button', 'Upload image')); ?>">
+                                            <i class="bi bi-image" aria-hidden="true"></i>
+                                        </button>
+                                        <input type="file" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif" data-admin-chat-file hidden>
+                                        <input type="text" class="form-control admin-chat-inbox__composer-input" data-admin-chat-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_write_message', 'Write message...')); ?>" autocomplete="off">
+                                        <button type="button" class="admin-chat-inbox__composer-send" data-admin-chat-send title="<?php echo admin_e(admin_t($messages, 'chat_send_button', 'Send message')); ?>">
+                                            <i class="bi bi-send-fill" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="admin-chat-inbox__quick-modal" data-admin-chat-quick-modal hidden>
+                                    <div class="admin-chat-inbox__quick-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_title', 'Quick message instructions')); ?>">
+                                        <div class="admin-chat-inbox__quick-header">
+                                            <div>
+                                                <strong><?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_title', 'Quick message instructions')); ?></strong>
+                                                <p><?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_intro', 'Choose one instruction and send it to this user.')); ?></p>
+                                            </div>
+                                            <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-quick-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="admin-chat-inbox__quick-list" data-admin-chat-quick-list></div>
+                                    </div>
+                                </div>
+                                <div class="admin-chat-inbox__quick-modal" data-admin-chat-crypto-modal hidden>
+                                    <div class="admin-chat-inbox__quick-dialog admin-chat-inbox__payment-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_modal_title', 'Create crypto request')); ?>">
+                                        <div class="admin-chat-inbox__quick-header">
+                                            <div>
+                                                <strong><?php echo admin_e(admin_t($messages, 'chat_crypto_request_modal_title', 'Create crypto request')); ?></strong>
+                                                <p><?php echo admin_e(admin_t($messages, 'chat_crypto_request_modal_intro', 'Choose a cryptocurrency and amount, then send the request to chat.')); ?></p>
+                                            </div>
+                                            <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-crypto-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="admin-chat-payment-modal" data-admin-chat-payment-modal data-payment-type="crypto">
+                                            <div class="admin-chat-payment-modal__form">
+                                                <div class="admin-chat-payment-modal__products">
+                                                    <label class="form-label">
+                                                        <span><?php echo admin_e(admin_t($messages, 'chat_crypto_product_label', 'Select product')); ?></span>
+                                                        <select class="form-select" data-admin-chat-payment-product data-default-label="<?php echo admin_e(admin_t($messages, 'chat_crypto_product_custom', 'Custom amount')); ?>">
+                                                            <option value=""><?php echo admin_e(admin_t($messages, 'chat_crypto_product_custom', 'Custom amount')); ?></option>
+                                                            <?php foreach ($chatPaymentProductPresets as $chatPaymentProductPreset): ?>
+                                                                <option
+                                                                    value="<?php echo (int)($chatPaymentProductPreset['product_id'] ?? 0); ?>"
+                                                                    data-price="<?php echo admin_e((string)($chatPaymentProductPreset['amount'] ?? '')); ?>"
+                                                                >
+                                                                    <?php echo admin_e((string)($chatPaymentProductPreset['label'] ?? '')); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </label>
+                                                </div>
+                                                <label class="form-label" data-admin-chat-asset-wrap>
+                                                    <span><?php echo admin_e(admin_t($messages, 'chat_crypto_asset_label', 'Cryptocurrency')); ?></span>
+                                                    <select class="form-select" data-admin-chat-payment-asset></select>
+                                                </label>
+                                                <label class="form-label" data-admin-chat-amount-wrap>
+                                                    <span data-admin-chat-amount-label><?php echo admin_e(admin_t($messages, 'chat_payment_amount_change_label', 'Price change:')); ?></span>
+                                                    <select class="form-select" data-admin-chat-payment-amount></select>
+                                                </label>
+                                            </div>
+                                            <div class="admin-chat-payment-modal__info" data-admin-chat-payment-info hidden></div>
+                                            <div class="admin-chat-payment-modal__preview" data-admin-chat-payment-preview hidden></div>
+                                            <div class="admin-chat-payment-modal__actions">
+                                                <button type="button" class="btn btn-dark btn-lg w-100" data-admin-chat-payment-send><?php echo admin_e(admin_t($messages, 'chat_payment_send_button', 'Send to chat')); ?></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="admin-chat-inbox__quick-modal" data-admin-chat-bank-modal hidden>
+                                    <div class="admin-chat-inbox__quick-dialog admin-chat-inbox__payment-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'chat_bank_request_modal_title', 'Create bank transfer request')); ?>">
+                                        <div class="admin-chat-inbox__quick-header">
+                                            <div>
+                                                <strong><?php echo admin_e(admin_t($messages, 'chat_bank_request_modal_title', 'Create bank transfer request')); ?></strong>
+                                                <p><?php echo admin_e(admin_t($messages, 'chat_bank_request_modal_intro', 'Choose the amount and bank account, then send the transfer details to chat.')); ?></p>
+                                            </div>
+                                            <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-bank-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="admin-chat-payment-modal" data-admin-chat-payment-modal data-payment-type="bank">
+                                            <div class="admin-chat-payment-modal__form">
+                                                <label class="form-label" data-admin-chat-payment-bank-wrap hidden>
+                                                    <span><?php echo admin_e(admin_t($messages, 'chat_bank_account_label', 'Bank account')); ?></span>
+                                                    <select class="form-select" data-admin-chat-payment-bank-account></select>
+                                                </label>
+                                                <label class="form-label">
+                                                    <span><?php echo admin_e(admin_t($messages, 'chat_payment_amount_label', 'Amount')); ?></span>
+                                                    <select class="form-select" data-admin-chat-payment-amount></select>
+                                                </label>
+                                            </div>
+                                            <div class="admin-chat-payment-modal__info" data-admin-chat-payment-info hidden></div>
+                                            <div class="admin-chat-payment-modal__preview" data-admin-chat-payment-preview></div>
+                                            <div class="admin-chat-payment-modal__actions">
+                                                <button type="button" class="btn btn-dark btn-sm" data-admin-chat-payment-send><?php echo admin_e(admin_t($messages, 'chat_payment_send_button', 'Send to chat')); ?></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="admin-chat-inbox__quick-modal" data-admin-chat-group-modal hidden>
+                                <div class="admin-chat-inbox__quick-dialog admin-chat-inbox__group-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>">
+                                    <div class="admin-chat-inbox__quick-header">
+                                        <div>
+                                            <strong><?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?></strong>
+                                            <p><?php echo admin_e(admin_t($messages, 'group_chat_create_intro', 'Add reseller or admin emails and create a compact group chat. Invitations expire automatically after 24 hours if they are not accepted.')); ?></p>
+                                        </div>
+                                        <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-group-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                            <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                        <div class="admin-chat-group-modal">
+                                            <div class="admin-chat-inbox__composer-alert" data-admin-chat-group-alert hidden></div>
+                                            <label class="form-label">
+                                                <span><?php echo admin_e(admin_t($messages, 'group_chat_name', 'Group name')); ?></span>
+                                            <input type="text" class="form-control" data-admin-chat-group-name maxlength="20" placeholder="<?php echo admin_e(admin_t($messages, 'group_chat_name_placeholder', 'Example: Reseller briefing')); ?>">
+                                            </label>
+                                        <label class="form-label">
+                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_add_by_email', 'Add participant by email')); ?></span>
+                                            <div class="admin-chat-group-modal__add-row">
+                                                <input type="email" class="form-control" data-admin-chat-group-email placeholder="name@example.com">
+                                                <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-group-add><?php echo admin_e(admin_t($messages, 'add', 'Add')); ?></button>
+                                            </div>
+                                            <small class="admin-chat-group-modal__hint"><?php echo admin_e(admin_t($messages, 'group_chat_invite_expiry_note', 'Each invitation is valid for 24 hours. If it is not accepted in time, it is removed automatically.')); ?></small>
+                                        </label>
+                                        <div class="admin-chat-group-modal__members" data-admin-chat-group-members></div>
+                                        <label class="admin-chat-group-modal__checkbox">
+                                            <input type="checkbox" data-admin-chat-group-readonly>
+                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_read_only_toggle', 'Resellers can only read after creation')); ?></span>
+                                        </label>
+                                        <button type="button" class="btn btn-dark btn-lg w-100" data-admin-chat-group-submit><?php echo admin_e(admin_t($messages, 'group_chat_create_submit', 'Create group')); ?></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="admin-user-chip">
+                        <img src="/img/admin_avatar.png" alt="admin avatar">
+                        <div>
+                            <strong><?php echo admin_e((string)$adminUser['login_name']); ?></strong>
+                            <span><?php echo admin_e((string)($adminUser['role_name'] ?? '')); ?></span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <main class="admin-content">
+                <?php if ($pageAlert !== ''): ?>
+                    <div class="alert alert-<?php echo admin_e($pageAlertType); ?> admin-page-alert"><?php echo $pageAlertHtml !== '' ? $pageAlertHtml : admin_e($pageAlert); ?></div>
+                <?php endif; ?>
+
+                <section class="admin-search-results" data-admin-search-results hidden></section>
+
+                <div data-admin-default-content>
+                <section class="admin-page-hero d-none d-lg-block d-xl-block">
+                    <div>
+                        <h1><?php echo admin_e($pageTitleMap[$route] ?? ''); ?></h1>
+                        <p><?php echo admin_e($pageIntroMap[$route] ?? ''); ?></p>
+                    </div>
+                </section>
+
+                <?php if ($route === 'dashboard'): ?>
+                    <section class="admin-dashboard-period-grid d-none d-lg-block d-xl-block">
+                        <?php
+                        $periodCards = [
+                            ['key' => 'daily', 'tone' => 'peach', 'label' => admin_t($messages, 'dashboard_period_daily', 'Daily')],
+                            ['key' => 'weekly', 'tone' => 'green', 'label' => admin_t($messages, 'dashboard_period_weekly', 'Weekly')],
+                            ['key' => 'monthly', 'tone' => 'blue', 'label' => admin_t($messages, 'dashboard_period_monthly', 'Monthly')],
+                            ['key' => 'yearly', 'tone' => 'pink', 'label' => admin_t($messages, 'dashboard_period_yearly', 'Yearly')],
+                        ];
+                        foreach ($periodCards as $card):
+                            $periodMetric = $dashboardPeriodMetrics[$card['key']] ?? ['paid_orders' => 0, 'paid_revenue' => 0.0];
+                            $periodRevenueLabel = admin_format_money_value_with_symbol(
+                                $periodMetric['paid_revenue'] ?? 0,
+                                $adminDefaultCurrencyCode,
+                                $adminDefaultCurrencySymbol
+                            );
+                        ?>
+                            <article class="admin-metric-card admin-metric-card--<?php echo admin_e($card['tone']); ?>">
+                                <span class="admin-metric-card__label"><?php echo admin_e($card['label']); ?></span>
+                                <strong class="admin-metric-card__value"><?php echo admin_e($periodRevenueLabel); ?></strong>
+                                <span class="admin-metric-card__meta">
+                                    <?php echo admin_e(admin_t($messages, 'dashboard_period_orders_meta', '{count} paid orders', [
+                                        'count' => (string)((int)($periodMetric['paid_orders'] ?? 0)),
+                                    ])); ?>
+                                </span>
+                            </article>
+                        <?php endforeach; ?>
+                    </section>
+
+                    <section class="admin-grid-2">
+                        <article class="admin-panel-card">
+                            <div class="admin-panel-card__header">
+                                <div>
+                                    <h2><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?></h2>
+                                    <p><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_intro', 'Paid orders from the last 30 days.')); ?></p>
+                                </div>
+                            </div>
+                            <?php if ($dashboardSalesSeries): ?>
+                                <?php
+                                $chartMaxOrders = 0;
+                                $chartRevenueTotal = 0.0;
+                                foreach ($dashboardSalesSeries as $chartPoint) {
+                                    $chartMaxOrders = max($chartMaxOrders, (int)($chartPoint['paid_orders'] ?? 0));
+                                    $chartRevenueTotal += (float)($chartPoint['paid_revenue'] ?? 0);
+                                }
+                                $chartMaxOrders = max(1, $chartMaxOrders);
+                                ?>
+                                <div class="admin-dashboard-chart">
+                                    <div class="admin-dashboard-chart__summary">
+                                        <div class="admin-dashboard-chart__summary-item">
+                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
+                                            <strong><?php echo admin_e(admin_format_money_value_with_symbol($chartRevenueTotal, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></strong>
+                                        </div>
+                                        <div class="admin-dashboard-chart__summary-item">
+                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_max_orders', 'Best day')); ?></span>
+                                            <strong><?php echo admin_e((string)$chartMaxOrders); ?></strong>
+                                        </div>
+                                    </div>
+                                    <div class="admin-dashboard-chart__canvas">
+                                        <svg viewBox="0 0 640 240" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
+                                            <line x1="20" y1="220" x2="620" y2="220" class="admin-dashboard-chart__axis"></line>
+                                            <line x1="20" y1="20" x2="20" y2="220" class="admin-dashboard-chart__axis"></line>
+                                            <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line"></path>
+                                            <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
+                                                <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="4" class="admin-dashboard-chart__point">
+                                                    <title><?php echo admin_e(($dashboardSalesSeries[$pointIndex]['short_label'] ?? '') . ': ' . (string)($chartPoint['value'] ?? 0)); ?></title>
+                                                </circle>
+                                            <?php endforeach; ?>
+                                            <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
+                                                <?php if ($pointIndex % 4 === 0 || $pointIndex === count($dashboardSalesSeriesPoints) - 1): ?>
+                                                    <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="236" text-anchor="middle" class="admin-dashboard-chart__label"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
+                                                <?php endif; ?>
+                                            <?php endforeach; ?>
+                                        </svg>
+                                    </div>
+                                </div>
+                            <?php else: ?>
+                                <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                            <?php endif; ?>
+                        </article>
+
+                        <article class="admin-panel-card">
+                            <div class="admin-panel-card__header">
+                                <div>
+                                    <h2><?php echo admin_e(admin_t($messages, 'section_recent_orders', 'Recent orders')); ?></h2>
+                                    <p><?php echo admin_e(admin_t($messages, 'section_recent_orders_intro', 'Latest orders from the new database.')); ?></p>
+                                </div>
+                            </div>
+                            <?php if ($recentOrders): ?>
+                                <div class="admin-dashboard-order-list">
+                                    <?php foreach ($recentOrders as $order): ?>
+                                        <?php
+                                        $recentOrderId = (int)($order['id'] ?? 0);
+                                        $recentCustomerId = (int)($order['customer_id'] ?? 0);
+                                        $recentCustomerEmail = trim((string)($order['customer_email'] ?? ''));
+                                        $recentOrderTitle = trim((string)($order['provider_name'] ?? '') . ' ' . (string)($order['product_name'] ?? ''));
+                                        $recentOrderAmountLabel = admin_format_money_value_with_symbol(
+                                            $order['total_amount'] ?? 0,
+                                            (string)($order['currency_code'] ?? $adminDefaultCurrencyCode),
+                                            (string)($order['currency_symbol'] ?? $adminDefaultCurrencySymbol)
+                                        );
+                                        $recentOrderStatusVisual = admin_order_status_visual($order);
+                                        $recentOrderStatusIcon = (string)($recentOrderStatusVisual['icon'] ?? 'bi bi-circle-fill');
+                                        $recentOrderStatusVisualClass = (string)($recentOrderStatusVisual['class'] ?? 'admin-order-status-icon--neutral');
+                                        $recentOrderStatusClass = (string)($recentOrderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation'
+                                            ? 'admin-status-pill--assigned'
+                                            : ((string)($recentOrderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired'
+                                                ? 'admin-status-pill--danger'
+                                                : (((string)($recentOrderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending'
+                                                    ? 'admin-status-pill--warning'
+                                                    : 'admin-status-pill--available')));
+                                        $recentOrderStatusLabel = (string)($order['status'] ?? '') === 'pending_payment' && strtolower((string)($order['payment_status'] ?? '')) === 'paid'
+                                            ? admin_t($messages, 'order_status_payment_confirmed', 'Payment confirmed')
+                                            : admin_t($messages, 'enum_' . (string)($order['status'] ?? ''), ucfirst(str_replace('_', ' ', (string)($order['status'] ?? ''))));
+                                        $recentPaymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
+                                        $recentPaymentMethod = strtolower(trim((string)($order['payment_method'] ?? '')));
+                                        $recentReference = trim((string)($order['order_reference'] ?? ''));
+                                        $recentOrderAvatar = strtoupper(substr($recentCustomerEmail !== '' ? $recentCustomerEmail : ($recentOrderTitle !== '' ? $recentOrderTitle : 'O'), 0, 1));
+                                        ?>
+                                        <article class="admin-dashboard-order-item">
+                                            <div class="admin-dashboard-order-item__main">
+                                                <span class="admin-dashboard-order-item__avatar"><?php echo admin_e($recentOrderAvatar); ?></span>
+                                                <div class="admin-dashboard-order-item__content">
+                                                    <div class="admin-dashboard-order-item__topline">
+                                                        <a href="/admin/?page=orders<?php echo $recentCustomerId > 0 ? '&amp;customer_id=' . admin_e((string)$recentCustomerId) : ''; ?>" class="admin-dashboard-order-item__order-link">#<?php echo admin_e((string)$recentOrderId); ?></a>
+                                                        <?php if ($recentReference !== ''): ?>
+                                                            <span class="admin-dashboard-order-item__reference"><?php echo admin_e($recentReference); ?></span>
+                                                        <?php endif; ?>
+                                                        <span class="admin-dashboard-order-item__date"><?php echo admin_e(admin_compact_datetime_label((string)($order['created_at'] ?? ''))); ?></span>
+                                                    </div>
+                                                    <div class="admin-dashboard-order-item__title-row">
+                                                        <span class="admin-dashboard-order-item__status-icon">
+                                                            <i class="<?php echo admin_e($recentOrderStatusIcon); ?> admin-order-status-icon <?php echo admin_e($recentOrderStatusVisualClass); ?>" aria-hidden="true"></i>
+                                                        </span>
+                                                        <h3><?php echo admin_e($recentOrderTitle !== '' ? $recentOrderTitle : admin_t($messages, 'col_product', 'Product')); ?></h3>
+                                                    </div>
+                                                    <div class="admin-dashboard-order-item__meta">
+                                                        <?php if ($recentCustomerId > 0): ?>
+                                                            <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$recentCustomerId); ?>" class="admin-inline-link"><?php echo admin_e($recentCustomerEmail); ?></a>
+                                                        <?php else: ?>
+                                                            <span><?php echo admin_e($recentCustomerEmail !== '' ? $recentCustomerEmail : '—'); ?></span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="admin-dashboard-order-item__badges">
+                                                        <span class="admin-status-pill <?php echo admin_e($recentOrderStatusClass); ?>">
+                                                            <?php echo admin_e($recentOrderStatusLabel); ?>
+                                                        </span>
+                                                        <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class($recentPaymentStatus)); ?>">
+                                                            <?php echo admin_e(admin_t($messages, 'enum_' . $recentPaymentStatus, ucfirst(str_replace('_', ' ', $recentPaymentStatus)))); ?>
+                                                        </span>
+                                                        <?php if ($recentPaymentMethod !== ''): ?>
+                                                            <span class="admin-status-pill admin-status-pill--muted">
+                                                                <?php echo admin_e(admin_t($messages, 'enum_' . $recentPaymentMethod, ucfirst(str_replace('_', ' ', $recentPaymentMethod)))); ?>
+                                                            </span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="admin-dashboard-order-item__aside">
+                                                <strong><?php echo admin_e($recentOrderAmountLabel); ?></strong>
+                                                <span class="admin-dashboard-order-item__amount-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></span>
+                                                <a href="/admin/?page=orders<?php echo $recentCustomerId > 0 ? '&amp;customer_id=' . admin_e((string)$recentCustomerId) : ''; ?>" class="btn btn-dark btn-sm admin-dashboard-order-item__action" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+                                                    <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
+                                                </a>
+                                            </div>
+                                        </article>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php else: ?>
+                                <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                            <?php endif; ?>
+                        </article>
+                    </section>
+
+                    <section class="admin-panel-card admin-dashboard-breakdowns">
+                        <div class="admin-panel-card__header">
+                            <div>
+                                <h2><?php echo admin_e(admin_t($messages, 'dashboard_provider_breakdown_title', 'Provider sales breakdown')); ?></h2>
+                                <p><?php echo admin_e(admin_t($messages, 'dashboard_provider_breakdown_intro', 'See which packages are sold most often for each provider.')); ?></p>
+                            </div>
+                        </div>
+                        <?php if ($dashboardProviderBreakdowns): ?>
+                            <div class="admin-dashboard-provider-grid">
+                                <?php foreach ($dashboardProviderBreakdowns as $providerBreakdown): ?>
+                                    <?php
+                                    $providerDonutSegments = admin_dashboard_donut_segments((array)($providerBreakdown['products'] ?? []));
+                                    $providerRevenueLabel = admin_format_money_value_with_symbol(
+                                        $providerBreakdown['total_revenue'] ?? 0,
+                                        $adminDefaultCurrencyCode,
+                                        $adminDefaultCurrencySymbol
+                                    );
+                                    ?>
+                                    <article class="admin-dashboard-provider-card">
+                                        <div class="admin-dashboard-provider-card__head">
+                                            <div>
+                                                <h3><?php echo admin_e((string)($providerBreakdown['provider_name'] ?? 'Provider')); ?></h3>
+                                                <p><?php echo admin_e(admin_t($messages, 'dashboard_provider_total_meta', '{count} sold / {amount}', [
+                                                    'count' => (string)((int)($providerBreakdown['total_sold'] ?? 0)),
+                                                    'amount' => $providerRevenueLabel,
+                                                ])); ?></p>
+                                            </div>
+                                        </div>
+                                        <div class="admin-dashboard-provider-card__body">
+                                            <div class="admin-dashboard-donut">
+                                                <svg viewBox="0 0 120 120" role="img" aria-label="<?php echo admin_e((string)($providerBreakdown['provider_name'] ?? 'Provider')); ?>">
+                                                    <circle cx="60" cy="60" r="42" class="admin-dashboard-donut__track"></circle>
+                                                    <?php foreach ($providerDonutSegments as $segment): ?>
+                                                        <circle
+                                                            cx="60"
+                                                            cy="60"
+                                                            r="42"
+                                                            class="admin-dashboard-donut__segment"
+                                                            stroke="<?php echo admin_e((string)$segment['color']); ?>"
+                                                            stroke-dasharray="<?php echo admin_e(number_format((float)$segment['dash'], 2, '.', '')); ?> <?php echo admin_e(number_format((float)$segment['gap'], 2, '.', '')); ?>"
+                                                            stroke-dashoffset="<?php echo admin_e(number_format((float)$segment['offset'], 2, '.', '')); ?>"
+                                                        >
+                                                            <title><?php echo admin_e((string)$segment['label'] . ': ' . (string)$segment['count'] . ' (' . number_format((float)$segment['percent'], 1, '.', '') . '%)'); ?></title>
+                                                        </circle>
+                                                    <?php endforeach; ?>
+                                                    <text x="60" y="56" text-anchor="middle" class="admin-dashboard-donut__center-value"><?php echo admin_e((string)((int)($providerBreakdown['total_sold'] ?? 0))); ?></text>
+                                                    <text x="60" y="70" text-anchor="middle" class="admin-dashboard-donut__center-label"><?php echo admin_e(admin_t($messages, 'dashboard_donut_center_label', 'sales')); ?></text>
+                                                </svg>
+                                            </div>
+                                            <div class="admin-dashboard-provider-card__legend">
+                                                <?php foreach ((array)($providerBreakdown['products'] ?? []) as $productBreakdown): ?>
+                                                    <div class="admin-dashboard-provider-card__legend-item">
+                                                        <span class="admin-dashboard-provider-card__legend-dot" style="background: <?php echo admin_e((string)($productBreakdown['color'] ?? '#111827')); ?>;"></span>
+                                                        <div class="admin-dashboard-provider-card__legend-text">
+                                                            <strong><?php echo admin_e((string)($productBreakdown['product_name'] ?? 'Product')); ?></strong>
+                                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_provider_product_meta', '{count} sold / {percent}%', [
+                                                                'count' => (string)((int)($productBreakdown['sold_count'] ?? 0)),
+                                                                'percent' => number_format((float)($productBreakdown['percent'] ?? 0), 1, '.', ''),
+                                                            ])); ?></span>
+                                                        </div>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </div>
+                                    </article>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                        <?php endif; ?>
+                    </section>
+                <?php else: ?>
+                    <section class="admin-page-layout">
+                        <article class="admin-panel-card admin-panel-card--wide">
+                            <?php if ((string)($pageCard['title'] ?? '') !== '' || (string)($pageCard['text'] ?? '') !== ''): ?>
+                            <div class="admin-panel-card__header">
+                                <div>
+                                    <?php if ((string)($pageCard['title'] ?? '') !== ''): ?>
+                                    <h2><?php echo admin_e($pageCard['title']); ?></h2>
+                                    <?php endif; ?>
+                                    <?php if ((string)($pageCard['text'] ?? '') !== ''): ?>
+                                    <p><?php echo $pageCard['text']; ?></p>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <?php endif; ?>
+
+                            <?php
+                            switch ($route) {
+                                case 'orders':
+                                    if ($orderShowCreate):
+                                        $productsJson = [];
+                                        foreach ($orderProducts as $productRow) {
+                                            $productsJson[] = [
+                                                'id' => (int)($productRow['id'] ?? 0),
+                                                'provider_id' => (int)($productRow['provider_id'] ?? 0),
+                                                'label' => admin_format_product_option_label($productRow),
+                                            ];
+                                        }
+                                        $createProviderId = (int)($orderCreateState['provider_id'] ?? 0);
+                                        $createProductOptions = $createProviderId > 0 ? ($orderProductsByProvider[$createProviderId] ?? []) : [];
+                                        $createDurationPlaceholder = $createProviderId > 0
+                                            ? admin_t($messages, 'order_product_placeholder', 'Choose subscription time')
+                                            : admin_t($messages, 'order_product_placeholder_locked', 'Choose package first');
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'order_create_title', 'Add new order')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=orders&amp;order_list_page=<?php echo admin_e((string)$orderListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_orders', 'Back to orders')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post"
+                                                  class="admin-order-create"
+                                                  data-admin-order-create
+                                                  data-search-url="/admin/orders.php?action=search_customers"
+                                                  data-create-url="/admin/orders.php?action=create_customer"
+                                                  data-search-empty="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_empty', 'No users found.')); ?>"
+                                                  data-search-error="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_error', 'Unable to search users.')); ?>"
+                                                  data-create-label="<?php echo admin_e(admin_t($messages, 'order_customer_create_label', 'Add user')); ?>"
+                                                  data-create-help="<?php echo admin_e(admin_t($messages, 'order_customer_create_help', 'This email is not in the service yet. Create the user and select them for this order.')); ?>"
+                                                  data-create-error="<?php echo admin_e(admin_t($messages, 'order_customer_create_error', 'Unable to create the user.')); ?>"
+                                                  data-create-loading="<?php echo admin_e(admin_t($messages, 'order_customer_create_loading', 'Creating user...')); ?>"
+                                                  data-create-created="<?php echo admin_e(admin_t($messages, 'order_customer_create_created', 'User created and selected.')); ?>"
+                                                  data-products="<?php echo admin_e(json_encode($productsJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?>">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$orderCreateState['customer_id']); ?>" data-admin-order-customer-id>
+
+                                                <div class="admin-order-create__grid">
+                                                    <div class="admin-order-create__main">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'order_customer_title', 'Customer')); ?></h4>
+                                                            <div class="admin-order-picker">
+                                                                <div class="admin-order-picker__search">
+                                                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                                                    <input type="search" class="form-control" value="<?php echo admin_e((string)($orderSelectedCustomer['email'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'order_customer_search_placeholder', 'Search by email or user ID')); ?>" data-admin-order-customer-search autocomplete="off">
+                                                                </div>
+                                                                <div class="admin-order-picker__results" data-admin-order-customer-results hidden></div>
+                                                                <div class="admin-order-picker__selected<?php echo $orderSelectedCustomer ? ' is-selected' : ''; ?>" data-admin-order-customer-selected>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'order_selected_customer', 'Selected customer')); ?></span>
+                                                                    <a href="<?php echo $orderSelectedCustomer ? admin_e('/admin/?page=users&customer_id=' . (int)($orderSelectedCustomer['id'] ?? 0)) : '#'; ?>" class="admin-order-picker__selected-link<?php echo $orderSelectedCustomer ? '' : ' is-disabled'; ?>" data-admin-order-customer-link<?php echo $orderSelectedCustomer ? '' : ' aria-disabled="true"'; ?>>
+                                                                        <strong data-admin-order-customer-email><?php echo admin_e((string)($orderSelectedCustomer['email'] ?? admin_t($messages, 'wallet_no_customer', 'No customer assigned'))); ?></strong>
+                                                                    </a>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'order_product_title', 'Subscription package')); ?></h4>
+                                                            <div class="row g-3">
+                                                                <div class="col-lg-6">
+                                                                    <label class="form-label" for="provider_id"><?php echo admin_e(admin_t($messages, 'order_provider_label', 'Package')); ?></label>
+                                                                    <select class="form-select" id="provider_id" name="provider_id" data-admin-order-provider>
+                                                                        <option value=""><?php echo admin_e(admin_t($messages, 'order_provider_placeholder', 'Choose package')); ?></option>
+                                                                        <?php foreach ($orderProviders as $providerRow): ?>
+                                                                            <option value="<?php echo admin_e((string)$providerRow['id']); ?>"<?php echo (int)$orderCreateState['provider_id'] === (int)$providerRow['id'] ? ' selected' : ''; ?>>
+                                                                                <?php echo admin_e((string)$providerRow['name']); ?>
+                                                                            </option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-lg-6">
+                                                                    <label class="form-label" for="product_id"><?php echo admin_e(admin_t($messages, 'order_duration_label', 'Subscription time')); ?></label>
+                                                                    <select class="form-select" id="product_id" name="product_id" data-admin-order-product data-selected-product-id="<?php echo admin_e((string)$orderCreateState['product_id']); ?>" data-placeholder-default="<?php echo admin_e(admin_t($messages, 'order_product_placeholder', 'Choose subscription time')); ?>" data-placeholder-locked="<?php echo admin_e(admin_t($messages, 'order_product_placeholder_locked', 'Choose package first')); ?>"<?php echo $createProviderId <= 0 ? ' disabled' : ''; ?>>
+                                                                        <option value=""><?php echo admin_e($createDurationPlaceholder); ?></option>
+                                                                        <?php foreach ($createProductOptions as $productRow): ?>
+                                                                            <?php $productOptionId = (int)($productRow['id'] ?? 0); ?>
+                                                                            <option value="<?php echo admin_e((string)$productOptionId); ?>"<?php echo (int)$orderCreateState['product_id'] === $productOptionId ? ' selected' : ''; ?>>
+                                                                                <?php echo admin_e(admin_format_product_option_label($productRow)); ?>
+                                                                            </option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="customer_note"><?php echo admin_e(admin_t($messages, 'order_note_label', 'Note')); ?></label>
+                                                                    <textarea class="form-control" id="customer_note" name="customer_note" rows="4"><?php echo admin_e((string)$orderCreateState['customer_note']); ?></textarea>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <aside class="admin-order-create__aside">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'order_create_help_title', 'How it works')); ?></h4>
+                                                            <p class="admin-order-create__hint"><?php echo admin_e(admin_t($messages, 'order_create_help_text', 'Pick a customer, choose the package and subscription time, then save the order. If URL link is enabled, the customer will be able to copy it later in their panel.')); ?></p>
+                                                        </div>
+                                                    </aside>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_order">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'order_create_button', 'Create order')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $orderRows = admin_order_rows($db, $orderListPerPage, ($orderListPage - 1) * $orderListPerPage, $orderFilterCustomerId);
+                                    ?>
+                                    <div class="admin-section-actions">
+                                        <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
+                                        </a>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table admin-table admin-orders-table align-middle">
+                                            <thead>
+                                                <tr>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                    <th class="admin-orders-table__date-col d-none d-xl-table-cell"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                    <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($orderRows as $row): ?>
+                                                    <?php
+                                                    $orderId = (int)$row['id'];
+                                                    $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+                                                    $orderTitle = trim((string)($row['provider_name'] ?? ''));
+                                                    if ($durationLabel !== '') {
+                                                        $orderTitle = trim($orderTitle . ' ' . $durationLabel);
+                                                    }
+                                                    $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
+                                                    $orderStatusVisual = admin_order_status_visual($row);
+                                                    $orderProgress = admin_order_progress_data($row);
+                                                    $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
+                                                    $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
+                                                    $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
+                                                    $modalId = 'adminOrderModal' . $orderId;
+                                                    $tabInfoId = 'adminOrderInfoTab' . $orderId;
+                                                    $tabExtendId = 'adminOrderExtendTab' . $orderId;
+                                                    ?>
+                                                    <tr>
+                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
+                                                            <strong>#<?php echo admin_e((string)$row['id']); ?></strong>
+                                                        </td>
+                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
+                                                            <div class="admin-order-summary">
+                                                                <div class="admin-order-summary__title-row">
+                                                                    <strong><?php echo admin_e($orderTitle); ?></strong>
+                                                                    <?php if ($isAwaitingActivationOrder): ?>
+                                                                        <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
+                                                                    <?php elseif ($isPendingOrder): ?>
+                                                                        <span class="admin-order-new-badge">NEW</span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                                <?php if ((string)($row['status'] ?? '') === 'expired'): ?>
+                                                                    <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
+                                                                <?php endif; ?>
+                                                                <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
+                                                                    <?php echo admin_e((string)$row['customer_email']); ?>
+                                                                </a>
+                                                                <?php if ($isAwaitingActivationOrder): ?>
+                                                                    <div class="admin-order-summary__note admin-order-summary__note--success">
+                                                                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
+                                                                    </div>
+                                                                <?php elseif ((string)($row['status'] ?? '') === 'active'): ?>
+                                                                    <div class="admin-order-progress">
+                                                                        <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
+                                                                            <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
+                                                                        </div>
+                                                                        <div class="admin-order-progress__track">
+                                                                            <div class="admin-order-progress__meta">
+                                                                                <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
+                                                                                <?php if (!empty($row['expires_at'])): ?>
+                                                                                    <span><?php echo admin_e(date('d.m.Y', strtotime((string)$row['expires_at']))); ?></span>
+                                                                                <?php else: ?>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
+                                                                                <?php endif; ?>
+                                                                            </div>
+                                                                            <div class="admin-order-progress__bar">
+                                                                                <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        </td>
+                                                        <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
+                                                            <div class="admin-order-amount">
+                                                                <strong class="<?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'text-danger' : ((string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending' ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
+                                                                <?php if ((string)($row['delivery_link'] ?? '') !== '' && !empty($row['delivery_link_visible'])): ?>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'order_delivery_enabled', 'URL enabled')); ?></span>
+                                                                <?php endif; ?>
+                                                                <i class="<?php echo admin_e($orderStatusVisual['icon']); ?> admin-order-status-icon <?php echo admin_e($orderStatusVisual['class']); ?>" aria-hidden="true" title="<?php echo admin_e($orderStatusVisual['label']); ?>"></i>
+                                                            </div>
+                                                        </td>
+                                                        <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                            <?php echo admin_e(date('d.m.Y', strtotime((string)$row['created_at']))); ?>
+                                                        </td>
+                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                            <button type="button" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : ((string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending' ? 'btn-dark' : 'btn-success'); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details" style="width: 50px; height: 50px;">
+                                                                <i class="bi bi-search" aria-hidden="true"></i>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <?php foreach ($orderRows as $row): ?>
+                                        <?php
+                                        $orderId = (int)$row['id'];
+                                        $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+                                        $orderTitle = trim((string)($row['provider_name'] ?? ''));
+                                        if ($durationLabel !== '') {
+                                            $orderTitle = trim($orderTitle . ' ' . $durationLabel);
+                                        }
+                                        $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
+                                        $orderStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
+                                        $paymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
+                                        $fulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
+                                        $isPendingOrder = $orderStatusRaw === 'pending_payment' || $paymentStatusRaw === 'unpaid';
+                                        $modalOrderStatusLabel = admin_t($messages, 'enum_' . $orderStatusRaw, ucfirst(str_replace('_', ' ', (string)($row['status'] ?? ''))));
+                                        $modalOrderStatusClass = 'is-neutral';
+                                        $modalOrderStatusIcon = 'bi bi-dot';
+                                        $modalOrderStatusIconClass = '';
+                                        if (in_array($orderStatusRaw, ['active'], true)) {
+                                            $modalOrderStatusClass = 'is-success';
+                                            $modalOrderStatusIcon = 'bi bi-check-lg';
+                                        } elseif (in_array($orderStatusRaw, ['pending_payment', 'awaiting_review', 'pending', 'unpaid'], true)) {
+                                            $modalOrderStatusClass = 'is-pending';
+                                            $modalOrderStatusIcon = 'bi bi-arrow-repeat';
+                                            $modalOrderStatusIconClass = ' admin-order-modal__status-icon--spin';
+                                        } elseif (in_array($orderStatusRaw, ['expired', 'cancelled', 'failed', 'inactive'], true)) {
+                                            $modalOrderStatusClass = 'is-danger';
+                                            $modalOrderStatusIcon = 'bi bi-x-lg';
+                                        }
+
+                                        $modalPaymentStatusLabel = admin_t($messages, 'enum_' . $paymentStatusRaw, ucfirst(str_replace('_', ' ', (string)($row['payment_status'] ?? ''))));
+                                        $modalPaymentStatusDisplayLabel = $modalPaymentStatusLabel;
+                                        if ($paymentStatusRaw === 'paid') {
+                                            $modalPaymentStatusDisplayLabel = admin_t($messages, 'enum_paid', 'Paid');
+                                        } elseif ($paymentStatusRaw === 'unpaid') {
+                                            $modalPaymentStatusDisplayLabel = admin_t($messages, 'enum_unpaid', 'Unpaid');
+                                        }
+                                        $modalPaymentStatusClass = 'is-neutral';
+                                        $modalPaymentStatusIcon = 'bi bi-dot';
+                                        if (in_array($paymentStatusRaw, ['paid'], true)) {
+                                            $modalPaymentStatusClass = 'is-success';
+                                            $modalPaymentStatusIcon = 'bi bi-check-lg';
+                                        } elseif (in_array($paymentStatusRaw, ['pending', 'pending_payment', 'awaiting_review'], true)) {
+                                            $modalPaymentStatusClass = 'is-pending';
+                                            $modalPaymentStatusIcon = 'bi bi-arrow-repeat';
+                                        } elseif ($paymentStatusRaw !== '') {
+                                            $modalPaymentStatusClass = 'is-danger';
+                                            $modalPaymentStatusIcon = 'bi bi-x-lg';
+                                        }
+
+                                        $modalFulfillmentStatusLabel = admin_t($messages, 'enum_' . $fulfillmentStatusRaw, ucfirst(str_replace('_', ' ', (string)($row['fulfillment_status'] ?? ''))));
+                                        $modalFulfillmentStatusDisplayLabel = $modalFulfillmentStatusLabel;
+                                        if (in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)) {
+                                            $modalFulfillmentStatusDisplayLabel = admin_t($messages, 'order_shipping_sent', 'Sent');
+                                        }
+                                        $modalFulfillmentStatusClass = 'is-neutral';
+                                        $modalFulfillmentStatusIcon = 'bi bi-dot';
+                                        if (in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)) {
+                                            $modalFulfillmentStatusClass = 'is-success';
+                                            $modalFulfillmentStatusIcon = 'bi bi-check-lg';
+                                        } elseif (in_array($fulfillmentStatusRaw, ['pending', 'processing', 'queued', 'awaiting_review', 'in_progress'], true)) {
+                                            $modalFulfillmentStatusClass = 'is-pending';
+                                            $modalFulfillmentStatusIcon = 'bi bi-arrow-repeat';
+                                        } elseif ($fulfillmentStatusRaw !== '') {
+                                            $modalFulfillmentStatusClass = 'is-danger';
+                                            $modalFulfillmentStatusIcon = 'bi bi-x-lg';
+                                        }
+                                        $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
+                                        $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+                                        $modalId = 'adminOrderModal' . $orderId;
+                                        $tabInfoId = 'adminOrderInfoTab' . $orderId;
+                                        $tabExtendId = 'adminOrderExtendTab' . $orderId;
+                                        ?>
+                                        <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>" tabindex="-1" aria-hidden="true">
+                                            <div class="modal-dialog modal-dialog-centered modal-xl">
+                                                <div class="modal-content">
+                                                    <div class="modal-header">
+                                                        <div>
+                                                            <h5 class="modal-title">#<?php echo admin_e((string)$orderId); ?> <?php echo admin_e($orderTitle); ?></h5>
+                                                            <div class="admin-order-modal__links">
+                                                                <?php if ((int)($row['customer_id'] ?? 0) > 0): ?>
+                                                                    <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-link">
+                                                                        <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                                                    </a>
+                                                                <?php endif; ?>
+                                                                <?php if ($providerDashboardUrl !== ''): ?>
+                                                                    <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="admin-order-modal__header-link admin-order-modal__header-link--muted" target="_blank" rel="noopener noreferrer">
+                                                                        <?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>
+                                                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                    </a>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <div class="admin-order-modal__summary">
+                                                                <span class="admin-order-modal__summary-chip"><?php echo admin_e(admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''))); ?></span>
+                                                                <span class="admin-order-modal__summary-chip admin-order-modal__summary-chip--status <?php echo admin_e($modalOrderStatusClass); ?>">
+                                                                    <i class="<?php echo admin_e($modalOrderStatusIcon . $modalOrderStatusIconClass); ?>" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e($modalOrderStatusLabel); ?></span>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <ul class="nav nav-tabs admin-order-modal__tabs" role="tablist">
+                                                            <li class="nav-item" role="presentation">
+                                                                <button class="nav-link active" id="<?php echo admin_e($tabInfoId); ?>" data-bs-toggle="tab" data-bs-target="#<?php echo admin_e($tabInfoId); ?>Pane" type="button" role="tab"><?php echo admin_e(admin_t($messages, 'order_tab_info', 'Info')); ?></button>
+                                                            </li>
+                                                            <li class="nav-item" role="presentation">
+                                                                <button class="nav-link" id="<?php echo admin_e($tabExtendId); ?>" data-bs-toggle="tab" data-bs-target="#<?php echo admin_e($tabExtendId); ?>Pane" type="button" role="tab"><?php echo admin_e(admin_t($messages, 'order_tab_extend', 'Extend')); ?></button>
+                                                            </li>
+                                                        </ul>
+
+                                                            <div class="tab-content admin-order-modal__tab-content">
+                                                            <div class="tab-pane fade show active" id="<?php echo admin_e($tabInfoId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabInfoId); ?>">
+                                                                <form
+                                                                    method="post"
+                                                                    class="admin-order-modal__form"
+                                                                    data-admin-order-status-form
+                                                                    data-label-payment-paid="<?php echo admin_e(admin_t($messages, 'enum_paid', 'Paid')); ?>"
+                                                                    data-label-payment-unpaid="<?php echo admin_e(admin_t($messages, 'enum_unpaid', 'Unpaid')); ?>"
+                                                                    data-label-payment-pending="<?php echo admin_e(admin_t($messages, 'enum_pending', 'Pending')); ?>"
+                                                                    data-label-payment-other="<?php echo admin_e(admin_t($messages, 'enum_unpaid', 'Unpaid')); ?>"
+                                                                    data-label-shipping-sent="<?php echo admin_e(admin_t($messages, 'order_shipping_sent', 'Sent')); ?>"
+                                                                    data-label-shipping-pending="<?php echo admin_e(admin_t($messages, 'enum_pending', 'Pending')); ?>"
+                                                                    data-label-shipping-other="<?php echo admin_e(admin_t($messages, 'enum_cancelled', 'Cancelled')); ?>"
+                                                                >
+                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                    <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
+                                                                    <input type="hidden" name="payment_status" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status>
+                                                                    <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
+                                                                    <div class="admin-order-modal__stack">
+                                                                        <div>
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_quick_status', 'Order status')); ?></label>
+                                                                            <select class="form-select" name="status" data-admin-order-main-status>
+                                                                                <?php foreach (admin_order_status_options((string)($row['status'] ?? '')) as $statusOption): ?>
+                                                                                    <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)($row['status'] ?? '') === $statusOption ? ' selected' : ''; ?>>
+                                                                                        <?php echo admin_e(admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)))); ?>
+                                                                                    </option>
+                                                                                <?php endforeach; ?>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div class="admin-order-modal__status-summary">
+                                                                            <div class="admin-order-modal__status-row">
+                                                                                <span class="admin-order-modal__status-row-label"><?php echo admin_e(admin_t($messages, 'order_payment_short_label', 'Payment')); ?>:</span>
+                                                                                <span class="admin-order-modal__field-status <?php echo admin_e($modalPaymentStatusClass); ?>" data-admin-order-payment-pill>
+                                                                                    <i class="<?php echo admin_e($modalPaymentStatusIcon . ($modalPaymentStatusClass === 'is-pending' ? ' admin-order-modal__status-icon--spin' : '')); ?>" aria-hidden="true"></i>
+                                                                                    <span data-admin-order-payment-label><?php echo admin_e($modalPaymentStatusDisplayLabel); ?></span>
+                                                                                </span>
+                                                                            </div>
+                                                                            <div class="admin-order-modal__status-row">
+                                                                                <span class="admin-order-modal__status-row-label"><?php echo admin_e(admin_t($messages, 'order_shipping_short_label', 'Shipping')); ?>:</span>
+                                                                                <span class="admin-order-modal__field-status <?php echo admin_e($modalFulfillmentStatusClass); ?>" data-admin-order-fulfillment-pill>
+                                                                                    <i class="<?php echo admin_e($modalFulfillmentStatusIcon . ($modalFulfillmentStatusClass === 'is-pending' ? ' admin-order-modal__status-icon--spin' : '')); ?>" aria-hidden="true"></i>
+                                                                                    <span data-admin-order-fulfillment-label><?php echo admin_e($modalFulfillmentStatusDisplayLabel); ?></span>
+                                                                                </span>
+                                                                            </div>
+                                                                        </div>
+                                                                        <button
+                                                                            type="button"
+                                                                            class="admin-order-modal__details-toggle"
+                                                                            data-bs-toggle="collapse"
+                                                                            data-bs-target="#adminOrderDetails<?php echo admin_e((string)$orderId); ?>"
+                                                                            aria-expanded="false"
+                                                                            aria-controls="adminOrderDetails<?php echo admin_e((string)$orderId); ?>"
+                                                                        >
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?></span>
+                                                                            <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                                                                        </button>
+                                                                        <div class="collapse" id="adminOrderDetails<?php echo admin_e((string)$orderId); ?>">
+                                                                            <div class="admin-order-modal__details">
+                                                                                <div>
+                                                                                    <div class="form-check admin-form-check">
+                                                                                        <input class="form-check-input" type="checkbox" value="1" id="delivery_link_visible_<?php echo admin_e((string)$orderId); ?>" name="delivery_link_visible"<?php echo !empty($row['delivery_link_visible']) ? ' checked' : ''; ?> data-admin-order-link-toggle>
+                                                                                        <label class="form-check-label" for="delivery_link_visible_<?php echo admin_e((string)$orderId); ?>"><?php echo admin_e(admin_t($messages, 'order_delivery_toggle', 'Show URL link to the user')); ?></label>
+                                                                                    </div>
+                                                                                    <?php if (!empty($row['supports_manual_delivery'])): ?>
+                                                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'order_delivery_toggle_manual_help', 'When this stays off, the user will only see login and password extracted from the URL.')); ?></small>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                                <div data-admin-order-link-field>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_delivery_link_label', 'URL link')); ?></label>
+                                                                                    <input type="url" class="form-control" name="delivery_link" value="<?php echo admin_e((string)($row['delivery_link'] ?? '')); ?>" placeholder="https://">
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_payment_method_label', 'Payment method')); ?></label>
+                                                                                    <select class="form-select" name="payment_method">
+                                                                                        <?php foreach (admin_order_payment_method_options((string)($row['payment_method'] ?? '')) as $paymentMethodOption): ?>
+                                                                                            <option value="<?php echo admin_e($paymentMethodOption); ?>"<?php echo (string)($row['payment_method'] ?? '') === $paymentMethodOption ? ' selected' : ''; ?>>
+                                                                                                <?php echo admin_e($paymentMethodOption !== '' ? admin_t($messages, 'enum_' . $paymentMethodOption, ucfirst(str_replace('_', ' ', $paymentMethodOption))) : admin_t($messages, 'order_payment_method_none', 'None')); ?>
+                                                                                            </option>
+                                                                                        <?php endforeach; ?>
+                                                                                    </select>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_transaction_reference', 'Transaction reference')); ?></label>
+                                                                                    <input type="text" class="form-control" name="transaction_reference" value="<?php echo admin_e((string)($row['transaction_reference'] ?? '')); ?>">
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
+                                                                                    <input type="text" class="form-control" name="total_amount" value="<?php echo admin_e(number_format((float)($row['total_amount'] ?? 0), 2, '.', '')); ?>">
+                                                                                </div>
+                                                                                <?php if (!$isPendingOrder): ?>
+                                                                                    <div>
+                                                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_started_at', 'Started at')); ?></label>
+                                                                                        <input type="datetime-local" class="form-control" name="started_at" value="<?php echo admin_e(admin_format_datetime_local((string)($row['started_at'] ?? ''))); ?>">
+                                                                                    </div>
+                                                                                <?php endif; ?>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_expires_at', 'Expires at')); ?></label>
+                                                                                    <input type="datetime-local" class="form-control" name="expires_at" value="<?php echo admin_e(admin_format_datetime_local((string)($row['expires_at'] ?? ''))); ?>">
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_paid_at', 'Paid at')); ?></label>
+                                                                                    <input type="datetime-local" class="form-control" name="paid_at" value="<?php echo admin_e(admin_format_datetime_local((string)($row['paid_at'] ?? ''))); ?>">
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_internal_id', 'Internal ID')); ?></label>
+                                                                                    <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e((string)$orderId); ?>" readonly>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></label>
+                                                                                    <input type="text" class="form-control" name="order_reference" value="<?php echo admin_e((string)($row['order_reference'] ?? '')); ?>">
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                                                    <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e((string)($row['customer_email'] ?? '')); ?>" readonly>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_provider_label', 'Package')); ?></label>
+                                                                                    <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e((string)($row['provider_name'] ?? '')); ?>" readonly>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></label>
+                                                                                    <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e((string)($row['product_name'] ?? '')); ?>" readonly>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_duration_label', 'Subscription time')); ?></label>
+                                                                                    <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e($durationLabel); ?>" readonly>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_customer_note', 'Customer note')); ?></label>
+                                                                                    <textarea class="form-control" name="customer_note" rows="3"><?php echo admin_e((string)($row['customer_note'] ?? '')); ?></textarea>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_support_note', 'Support note')); ?></label>
+                                                                                    <textarea class="form-control" name="support_note" rows="3"><?php echo admin_e((string)($row['support_note'] ?? '')); ?></textarea>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="admin-order-modal__actions">
+                                                                        <button type="submit" class="btn btn-dark" name="admin_save_order_info">
+                                                                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_save_button', 'Save order')); ?></span>
+                                                                        </button>
+                                                                        <button type="submit" class="btn btn-outline-danger" name="admin_delete_order" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');">
+                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?></span>
+                                                                        </button>
+                                                                    </div>
+                                                                </form>
+                                                            </div>
+
+                                                            <div class="tab-pane fade" id="<?php echo admin_e($tabExtendId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabExtendId); ?>">
+                                                                <form method="post" class="admin-order-modal__form">
+                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                    <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
+                                                                    <div class="admin-order-modal__stack">
+                                                                        <div class="admin-order-extend__hint">
+                                                                            <?php echo admin_e(admin_t($messages, 'order_extend_hint', 'Select a package from the same provider. Its duration will be added to the current subscription expiry date.')); ?>
+                                                                        </div>
+                                                                        <div>
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_current_expiry', 'Current expiry')); ?></label>
+                                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>" readonly>
+                                                                        </div>
+                                                                        <div>
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_package', 'Extension package')); ?></label>
+                                                                            <?php if ($extendProducts): ?>
+                                                                                <select class="form-select" name="extend_product_id" required>
+                                                                                    <option value=""><?php echo admin_e(admin_t($messages, 'order_extend_package_placeholder', 'Choose extension package')); ?></option>
+                                                                                    <?php foreach ($extendProducts as $extendProduct): ?>
+                                                                                        <option value="<?php echo admin_e((string)$extendProduct['id']); ?>">
+                                                                                            <?php echo admin_e(admin_format_product_option_label($extendProduct)); ?>
+                                                                                        </option>
+                                                                                    <?php endforeach; ?>
+                                                                                </select>
+                                                                            <?php else: ?>
+                                                                                <div class="admin-order-extend__hint admin-order-extend__hint--warning">
+                                                                                    <?php echo admin_e(admin_t($messages, 'order_extend_no_packages', 'No eligible extension packages are available for this provider. Trial products and packages up to 24 hours are hidden here.')); ?>
+                                                                                </div>
+                                                                            <?php endif; ?>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="admin-order-modal__actions">
+                                                                        <button type="submit" class="btn btn-dark" name="admin_extend_order"<?php echo $extendProducts ? '' : ' disabled'; ?>>
+                                                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_extend_button', 'Extend subscription')); ?></span>
+                                                                        </button>
+                                                                    </div>
+                                                                </form>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    <?php if ($orderListTotalPages > 1): ?>
+                                        <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'order_pagination', 'Order pages')); ?>">
+                                            <ul class="pagination admin-pagination">
+                                                <?php for ($pageNumber = 1; $pageNumber <= $orderListTotalPages; $pageNumber++): ?>
+                                                    <li class="page-item<?php echo $pageNumber === $orderListPage ? ' active' : ''; ?>">
+                                                        <a class="page-link" href="/admin/?page=orders&amp;order_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                    </li>
+                                                <?php endfor; ?>
+                                            </ul>
+                                        </nav>
+                                    <?php endif; ?>
+                                    <?php
+                                    break;
+
+                                case 'products':
+                                    if ($productProviderShowCreate):
+                                        $productProviderDraft = $productProviderFormState;
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'product_provider_create_title', 'Add provider')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=products&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_products', 'Back to products')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="product_list_page" value="<?php echo admin_e((string)$productListPage); ?>">
+
+                                                <div class="row g-3" data-provider-url-replacement-scope>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="product_provider_name"><?php echo admin_e(admin_t($messages, 'product_provider_name_label', 'Provider name')); ?></label>
+                                                        <input type="text" class="form-control" id="product_provider_name" name="name" value="<?php echo admin_e((string)($productProviderDraft['name'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_provider_slug"><?php echo admin_e(admin_t($messages, 'product_provider_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="product_provider_slug" name="slug" value="<?php echo admin_e((string)($productProviderDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'product_provider_slug_placeholder', 'generated-from-name')); ?>">
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="product_provider_dashboard_url"><?php echo admin_e(admin_t($messages, 'product_provider_dashboard_url', 'Dashboard URL')); ?></label>
+                                                        <input type="url" class="form-control" id="product_provider_dashboard_url" name="dashboard_url" value="<?php echo admin_e((string)($productProviderDraft['dashboard_url'] ?? '')); ?>" placeholder="https://">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_provider_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="product_provider_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($productProviderDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($productProviderDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_provider_description"><?php echo admin_e(admin_t($messages, 'product_provider_description_label', 'Description')); ?></label>
+                                                        <textarea class="form-control" id="product_provider_description" name="description" rows="5"><?php echo admin_e((string)($productProviderDraft['description'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="admin-check-field">
+                                                            <input type="checkbox" name="supports_manual_delivery" value="1"<?php echo !empty($productProviderDraft['supports_manual_delivery']) ? ' checked' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery', 'Supports manual delivery')); ?></span>
+                                                        </label>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery_help', 'Enables manual assignment of access credentials after subscription purchase.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="admin-check-field">
+                                                            <input type="checkbox" name="supports_url_replacement" value="1" data-provider-url-replacement-toggle<?php echo !empty($productProviderDraft['supports_url_replacement']) ? ' checked' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'product_provider_supports_url_replacement', 'Supports URL replacement')); ?></span>
+                                                        </label>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_supports_url_replacement_help', 'Allows automatic URL replacement in the provider panel after purchase.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12 admin-provider-replacement-panel" data-provider-url-replacement-section hidden>
+                                                        <div class="admin-provider-replacement-panel__inner">
+                                                            <div class="admin-provider-replacement-panel__header">
+                                                                <strong><?php echo admin_e(admin_t($messages, 'product_provider_supports_url_replacement', 'Supports URL replacement')); ?></strong>
+                                                                <span><?php echo admin_e(admin_t($messages, 'product_provider_url_replacement_prefix_help', 'When URL replacement is enabled, every shown stream link that starts with the old prefix will be rendered with the new prefix.')); ?></span>
+                                                            </div>
+                                                            <div class="row g-3">
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="product_provider_url_replacement_from"><?php echo admin_e(admin_t($messages, 'product_provider_url_replacement_from', 'Replace this URL prefix')); ?></label>
+                                                                    <input type="url" class="form-control" id="product_provider_url_replacement_from" name="url_replacement_from" value="<?php echo admin_e((string)($productProviderDraft['url_replacement_from'] ?? '')); ?>" placeholder="http://abc.com:8800">
+                                                                </div>
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="product_provider_url_replacement_to"><?php echo admin_e(admin_t($messages, 'product_provider_url_replacement_to', 'With this URL prefix')); ?></label>
+                                                                    <input type="url" class="form-control" id="product_provider_url_replacement_to" name="url_replacement_to" value="<?php echo admin_e((string)($productProviderDraft['url_replacement_to'] ?? '')); ?>" placeholder="http://cba.com:8800">
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_product_provider">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_create_button', 'Create provider')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($productProviderEditorId > 0 && is_array($productProviderEditor) && !empty($productProviderEditor['id'])):
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'product_provider_editor_title', 'Edit provider')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=products&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_products', 'Back to products')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="provider_id" value="<?php echo admin_e((string)$productProviderEditorId); ?>">
+                                                <input type="hidden" name="product_list_page" value="<?php echo admin_e((string)$productListPage); ?>">
+
+                                                <div class="row g-3" data-provider-url-replacement-scope>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="product_provider_name"><?php echo admin_e(admin_t($messages, 'product_provider_name_label', 'Provider name')); ?></label>
+                                                        <input type="text" class="form-control" id="product_provider_name" name="name" value="<?php echo admin_e((string)($productProviderEditor['name'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_provider_slug"><?php echo admin_e(admin_t($messages, 'product_provider_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="product_provider_slug" name="slug" value="<?php echo admin_e((string)($productProviderEditor['slug'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="product_provider_dashboard_url"><?php echo admin_e(admin_t($messages, 'product_provider_dashboard_url', 'Dashboard URL')); ?></label>
+                                                        <input type="url" class="form-control" id="product_provider_dashboard_url" name="dashboard_url" value="<?php echo admin_e((string)($productProviderEditor['dashboard_url'] ?? '')); ?>" placeholder="https://">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_provider_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="product_provider_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($productProviderEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($productProviderEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_provider_description"><?php echo admin_e(admin_t($messages, 'product_provider_description_label', 'Description')); ?></label>
+                                                        <textarea class="form-control" id="product_provider_description" name="description" rows="5"><?php echo admin_e((string)($productProviderEditor['description'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="admin-check-field">
+                                                            <input type="checkbox" name="supports_manual_delivery" value="1"<?php echo !empty($productProviderEditor['supports_manual_delivery']) ? ' checked' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery', 'Supports manual delivery')); ?></span>
+                                                        </label>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery_help', 'Enables manual assignment of access credentials after subscription purchase.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="admin-check-field">
+                                                            <input type="checkbox" name="supports_url_replacement" value="1" data-provider-url-replacement-toggle<?php echo !empty($productProviderEditor['supports_url_replacement']) ? ' checked' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'product_provider_supports_url_replacement', 'Supports URL replacement')); ?></span>
+                                                        </label>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_supports_url_replacement_help', 'Allows automatic URL replacement in the provider panel after purchase.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12 admin-provider-replacement-panel" data-provider-url-replacement-section hidden>
+                                                        <div class="admin-provider-replacement-panel__inner">
+                                                            <div class="admin-provider-replacement-panel__header">
+                                                                <strong><?php echo admin_e(admin_t($messages, 'product_provider_supports_url_replacement', 'Supports URL replacement')); ?></strong>
+                                                                <span><?php echo admin_e(admin_t($messages, 'product_provider_url_replacement_prefix_help', 'When URL replacement is enabled, every shown stream link that starts with the old prefix will be rendered with the new prefix.')); ?></span>
+                                                            </div>
+                                                            <div class="row g-3">
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="product_provider_url_replacement_from"><?php echo admin_e(admin_t($messages, 'product_provider_url_replacement_from', 'Replace this URL prefix')); ?></label>
+                                                                    <input type="url" class="form-control" id="product_provider_url_replacement_from" name="url_replacement_from" value="<?php echo admin_e((string)($productProviderEditor['url_replacement_from'] ?? '')); ?>" placeholder="http://abc.com:8800">
+                                                                </div>
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="product_provider_url_replacement_to"><?php echo admin_e(admin_t($messages, 'product_provider_url_replacement_to', 'With this URL prefix')); ?></label>
+                                                                    <input type="url" class="form-control" id="product_provider_url_replacement_to" name="url_replacement_to" value="<?php echo admin_e((string)($productProviderEditor['url_replacement_to'] ?? '')); ?>" placeholder="http://cba.com:8800">
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'product_provider_products_count', 'Products')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)((int)($productProviderEditor['product_count'] ?? 0)) . ' / ' . admin_t($messages, 'status_active', 'Active') . ': ' . (string)((int)($productProviderEditor['active_product_count'] ?? 0))); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($productProviderEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($productProviderEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_product_provider">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_save_button', 'Save provider')); ?></span>
+                                                    </button>
+                                                    <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_product_provider" formnovalidate onclick="return confirm('<?php echo admin_e(admin_t($messages, 'product_provider_delete_confirm', 'Delete this provider?')); ?>');">
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_delete_button', 'Delete provider')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($productShowCreate):
+                                        $productDraft = $productFormState;
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'product_create_title', 'Add product')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=products&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_products', 'Back to products')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <?php
+                                            $productDraftType = admin_normalize_product_type((string)($productDraft['product_type'] ?? 'subscription'));
+                                            $productDraftTypeOptions = admin_product_type_form_options($appSettings, $productDraftType);
+                                            ?>
+                                            <form method="post" class="admin-editor-form" data-product-form-scope>
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="product_list_page" value="<?php echo admin_e((string)$productListPage); ?>">
+
+                                                <div class="row g-3" data-provider-url-replacement-scope>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_type"><?php echo admin_e(admin_t($messages, 'product_type_label', 'Product type')); ?></label>
+                                                        <?php if (count($productDraftTypeOptions) > 1): ?>
+                                                            <select class="form-select" id="product_type" name="product_type" data-product-type-select>
+                                                                <?php foreach ($productDraftTypeOptions as $productTypeOption): ?>
+                                                                    <option value="<?php echo admin_e($productTypeOption); ?>"<?php echo $productDraftType === $productTypeOption ? ' selected' : ''; ?>>
+                                                                        <?php echo admin_e(admin_t($messages, 'product_type_' . $productTypeOption, ucfirst(str_replace('_', ' ', $productTypeOption)))); ?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        <?php else: ?>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'product_type_' . $productDraftType, ucfirst(str_replace('_', ' ', $productDraftType)))); ?>" readonly>
+                                                            <input type="hidden" name="product_type" value="<?php echo admin_e($productDraftType); ?>" data-product-type-select>
+                                                        <?php endif; ?>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_type_toggle_help', 'Choose whether you are adding a timed subscription or a credits product for reseller orders.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="product_provider_id"><?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?></label>
+                                                        <select class="form-select" id="product_provider_id" name="provider_id" required>
+                                                            <option value=""><?php echo admin_e(admin_t($messages, 'product_provider_placeholder', 'Choose provider')); ?></option>
+                                                            <?php foreach ($productProviders as $providerRow): ?>
+                                                                <option value="<?php echo admin_e((string)$providerRow['id']); ?>"<?php echo (int)($productDraft['provider_id'] ?? 0) === (int)($providerRow['id'] ?? 0) ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($providerRow['name'] ?? '')); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_description', 'Select the service provider for this product. Each provider offers different packages and pricing options.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="product_currency_id"><?php echo admin_e(admin_t($messages, 'product_currency_label', 'Currency')); ?></label>
+                                                        <input type="text" class="form-control" id="product_currency_id" value="<?php echo admin_e($adminDefaultCurrencyLabel); ?>" readonly>
+                                                        <input type="hidden" name="currency_id" value="<?php echo admin_e((string)$adminDefaultCurrencyId); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_currency_fixed_help', 'Currency is fixed globally from Settings.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="product_name"><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></label>
+                                                        <input type="text" class="form-control" id="product_name" name="name" value="<?php echo admin_e((string)($productDraft['name'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_slug"><?php echo admin_e(admin_t($messages, 'product_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="product_slug" name="slug" value="<?php echo admin_e((string)($productDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'product_slug_placeholder', 'generated-from-name')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4" data-product-type-section="subscription">
+                                                        <label class="form-label" for="product_duration_hours"><?php echo admin_e(admin_t($messages, 'product_duration_hours', 'Duration (hours)')); ?></label>
+                                                        <input type="number" min="0" step="1" class="form-control" id="product_duration_hours" name="duration_hours" value="<?php echo admin_e((string)($productDraft['duration_hours'] ?? '0')); ?>" data-required-when-visible="1">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_price_amount"><?php echo admin_e(admin_t($messages, 'product_price_label', 'Price')); ?></label>
+                                                        <input type="number" min="0" step="0.01" class="form-control" id="product_price_amount" name="price_amount" value="<?php echo admin_e((string)($productDraft['price_amount'] ?? '0.00')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="product_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($productDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($productDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="product_provisioning_mode"><?php echo admin_e(admin_t($messages, 'product_provisioning_mode_label', 'Provisioning mode')); ?></label>
+                                                        <select class="form-select" id="product_provisioning_mode" name="provisioning_mode">
+                                                            <?php foreach (admin_product_provisioning_mode_options((string)($productDraft['provisioning_mode'] ?? 'manual')) as $provisioningModeOption): ?>
+                                                                <option value="<?php echo admin_e($provisioningModeOption); ?>"<?php echo (string)($productDraft['provisioning_mode'] ?? 'manual') === $provisioningModeOption ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e(admin_t($messages, 'product_provisioning_mode_' . $provisioningModeOption, ucfirst(str_replace('_', ' ', $provisioningModeOption)))); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_description"><?php echo admin_e(admin_t($messages, 'product_description_label', 'Description')); ?></label>
+                                                        <textarea class="form-control" id="product_description" name="description" rows="5"><?php echo admin_e((string)($productDraft['description'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-12" data-product-type-section="subscription">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_subscription_section_title', 'Subscription settings')); ?></h4>
+                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_subscription_section_help', 'Subscriptions use a duration and can optionally be marked as trial.')); ?></p>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12" data-product-type-section="subscription">
+                                                        <label class="admin-check-field">
+                                                            <input type="checkbox" name="is_trial" value="1"<?php echo !empty($productDraft['is_trial']) ? ' checked' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'product_is_trial', 'Mark as trial product')); ?></span>
+                                                        </label>
+                                                    </div>
+                                                    <div class="col-12" data-product-type-section="credits">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_credits_section_title', 'Credits settings')); ?></h4>
+                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_credits_section_help', 'Credits do not top up any balance. A purchase only creates an order record with customer, date, payment and fulfillment status.')); ?></p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_product">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'product_create_button', 'Create product')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($productEditorId > 0 && is_array($productEditor) && !empty($productEditor['id'])):
+                                        $productDeleteData = is_array($productDeleteSummary ?? null) ? $productDeleteSummary : ['orders_total' => 0, 'can_delete' => false];
+                                        $productOrdersTotal = (int)($productDeleteData['orders_total'] ?? 0);
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'product_editor_title', 'Edit product')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=products&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_products', 'Back to products')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <?php
+                                            $productEditorType = admin_normalize_product_type((string)($productEditor['product_type'] ?? 'subscription'));
+                                            $productEditorTypeOptions = admin_product_type_form_options($appSettings, $productEditorType);
+                                            ?>
+                                            <form method="post" class="admin-editor-form" data-product-form-scope>
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="product_id" value="<?php echo admin_e((string)$productEditor['id']); ?>">
+                                                <input type="hidden" name="product_list_page" value="<?php echo admin_e((string)$productListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_type"><?php echo admin_e(admin_t($messages, 'product_type_label', 'Product type')); ?></label>
+                                                        <?php if (count($productEditorTypeOptions) > 1): ?>
+                                                            <select class="form-select" id="product_type" name="product_type" data-product-type-select>
+                                                                <?php foreach ($productEditorTypeOptions as $productTypeOption): ?>
+                                                                    <option value="<?php echo admin_e($productTypeOption); ?>"<?php echo $productEditorType === $productTypeOption ? ' selected' : ''; ?>>
+                                                                        <?php echo admin_e(admin_t($messages, 'product_type_' . $productTypeOption, ucfirst(str_replace('_', ' ', $productTypeOption)))); ?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        <?php else: ?>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'product_type_' . $productEditorType, ucfirst(str_replace('_', ' ', $productEditorType)))); ?>" readonly>
+                                                            <input type="hidden" name="product_type" value="<?php echo admin_e($productEditorType); ?>" data-product-type-select>
+                                                        <?php endif; ?>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_type_toggle_help', 'Choose whether you are adding a timed subscription or a credits product for reseller orders.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="product_provider_id"><?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?></label>
+                                                        <select class="form-select" id="product_provider_id" name="provider_id" required>
+                                                            <option value=""><?php echo admin_e(admin_t($messages, 'product_provider_placeholder', 'Choose provider')); ?></option>
+                                                            <?php foreach ($productProviders as $providerRow): ?>
+                                                                <option value="<?php echo admin_e((string)$providerRow['id']); ?>"<?php echo (int)($productEditor['provider_id'] ?? 0) === (int)($providerRow['id'] ?? 0) ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($providerRow['name'] ?? '')); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="product_currency_id"><?php echo admin_e(admin_t($messages, 'product_currency_label', 'Currency')); ?></label>
+                                                        <input type="text" class="form-control" id="product_currency_id" value="<?php echo admin_e($adminDefaultCurrencyLabel); ?>" readonly>
+                                                        <input type="hidden" name="currency_id" value="<?php echo admin_e((string)$adminDefaultCurrencyId); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_currency_fixed_help', 'Currency is fixed globally from Settings.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="product_name"><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></label>
+                                                        <input type="text" class="form-control" id="product_name" name="name" value="<?php echo admin_e((string)($productEditor['name'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_slug"><?php echo admin_e(admin_t($messages, 'product_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="product_slug" name="slug" value="<?php echo admin_e((string)($productEditor['slug'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4" data-product-type-section="subscription">
+                                                        <label class="form-label" for="product_duration_hours"><?php echo admin_e(admin_t($messages, 'product_duration_hours', 'Duration (hours)')); ?></label>
+                                                        <input type="number" min="0" step="1" class="form-control" id="product_duration_hours" name="duration_hours" value="<?php echo admin_e((string)($productEditor['duration_hours'] ?? '0')); ?>" data-required-when-visible="1">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_price_amount"><?php echo admin_e(admin_t($messages, 'product_price_label', 'Price')); ?></label>
+                                                        <input type="number" min="0" step="0.01" class="form-control" id="product_price_amount" name="price_amount" value="<?php echo admin_e((string)($productEditor['price_amount'] ?? '0.00')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="product_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="product_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($productEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($productEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="product_provisioning_mode"><?php echo admin_e(admin_t($messages, 'product_provisioning_mode_label', 'Provisioning mode')); ?></label>
+                                                        <select class="form-select" id="product_provisioning_mode" name="provisioning_mode">
+                                                            <?php foreach (admin_product_provisioning_mode_options((string)($productEditor['provisioning_mode'] ?? 'manual')) as $provisioningModeOption): ?>
+                                                                <option value="<?php echo admin_e($provisioningModeOption); ?>"<?php echo (string)($productEditor['provisioning_mode'] ?? 'manual') === $provisioningModeOption ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e(admin_t($messages, 'product_provisioning_mode_' . $provisioningModeOption, ucfirst(str_replace('_', ' ', $provisioningModeOption)))); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_description"><?php echo admin_e(admin_t($messages, 'product_description_label', 'Description')); ?></label>
+                                                        <textarea class="form-control" id="product_description" name="description" rows="5"><?php echo admin_e((string)($productEditor['description'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-12" data-product-type-section="subscription">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_subscription_section_title', 'Subscription settings')); ?></h4>
+                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_subscription_section_help', 'Subscriptions use a duration and can optionally be marked as trial.')); ?></p>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12" data-product-type-section="subscription">
+                                                        <label class="admin-check-field">
+                                                            <input type="checkbox" name="is_trial" value="1"<?php echo !empty($productEditor['is_trial']) ? ' checked' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'product_is_trial', 'Mark as trial product')); ?></span>
+                                                        </label>
+                                                    </div>
+                                                    <div class="col-12" data-product-type-section="credits">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_credits_section_title', 'Credits settings')); ?></h4>
+                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_credits_section_help', 'Credits do not top up any balance. A purchase only creates an order record with customer, date, payment and fulfillment status.')); ?></p>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($productEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($productEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="admin-form-card">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_delete_section_title', 'Delete product')); ?></h4>
+                                                            <?php if ($productOrdersTotal > 0): ?>
+                                                                <p class="mb-2 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_delete_blocked_help', 'This product already has assigned orders. To remove it completely, first delete the orders. If you only want to hide it from sale, change the status to archived.')); ?></p>
+                                                                <div class="d-flex flex-wrap gap-2">
+                                                                    <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'product_delete_orders_total', 'Linked orders: {count}', ['count' => (string)$productOrdersTotal])); ?></span>
+                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'product_delete_archive_hint', 'Use Archived status to hide this product from sale.')); ?></span>
+                                                                </div>
+                                                            <?php else: ?>
+                                                                <p class="mb-2 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_delete_allowed_help', 'This product has no assigned orders, so it can be deleted completely from the service.')); ?></p>
+                                                                <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'product_delete_orders_total', 'Linked orders: {count}', ['count' => '0'])); ?></span>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_product">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'product_save_button', 'Save product')); ?></span>
+                                                    </button>
+                                                    <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_product" formnovalidate onclick="return confirm('<?php echo admin_e(admin_t($messages, 'product_delete_confirm', 'Delete this product completely? This cannot be undone.')); ?>');"<?php echo $productOrdersTotal === 0 ? '' : ' disabled'; ?>>
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'product_delete_button', 'Delete product')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $productProviderRows = admin_product_provider_rows_paginated($db, 100, 0);
+                                    $productRows = admin_product_rows_paginated($db, $productListPerPage, ($productListPage - 1) * $productListPerPage);
+                                    ?>
+                                    <div class="admin-editor-page__header">
+                                        <div>
+                                            <h3><?php echo admin_e(admin_t($messages, 'product_provider_section_title', 'Providers')); ?></h3>
+                                            <p class="text-body-secondary small mb-0"><?php echo admin_e(admin_t($messages, 'product_provider_section_intro', 'Manage service providers before assigning subscriptions to them.')); ?></p>
+                                        </div>
+                                        <a href="/admin/?page=products&amp;provider_view=create&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-dark">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'product_provider_add_new', 'Add provider')); ?></span>
+                                        </a>
+                                    </div>
+                                    <?php if ($productProviderRows): ?>
+                                        <div class="table-responsive mb-4">
+                                            <table class="table admin-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th><?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?></th>
+                                                        <th class="text-center"><?php echo admin_e(admin_t($messages, 'product_provider_products_count', 'Products')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($productProviderRows as $providerRow): ?>
+                                                        <?php
+                                                        $providerDescriptionPreview = admin_news_body_preview((string)($providerRow['description'] ?? ''), 90);
+                                                        $providerDashboardUrl = trim((string)($providerRow['dashboard_url'] ?? ''));
+                                                        $providerLogoUrl = trim((string)($providerRow['logo_url'] ?? ''));
+                                                        ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?>">
+                                                                <div class="d-flex align-items-center gap-3">
+                                                                    <?php
+                                                                    $logoSrc = $providerLogoUrl !== '' ? $providerLogoUrl : '/img/no-image.png';
+                                                                    $logoSrc = str_replace('admin/', '', $logoSrc);
+                                                                    if (strpos($logoSrc, '/') !== 0) {
+                                                                        $logoSrc = '/' . $logoSrc;
+                                                                    }
+                                                                    ?>
+                                                                    <img src="<?php echo admin_e($logoSrc); ?>" alt="<?php echo admin_e((string)($providerRow['name'] ?? '')); ?>" width="40" height="40" style="border-radius: 8px; object-fit: cover;">
+                                                                    <div class="d-flex flex-column gap-1">
+                                                                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                                                                            <strong><?php echo admin_e((string)($providerRow['name'] ?? '')); ?></strong>
+                                                                            <span class="admin-status-pill <?php echo !empty($providerRow['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                                <?php echo admin_e(!empty($providerRow['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_disabled', 'Disabled')); ?>
+                                                                            </span>
+                                                                        </div>
+                                                                        <?php if ($providerDescriptionPreview !== ''): ?>
+                                                                            <span class="text-body-secondary small"><?php echo admin_e($providerDescriptionPreview); ?></span>
+                                                                        <?php endif; ?>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'product_provider_products_count', 'Products')); ?>" class="text-center">
+                                                                <div class="admin-table-stack">
+                                                                    <strong><?php echo admin_e((string)((int)($providerRow['product_count'] ?? 0))); ?></strong>
+                                                                    <span class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_active_products', 'Active') . ': ' . (string)((int)($providerRow['active_product_count'] ?? 0))); ?></span>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-wallet-actions">
+                                                                    <a href="/admin/?page=products&amp;edit_provider=<?php echo admin_e((string)$providerRow['id']); ?>&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-dark btn-sm">
+                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                    </a>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                    <?php endif; ?>
+
+                                    <div class="admin-editor-page__header">
+                                        <div>
+                                            <h3><?php echo admin_e(admin_t($messages, 'product_section_title', 'Subscriptions')); ?></h3>
+                                            <p class="text-body-secondary small mb-0"><?php echo admin_e(admin_t($messages, 'product_section_intro', 'Manage subscription packages assigned to each provider.')); ?></p>
+                                        </div>
+                                        <a href="/admin/?page=products&amp;view=create&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-dark">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'product_add_new', 'Add product')); ?></span>
+                                        </a>
+                                    </div>
+                                    <?php if ($productRows): ?>
+                                        <div class="table-responsive">
+                                            <table class="table admin-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th><?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+                                                        <th class="admin-products-table__type-col"><?php echo admin_e(admin_t($messages, 'product_type_label', 'Product type')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php
+                                                    $colorPalette = ['#15161a', '#1c64f2', '#7c3aed', '#059669', '#dc2626', '#d97706', '#0891b2', '#9333ea'];
+                                                    $providerColorMap = [];
+                                                    $colorIndex = 0;
+                                                    foreach ($productRows as $row):
+                                                        $productDescriptionPreview = admin_news_body_preview((string)($row['description'] ?? ''), 90);
+                                                        $productPriceLabel = admin_format_money_value($row['price_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
+                                                        $providerName = (string)($row['provider_name'] ?? '—');
+                                                        $productTypeLabel = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits'
+                                                            ? admin_t($messages, 'product_type_credits', 'Credits')
+                                                            : admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+                                                        $productDaysLabel = '';
+                                                        if (admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) !== 'credits' && (int)($row['duration_hours'] ?? 0) > 0) {
+                                                            $days = (int)($row['duration_hours'] ?? 0) / 24;
+                                                            $productDaysLabel = (int)$days . ' Days';
+                                                        }
+                                                        if (!isset($providerColorMap[$providerName])) {
+                                                            $providerColorMap[$providerName] = $colorPalette[$colorIndex % count($colorPalette)];
+                                                            $colorIndex++;
+                                                        }
+                                                        $providerColor = $providerColorMap[$providerName];
+                                                    ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?>">
+                                                                <div class="d-flex align-items-center gap-2">
+                                                                    <?php if (!empty($row['provider_logo_url'])): ?>
+                                                                        <img src="/<?php echo admin_e((string)($row['provider_logo_url'] ?? '')); ?>" alt="<?php echo admin_e((string)($row['provider_name'] ?? '')); ?>" class="admin-provider-logo" style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover;">
+                                                                    <?php endif; ?>
+                                                                    <strong style="color: <?php echo admin_e($providerColor); ?>;"><?php echo admin_e($providerName); ?></strong>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>">
+                                                                    <div class="d-flex flex-column gap-1">
+                                                                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                                                                            <strong><?php echo admin_e((string)($row['name'] ?? '')); ?></strong>
+                                                                            <?php if (!empty($row['is_trial'])): ?>
+                                                                                <span class="admin-status-pill admin-status-pill--warning"><?php echo admin_e(admin_t($messages, 'product_trial_badge', 'Trial')); ?></span>
+                                                                            <?php endif; ?>
+                                                                        </div>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e($productTypeLabel); ?></span>
+                                                                    <?php if ($productDaysLabel !== ''): ?>
+                                                                        <span class="text-body-secondary small"><?php echo admin_e($productDaysLabel); ?></span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'product_type_label', 'Product type')); ?>" class="admin-products-table__type-col">
+                                                                <div class="d-flex flex-column gap-1">
+                                                                    <span><?php echo admin_e(admin_t($messages, 'product_type_' . (string)($row['product_type'] ?? 'subscription'), ucfirst(str_replace('_', ' ', (string)($row['product_type'] ?? 'subscription'))))); ?></span>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_provisioning_mode_' . (string)($row['provisioning_mode'] ?? 'manual'), ucfirst(str_replace('_', ' ', (string)($row['provisioning_mode'] ?? 'manual'))))); ?></span>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
+                                                                <?php echo admin_e($productPriceLabel); ?>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                    <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                </span>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-wallet-actions">
+                                                                    <a href="/admin/?page=products&amp;edit_product=<?php echo admin_e((string)$row['id']); ?>&amp;product_list_page=<?php echo admin_e((string)$productListPage); ?>" class="btn btn-dark btn-sm">
+                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                    </a>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <?php if ($productListTotalPages > 1): ?>
+                                            <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'product_pagination', 'Product pages')); ?>">
+                                                <ul class="pagination admin-pagination">
+                                                    <?php for ($pageNumber = 1; $pageNumber <= $productListTotalPages; $pageNumber++): ?>
+                                                        <li class="page-item<?php echo $pageNumber === $productListPage ? ' active' : ''; ?>">
+                                                            <a class="page-link" href="/admin/?page=products&amp;product_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                        </li>
+                                                    <?php endfor; ?>
+                                                </ul>
+                                            </nav>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                    <?php endif; ?>
+                                    <?php
+                                    break;
+
+                                case 'users':
+                                    $userDirectoryRows = admin_customer_rows($db, 40);
+                                    if ($selectedCustomer) {
+                                        $selectedCustomerBalance = is_numeric($selectedCustomer['balance_amount'] ?? null)
+                                            ? number_format((float)$selectedCustomer['balance_amount'], 2, '.', '')
+                                            : '0.00';
+                                        $selectedLocaleCode = strtoupper((string)($selectedCustomer['locale_code'] ?? 'EN'));
+                                        $selectedLocaleFlagUrl = admin_locale_flag_url((string)($selectedCustomer['locale_code'] ?? 'en'));
+                                        $selectedCountryCode = strtoupper(trim((string)($selectedCustomer['country_code'] ?? '')));
+                                        $selectedCountryFlagUrl = admin_country_flag_url($selectedCountryCode);
+                                        $selectedIpAddress = trim((string)($selectedCustomer['ip_address'] ?? ''));
+                                        ?>
+                                        <div class="admin-user-detail">
+                                            <div class="admin-user-detail__header">
+                                                <div>
+                                                    <h3><?php echo admin_e((string)$selectedCustomer['email']); ?></h3>
+                                                    <p><?php echo admin_e(admin_t($messages, 'user_detail_intro', 'Customer account overview, orders and payments.')); ?></p>
+                                                </div>
+                                                <a href="/admin/?page=users" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_users', 'Back to users')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <div class="admin-user-detail__meta admin-user-detail__meta--top">
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></span>
+                                                    <strong><?php echo admin_e((string)$selectedCustomer['email']); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></span>
+                                                    <strong class="admin-meta-inline">
+                                                        <?php if ($selectedLocaleFlagUrl !== ''): ?>
+                                                            <img src="<?php echo admin_e($selectedLocaleFlagUrl); ?>" alt="<?php echo admin_e($selectedLocaleCode); ?>" class="admin-inline-flag" loading="lazy">
+                                                        <?php endif; ?>
+                                                        <span><?php echo admin_e($selectedLocaleCode); ?></span>
+                                                    </strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></span>
+                                                    <?php $customerStatus = strtolower(trim((string)($selectedCustomer['status'] ?? 'inactive'))); ?>
+                                                    <strong>
+                                                        <span class="admin-status-pill <?php echo $customerStatus === 'active' ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                            <?php echo admin_e($customerStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : ucfirst($customerStatus !== '' ? $customerStatus : 'inactive')); ?>
+                                                        </span>
+                                                    </strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?></span>
+                                                    <strong><?php echo admin_e(admin_t($messages, 'customer_type_' . (string)($selectedCustomer['customer_type'] ?? 'client'), ucfirst((string)($selectedCustomer['customer_type'] ?? 'client')))); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'col_registered', 'Registered')); ?></span>
+                                                    <strong><?php echo admin_e(substr((string)$selectedCustomer['registered_at'], 0, 16)); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?></span>
+                                                    <strong><?php echo admin_e(substr((string)($selectedCustomer['last_login_at'] ?? ''), 0, 16)); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'customer_ip_address', 'IP address')); ?></span>
+                                                    <strong class="admin-meta-inline">
+                                                        <?php if ($selectedCountryFlagUrl !== ''): ?>
+                                                            <img src="<?php echo admin_e($selectedCountryFlagUrl); ?>" alt="<?php echo admin_e($selectedCountryCode); ?>" class="admin-inline-flag" loading="lazy">
+                                                        <?php endif; ?>
+                                                        <span><?php echo admin_e($selectedIpAddress !== '' ? $selectedIpAddress : '—'); ?></span>
+                                                    </strong>
+                                                </div>
+                                                <div class="admin-user-detail__meta-item">
+                                                    <span><?php echo admin_e(admin_t($messages, 'customer_balance_title', 'Balance')); ?></span>
+                                                    <strong><?php echo admin_e($selectedCustomerBalance . ' ' . $adminDefaultCurrencyCode); ?></strong>
+                                                </div>
+                                            </div>
+
+                                            <div class="admin-user-detail__summary-grid">
+                                                <div class="admin-user-detail__summary-card">
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_summary_orders', 'Orders')); ?></span>
+                                                    <strong><?php echo admin_e((string)((int)($selectedCustomerSummary['orders_total'] ?? 0))); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__summary-card">
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_summary_active_orders', 'Active')); ?></span>
+                                                    <strong><?php echo admin_e((string)((int)($selectedCustomerSummary['orders_active_total'] ?? 0))); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__summary-card">
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_summary_pending_orders', 'Pending')); ?></span>
+                                                    <strong><?php echo admin_e((string)((int)($selectedCustomerSummary['orders_pending_total'] ?? 0))); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__summary-card">
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_summary_open_payments', 'Open payments')); ?></span>
+                                                    <strong><?php echo admin_e((string)((int)($selectedCustomerSummary['open_payments_total'] ?? 0))); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__summary-card">
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_summary_wallets', 'Wallets')); ?></span>
+                                                    <strong><?php echo admin_e((string)((int)($selectedCustomerSummary['wallets_total'] ?? 0))); ?></strong>
+                                                </div>
+                                                <div class="admin-user-detail__summary-card">
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_summary_bank_accounts', 'Bank accounts')); ?></span>
+                                                    <strong><?php echo admin_e((string)((int)($selectedCustomerSummary['bank_accounts_total'] ?? 0))); ?></strong>
+                                                </div>
+                                            </div>
+
+                                            <div class="admin-user-detail__quick-links">
+                                                <a class="btn btn-dark admin-user-detail__quick-link" href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>">
+                                                    <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                    <span>Orders</span>
+                                                </a>
+                                                <a class="btn btn-dark admin-user-detail__quick-link" href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>">
+                                                    <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
+                                                    <span>Payments</span>
+                                                </a>
+                                                <a class="btn btn-dark admin-user-detail__quick-link" href="#customerActivity">
+                                                    <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                                    <span>History</span>
+                                                </a>
+                                            </div>
+
+                                            <div class="admin-user-detail__layout">
+                                                <section class="admin-user-detail__card">
+                                                    <div class="admin-user-detail__card-head">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_profile_title', 'Customer profile')); ?></h4>
+                                                        <p><?php echo admin_e(admin_t($messages, 'customer_profile_intro', 'Edit the main account data visible in the new database.')); ?></p>
+                                                    </div>
+
+                                                    <form method="post" class="admin-user-form">
+                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                        <div class="row g-3">
+                                                            <div class="col-md-6">
+                                                                <label class="form-label" for="customer_email"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                                <input type="email" class="form-control" id="customer_email" name="email" value="<?php echo admin_e((string)$selectedCustomer['email']); ?>" required>
+                                                            </div>
+                                                            <div class="col-md-3">
+                                                                <label class="form-label" for="customer_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                                <select class="form-select" id="customer_locale" name="locale_code">
+                                                                    <option value="en"<?php echo (string)$selectedCustomer['locale_code'] === 'en' ? ' selected' : ''; ?>>EN</option>
+                                                                    <option value="pl"<?php echo (string)$selectedCustomer['locale_code'] === 'pl' ? ' selected' : ''; ?>>PL</option>
+                                                                </select>
+                                                            </div>
+                                                            <div class="col-md-3">
+                                                                <label class="form-label" for="customer_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                                <select class="form-select" id="customer_status" name="status">
+                                                                    <?php foreach (['active', 'blocked', 'inactive'] as $statusOption): ?>
+                                                                        <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)$selectedCustomer['status'] === $statusOption ? ' selected' : ''; ?>><?php echo admin_e(ucfirst($statusOption)); ?></option>
+                                                                    <?php endforeach; ?>
+                                                                </select>
+                                                            </div>
+                                                            <div class="col-md-3">
+                                                                <label class="form-label" for="customer_type"><?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?></label>
+                                                                <select class="form-select" id="customer_type" name="customer_type">
+                                                                    <?php foreach (admin_customer_type_options((string)($selectedCustomer['customer_type'] ?? 'client')) as $customerTypeOption): ?>
+                                                                        <option value="<?php echo admin_e($customerTypeOption); ?>"<?php echo (string)($selectedCustomer['customer_type'] ?? 'client') === $customerTypeOption ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'customer_type_' . $customerTypeOption, ucfirst($customerTypeOption))); ?></option>
+                                                                    <?php endforeach; ?>
+                                                                </select>
+                                                            </div>
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="customer_country"><?php echo admin_e(admin_t($messages, 'customer_country_code', 'Country code')); ?></label>
+                                                                <input type="text" class="form-control" id="customer_country" name="country_code" value="<?php echo admin_e((string)($selectedCustomer['country_code'] ?? '')); ?>" maxlength="2">
+                                                            </div>
+                                                            <div class="col-md-8">
+                                                                <label class="form-label" for="customer_ip"><?php echo admin_e(admin_t($messages, 'customer_ip_address', 'IP address')); ?></label>
+                                                                <input type="text" class="form-control" id="customer_ip" name="ip_address" value="<?php echo admin_e((string)($selectedCustomer['ip_address'] ?? '')); ?>">
+                                                            </div>
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="customer_verified"><?php echo admin_e(admin_t($messages, 'customer_email_verified_at', 'Email verified at')); ?></label>
+                                                                <input type="datetime-local" class="form-control" id="customer_verified" name="email_verified_at" value="<?php echo admin_e(admin_format_datetime_local($selectedCustomer['email_verified_at'] ?? null)); ?>">
+                                                            </div>
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="customer_registered"><?php echo admin_e(admin_t($messages, 'col_registered', 'Registered')); ?></label>
+                                                                <input type="datetime-local" class="form-control" id="customer_registered" name="registered_at" value="<?php echo admin_e(admin_format_datetime_local($selectedCustomer['registered_at'] ?? null)); ?>">
+                                                            </div>
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="customer_last_login"><?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?></label>
+                                                                <input type="datetime-local" class="form-control" id="customer_last_login" name="last_login_at" value="<?php echo admin_e(admin_format_datetime_local($selectedCustomer['last_login_at'] ?? null)); ?>">
+                                                            </div>
+                                                            <div class="col-12">
+                                                                <label class="admin-check-field">
+                                                                    <input type="checkbox" name="email_notification" value="1"<?php echo !empty($selectedCustomer['email_notification']) ? ' checked' : ''; ?>>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'customer_email_notifications', 'Email notifications enabled')); ?></span>
+                                                                </label>
+                                                            </div>
+                                                        </div>
+
+                                                        <div class="admin-editor-actions">
+                                                            <button type="submit" class="btn btn-dark" name="admin_save_customer_profile">
+                                                                <i class="bi bi-save" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'customer_save_profile', 'Save customer')); ?></span>
+                                                            </button>
+                                                            <button type="submit" class="btn btn-outline-danger" name="admin_delete_customer" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_delete_confirm', 'Delete this user account with related orders, payments, chat and assignments? This cannot be undone.')); ?>');">
+                                                                <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?></span>
+                                                            </button>
+                                                        </div>
+                                                    </form>
+                                                </section>
+
+                                                <section class="admin-user-detail__card">
+                                                    <div class="admin-user-detail__card-head">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_balance_title', 'Balance')); ?></h4>
+                                                        <p><?php echo admin_e(admin_t($messages, 'customer_balance_intro', 'Add or deduct funds from the customer balance.')); ?></p>
+                                                    </div>
+
+                                                    <div class="admin-user-balance">
+                                                        <div class="admin-user-balance__value"><?php echo admin_e($adminDefaultCurrencySymbol . $selectedCustomerBalance); ?></div>
+                                                        <div class="admin-user-balance__code"><?php echo admin_e($adminDefaultCurrencyCode); ?></div>
+                                                    </div>
+
+                                                    <form method="post" class="admin-user-form">
+                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                        <div class="row g-3">
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="adjustment_direction"><?php echo admin_e(admin_t($messages, 'customer_balance_action', 'Action')); ?></label>
+                                                                <select class="form-select" id="adjustment_direction" name="adjustment_direction">
+                                                                    <option value="credit"><?php echo admin_e(admin_t($messages, 'customer_balance_credit', 'Add funds')); ?></option>
+                                                                    <option value="debit"><?php echo admin_e(admin_t($messages, 'customer_balance_debit', 'Deduct funds')); ?></option>
+                                                                </select>
+                                                            </div>
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="adjustment_amount"><?php echo admin_e(admin_t($messages, 'customer_balance_amount', 'Amount')); ?></label>
+                                                                <input type="text" class="form-control" id="adjustment_amount" name="adjustment_amount" placeholder="0.00" required>
+                                                            </div>
+                                                            <div class="col-md-4">
+                                                                <label class="form-label" for="adjustment_note"><?php echo admin_e(admin_t($messages, 'customer_balance_note', 'Note')); ?></label>
+                                                                <input type="text" class="form-control" id="adjustment_note" name="adjustment_note" placeholder="<?php echo admin_e(admin_t($messages, 'customer_balance_note_placeholder', 'Optional note')); ?>">
+                                                            </div>
+                                                        </div>
+
+                                                        <div class="admin-editor-actions">
+                                                            <button type="submit" class="btn btn-dark" name="admin_adjust_customer_balance">
+                                                                <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'customer_balance_save', 'Update balance')); ?></span>
+                                                            </button>
+                                                        </div>
+                                                    </form>
+                                                </section>
+                                            </div>
+
+                                            <div class="admin-user-detail__sections">
+                                                <section class="admin-user-detail__section">
+                                                    <div class="admin-section-title">
+                                                        <h4 id="customerOrders"><?php echo admin_e(admin_t($messages, 'section_recent_orders', 'Recent orders')); ?></h4>
+                                                        <a class="admin-inline-link" href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>"><?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?></a>
+                                                    </div>
+                                                    <?php if ($selectedCustomerOrders): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table admin-user-detail-table align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($selectedCustomerOrders as $row): ?>
+                                                                        <?php
+                                                                        $orderId = (int)($row['id'] ?? 0);
+                                                                        $orderUrl = '/admin/?page=orders&customer_id=' . (int)$selectedCustomer['id'];
+                                                                        $orderPaymentUrl = '/admin/?page=payments&customer_id=' . (int)$selectedCustomer['id'];
+                                                                        $productName = trim((string)($row['product_name'] ?? ''));
+                                                                        $providerName = trim((string)($row['provider_name'] ?? ''));
+                                                                        $productLabel = trim($providerName . ($providerName !== '' && $productName !== '' ? ' / ' : '') . $productName);
+                                                                        if ($productLabel === '') {
+                                                                            $productLabel = admin_t($messages, 'col_product', 'Product');
+                                                                        }
+                                                                        $providerLogoUrl = admin_optional_media_url((string)($row['provider_logo_url'] ?? ''));
+                                                                        $orderStatus = strtolower(trim((string)($row['status'] ?? '')));
+                                                                        $paymentStatus = strtolower(trim((string)($row['payment_status'] ?? '')));
+                                                                        $fulfillmentStatus = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
+                                                                        $orderStatusClass = 'admin-status-pill--neutral';
+                                                                        if ($orderStatus === 'active') {
+                                                                            $orderStatusClass = 'admin-status-pill--available';
+                                                                        } elseif ($orderStatus === 'pending_payment') {
+                                                                            $orderStatusClass = 'admin-status-pill--warning';
+                                                                        } elseif ($orderStatus === 'cancelled') {
+                                                                            $orderStatusClass = 'admin-status-pill--danger';
+                                                                        } elseif ($orderStatus === 'expired') {
+                                                                            $orderStatusClass = 'admin-status-pill--muted';
+                                                                        }
+                                                                        $statusLabel = admin_t($messages, 'enum_' . $orderStatus, ucfirst(str_replace('_', ' ', $orderStatus !== '' ? $orderStatus : 'order')));
+                                                                        $paymentLabel = $paymentStatus !== '' ? admin_t($messages, 'enum_' . $paymentStatus, ucfirst(str_replace('_', ' ', $paymentStatus))) : '—';
+                                                                        $fulfillmentLabel = $fulfillmentStatus !== '' ? admin_t($messages, 'enum_' . $fulfillmentStatus, ucfirst(str_replace('_', ' ', $fulfillmentStatus))) : '—';
+                                                                        $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? null, (string)($row['currency_code'] ?? ''));
+                                                                        $expiresAt = trim((string)($row['expires_at'] ?? ''));
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__cell">
+                                                                                    <a class="admin-inline-link admin-user-detail-table__primary-link" href="<?php echo admin_e($orderUrl); ?>">#<?php echo admin_e((string)$orderId); ?></a>
+                                                                                    <span class="admin-user-detail-table__muted">
+                                                                                        <?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>: <?php echo admin_e(admin_compact_datetime_label((string)($row['created_at'] ?? ''))); ?>
+                                                                                        <?php if ($expiresAt !== ''): ?>
+                                                                                            · <?php echo admin_e(admin_t($messages, 'payment_expires_at', 'Expires at')); ?>: <?php echo admin_e(admin_compact_datetime_label($expiresAt)); ?>
+                                                                                        <?php endif; ?>
+                                                                                    </span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-asset">
+                                                                                    <?php if ($providerLogoUrl !== ''): ?>
+                                                                                        <img src="<?php echo admin_e($providerLogoUrl); ?>" alt="<?php echo admin_e($providerName !== '' ? $providerName : $productLabel); ?>" class="admin-user-detail-asset__logo" loading="lazy">
+                                                                                    <?php endif; ?>
+                                                                                    <div class="admin-user-detail-asset__copy">
+                                                                                        <strong><?php echo admin_e($productLabel); ?></strong>
+                                                                                        <span>
+                                                                                            <?php echo admin_e($providerName !== '' ? $providerName : admin_t($messages, 'col_product', 'Product')); ?>
+                                                                                            <?php if (trim((string)($row['payment_method'] ?? '')) !== ''): ?>
+                                                                                                · <?php echo admin_e(ucfirst(str_replace('_', ' ', (string)$row['payment_method']))); ?>
+                                                                                            <?php endif; ?>
+                                                                                        </span>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-status">
+                                                                                    <span class="admin-status-pill <?php echo admin_e($orderStatusClass); ?>"><?php echo admin_e($statusLabel); ?></span>
+                                                                                    <span class="admin-user-detail-table__muted"><?php echo admin_e($paymentLabel); ?> / <?php echo admin_e($fulfillmentLabel); ?></span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <strong class="admin-user-detail-table__amount"><?php echo admin_e($orderAmountLabel); ?></strong>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__actions">
+                                                                                    <a href="<?php echo admin_e($orderUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
+                                                                                        <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                                                    </a>
+                                                                                    <a href="<?php echo admin_e($orderPaymentUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
+                                                                                        <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
+                                                                                    </a>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+
+                                                <section class="admin-user-detail__section">
+                                                    <div class="admin-section-title">
+                                                        <h4 id="customerPayments"><?php echo admin_e(admin_t($messages, 'page_payments_title', 'Payments')); ?></h4>
+                                                        <a class="admin-inline-link" href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>"><?php echo admin_e(admin_t($messages, 'customer_link_all_payments', 'All payments')); ?></a>
+                                                    </div>
+                                                    <?php if ($selectedCustomerPayments): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table admin-user-detail-table align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'payment_column_payment', 'Payment')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($selectedCustomerPayments as $row): ?>
+                                                                        <?php
+                                                                        $paymentType = strtolower(trim((string)($row['payment_type'] ?? '')));
+                                                                        $paymentId = (int)($row['id'] ?? 0);
+                                                                        $paymentStatus = strtolower(trim((string)($row['status'] ?? '')));
+                                                                        $paymentStatusLabel = admin_t($messages, 'enum_' . $paymentStatus, ucfirst(str_replace('_', ' ', $paymentStatus !== '' ? $paymentStatus : 'payment')));
+                                                                        $paymentStatusClass = admin_payment_status_badge_class($paymentStatus);
+                                                                        $paymentTypeLabel = admin_payment_type_label($paymentType, $messages);
+                                                                        $paymentTypeClass = admin_payment_type_badge_class($paymentType);
+                                                                        $paymentAssetCode = trim((string)($row['asset_code'] ?? ''));
+                                                                        $paymentAssetName = trim((string)($row['asset_name'] ?? ''));
+                                                                        $paymentWalletAddress = trim((string)($row['wallet_address'] ?? ''));
+                                                                        $paymentNetworkCode = trim((string)($row['network_code'] ?? ''));
+                                                                        $paymentExplorerUrl = $paymentType === 'crypto' && $paymentWalletAddress !== ''
+                                                                            ? admin_crypto_wallet_explorer_url($paymentAssetCode, $paymentNetworkCode, $paymentWalletAddress)
+                                                                            : '';
+                                                                        $paymentAddressLabel = $paymentWalletAddress !== '' ? admin_compact_wallet_address($paymentWalletAddress, 4, 5) : '';
+                                                                        $paymentLogoUrl = $paymentType === 'crypto'
+                                                                            ? admin_payment_asset_logo_url($paymentAssetCode, (string)($row['asset_logo_url'] ?? ''))
+                                                                            : '';
+                                                                        $paymentTitle = $paymentType === 'crypto'
+                                                                            ? trim(($paymentAssetName !== '' ? $paymentAssetName : strtoupper($paymentAssetCode)) . ($paymentAssetCode !== '' ? ' (' . strtoupper($paymentAssetCode) . ')' : ''))
+                                                                            : $paymentTypeLabel;
+                                                                        $paymentAmountLabel = admin_format_money_value($row['amount_value'] ?? null, (string)($row['currency_code'] ?? ''));
+                                                                        $paymentCryptoAmount = trim((string)($row['crypto_value'] ?? ''));
+                                                                        if ($paymentType === 'crypto' && $paymentCryptoAmount !== '' && is_numeric($paymentCryptoAmount)) {
+                                                                            $paymentCryptoAmount = rtrim(rtrim(number_format((float)$paymentCryptoAmount, 8, '.', ''), '0'), '.');
+                                                                            if ($paymentAssetCode !== '') {
+                                                                                $paymentCryptoAmount .= ' ' . strtoupper($paymentAssetCode);
+                                                                            }
+                                                                        } else {
+                                                                            $paymentCryptoAmount = '';
+                                                                        }
+                                                                        $paymentOrderId = (int)($row['order_id'] ?? 0);
+                                                                        $paymentDetailsUrl = '/admin/?page=payments&customer_id=' . (int)$selectedCustomer['id'] . '&payment_type=' . rawurlencode($paymentType) . '&payment_id=' . $paymentId;
+                                                                        $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)$selectedCustomer['id'];
+                                                                        $paymentReference = trim((string)($row['payment_reference'] ?? ''));
+                                                                        if ($paymentReference === '') {
+                                                                            $paymentReference = trim((string)($row['bank_name'] ?? $row['bank_label'] ?? ''));
+                                                                        }
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td>
+                                                                                <div class="admin-payment-summary">
+                                                                                    <div class="admin-payment-summary__top">
+                                                                                        <?php if ($paymentLogoUrl !== ''): ?>
+                                                                                            <img src="<?php echo admin_e($paymentLogoUrl); ?>" alt="<?php echo admin_e($paymentTitle); ?>" class="admin-payment-summary__logo" loading="lazy">
+                                                                                        <?php endif; ?>
+                                                                                        <div class="admin-payment-summary__content">
+                                                                                            <div class="admin-payment-summary__title-row">
+                                                                                                <strong><?php echo admin_e($paymentTitle); ?></strong>
+                                                                                                <span class="admin-status-pill <?php echo admin_e($paymentTypeClass); ?>"><?php echo admin_e($paymentTypeLabel); ?></span>
+                                                                                            </div>
+                                                                                            <span class="admin-user-detail-table__muted">
+                                                                                                <?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>: <?php echo admin_e(admin_compact_datetime_label((string)($row['requested_at'] ?? ''))); ?>
+                                                                                                <?php if ($paymentOrderId > 0): ?>
+                                                                                                    · <?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>: #<?php echo admin_e((string)$paymentOrderId); ?>
+                                                                                                <?php endif; ?>
+                                                                                            </span>
+                                                                                            <?php if ($paymentAddressLabel !== ''): ?>
+                                                                                                <?php if ($paymentExplorerUrl !== ''): ?>
+                                                                                                    <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer"><?php echo admin_e($paymentAddressLabel); ?></a>
+                                                                                                <?php else: ?>
+                                                                                                    <span class="admin-payment-summary__address"><?php echo admin_e($paymentAddressLabel); ?></span>
+                                                                                                <?php endif; ?>
+                                                                                            <?php elseif ($paymentReference !== ''): ?>
+                                                                                                <span class="admin-payment-summary__address"><?php echo admin_e(admin_compact_wallet_address($paymentReference, 6, 5)); ?></span>
+                                                                                            <?php endif; ?>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-status">
+                                                                                    <span class="admin-status-pill <?php echo admin_e($paymentStatusClass); ?>"><?php echo admin_e($paymentStatusLabel); ?></span>
+                                                                                    <?php if ($paymentCryptoAmount !== ''): ?>
+                                                                                        <span class="admin-user-detail-table__muted"><?php echo admin_e($paymentCryptoAmount); ?></span>
+                                                                                    <?php elseif ($paymentReference !== ''): ?>
+                                                                                        <span class="admin-user-detail-table__muted"><?php echo admin_e(admin_string_truncate($paymentReference, 28)); ?></span>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <strong class="admin-user-detail-table__amount"><?php echo admin_e($paymentAmountLabel); ?></strong>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__actions">
+                                                                                    <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>">
+                                                                                        <i class="bi bi-search" aria-hidden="true"></i>
+                                                                                    </a>
+                                                                                    <?php if ($paymentOrderId > 0): ?>
+                                                                                        <a href="<?php echo admin_e($paymentOrdersUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?>">
+                                                                                            <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                                                        </a>
+                                                                                    <?php endif; ?>
+                                                                                    <?php if ($paymentExplorerUrl !== ''): ?>
+                                                                                        <a href="<?php echo admin_e($paymentExplorerUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>">
+                                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                                        </a>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+
+                                                <section class="admin-user-detail__section">
+                                                    <div class="admin-section-title">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'nav_crypto_wallets', 'Crypto wallets')); ?></h4>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerWallets)); ?></span>
+                                                    </div>
+                                                    <?php if ($selectedCustomerWallets): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table admin-user-detail-table admin-user-detail-table--records align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'wallet_owner_full_name', 'Owner full name')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($selectedCustomerWallets as $row): ?>
+                                                                        <?php
+                                                                        $walletAssetCode = strtoupper(trim((string)($row['crypto_asset_code'] ?? '')));
+                                                                        $walletAssetName = trim((string)($row['crypto_asset_name'] ?? ''));
+                                                                        $walletLabel = trim((string)($row['label'] ?? ''));
+                                                                        $walletProvider = trim((string)($row['wallet_provider'] ?? ''));
+                                                                        $walletOwner = trim((string)($row['owner_full_name'] ?? ''));
+                                                                        $walletAddress = trim((string)($row['address'] ?? ''));
+                                                                        $walletNetwork = trim((string)($row['network_code'] ?? ''));
+                                                                        $walletStatus = strtolower(trim((string)($row['status'] ?? '')));
+                                                                        $walletLogoUrl = admin_payment_asset_logo_url($walletAssetCode);
+                                                                        $walletExplorerUrl = admin_crypto_wallet_explorer_url($walletAssetCode, $walletNetwork, $walletAddress);
+                                                                        $walletStatusClass = $walletStatus === 'active' ? 'admin-status-pill--available' : ($walletStatus === 'released' ? 'admin-status-pill--muted' : 'admin-status-pill--neutral');
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-asset">
+                                                                                    <img src="<?php echo admin_e($walletLogoUrl); ?>" alt="<?php echo admin_e($walletAssetCode !== '' ? $walletAssetCode : 'Crypto'); ?>" class="admin-user-detail-asset__logo" loading="lazy">
+                                                                                    <div class="admin-user-detail-asset__copy">
+                                                                                        <strong><?php echo admin_e($walletAssetName !== '' ? $walletAssetName : $walletAssetCode); ?></strong>
+                                                                                        <span>
+                                                                                            <?php echo admin_e($walletLabel !== '' ? $walletLabel : ($walletProvider !== '' ? $walletProvider : $walletAssetCode)); ?>
+                                                                                            <?php if ($walletNetwork !== ''): ?>
+                                                                                                · <?php echo admin_e(strtoupper($walletNetwork)); ?>
+                                                                                            <?php endif; ?>
+                                                                                        </span>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__cell">
+                                                                                    <strong><?php echo admin_e($walletOwner !== '' ? $walletOwner : '—'); ?></strong>
+                                                                                    <span class="admin-user-detail-table__muted"><?php echo admin_e(admin_compact_datetime_label((string)($row['assigned_at'] ?? ''))); ?></span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <?php if ($walletExplorerUrl !== ''): ?>
+                                                                                    <a class="admin-payment-summary__address admin-user-detail-table__mono" href="<?php echo admin_e($walletExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e($walletAddress); ?>"><?php echo admin_e(admin_compact_wallet_address($walletAddress, 6, 5)); ?></a>
+                                                                                <?php else: ?>
+                                                                                    <span class="admin-user-detail-table__mono" title="<?php echo admin_e($walletAddress); ?>"><?php echo admin_e(admin_compact_wallet_address($walletAddress, 6, 5)); ?></span>
+                                                                                <?php endif; ?>
+                                                                            </td>
+                                                                            <td>
+                                                                                <span class="admin-status-pill <?php echo admin_e($walletStatusClass); ?>"><?php echo admin_e(admin_t($messages, 'enum_' . $walletStatus, ucfirst($walletStatus !== '' ? $walletStatus : 'status'))); ?></span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__actions">
+                                                                                    <?php if ($walletExplorerUrl !== ''): ?>
+                                                                                        <a href="<?php echo admin_e($walletExplorerUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>">
+                                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                                        </a>
+                                                                                    <?php endif; ?>
+                                                                                    <form method="post" class="d-inline">
+                                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                        <input type="hidden" name="wallet_assignment_id" value="<?php echo admin_e((string)($row['wallet_assignment_id'] ?? 0)); ?>">
+                                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer_wallet_assignment" title="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_wallet_delete_confirm', 'Remove this crypto wallet assignment from the user?')); ?>');">
+                                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                                        </button>
+                                                                                    </form>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+
+                                                <section class="admin-user-detail__section">
+                                                    <div class="admin-section-title">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'nav_bank_accounts', 'Bank accounts')); ?></h4>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerBankAccounts)); ?></span>
+                                                    </div>
+                                                    <?php if ($selectedCustomerBankAccounts): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table admin-user-detail-table admin-user-detail-table--records align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'bank_account_holder_name', 'Account holder full name')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_iban', 'IBAN')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($selectedCustomerBankAccounts as $row): ?>
+                                                                        <?php
+                                                                        $bankStatus = strtolower(trim((string)($row['status'] ?? '')));
+                                                                        $bankStatusClass = $bankStatus === 'active' ? 'admin-status-pill--available' : ($bankStatus === 'released' ? 'admin-status-pill--muted' : 'admin-status-pill--neutral');
+                                                                        $bankLabel = trim((string)($row['label'] ?? ''));
+                                                                        $bankName = trim((string)($row['bank_name'] ?? ''));
+                                                                        $bankIban = trim((string)($row['iban'] ?? ''));
+                                                                        $bankAccountId = (int)($row['bank_account_id'] ?? 0);
+                                                                        $bankAccountEditUrl = $bankAccountId > 0
+                                                                            ? '/admin/?page=bank-accounts&account_list_page=1&edit_account=' . $bankAccountId
+                                                                            : '';
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__cell">
+                                                                                    <strong><?php echo admin_e(trim((string)($row['currency_code'] ?? '')) !== '' ? (string)$row['currency_code'] : '—'); ?></strong>
+                                                                                    <span class="admin-user-detail-table__muted"><?php echo admin_e($bankLabel !== '' ? $bankLabel : ($bankName !== '' ? $bankName : '—')); ?></span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__cell">
+                                                                                    <strong><?php echo admin_e(trim((string)($row['account_holder_name'] ?? '')) !== '' ? (string)$row['account_holder_name'] : '—'); ?></strong>
+                                                                                    <span class="admin-user-detail-table__muted"><?php echo admin_e(admin_compact_datetime_label((string)($row['assigned_at'] ?? ''))); ?></span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <?php if ($bankAccountEditUrl !== ''): ?>
+                                                                                    <a href="<?php echo admin_e($bankAccountEditUrl); ?>" class="admin-inline-link admin-user-detail-table__mono" title="<?php echo admin_e($bankIban); ?>"><?php echo admin_e(admin_compact_wallet_address($bankIban, 6, 5)); ?></a>
+                                                                                <?php else: ?>
+                                                                                    <span class="admin-user-detail-table__mono" title="<?php echo admin_e($bankIban); ?>"><?php echo admin_e(admin_compact_wallet_address($bankIban, 6, 5)); ?></span>
+                                                                                <?php endif; ?>
+                                                                            </td>
+                                                                            <td>
+                                                                                <span class="admin-status-pill <?php echo admin_e($bankStatusClass); ?>"><?php echo admin_e(admin_t($messages, 'enum_' . $bankStatus, ucfirst($bankStatus !== '' ? $bankStatus : 'status'))); ?></span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__actions">
+                                                                                    <?php if ($bankAccountEditUrl !== ''): ?>
+                                                                                        <a href="<?php echo admin_e($bankAccountEditUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'bank_open_editor', 'Open bank account')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'bank_open_editor', 'Open bank account')); ?>">
+                                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                                        </a>
+                                                                                    <?php endif; ?>
+                                                                                    <form method="post" class="d-inline">
+                                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                        <input type="hidden" name="bank_account_assignment_id" value="<?php echo admin_e((string)($row['bank_account_assignment_id'] ?? 0)); ?>">
+                                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer_bank_assignment" title="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_bank_delete_confirm', 'Remove this bank account assignment from the user?')); ?>');">
+                                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                                        </button>
+                                                                                    </form>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+
+                                                <section class="admin-user-detail__section" id="customerActivity">
+                                                    <div class="admin-section-title">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_activity_title', 'Activity history')); ?></h4>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerActivity)); ?></span>
+                                                    </div>
+                                                    <?php if ($selectedCustomerActivity): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table admin-user-detail-table admin-user-history-table align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'customer_activity_action', 'Action')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'customer_activity_description', 'Description')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'customer_activity_actor', 'Actor')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'customer_ip_address', 'IP address')); ?></th>
+                                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($selectedCustomerActivity as $row): ?>
+                                                                        <?php
+                                                                        $activityActor = trim(((string)($row['admin_login'] ?? '')) !== '' ? (string)$row['admin_login'] : (string)($row['actor_type'] ?? 'system'));
+                                                                        $activityActionKey = trim((string)($row['action_key'] ?? ''));
+                                                                        $activityActionLabel = $activityActionKey !== '' ? str_replace('_', ' ', $activityActionKey) : admin_t($messages, 'customer_activity_action', 'Action');
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td>
+                                                                                <span class="admin-user-detail-table__mono"><?php echo admin_e(substr((string)($row['created_at'] ?? ''), 0, 16)); ?></span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <span class="admin-user-history-table__action"><?php echo admin_e($activityActionLabel); ?></span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <div class="admin-user-history-table__description">
+                                                                                    <strong><?php echo admin_e((string)($row['description'] ?? '')); ?></strong>
+                                                                                    <span class="admin-user-detail-table__muted">#<?php echo admin_e((string)($row['id'] ?? 0)); ?></span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td>
+                                                                                <span class="admin-user-history-table__actor"><?php echo admin_e($activityActor !== '' ? $activityActor : 'system'); ?></span>
+                                                                            </td>
+                                                                            <td><span class="admin-user-detail-table__mono"><?php echo admin_e((string)($row['ip_address'] ?? '—')); ?></span></td>
+                                                                            <td>
+                                                                                <div class="admin-user-detail-table__actions">
+                                                                                    <form method="post" class="d-inline">
+                                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                        <input type="hidden" name="activity_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer_activity_entry" title="<?php echo admin_e(admin_t($messages, 'payment_action_delete', 'Delete')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_delete', 'Delete')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_activity_delete_confirm', 'Delete this history entry?')); ?>');">
+                                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                                        </button>
+                                                                                    </form>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+                                            </div>
+                                        </div>
+                                        <?php
+                                    }
+                                    ?>
+                                    <div class="admin-panel-card admin-user-directory">
+                                        <div class="admin-panel-card__header">
+                                            <div>
+                                                <h2><?php echo admin_e(admin_t($messages, 'users_directory_title', 'User management')); ?></h2>
+                                                <p><?php echo admin_e(admin_t($messages, 'users_directory_intro', 'Recent users are listed below. Use the topbar search when you need a specific account fast.')); ?></p>
+                                            </div>
+                                        </div>
+                                        <div class="accordion admin-users-accordion" id="adminUsersCreateAccordion">
+                                            <section class="accordion-item admin-users-create-card">
+                                                <h3 class="accordion-header" id="adminUsersQuickAddHeading">
+                                                    <button class="accordion-button collapsed admin-users-create-card__toggle" type="button" data-bs-toggle="collapse" data-bs-target="#adminUsersQuickAddCollapse" aria-expanded="false" aria-controls="adminUsersQuickAddCollapse">
+                                                        <span class="admin-users-create-card__toggle-copy">
+                                                            <strong><?php echo admin_e(admin_t($messages, 'users_quick_add_title', 'Quick add user')); ?></strong>
+                                                            <small><?php echo admin_e(admin_t($messages, 'users_quick_add_intro', 'Enter email and password to create a new account instantly. The newest user appears first in the list below.')); ?></small>
+                                                        </span>
+                                                    </button>
+                                                </h3>
+                                                <div id="adminUsersQuickAddCollapse" class="accordion-collapse collapse" aria-labelledby="adminUsersQuickAddHeading" data-bs-parent="#adminUsersCreateAccordion">
+                                                    <div class="accordion-body admin-users-create-card__body">
+                                                        <form method="post" class="admin-editor-form">
+                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                            <div class="row g-3">
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="quick_email"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                                    <input type="email" class="form-control" id="quick_email" name="quick_email" value="<?php echo admin_e((string)($userQuickCreateState['email'] ?? '')); ?>" required>
+                                                                </div>
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="quick_password"><?php echo admin_e(admin_t($messages, 'users_quick_add_password', 'Password')); ?></label>
+                                                                    <input type="text" class="form-control" id="quick_password" name="quick_password" value="<?php echo admin_e((string)($userQuickCreateState['password'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'users_quick_add_password_placeholder', 'Leave empty to generate a random password')); ?>">
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="quick_locale_code"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                                    <select class="form-select" id="quick_locale_code" name="quick_locale_code">
+                                                                        <?php foreach (admin_supported_locales() as $supportedLocaleCode => $supportedLocaleMeta): ?>
+                                                                            <option value="<?php echo admin_e($supportedLocaleCode); ?>"<?php echo admin_normalize_locale((string)($userQuickCreateState['locale_code'] ?? 'pl')) === $supportedLocaleCode ? ' selected' : ''; ?>><?php echo admin_e(strtoupper($supportedLocaleCode)); ?></option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="quick_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                                    <select class="form-select" id="quick_status" name="quick_status">
+                                                                        <?php foreach (admin_customer_status_options((string)($userQuickCreateState['status'] ?? 'active')) as $statusOption): ?>
+                                                                            <option value="<?php echo admin_e($statusOption); ?>"<?php echo strtolower((string)($userQuickCreateState['status'] ?? 'active')) === $statusOption ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_' . $statusOption, ucfirst($statusOption))); ?></option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label d-block"><?php echo admin_e(admin_t($messages, 'users_email_password_label', 'Password email')); ?></label>
+                                                                    <div class="form-check form-switch mt-2">
+                                                                        <input class="form-check-input" type="checkbox" role="switch" id="quick_send_password_email" name="quick_send_password_email" value="1"<?php echo !array_key_exists('quick_send_password_email', $_POST) || !empty($userQuickCreateState['send_password_email']) ? ' checked' : ''; ?>>
+                                                                        <label class="form-check-label" for="quick_send_password_email"><?php echo admin_e(admin_t($messages, 'users_email_password_send', 'Send login email with password')); ?></label>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            <div class="admin-editor-actions">
+                                                                <button type="submit" class="btn btn-dark" name="admin_quick_create_customer">
+                                                                    <i class="bi bi-person-plus" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'users_quick_add_button', 'Add user')); ?></span>
+                                                                </button>
+                                                            </div>
+                                                        </form>
+                                                    </div>
+                                                </div>
+                                            </section>
+
+                                            <section class="accordion-item admin-users-create-card">
+                                                <h3 class="accordion-header" id="adminUsersImportHeading">
+                                                    <button class="accordion-button collapsed admin-users-create-card__toggle" type="button" data-bs-toggle="collapse" data-bs-target="#adminUsersImportCollapse" aria-expanded="false" aria-controls="adminUsersImportCollapse">
+                                                        <span class="admin-users-create-card__toggle-copy">
+                                                            <strong><?php echo admin_e(admin_t($messages, 'users_import_title', 'Import users')); ?></strong>
+                                                            <small><?php echo admin_e(admin_t($messages, 'users_import_intro', 'Paste CSV or TXT data, or upload a file. The email column is detected automatically and random passwords are generated for imported users.')); ?></small>
+                                                        </span>
+                                                    </button>
+                                                </h3>
+                                                <div id="adminUsersImportCollapse" class="accordion-collapse collapse" aria-labelledby="adminUsersImportHeading" data-bs-parent="#adminUsersCreateAccordion">
+                                                    <div class="accordion-body admin-users-create-card__body">
+                                                        <form method="post" enctype="multipart/form-data" class="admin-editor-form">
+                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                            <div class="row g-3">
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="import_locale_code"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                                    <select class="form-select" id="import_locale_code" name="import_locale_code">
+                                                                        <?php foreach (admin_supported_locales() as $supportedLocaleCode => $supportedLocaleMeta): ?>
+                                                                            <option value="<?php echo admin_e($supportedLocaleCode); ?>"<?php echo admin_normalize_locale((string)($userImportState['locale_code'] ?? 'pl')) === $supportedLocaleCode ? ' selected' : ''; ?>><?php echo admin_e(strtoupper($supportedLocaleCode)); ?></option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="import_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                                    <select class="form-select" id="import_status" name="import_status">
+                                                                        <?php foreach (admin_customer_status_options((string)($userImportState['status'] ?? 'active')) as $statusOption): ?>
+                                                                            <option value="<?php echo admin_e($statusOption); ?>"<?php echo strtolower((string)($userImportState['status'] ?? 'active')) === $statusOption ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_' . $statusOption, ucfirst($statusOption))); ?></option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="import_source_file"><?php echo admin_e(admin_t($messages, 'users_import_file_label', 'CSV / TXT file')); ?></label>
+                                                                    <input type="file" class="form-control" id="import_source_file" name="import_source_file" accept=".csv,.txt,text/plain,text/csv">
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="import_source_text"><?php echo admin_e(admin_t($messages, 'users_import_text_label', 'Paste content')); ?></label>
+                                                                    <textarea class="form-control" id="import_source_text" name="import_source_text" rows="7" placeholder="<?php echo admin_e(admin_t($messages, 'users_import_placeholder', 'email@example.com\nsecond@example.com\n\nor CSV with an email column')); ?>"><?php echo admin_e((string)($userImportState['source_text'] ?? '')); ?></textarea>
+                                                                    <div class="form-text"><?php echo admin_e(admin_t($messages, 'users_import_help', 'You can import one email per line or a CSV file. Email column detection works automatically.')); ?></div>
+                                                                </div>
+                                                            </div>
+                                                            <div class="admin-editor-actions">
+                                                                <button type="submit" class="btn btn-dark" name="admin_import_customers">
+                                                                    <i class="bi bi-upload" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'users_import_button', 'Import users')); ?></span>
+                                                                </button>
+                                                            </div>
+                                                        </form>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        </div>
+                                        <div class="table-responsive">
+                                            <table class="table admin-table admin-users-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th>User</th>
+                                                        <th class="text-center">Orders</th>
+                                                        <th class="text-center">Last login</th>
+                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($userDirectoryRows as $row): ?>
+                                                        <?php
+                                                        $rowCustomerId = (int)($row['id'] ?? 0);
+                                                        $rowLocaleCode = strtoupper((string)($row['locale_code'] ?? 'EN'));
+                                                        $rowLocaleFlagUrl = admin_locale_flag_url((string)($row['locale_code'] ?? 'en'));
+                                                        $rowCountryCode = strtoupper(trim((string)($row['country_code'] ?? '')));
+                                                        $rowCountryFlagUrl = admin_country_flag_url($rowCountryCode);
+                                                        $rowStatus = strtolower(trim((string)($row['status'] ?? 'inactive')));
+                                                        $rowStatusClass = $rowStatus === 'active'
+                                                            ? 'admin-status-pill--available'
+                                                            : ($rowStatus === 'blocked' ? 'admin-status-pill--danger' : 'admin-status-pill--muted');
+                                                        $rowVerified = !empty($row['email_verified_at']);
+                                                        $rowBalanceLabel = number_format((float)($row['balance_amount'] ?? 0), 2, '.', '') . ' ' . $adminDefaultCurrencyCode;
+                                                        $rowLastLoginLabel = trim((string)($row['last_login_at'] ?? '')) !== ''
+                                                            ? admin_format_last_login_date((string)$row['last_login_at'])
+                                                            : admin_t($messages, 'user_never_logged_in', 'No login yet');
+                                                        ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?>">
+                                                                <div class="admin-user-row__identity">
+                                                                    <div class="admin-user-row__email-line">
+                                                                        <?php if ($rowLocaleFlagUrl !== ''): ?>
+                                                                            <img src="<?php echo admin_e($rowLocaleFlagUrl); ?>" alt="<?php echo admin_e($rowLocaleCode); ?>" class="admin-inline-flag" loading="lazy">
+                                                                        <?php endif; ?>
+                                                                        <?php if ($rowCountryFlagUrl !== ''): ?>
+                                                                            <img src="<?php echo admin_e($rowCountryFlagUrl); ?>" alt="<?php echo admin_e($rowCountryCode); ?>" class="admin-inline-flag" loading="lazy">
+                                                                        <?php endif; ?>
+                                                                        <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="admin-inline-link admin-user-row__email"><?php echo admin_e((string)($row['email'] ?? '')); ?></a>
+                                                                    </div>
+                                                                    <div class="admin-user-row__badges">
+                                                                        <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($rowStatusClass); ?>">
+                                                                            <?php echo admin_e($rowStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : ucfirst($rowStatus)); ?>
+                                                                        </span>
+                                                                        <span class="admin-status-pill admin-status-pill--xs admin-status-pill--neutral">
+                                                                            <?php echo admin_e(admin_t($messages, 'customer_type_' . (string)($row['customer_type'] ?? 'client'), ucfirst((string)($row['customer_type'] ?? 'client')))); ?>
+                                                                        </span>
+                                                                        <span class="admin-status-pill admin-status-pill--xs <?php echo $rowVerified ? 'admin-status-pill--available' : 'admin-status-pill--neutral'; ?>">
+                                                                            <?php echo admin_e($rowVerified ? admin_t($messages, 'user_verified', 'Verified') : admin_t($messages, 'user_unverified', 'Unverified')); ?>
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="Orders" class="text-center">
+                                                                <div class="admin-user-row__summary">
+                                                                    <strong class="<?php echo (int)($row['orders_total'] ?? 0) === 0 ? 'text-danger' : ''; ?>"><?php echo admin_e((string)((int)($row['orders_total'] ?? 0))); ?></strong>
+                                                                    <?php if ((int)($row['open_payments_total'] ?? 0) > 0): ?>
+                                                                        <span class="admin-user-row__summary-link"><?php echo admin_e(admin_t($messages, 'user_open_payments_compact', 'open payments: {count}', ['count' => (string)((int)($row['open_payments_total'] ?? 0))])); ?></span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="Last login" class="text-center">
+                                                                <div class="admin-user-row__summary">
+                                                                    <strong class="<?php echo trim((string)($row['last_login_at'] ?? '')) === '' ? 'text-danger' : ''; ?>"><?php echo admin_e($rowLastLoginLabel); ?></strong>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-user-row__actions">
+                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>">
+                                                                        <i class="bi bi-person-gear" aria-hidden="true"></i>
+                                                                    </a>
+                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
+                                                                        <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                                    </a>
+                                                                    <a href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
+                                                                        <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
+                                                                    </a>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                    <?php
+                                    break;
+
+                                case 'cryptocurrencies':
+                                    if ($cryptoAssetEditorId > 0 && is_array($cryptoAssetEditor) && !empty($cryptoAssetEditor['id'])):
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'crypto_asset_editor_title', 'Edit cryptocurrency')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=cryptocurrencies" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_cryptocurrencies', 'Back to cryptocurrencies')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="crypto_asset_id" value="<?php echo admin_e((string)$cryptoAssetEditor['id']); ?>">
+                                                <div class="row g-3">
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)$cryptoAssetEditor['code']); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="crypto_asset_name"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="crypto_asset_name" name="name" value="<?php echo admin_e((string)$cryptoAssetEditor['name']); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="crypto_asset_coingecko"><?php echo admin_e(admin_t($messages, 'crypto_asset_coingecko_id', 'CoinGecko ID')); ?></label>
+                                                        <input type="text" class="form-control" id="crypto_asset_coingecko" name="coingecko_id" value="<?php echo admin_e((string)($cryptoAssetEditor['coingecko_id'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="crypto_asset_logo"><?php echo admin_e(admin_t($messages, 'crypto_asset_logo_url', 'Logo URL')); ?></label>
+                                                        <input type="text" class="form-control" id="crypto_asset_logo" name="logo_url" value="<?php echo admin_e((string)($cryptoAssetEditor['logo_url'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="crypto_asset_active"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="crypto_asset_active" name="is_active">
+                                                            <option value="1"<?php echo !empty($cryptoAssetEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($cryptoAssetEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'crypto_asset_rate', 'Current rate')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(app_format_crypto_rate($cryptoAssetEditor['current_rate_fiat'] ?? null)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'crypto_asset_rate_updated_at', 'Rate updated at')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)($cryptoAssetEditor['rate_updated_at'] ?? '')); ?>" readonly>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_crypto_asset">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'crypto_asset_save_button', 'Save cryptocurrency')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+                                    ?>
+                                    <div class="table-responsive">
+                                        <table class="table admin-table align-middle">
+                                            <thead>
+                                                <tr>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'crypto_asset_rate', 'Current rate')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($cryptoAssetRows as $row): ?>
+                                                    <?php $assetLogo = admin_crypto_asset_logo_url((string)($row['code'] ?? '')); ?>
+                                                    <tr>
+                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?>">
+                                                            <div class="admin-asset-cell">
+                                                                <img src="<?php echo admin_e($assetLogo); ?>" alt="<?php echo admin_e((string)$row['name']); ?>" class="admin-asset-cell__logo">
+                                                                <span class="admin-asset-cell__name"><?php echo admin_e((string)$row['name']); ?></span>
+                                                                <span class="admin-asset-cell__badge"><?php echo admin_e((string)$row['code']); ?></span>
+                                                            </div>
+                                                        </td>
+                                                        <td><?php echo admin_e(app_format_crypto_rate($row['current_rate_fiat'] ?? null)); ?></td>
+                                                        <td>
+                                                            <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?>
+                                                            </span>
+                                                        </td>
+                                                        <td>
+                                                            <div class="admin-wallet-actions">
+                                                                <form method="post" class="d-inline">
+                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                    <button type="submit" class="btn btn-outline-dark btn-sm" name="admin_toggle_crypto_asset" value="<?php echo admin_e((string)$row['id']); ?>">
+                                                                        <i class="bi <?php echo !empty($row['is_active']) ? 'bi-toggle-on' : 'bi-toggle-off'; ?>" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'crypto_asset_turn_off', 'Turn OFF') : admin_t($messages, 'crypto_asset_turn_on', 'Turn ON')); ?></span>
+                                                                    </button>
+                                                                </form>
+                                                                <a href="/admin/?page=cryptocurrencies&amp;edit_asset=<?php echo admin_e((string)$row['id']); ?>" class="btn btn-dark btn-sm">
+                                                                    <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                </a>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <?php
+                                    break;
+
+                                case 'payments':
+                                    $paymentSummary = admin_payment_summary($db, $paymentFilterCustomerId, $bankTransfersVisibleInPayments);
+                                    $paymentRows = admin_payment_rows($db, 25, $paymentFilterCustomerId, $paymentScope, $paymentTypeFilter, $bankTransfersVisibleInPayments);
+                                    $paymentScopeOptions = [
+                                        'open' => admin_t($messages, 'payment_filter_open', 'Open'),
+                                        'new' => admin_t($messages, 'payment_filter_new', 'New'),
+                                        'review' => admin_t($messages, 'payment_filter_review', 'Review'),
+                                        'archived' => admin_t($messages, 'payment_filter_archived', 'Archived'),
+                                        'all' => admin_t($messages, 'payment_filter_all', 'All'),
+                                    ];
+                                    $paymentTypeOptions = [
+                                        '' => admin_t($messages, 'payment_filter_type_all', 'All types'),
+                                        'crypto' => admin_payment_type_label('crypto', $messages),
+                                    ];
+                                    if ($bankTransfersVisibleInPayments) {
+                                        $paymentTypeOptions['bank'] = admin_payment_type_label('bank', $messages);
+                                    }
+
+                                    if ($paymentEditorType !== '' && $paymentEditorId > 0 && is_array($paymentEditor) && !empty($paymentEditor['id'])):
+                                        $paymentEditorCurrencyCode = trim((string)($paymentEditor['currency_code'] ?? ''));
+                                        $paymentEditorCurrencySymbol = trim((string)($paymentEditor['currency_symbol'] ?? ''));
+                                        if ($paymentEditorCurrencyCode === '') {
+                                            $paymentEditorCurrencyCode = $adminDefaultCurrencyCode;
+                                        }
+                                        if ($paymentEditorCurrencySymbol === '') {
+                                            $paymentEditorCurrencySymbol = $adminDefaultCurrencySymbol;
+                                        }
+                                        $paymentAmountLabel = admin_format_money_value_with_symbol(
+                                            $paymentEditor['amount_value'] ?? null,
+                                            $paymentEditorCurrencyCode,
+                                            $paymentEditorCurrencySymbol
+                                        );
+                                        $paymentReferenceLabel = trim((string)($paymentEditor['payment_reference'] ?? ($paymentEditor['wallet_address'] ?? '')));
+                                        $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
+                                        $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
+                                        ?>
+                                        <div class="admin-editor-page admin-payments-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'payment_editor_title', 'Payment details')); ?></h3>
+                                                    <p class="mb-0 text-muted"><?php echo admin_e(admin_t($messages, 'payment_editor_intro', 'Review the request, update its status and jump straight to the related customer or order flow.')); ?></p>
+                                                </div>
+                                                <div class="admin-wallet-actions">
+                                                    <a href="<?php echo admin_e($buildPaymentsListUrl()); ?>" class="btn btn-outline-dark btn-sm">
+                                                        <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'back_to_payments', 'Back to payments')); ?></span>
+                                                    </a>
+                                                    <?php if ((int)($paymentEditor['customer_id'] ?? 0) > 0): ?>
+                                                        <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="btn btn-outline-dark btn-sm">
+                                                            <i class="bi bi-person" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_open_customer', 'Customer')); ?></span>
+                                                        </a>
+                                                        <a href="<?php echo admin_e($paymentOrdersUrl); ?>" class="btn btn-success btn-sm">
+                                                            <i class="bi bi-check2-square" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?></span>
+                                                        </a>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+
+                                            <div class="admin-payments-inline-actions">
+                                                <span class="admin-payments-inline-actions__label"><?php echo admin_e(admin_t($messages, 'payment_quick_actions_label', 'Quick actions')); ?></span>
+                                                <form method="post" class="admin-payments-inline-actions__form">
+                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                    <input type="hidden" name="admin_payment_quick_action" value="1">
+                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentEditorType); ?>">
+                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)$paymentEditorId); ?>">
+                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                    <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment'], true)): ?>
+                                                        <button type="submit" class="btn btn-outline-primary btn-sm" name="quick_action" value="review">
+                                                            <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_review', 'Move to review')); ?></span>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if ((string)($paymentEditor['status'] ?? '') !== 'archived'): ?>
+                                                        <button type="submit" class="btn btn-outline-secondary btn-sm" name="quick_action" value="archive">
+                                                            <i class="bi bi-archive" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Archive')); ?></span>
+                                                        </button>
+                                                    <?php else: ?>
+                                                        <button type="submit" class="btn btn-outline-success btn-sm" name="quick_action" value="reopen">
+                                                            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_reopen', 'Reopen')); ?></span>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </form>
+                                            </div>
+
+                                            <div class="admin-payments-summary">
+                                                <div class="admin-payments-summary-card">
+                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></span>
+                                                    <strong><span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentEditor['status'] ?? ''))); ?>"><?php echo admin_e(admin_t($messages, 'enum_' . (string)($paymentEditor['status'] ?? ''), ucfirst(str_replace('_', ' ', (string)($paymentEditor['status'] ?? ''))))); ?></span></strong>
+                                                </div>
+                                                <div class="admin-payments-summary-card">
+                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></span>
+                                                    <strong><?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?></strong>
+                                                </div>
+                                                <div class="admin-payments-summary-card">
+                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></span>
+                                                    <strong><?php echo admin_e($paymentAmountLabel); ?></strong>
+                                                </div>
+                                                <div class="admin-payments-summary-card">
+                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_reference_summary', 'Reference')); ?></span>
+                                                    <strong><?php echo admin_e($paymentReferenceLabel !== '' ? admin_string_truncate($paymentReferenceLabel, 32) : admin_t($messages, 'payment_reference_empty', 'No reference')); ?></strong>
+                                                </div>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentEditorType); ?>">
+                                                <input type="hidden" name="payment_id" value="<?php echo admin_e((string)$paymentEditorId); ?>">
+                                                <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-3">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e('#' . (int)($paymentEditor['order_id'] ?? 0)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['customer_email'] ?? '')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e($paymentAmountLabel); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="payment_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="payment_status" name="status">
+                                                            <?php foreach (admin_payment_status_options($paymentEditorType, (string)($paymentEditor['status'] ?? '')) as $paymentStatusOption): ?>
+                                                                <option value="<?php echo admin_e($paymentStatusOption); ?>"<?php echo (string)($paymentEditor['status'] ?? '') === $paymentStatusOption ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e(admin_t($messages, 'enum_' . $paymentStatusOption, ucfirst(str_replace('_', ' ', $paymentStatusOption)))); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_reference_summary', 'Reference')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e($paymentReferenceLabel); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="payment_requested_at"><?php echo admin_e(admin_t($messages, 'payment_requested_at', 'Requested at')); ?></label>
+                                                        <input type="datetime-local" class="form-control" id="payment_requested_at" name="requested_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['requested_at'] ?? ''))); ?>">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="payment_expires_at"><?php echo admin_e(admin_t($messages, 'payment_expires_at', 'Expires at')); ?></label>
+                                                        <input type="datetime-local" class="form-control" id="payment_expires_at" name="expires_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['expires_at'] ?? ''))); ?>">
+                                                    </div>
+
+                                                    <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_crypto_asset', 'Crypto asset')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e(trim((string)($paymentEditor['asset_code'] ?? '') . ' ' . (string)($paymentEditor['asset_name'] ?? ''))); ?>" readonly>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_crypto_amount', 'Crypto amount')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>" readonly>
+                                                        </div>
+                                                        <?php if ($paymentEditorType === 'crypto'): ?>
+                                                            <div class="col-12">
+                                                                <label class="form-label" for="payment_request_note"><?php echo admin_e(admin_t($messages, 'payment_request_note', 'Request note')); ?></label>
+                                                                <textarea class="form-control" id="payment_request_note" name="request_note" rows="5"><?php echo admin_e((string)($paymentEditor['request_note'] ?? '')); ?></textarea>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    <?php else: ?>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="payment_reference"><?php echo admin_e(admin_t($messages, 'payment_reference_label', 'Payment reference')); ?></label>
+                                                            <input type="text" class="form-control" id="payment_reference" name="payment_reference" value="<?php echo admin_e((string)($paymentEditor['payment_reference'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_bank_account', 'Bank account')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['bank_name'] ?? $paymentEditor['bank_label'] ?? '')); ?>" readonly>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label" for="payment_submitted_at"><?php echo admin_e(admin_t($messages, 'payment_submitted_at', 'Submitted at')); ?></label>
+                                                            <input type="datetime-local" class="form-control" id="payment_submitted_at" name="submitted_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['submitted_at'] ?? ''))); ?>">
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label" for="payment_approved_at"><?php echo admin_e(admin_t($messages, 'payment_approved_at', 'Approved at')); ?></label>
+                                                            <input type="datetime-local" class="form-control" id="payment_approved_at" name="approved_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['approved_at'] ?? ''))); ?>">
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label" for="payment_rejected_at"><?php echo admin_e(admin_t($messages, 'payment_rejected_at', 'Rejected at')); ?></label>
+                                                            <input type="datetime-local" class="form-control" id="payment_rejected_at" name="rejected_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['rejected_at'] ?? ''))); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="payment_payer_name"><?php echo admin_e(admin_t($messages, 'payment_payer_name', 'Payer name')); ?></label>
+                                                            <input type="text" class="form-control" id="payment_payer_name" name="payer_name" value="<?php echo admin_e((string)($paymentEditor['payer_name'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="payment_payer_bank_name"><?php echo admin_e(admin_t($messages, 'payment_payer_bank_name', 'Payer bank')); ?></label>
+                                                            <input type="text" class="form-control" id="payment_payer_bank_name" name="payer_bank_name" value="<?php echo admin_e((string)($paymentEditor['payer_bank_name'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="payment_customer_transfer_note"><?php echo admin_e(admin_t($messages, 'payment_customer_transfer_note', 'Customer transfer note')); ?></label>
+                                                            <textarea class="form-control" id="payment_customer_transfer_note" name="customer_transfer_note" rows="4"><?php echo admin_e((string)($paymentEditor['customer_transfer_note'] ?? '')); ?></textarea>
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="payment_admin_review_note"><?php echo admin_e(admin_t($messages, 'payment_admin_review_note', 'Admin review note')); ?></label>
+                                                            <textarea class="form-control" id="payment_admin_review_note" name="admin_review_note" rows="4"><?php echo admin_e((string)($paymentEditor['admin_review_note'] ?? '')); ?></textarea>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_payment">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'payment_save_button', 'Save payment')); ?></span>
+                                                    </button>
+                                                    <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'payment_delete_button', 'Delete payment')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+                                    ?>
+                                    <div class="admin-payments-page">
+                                        <div class="admin-payments-summary">
+                                            <a class="admin-payments-summary-card<?php echo $paymentScope === 'new' ? ' admin-payments-summary-card--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => 'new'])); ?>">
+                                                <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_summary_new', 'New')); ?></span>
+                                                <strong><?php echo admin_e((string)($paymentSummary['new_total'] ?? 0)); ?></strong>
+                                            </a>
+                                            <a class="admin-payments-summary-card<?php echo $paymentScope === 'review' ? ' admin-payments-summary-card--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => 'review'])); ?>">
+                                                <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_summary_review', 'Review')); ?></span>
+                                                <strong><?php echo admin_e((string)($paymentSummary['review_total'] ?? 0)); ?></strong>
+                                            </a>
+                                            <a class="admin-payments-summary-card<?php echo $paymentScope === 'open' ? ' admin-payments-summary-card--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => null])); ?>">
+                                                <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_summary_open', 'Open queue')); ?></span>
+                                                <strong><?php echo admin_e((string)($paymentSummary['open_total'] ?? 0)); ?></strong>
+                                            </a>
+                                            <a class="admin-payments-summary-card<?php echo $paymentScope === 'archived' ? ' admin-payments-summary-card--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => 'archived'])); ?>">
+                                                <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_summary_archived', 'Archived')); ?></span>
+                                                <strong><?php echo admin_e((string)($paymentSummary['archived_total'] ?? 0)); ?></strong>
+                                            </a>
+                                            <a class="admin-payments-summary-card<?php echo $paymentTypeFilter === 'crypto' ? ' admin-payments-summary-card--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_type_filter' => 'crypto'])); ?>">
+                                                <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_summary_crypto', 'Crypto')); ?></span>
+                                                <strong><?php echo admin_e((string)($paymentSummary['crypto_total'] ?? 0)); ?></strong>
+                                            </a>
+                                            <?php if ($bankTransfersVisibleInPayments): ?>
+                                                <a class="admin-payments-summary-card<?php echo $paymentTypeFilter === 'bank' ? ' admin-payments-summary-card--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_type_filter' => 'bank'])); ?>">
+                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_summary_bank', 'Bank')); ?></span>
+                                                    <strong><?php echo admin_e((string)($paymentSummary['bank_total'] ?? 0)); ?></strong>
+                                                </a>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <div class="admin-payments-toolbar">
+                                            <div class="admin-payments-filter-group">
+                                                <?php foreach ($paymentScopeOptions as $scopeValue => $scopeLabel): ?>
+                                                    <a class="admin-payments-filter<?php echo $paymentScope === $scopeValue ? ' admin-payments-filter--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => $scopeValue === 'open' ? null : $scopeValue])); ?>">
+                                                        <?php echo admin_e($scopeLabel); ?>
+                                                    </a>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <div class="admin-payments-filter-group">
+                                                <?php foreach ($paymentTypeOptions as $typeValue => $typeLabel): ?>
+                                                    <a class="admin-payments-filter<?php echo $paymentTypeFilter === $typeValue ? ' admin-payments-filter--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_type_filter' => $typeValue !== '' ? $typeValue : null])); ?>">
+                                                        <?php echo admin_e($typeLabel); ?>
+                                                    </a>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </div>
+
+                                        <div class="admin-payments-note">
+                                            <strong><?php echo admin_e(admin_t($messages, 'payment_note_title', 'Recommended workflow')); ?></strong>
+                                            <span><?php echo admin_e(admin_t($messages, 'payment_note_text', 'New requests should first move to review. Final payment approval and subscription activation happen in the related order view.')); ?></span>
+                                        </div>
+
+                                        <?php if (!empty($paymentFilterCustomer) && !empty($paymentFilterCustomerId)): ?>
+                                            <div class="admin-payments-context">
+                                                <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'payment_filtered_customer', 'Filtered customer')); ?>: <?php echo admin_e((string)($paymentFilterCustomer['email'] ?? '')); ?></span>
+                                                <a class="admin-inline-link" href="<?php echo admin_e($buildPaymentsListUrl(['customer_id' => null])); ?>"><?php echo admin_e(admin_t($messages, 'payment_clear_customer_filter', 'Clear customer filter')); ?></a>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($paymentRows): ?>
+                                            <div class="table-responsive">
+                                                <table class="table admin-table admin-payments-table align-middle">
+                                                    <thead>
+                                                        <tr>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'payment_column_payment', 'Payment')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                            <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <?php foreach ($paymentRows as $row): ?>
+                                                            <?php
+                                                            $paymentType = (string)($row['payment_type'] ?? '');
+                                                            $paymentStatus = (string)($row['status'] ?? '');
+                                                            $requestedTimestamp = !empty($row['requested_at']) ? strtotime((string)$row['requested_at']) : 0;
+                                                            $expiresTimestamp = !empty($row['expires_at']) ? strtotime((string)$row['expires_at']) : 0;
+                                                            $isArchivedPayment = $paymentStatus === 'archived';
+                                                            $isSuccessPayment = in_array($paymentStatus, ['confirmed', 'approved', 'paid', 'completed'], true);
+                                                            $isCancelledPayment = in_array($paymentStatus, ['cancelled', 'rejected', 'failed'], true);
+                                                            $isReviewPayment = in_array($paymentStatus, ['awaiting_confirmation', 'awaiting_review'], true);
+                                                            $needsAttention = in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
+                                                            $isExpiredQueue = !$isArchivedPayment && $expiresTimestamp > 0 && $expiresTimestamp < time();
+                                                            $queueStageLabel = $isArchivedPayment
+                                                                ? admin_t($messages, 'payment_stage_archived', 'Archived')
+                                                                : ($isCancelledPayment
+                                                                    ? admin_t($messages, 'enum_cancelled', 'Cancelled')
+                                                                    : ($isSuccessPayment
+                                                                        ? admin_t($messages, 'payment_stage_success', 'Success')
+                                                                        : (in_array($paymentStatus, ['pending', 'pending_payment'], true)
+                                                                            ? admin_t($messages, 'payment_stage_new', 'New')
+                                                                            : admin_t($messages, 'payment_stage_review', 'Review'))));
+                                                            $queueStageClass = $isArchivedPayment
+                                                                ? 'admin-status-pill--muted'
+                                                                : ($isCancelledPayment
+                                                                    ? 'admin-status-pill--danger'
+                                                                    : ($isSuccessPayment
+                                                                        ? 'admin-status-pill--available'
+                                                                        : (in_array($paymentStatus, ['pending', 'pending_payment'], true)
+                                                                            ? 'admin-status-pill--warning'
+                                                                            : ($isReviewPayment ? 'admin-status-pill--assigned' : 'admin-status-pill--neutral'))));
+                                                            $paymentRowCurrencyCode = trim((string)($row['currency_code'] ?? ''));
+                                                            $paymentRowCurrencySymbol = trim((string)($row['currency_symbol'] ?? ''));
+                                                            if ($paymentRowCurrencyCode === '') {
+                                                                $paymentRowCurrencyCode = $adminDefaultCurrencyCode;
+                                                            }
+                                                            if ($paymentRowCurrencySymbol === '') {
+                                                                $paymentRowCurrencySymbol = $adminDefaultCurrencySymbol;
+                                                            }
+                                                            $paymentAmountLabel = admin_format_money_value_with_symbol(
+                                                                $row['amount_value'] ?? null,
+                                                                $paymentRowCurrencyCode,
+                                                                $paymentRowCurrencySymbol
+                                                            );
+                                                            $paymentReference = trim((string)($row['payment_reference'] ?? ''));
+                                                            $paymentAssetCode = trim((string)($row['asset_code'] ?? ''));
+                                                            $paymentAssetName = trim((string)($row['asset_name'] ?? ''));
+                                                            $paymentWalletAddress = trim((string)($row['wallet_address'] ?? $paymentReference));
+                                                            $paymentNetworkCode = trim((string)($row['network_code'] ?? ''));
+                                                            $paymentAssetLogo = $paymentAssetCode !== '' || trim((string)($row['asset_logo_url'] ?? '')) !== ''
+                                                                ? admin_payment_asset_logo_url($paymentAssetCode, (string)($row['asset_logo_url'] ?? ''))
+                                                                : '';
+                                                            $paymentExplorerUrl = $paymentType === 'crypto' && $paymentWalletAddress !== ''
+                                                                ? admin_crypto_wallet_explorer_url($paymentAssetCode, $paymentNetworkCode, $paymentWalletAddress)
+                                                                : '';
+                                                            $paymentAddressLabel = $paymentWalletAddress !== ''
+                                                                ? admin_compact_wallet_address($paymentWalletAddress, 4, 5)
+                                                                : '';
+                                                            $paymentProgress = admin_payment_progress_state($paymentStatus);
+                                                            $paymentProgressLabel = admin_t(
+                                                                $messages,
+                                                                (string)($paymentProgress['status_label_key'] ?? 'payment_stage_new'),
+                                                                (string)($paymentProgress['status_fallback'] ?? 'Pending')
+                                                            );
+                                                            $paymentProgressTone = (string)($paymentProgress['tone'] ?? 'neutral');
+                                                            $paymentProgressColor = $paymentProgressTone === 'success'
+                                                                ? '#16a34a'
+                                                                : ($paymentProgressTone === 'warning' ? '#f59e0b' : '#111827');
+                                                            $paymentCountdownLabel = '';
+                                                            if (!$isArchivedPayment && $expiresTimestamp > 0) {
+                                                                if ($expiresTimestamp > time()) {
+                                                                    $paymentCountdownLabel = admin_remaining_time_label($expiresTimestamp - time());
+                                                                } else {
+                                                                    $paymentCountdownLabel = admin_t($messages, 'payment_expiry_overdue', 'Expired');
+                                                                }
+                                                            }
+                                                            $paymentCryptoAmountLabel = '';
+                                                            if ($paymentType === 'crypto' && isset($row['amount_crypto']) && is_numeric((string)$row['amount_crypto'])) {
+                                                                $paymentCryptoAmountLabel = rtrim(rtrim(number_format((float)$row['amount_crypto'], 8, '.', ''), '0'), '.');
+                                                                if ($paymentCryptoAmountLabel === '') {
+                                                                    $paymentCryptoAmountLabel = '0';
+                                                                }
+                                                                if ($paymentAssetCode !== '') {
+                                                                    $paymentCryptoAmountLabel .= ' ' . strtoupper($paymentAssetCode);
+                                                                }
+                                                            }
+                                                            $paymentDetailsUrl = $buildPaymentsListUrl([
+                                                                'payment_type' => $paymentType,
+                                                                'payment_id' => (int)($row['id'] ?? 0),
+                                                            ]);
+                                                            $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
+                                                            $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($row['customer_id'] ?? 0);
+                                                            $canReview = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['pending', 'pending_payment'], true);
+                                                            $expiresLabel = '-';
+                                                            if ($expiresTimestamp > 0) {
+                                                                if ($isExpiredQueue) {
+                                                                    $expiresLabel = admin_t($messages, 'payment_expiry_overdue', 'Expired');
+                                                                } elseif (date('Y-m-d', $expiresTimestamp) === date('Y-m-d')) {
+                                                                    $expiresLabel = admin_t($messages, 'payment_expiry_today', 'Today');
+                                                                } else {
+                                                                    $expiresLabel = admin_compact_datetime_label((string)($row['expires_at'] ?? ''));
+                                                                }
+                                                            }
+                                                            ?>
+                                                            <tr class="<?php echo $needsAttention ? 'admin-payments-row--attention' : ''; ?><?php echo $isExpiredQueue ? ' admin-payments-row--expired' : ''; ?>">
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                                    <strong class="admin-payments-table__date"><?php echo admin_e(admin_compact_datetime_label((string)($row['requested_at'] ?? ''))); ?></strong>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'payment_column_payment', 'Payment')); ?>">
+                                                                    <div class="admin-payment-summary">
+                                                                        <div class="admin-payment-summary__top">
+                                                                            <?php if ($paymentAssetLogo !== ''): ?>
+                                                                                <img src="<?php echo admin_e($paymentAssetLogo); ?>" alt="<?php echo admin_e($paymentAssetName !== '' ? $paymentAssetName : $paymentAssetCode); ?>" class="admin-payment-summary__logo">
+                                                                            <?php endif; ?>
+                                                                            <div class="admin-payment-summary__content">
+                                                                                <div class="admin-payment-summary__title-row">
+                                                                                    <strong><?php echo admin_e($paymentAssetName !== '' ? $paymentAssetName : ($paymentAssetCode !== '' ? strtoupper($paymentAssetCode) : admin_payment_type_label($paymentType, $messages))); ?></strong>
+                                                                                    <?php if ($paymentCryptoAmountLabel !== ''): ?>
+                                                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($paymentCryptoAmountLabel); ?></span>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                                <a class="admin-inline-link admin-payment-summary__email" href="<?php echo admin_e($paymentCustomerUrl); ?>">
+                                                                                    <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                                                                </a>
+                                                                                <?php if ($paymentAddressLabel !== ''): ?>
+                                                                                    <?php if ($paymentExplorerUrl !== ''): ?>
+                                                                                        <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer">
+                                                                                            <?php echo admin_e($paymentAddressLabel); ?>
+                                                                                        </a>
+                                                                                    <?php else: ?>
+                                                                                        <span class="admin-payment-summary__address"><?php echo admin_e($paymentAddressLabel); ?></span>
+                                                                                    <?php endif; ?>
+                                                                                <?php elseif ($paymentReference !== ''): ?>
+                                                                                    <span class="admin-payment-summary__address"><?php echo admin_e(admin_string_truncate($paymentReference, 28)); ?></span>
+                                                                                <?php endif; ?>
+                                                                            </div>
+                                                                        </div>
+                                                                        <?php if (!empty($paymentProgress['show_bar'])): ?>
+                                                                            <div class="admin-payment-progress">
+                                                                                <div class="admin-payment-progress__status">
+                                                                                    <span class="admin-status-pill <?php echo admin_e($queueStageClass); ?>">
+                                                                                        <?php echo admin_e($paymentProgressLabel); ?>
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div class="admin-payment-progress__labels">
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'payment_progress_pending', 'Pending')); ?></span>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'payment_progress_review', 'Verification')); ?></span>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'payment_progress_success', 'Success')); ?></span>
+                                                                                </div>
+                                                                                <div class="admin-order-progress__bar">
+                                                                                    <span style="width: <?php echo admin_e((string)($paymentProgress['percent'] ?? 0)); ?>%; background: <?php echo admin_e($paymentProgressColor); ?>;"></span>
+                                                                                </div>
+                                                                            </div>
+                                                                        <?php else: ?>
+                                                                            <div class="admin-payment-progress admin-payment-progress--archived">
+                                                                                <span class="admin-status-pill <?php echo admin_e($queueStageClass); ?>">
+                                                                                    <?php echo admin_e($paymentProgressLabel); ?>
+                                                                                </span>
+                                                                            </div>
+                                                                        <?php endif; ?>
+                                                                    </div>
+                                                                </td>
+                                                                <td class="admin-payments-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
+                                                                    <div class="admin-payment-amount">
+                                                                        <strong class="<?php echo $isArchivedPayment ? 'text-danger' : ($needsAttention ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($paymentAmountLabel); ?></strong>
+                                                                        <?php if ($paymentCountdownLabel !== '' && $needsAttention): ?>
+                                                                            <span class="admin-status-pill <?php echo $isExpiredQueue ? 'admin-status-pill--danger' : 'admin-status-pill--warning'; ?>">
+                                                                                <?php echo admin_e($paymentCountdownLabel); ?>
+                                                                            </span>
+                                                                        <?php endif; ?>
+                                                                    </div>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                    <form method="post" class="admin-payments-actions">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="admin_payment_quick_action" value="1">
+                                                                        <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
+                                                                        <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                        <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                                        <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                                        <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+
+                                                                        <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>">
+                                                                            <i class="bi bi-search" aria-hidden="true"></i>
+                                                                        </a>
+                                                                        <?php if ((int)($row['order_id'] ?? 0) > 0 && (int)($row['customer_id'] ?? 0) > 0): ?>
+                                                                            <a href="<?php echo admin_e($paymentOrdersUrl); ?>" class="btn btn-success btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?>">
+                                                                                <i class="bi bi-check2-square" aria-hidden="true"></i>
+                                                                            </a>
+                                                                        <?php endif; ?>
+                                                                        <?php if ($canReview): ?>
+                                                                            <button type="submit" class="btn btn-outline-primary btn-sm admin-user-row__icon-btn" name="quick_action" value="review" title="<?php echo admin_e(admin_t($messages, 'payment_action_review', 'Move to review')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_review', 'Move to review')); ?>">
+                                                                                <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                                                                            </button>
+                                                                        <?php endif; ?>
+                                                                        <?php if (!$isArchivedPayment): ?>
+                                                                            <button type="submit" class="btn btn-outline-secondary btn-sm admin-user-row__icon-btn" name="quick_action" value="archive" title="<?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Archive')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Archive')); ?>">
+                                                                                <i class="bi bi-archive" aria-hidden="true"></i>
+                                                                            </button>
+                                                                        <?php else: ?>
+                                                                            <button type="submit" class="btn btn-outline-success btn-sm admin-user-row__icon-btn" name="quick_action" value="reopen" title="<?php echo admin_e(admin_t($messages, 'payment_action_reopen', 'Reopen')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_reopen', 'Reopen')); ?>">
+                                                                                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                                                                            </button>
+                                                                        <?php endif; ?>
+                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="quick_action" value="delete" title="<?php echo admin_e(admin_t($messages, 'payment_action_delete', 'Delete')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_delete', 'Delete')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </form>
+                                                                </td>
+                                                            </tr>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php
+                                    break;
+
+                                case 'bank-accounts':
+                                    if ($bankAccountEditorId > 0 && is_array($bankAccountEditor) && !empty($bankAccountEditor['id'])):
+                                        $bankEditorStatus = strtolower(trim((string)($bankAccountEditor['status'] ?? '')));
+                                        if ($bankEditorStatus !== 'disabled') {
+                                            $bankEditorStatus = 'available';
+                                        }
+                                        $bankEditorDeleteSummary = is_array($bankAccountDeleteSummary ?? null) ? $bankAccountDeleteSummary : ['active_assignments_total' => 0, 'assignments_total' => 0, 'payments_total' => 0, 'can_delete' => false];
+                                        $bankEditorAssignedCount = count($bankAccountAssignments ?? []);
+                                        $bankEditorIdentity = trim((string)($bankAccountEditor['label'] ?? '')) !== ''
+                                            ? (string)$bankAccountEditor['label']
+                                            : (string)($bankAccountEditor['bank_name'] ?? '');
+                                        ?>
+                                        <div class="admin-wallet-editor-page">
+                                            <aside class="admin-wallet-editor">
+                                                <div class="admin-wallet-editor__header">
+                                                    <div>
+                                                        <h3><?php echo admin_e(admin_t($messages, 'bank_editor_title', 'Edit bank account')); ?></h3>
+                                                        <p><?php echo admin_e($bankEditorIdentity !== '' ? $bankEditorIdentity : admin_t($messages, 'nav_bank_accounts', 'Bank accounts')); ?></p>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__header-actions">
+                                                        <form method="post" class="d-inline">
+                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                            <input type="hidden" name="bank_account_id" value="<?php echo admin_e((string)$bankAccountEditor['id']); ?>">
+                                                            <input type="hidden" name="account_list_page" value="<?php echo admin_e((string)$bankAccountListPage); ?>">
+                                                            <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_bank_account" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'bank_delete_confirm', 'Delete this bank account completely? This cannot be undone.')); ?>');"<?php echo !empty($bankEditorDeleteSummary['can_delete']) ? '' : ' disabled'; ?>>
+                                                                <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'bank_delete_button', 'Delete bank account')); ?></span>
+                                                            </button>
+                                                        </form>
+                                                        <a href="/admin/?page=bank-accounts&amp;account_list_page=<?php echo admin_e((string)$bankAccountListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                            <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'back_to_bank_accounts', 'Back to bank accounts')); ?></span>
+                                                        </a>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-wallet-editor__summary">
+                                                    <div class="admin-wallet-editor__summary-card">
+                                                        <span><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></span>
+                                                        <strong><?php echo admin_e(admin_t($messages, 'enum_' . $bankEditorStatus, ucfirst($bankEditorStatus))); ?></strong>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__summary-card">
+                                                        <span><?php echo admin_e(admin_t($messages, 'bank_editor_assigned_users', 'Assigned users')); ?></span>
+                                                        <strong><?php echo admin_e((string)$bankEditorAssignedCount); ?></strong>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__summary-card">
+                                                        <span><?php echo admin_e(admin_t($messages, 'col_iban', 'IBAN')); ?></span>
+                                                        <strong title="<?php echo admin_e((string)($bankAccountEditor['iban'] ?? '')); ?>"><?php echo admin_e(admin_compact_wallet_address((string)($bankAccountEditor['iban'] ?? '—'), 8, 6)); ?></strong>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__summary-card">
+                                                        <span><?php echo admin_e(admin_t($messages, 'col_bank', 'Bank')); ?></span>
+                                                        <strong><?php echo admin_e((string)($bankAccountEditor['bank_name'] ?? '—')); ?></strong>
+                                                    </div>
+                                                </div>
+
+                                                <form method="post" class="admin-wallet-editor__form" autocomplete="off">
+                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                    <input type="hidden" name="bank_account_id" value="<?php echo admin_e((string)$bankAccountEditor['id']); ?>">
+                                                    <input type="hidden" name="account_list_page" value="<?php echo admin_e((string)$bankAccountListPage); ?>">
+
+                                                    <div class="row g-3">
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_label"><?php echo admin_e(admin_t($messages, 'bank_label', 'Account name / info')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_label" name="label" value="<?php echo admin_e((string)($bankAccountEditor['label'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_account_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                            <select class="form-select" id="bank_account_status" name="bank_account_status">
+                                                                <option value="available"<?php echo $bankEditorStatus === 'available' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_available', 'Available')); ?></option>
+                                                                <option value="disabled"<?php echo $bankEditorStatus === 'disabled' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_account_holder_name"><?php echo admin_e(admin_t($messages, 'bank_account_holder_name', 'Account holder full name')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_account_holder_name" name="account_holder_name" value="<?php echo admin_e((string)($bankAccountEditor['account_holder_name'] ?? '')); ?>" required>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_name"><?php echo admin_e(admin_t($messages, 'col_bank', 'Bank')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_name" name="bank_name" value="<?php echo admin_e((string)($bankAccountEditor['bank_name'] ?? '')); ?>" required>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label" for="bank_currency_code"><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_currency_code" value="<?php echo admin_e((string)($bankAccountEditor['currency_code'] ?? '')); ?>" readonly>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label" for="bank_country_code"><?php echo admin_e(admin_t($messages, 'bank_country_code', 'Country code')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_country_code" name="country_code" value="<?php echo admin_e((string)($bankAccountEditor['country_code'] ?? '')); ?>" maxlength="2">
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label" for="bank_swift_bic"><?php echo admin_e(admin_t($messages, 'bank_swift_bic', 'SWIFT / BIC')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_swift_bic" name="swift_bic" value="<?php echo admin_e((string)($bankAccountEditor['swift_bic'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="bank_iban"><?php echo admin_e(admin_t($messages, 'col_iban', 'IBAN')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_iban" name="iban" value="<?php echo admin_e((string)($bankAccountEditor['iban'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_account_number"><?php echo admin_e(admin_t($messages, 'bank_account_number', 'Account number')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_account_number" name="account_number" value="<?php echo admin_e((string)($bankAccountEditor['account_number'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_routing_number"><?php echo admin_e(admin_t($messages, 'bank_routing_number', 'Routing number')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_routing_number" name="routing_number" value="<?php echo admin_e((string)($bankAccountEditor['routing_number'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="bank_address"><?php echo admin_e(admin_t($messages, 'bank_address', 'Bank address')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_address" name="bank_address" value="<?php echo admin_e((string)($bankAccountEditor['bank_address'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="bank_payment_reference_template"><?php echo admin_e(admin_t($messages, 'bank_payment_reference_template', 'Payment reference template')); ?></label>
+                                                            <input type="text" class="form-control" id="bank_payment_reference_template" name="payment_reference_template" value="<?php echo admin_e((string)($bankAccountEditor['payment_reference_template'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="bank_transfer_instructions"><?php echo admin_e(admin_t($messages, 'bank_transfer_instructions', 'Transfer instructions')); ?></label>
+                                                            <textarea class="form-control" id="bank_transfer_instructions" name="transfer_instructions" rows="3"><?php echo admin_e((string)($bankAccountEditor['transfer_instructions'] ?? '')); ?></textarea>
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="bank_notes"><?php echo admin_e(admin_t($messages, 'wallet_notes', 'Notes')); ?></label>
+                                                            <textarea class="form-control" id="bank_notes" name="notes" rows="3"><?php echo admin_e((string)($bankAccountEditor['notes'] ?? '')); ?></textarea>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-wallet-customer-picker"
+                                                         data-admin-wallet-customer-picker
+                                                         data-submit-name="admin_assign_bank_account_customer"
+                                                         data-search-url="/admin/bank-accounts.php?action=search_customers&amp;account_id=<?php echo admin_e((string)$bankAccountEditor['id']); ?>"
+                                                         data-no-customer="<?php echo admin_e(admin_t($messages, 'wallet_no_customer', 'No customer assigned')); ?>"
+                                                         data-search-empty="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_empty', 'No users found.')); ?>"
+                                                         data-search-error="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_error', 'Unable to search users.')); ?>">
+                                                        <div class="admin-wallet-customer-picker__header">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'bank_assign_customer', 'Assign customer')); ?></h4>
+                                                            <p><?php echo admin_e(admin_t($messages, 'bank_assign_customer_intro', 'Search a user by email and assign this bank account manually.')); ?></p>
+                                                        </div>
+
+                                                        <input type="hidden" name="assignment_customer_id" value="0" data-admin-wallet-customer-id>
+                                                        <div class="admin-wallet-customer-picker__search">
+                                                            <i class="bi bi-search" aria-hidden="true"></i>
+                                                            <input type="search" class="form-control" placeholder="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_placeholder', 'Search...')); ?>" data-admin-wallet-customer-search>
+                                                        </div>
+                                                        <div class="admin-wallet-customer-picker__results" data-admin-wallet-customer-results hidden></div>
+                                                        <div class="admin-wallet-customer-picker__info admin-wallet-customer-picker__info--notice">
+                                                            <?php echo admin_e(admin_bank_account_shared_assignments_enabled($appSettings)
+                                                                ? admin_t($messages, 'bank_assign_mode_shared', 'Bank account sharing is ON. One bank account can have many users. If the selected user already has another active bank account, clicking will move them here.')
+                                                                : admin_t($messages, 'bank_assign_mode_single', 'Bank account sharing is OFF. One bank account can have one active user, and assigning a user here will move them from their old bank account.')); ?>
+                                                        </div>
+                                                        <?php if ($bankAccountAssignments): ?>
+                                                            <div class="admin-assignment-chip-list">
+                                                                <?php foreach ($bankAccountAssignments as $assignment): ?>
+                                                                    <div class="admin-assignment-chip">
+                                                                        <a class="admin-assignment-chip__link" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$assignment['customer_id']); ?>" title="<?php echo admin_e((string)$assignment['customer_email']); ?>"><?php echo admin_e(admin_string_truncate((string)$assignment['customer_email'], 24)); ?></a>
+                                                                        <button type="submit" class="admin-assignment-chip__remove" name="admin_remove_bank_account_assignment" value="<?php echo admin_e((string)$assignment['id']); ?>" formnovalidate aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>">
+                                                                            <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php else: ?>
+                                                            <div class="admin-wallet-customer-picker__selected">
+                                                                <div class="admin-wallet-customer-picker__selected-copy">
+                                                                    <span><?php echo admin_e(admin_t($messages, 'wallet_assigned_user', 'Assigned user')); ?></span>
+                                                                    <strong><?php echo admin_e(admin_t($messages, 'wallet_no_customer', 'No customer assigned')); ?></strong>
+                                                                </div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <div class="admin-wallet-editor__actions">
+                                                            <span class="admin-wallet-editor__hint"><?php echo admin_e(admin_t($messages, 'wallet_click_result_hint', 'Click a search result to assign the user immediately.')); ?></span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-wallet-editor__actions">
+                                                        <button type="submit" class="btn btn-dark btn-lg" name="admin_save_bank_account">
+                                                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'bank_save_button', 'Save bank account')); ?></span>
+                                                        </button>
+                                                    </div>
+                                                </form>
+
+                                                <section class="admin-wallet-editor__danger">
+                                                    <div class="admin-wallet-editor__danger-copy">
+                                                        <h4><?php echo admin_e(admin_t($messages, 'bank_delete_section_title', 'Delete from service')); ?></h4>
+                                                        <p><?php echo admin_e(admin_t($messages, 'bank_delete_section_text', 'Bank account can be removed only when it has no active assignments, no assignment history and no payment history.')); ?></p>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__danger-meta">
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'bank_delete_active_assignments', 'Active assignments: {count}', ['count' => (string)((int)($bankEditorDeleteSummary['active_assignments_total'] ?? 0))])); ?></span>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'bank_delete_assignment_history', 'Assignment history: {count}', ['count' => (string)((int)($bankEditorDeleteSummary['assignments_total'] ?? 0))])); ?></span>
+                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'bank_delete_payment_history', 'Payment history: {count}', ['count' => (string)((int)($bankEditorDeleteSummary['payments_total'] ?? 0))])); ?></span>
+                                                    </div>
+                                                </section>
+                                            </aside>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $accountRows = admin_bank_account_rows($db, $bankAccountListPerPage, ($bankAccountListPage - 1) * $bankAccountListPerPage);
+                                    if (!$accountRows) {
+                                        echo '<div class="admin-empty-state">' . admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')) . '</div>';
+                                        break;
+                                    }
+                                    ?>
+                                    <div class="admin-wallet-workspace">
+                                        <div class="admin-wallet-workspace__list">
+                                            <div class="table-responsive">
+                                                <table class="table admin-table admin-wallet-table align-middle">
+                                                    <thead>
+                                                        <tr>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_bank', 'Bank')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <?php foreach ($accountRows as $row): ?>
+                                                            <?php
+                                                            $accountStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
+                                                            $activeAssignmentCount = (int)($row['active_assignment_count'] ?? 0);
+                                                            $ibanValue = trim((string)($row['iban'] ?? ''));
+                                                            $ibanShort = strlen($ibanValue) > 18 ? substr($ibanValue, 0, 8) . '...' . substr($ibanValue, -8) : $ibanValue;
+                                                            ?>
+                                                            <tr>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
+                                                                    <div class="admin-wallet-address">
+                                                                        <strong><?php echo admin_e((string)(($row['label'] ?? '') !== '' ? $row['label'] : $row['account_holder_name'])); ?></strong>
+                                                                        <span><?php echo admin_e((string)($row['account_holder_name'] ?? '')); ?></span>
+                                                                    </div>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_bank', 'Bank')); ?>">
+                                                                    <div class="admin-wallet-address">
+                                                                        <strong><?php echo admin_e((string)($row['bank_name'] ?? '')); ?></strong>
+                                                                        <span><?php echo admin_e($ibanShort !== '' ? $ibanShort : (string)($row['account_number'] ?? '')); ?></span>
+                                                                    </div>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                    <?php if ($accountStatusRaw === 'disabled'): ?>
+                                                                        <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></span>
+                                                                    <?php elseif ($activeAssignmentCount > 1): ?>
+                                                                        <span class="admin-status-summary admin-status-summary--active">
+                                                                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e((string)$activeAssignmentCount . ' ' . admin_t($messages, 'users_short_label', 'users')); ?></span>
+                                                                        </span>
+                                                                    <?php elseif ($activeAssignmentCount === 1): ?>
+                                                                        <span class="admin-status-summary admin-status-summary--active">
+                                                                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></span>
+                                                                        </span>
+                                                                    <?php else: ?>
+                                                                        <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'wallet_status_available', 'Available')); ?></span>
+                                                                    <?php endif; ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                    <div class="admin-wallet-actions">
+                                                                        <a href="/admin/?page=bank-accounts&amp;account_list_page=<?php echo admin_e((string)$bankAccountListPage); ?>&amp;edit_account=<?php echo admin_e((string)$row['id']); ?>" class="btn btn-dark btn-sm">
+                                                                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                        </a>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <?php if ($bankAccountListTotalPages > 1): ?>
+                                                <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'bank_pagination', 'Bank account pages')); ?>">
+                                                    <ul class="pagination admin-pagination">
+                                                        <?php for ($pageNumber = 1; $pageNumber <= $bankAccountListTotalPages; $pageNumber++): ?>
+                                                            <li class="page-item<?php echo $pageNumber === $bankAccountListPage ? ' active' : ''; ?>">
+                                                                <a class="page-link" href="/admin/?page=bank-accounts&amp;account_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                            </li>
+                                                        <?php endfor; ?>
+                                                    </ul>
+                                                </nav>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <?php
+                                    break;
+
+                                case 'crypto-wallets':
+                                    if ($walletEditorId > 0 && is_array($walletEditor) && !empty($walletEditor['id'])):
+                                        ?>
+                                        <div class="admin-wallet-editor-page">
+                                            <?php
+                                            $editorOwnerFullName = trim((string)($walletEditor['owner_full_name'] ?? ''));
+                                            if ($editorOwnerFullName === '') {
+                                                $editorOwnerFullName = admin_random_wallet_owner_name();
+                                            }
+                                            $editorExplorerUrl = admin_crypto_wallet_explorer_url(
+                                                (string)($walletEditor['asset_code'] ?? ''),
+                                                (string)($walletEditor['network_code'] ?? ''),
+                                                (string)($walletEditor['address'] ?? '')
+                                            );
+                                            $editorStatus = strtolower(trim((string)($walletEditor['status'] ?? '')));
+                                            if ($editorStatus !== 'disabled') {
+                                                $editorStatus = 'available';
+                                            }
+                                            $editorAssetCode = strtoupper(trim((string)($walletEditor['asset_code'] ?? '')));
+                                            $editorNetworkOptions = admin_crypto_asset_network_options($editorAssetCode);
+                                            $editorNetworkCode = admin_normalize_crypto_wallet_network(
+                                                $editorAssetCode,
+                                                (string)($walletEditor['network_code'] ?? ''),
+                                                (string)($walletEditor['address'] ?? '')
+                                            );
+                                            $editorAllowsNetworkChoice = admin_crypto_asset_allows_network_choice($editorAssetCode);
+                                            ?>
+                                            <aside class="admin-wallet-editor">
+                                                <div class="admin-wallet-editor__header">
+                                                    <div>
+                                                        <h3><?php echo admin_e(admin_t($messages, 'wallet_editor_title', 'Edit wallet')); ?></h3>
+                                                    </div>
+                                                    <div class="admin-wallet-editor__header-actions">
+                                                        <a href="/admin/?page=crypto-wallets&amp;wallet_list_page=<?php echo admin_e((string)$walletListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                            <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'back_to_wallets', 'Back to wallets')); ?></span>
+                                                        </a>
+                                                        <?php if ($editorExplorerUrl !== ''): ?>
+                                                            <a href="<?php echo admin_e($editorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark btn-sm">
+                                                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                            </a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+
+                                                <form method="post" class="admin-wallet-editor__form" autocomplete="off">
+                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                    <input type="hidden" name="wallet_id" value="<?php echo admin_e((string)$walletEditor['id']); ?>">
+                                                    <input type="hidden" name="wallet_list_page" value="<?php echo admin_e((string)$walletListPage); ?>">
+
+                                                    <div class="row g-3" data-admin-wallet-network-form>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_asset_id"><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></label>
+                                                            <select class="form-select" id="wallet_asset_id" name="crypto_asset_id" required data-admin-wallet-asset-select>
+                                                                <?php foreach ($walletAssetOptions as $assetOption): ?>
+                                                                    <option value="<?php echo admin_e((string)$assetOption['id']); ?>" data-asset-code="<?php echo admin_e((string)($assetOption['code'] ?? '')); ?>"<?php echo (int)$assetOption['id'] === (int)$walletEditor['crypto_asset_id'] ? ' selected' : ''; ?>>
+                                                                        <?php echo admin_e((string)$assetOption['name'] . ' (' . (string)$assetOption['code'] . ')'); ?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                            <select class="form-select" id="wallet_status" name="wallet_status">
+                                                                <option value="available"<?php echo $editorStatus === 'available' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_available', 'Available')); ?></option>
+                                                                <option value="disabled"<?php echo $editorStatus === 'disabled' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></option>
+                                                            </select>
+                                                        </div>
+
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_label"><?php echo admin_e(admin_t($messages, 'wallet_label', 'Wallet name / info')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_owner_full_name"><?php echo admin_e(admin_t($messages, 'wallet_owner_full_name', 'Owner full name')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_owner_full_name" name="owner_full_name" value="<?php echo admin_e($editorOwnerFullName); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_provider"><?php echo admin_e(admin_t($messages, 'wallet_provider', 'Wallet provider')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_provider" name="wallet_provider" value="<?php echo admin_e((string)($walletEditor['wallet_provider'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_network_code"><?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?></label>
+                                                            <select class="form-select<?php echo !$editorAllowsNetworkChoice ? ' d-none' : ''; ?>" id="wallet_network_code" name="network_code" data-admin-wallet-network-select>
+                                                                <?php foreach ($editorNetworkOptions as $networkCode => $networkLabel): ?>
+                                                                    <option value="<?php echo admin_e($networkCode); ?>"<?php echo $networkCode === $editorNetworkCode ? ' selected' : ''; ?>>
+                                                                        <?php echo admin_e($networkLabel); ?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                            <input type="text" class="form-control<?php echo $editorAllowsNetworkChoice ? ' d-none' : ''; ?>" value="<?php echo admin_e(admin_crypto_network_label($editorNetworkCode)); ?>" readonly data-admin-wallet-network-fixed>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <div class="admin-wallet-network-help">
+                                                                <?php echo admin_e(admin_t($messages, 'wallet_network_help', 'For BTC, BNB, SOL and similar coins the network is filled automatically. Stablecoins like USDT or USDC allow network selection per wallet.')); ?>
+                                                            </div>
+                                                        </div>
+
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="wallet_address"><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_address" name="address" value="<?php echo admin_e((string)($walletEditor['address'] ?? '')); ?>" required>
+                                                        </div>
+
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="wallet_memo_tag"><?php echo admin_e(admin_t($messages, 'wallet_memo_tag', 'Memo / tag')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_memo_tag" name="memo_tag" value="<?php echo admin_e((string)($walletEditor['memo_tag'] ?? '')); ?>">
+                                                        </div>
+
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="wallet_notes"><?php echo admin_e(admin_t($messages, 'wallet_notes', 'Notes')); ?></label>
+                                                            <textarea class="form-control" id="wallet_notes" name="notes" rows="3"><?php echo admin_e((string)($walletEditor['notes'] ?? '')); ?></textarea>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-wallet-customer-picker"
+                                                         data-admin-wallet-customer-picker
+                                                         data-submit-name="admin_assign_crypto_wallet_customer"
+                                                         data-search-url="/admin/wallets.php?action=search_customers&amp;wallet_id=<?php echo admin_e((string)$walletEditor['id']); ?>"
+                                                         data-no-customer="<?php echo admin_e(admin_t($messages, 'wallet_no_customer', 'No customer assigned')); ?>"
+                                                         data-search-empty="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_empty', 'No users found.')); ?>"
+                                                         data-search-error="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_error', 'Unable to search users.')); ?>">
+                                                        <div class="admin-wallet-customer-picker__header">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'wallet_assign_customer', 'Assign customer')); ?></h4>
+                                                            <p><?php echo admin_e(admin_t($messages, 'wallet_assign_customer_intro', 'Search a user by email and assign this wallet manually.')); ?></p>
+                                                        </div>
+
+                                                        <input type="hidden" name="assignment_customer_id" value="0" data-admin-wallet-customer-id>
+
+                                                        <div class="admin-wallet-customer-picker__search">
+                                                            <i class="bi bi-search" aria-hidden="true"></i>
+                                                            <input type="search" class="form-control" placeholder="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_placeholder', 'Search...')); ?>" data-admin-wallet-customer-search>
+                                                        </div>
+                                                        <div class="admin-wallet-customer-picker__results" data-admin-wallet-customer-results hidden></div>
+                                                        <div class="admin-wallet-customer-picker__info admin-wallet-customer-picker__info--notice">
+                                                            <?php echo admin_e(admin_crypto_wallet_shared_assignments_enabled($appSettings)
+                                                                ? admin_t($messages, 'wallet_assign_mode_shared', 'Crypto wallet sharing is ON. You can assign one user to many addresses of the same coin.')
+                                                                : admin_t($messages, 'wallet_assign_mode_single', 'Crypto wallet sharing is OFF. Assigning a user to a new address of the same coin will release the old assignment.')); ?>
+                                                        </div>
+                                                        <?php if ($walletAssignments): ?>
+                                                            <div class="admin-assignment-chip-list">
+                                                                <?php foreach ($walletAssignments as $assignment): ?>
+                                                                    <div class="admin-assignment-chip">
+                                                                        <a class="admin-assignment-chip__link" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$assignment['customer_id']); ?>" title="<?php echo admin_e((string)$assignment['customer_email']); ?>"><?php echo admin_e(admin_string_truncate((string)$assignment['customer_email'], 24)); ?></a>
+                                                                        <button type="submit" class="admin-assignment-chip__remove" name="admin_remove_crypto_wallet_assignment" value="<?php echo admin_e((string)$assignment['id']); ?>" formnovalidate aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>">
+                                                                            <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php else: ?>
+                                                            <div class="admin-wallet-customer-picker__selected">
+                                                                <div class="admin-wallet-customer-picker__selected-copy">
+                                                                    <span><?php echo admin_e(admin_t($messages, 'wallet_assigned_user', 'Assigned user')); ?></span>
+                                                                    <strong><?php echo admin_e(admin_t($messages, 'wallet_no_customer', 'No customer assigned')); ?></strong>
+                                                                </div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <div class="admin-wallet-editor__actions">
+                                                            <span class="admin-wallet-editor__hint"><?php echo admin_e(admin_t($messages, 'wallet_click_result_hint', 'Click a search result to assign the user immediately.')); ?></span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-wallet-editor__actions">
+                                                        <button type="submit" class="btn btn-dark btn-lg" name="admin_save_crypto_wallet">
+                                                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'wallet_save_button', 'Save wallet')); ?></span>
+                                                        </button>
+                                                    </div>
+                                                </form>
+                                            </aside>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $walletRows = admin_crypto_wallet_rows($db, $walletListPerPage, ($walletListPage - 1) * $walletListPerPage);
+                                    if (!$walletRows) {
+                                        echo '<div class="admin-empty-state">' . admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')) . '</div>';
+                                        break;
+                                    }
+
+                                    ?>
+                                    <div class="admin-wallet-workspace">
+                                        <div class="admin-wallet-workspace__list">
+                                            <div class="table-responsive">
+                                                <table class="table admin-table admin-wallet-table align-middle">
+                                                    <thead>
+                                                <tr>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <?php foreach ($walletRows as $row): ?>
+                                                            <?php
+                                                            $assetName = (string)($row['asset_name'] ?? '');
+                                                            $assetCode = strtoupper((string)($row['asset_code'] ?? ''));
+                                                            $assetLogo = admin_crypto_asset_logo_url($assetCode);
+                                                            $walletAddress = trim((string)($row['address'] ?? ''));
+                                                            $walletAddressShort = strlen($walletAddress) > 14
+                                                                ? substr($walletAddress, 0, 7) . '...' . substr($walletAddress, -7)
+                                                                : $walletAddress;
+                                                            $walletStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
+                                                            $assignedCustomerEmail = trim((string)($row['assigned_customer_email'] ?? ''));
+                                                            $assignedCustomerEmailShort = $assignedCustomerEmail !== '' ? admin_string_truncate($assignedCustomerEmail, 20) : '';
+                                                            $activeAssignmentCount = (int)($row['active_assignment_count'] ?? 0);
+                                                            $walletExplorerUrl = admin_crypto_wallet_explorer_url(
+                                                                (string)($row['asset_code'] ?? ''),
+                                                                (string)($row['network_code'] ?? ''),
+                                                                $walletAddress
+                                                            );
+                                                            ?>
+                                                            <tr>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?>">
+                                                                    <div class="admin-asset-cell">
+                                                                        <img src="<?php echo admin_e($assetLogo); ?>" alt="<?php echo admin_e($assetName); ?>" class="admin-asset-cell__logo">
+                                                                        <span class="admin-asset-cell__name"><?php echo admin_e($assetName); ?></span>
+                                                                        <span class="admin-asset-cell__badge"><?php echo admin_e($assetCode); ?></span>
+                                                                    </div>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?>">
+                                                                    <?php echo admin_e(admin_crypto_network_label((string)($row['network_code'] ?? ''))); ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?>">
+                                                                    <div class="admin-wallet-address">
+                                                                        <strong><?php echo admin_e($walletAddressShort); ?></strong>
+                                                                        <?php if (!empty($row['wallet_provider'])): ?>
+                                                                            <span><?php echo admin_e((string)$row['wallet_provider']); ?></span>
+                                                                        <?php endif; ?>
+                                                                    </div>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                    <?php if ($walletStatusRaw === 'disabled'): ?>
+                                                                        <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></span>
+                                                                    <?php elseif ($assignedCustomerEmailShort !== ''): ?>
+                                                                        <div class="admin-wallet-assigned">
+                                                                            <a class="admin-inline-link" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)($row['assigned_customer_id'] ?? 0)); ?>" title="<?php echo admin_e($assignedCustomerEmail); ?>"><?php echo admin_e($assignedCustomerEmailShort); ?></a>
+                                                                            <?php if ($activeAssignmentCount > 1): ?>
+                                                                                <span class="admin-status-pill admin-status-pill--available">+<?php echo admin_e((string)($activeAssignmentCount - 1)); ?></span>
+                                                                            <?php endif; ?>
+                                                                        </div>
+                                                                    <?php else: ?>
+                                                                        <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'wallet_status_available', 'Available')); ?></span>
+                                                                    <?php endif; ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                    <div class="admin-wallet-actions">
+                                                                        <?php if ($walletExplorerUrl !== ''): ?>
+                                                                            <a href="<?php echo admin_e($walletExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark btn-sm">
+                                                                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                            </a>
+                                                                        <?php endif; ?>
+                                                                        <a href="/admin/?page=crypto-wallets&amp;wallet_list_page=<?php echo admin_e((string)$walletListPage); ?>&amp;edit_wallet=<?php echo admin_e((string)$row['id']); ?>" class="btn btn-dark btn-sm">
+                                                                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                        </a>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <?php if ($walletListTotalPages > 1): ?>
+                                                <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_pagination', 'Wallet pages')); ?>">
+                                                    <ul class="pagination admin-pagination">
+                                                        <?php for ($pageNumber = 1; $pageNumber <= $walletListTotalPages; $pageNumber++): ?>
+                                                            <li class="page-item<?php echo $pageNumber === $walletListPage ? ' active' : ''; ?>">
+                                                                <a class="page-link" href="/admin/?page=crypto-wallets&amp;wallet_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                            </li>
+                                                        <?php endfor; ?>
+                                                    </ul>
+                                                </nav>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <?php
+                                    break;
+
+                                case 'news':
+                                    if ($newsShowCreate):
+                                        $newsDraft = $newsFormState;
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'news_create_title', 'Add news post')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=news&amp;news_list_page=<?php echo admin_e((string)$newsListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_news', 'Back to news')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="news_list_page" value="<?php echo admin_e((string)$newsListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-7">
+                                                        <label class="form-label" for="news_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="news_title" name="title" value="<?php echo admin_e((string)($newsDraft['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="form-label" for="news_slug"><?php echo admin_e(admin_t($messages, 'news_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="news_slug" name="slug" value="<?php echo admin_e((string)($newsDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'news_slug_placeholder', 'generated-from-title')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="news_visibility"><?php echo admin_e(admin_t($messages, 'col_visibility', 'Visibility')); ?></label>
+                                                        <select class="form-select" id="news_visibility" name="visibility">
+                                                            <?php $newsDraftVisibility = strtolower(trim((string)($newsDraft['visibility'] ?? 'client'))) === 'customer' ? 'client' : strtolower(trim((string)($newsDraft['visibility'] ?? 'client'))); ?>
+                                                            <?php foreach (admin_news_visibility_options($newsDraftVisibility) as $visibilityOption): ?>
+                                                                <option value="<?php echo admin_e($visibilityOption); ?>"<?php echo $newsDraftVisibility === $visibilityOption ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e(admin_news_visibility_label($visibilityOption, $messages)); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="news_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="news_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($newsDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($newsDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="news_published_at"><?php echo admin_e(admin_t($messages, 'news_published_at', 'Published at')); ?></label>
+                                                        <input type="datetime-local" class="form-control" id="news_published_at" name="published_at" value="<?php echo admin_e(admin_format_datetime_local((string)($newsDraft['published_at'] ?? ''))); ?>">
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="news_body"><?php echo admin_e(admin_t($messages, 'news_body_label', 'Content')); ?></label>
+                                                        <textarea class="form-control" id="news_body" name="body" rows="12" required><?php echo admin_e((string)($newsDraft['body'] ?? '')); ?></textarea>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_news">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'news_create_button', 'Create news')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($newsEditorId > 0 && is_array($newsEditor) && !empty($newsEditor['id'])):
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'news_editor_title', 'Edit news post')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=news&amp;news_list_page=<?php echo admin_e((string)$newsListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_news', 'Back to news')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="news_id" value="<?php echo admin_e((string)$newsEditor['id']); ?>">
+                                                <input type="hidden" name="news_list_page" value="<?php echo admin_e((string)$newsListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-7">
+                                                        <label class="form-label" for="news_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="news_title" name="title" value="<?php echo admin_e((string)$newsEditor['title']); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="form-label" for="news_slug"><?php echo admin_e(admin_t($messages, 'news_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="news_slug" name="slug" value="<?php echo admin_e((string)($newsEditor['slug'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="news_visibility"><?php echo admin_e(admin_t($messages, 'col_visibility', 'Visibility')); ?></label>
+                                                        <select class="form-select" id="news_visibility" name="visibility">
+                                                            <?php $newsEditorVisibility = strtolower(trim((string)($newsEditor['visibility'] ?? 'client'))) === 'customer' ? 'client' : strtolower(trim((string)($newsEditor['visibility'] ?? 'client'))); ?>
+                                                            <?php foreach (admin_news_visibility_options($newsEditorVisibility) as $visibilityOption): ?>
+                                                                <option value="<?php echo admin_e($visibilityOption); ?>"<?php echo $newsEditorVisibility === $visibilityOption ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e(admin_news_visibility_label($visibilityOption, $messages)); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="news_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="news_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($newsEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($newsEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="news_published_at"><?php echo admin_e(admin_t($messages, 'news_published_at', 'Published at')); ?></label>
+                                                        <input type="datetime-local" class="form-control" id="news_published_at" name="published_at" value="<?php echo admin_e(admin_format_datetime_local((string)($newsEditor['published_at'] ?? ''))); ?>">
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="news_body"><?php echo admin_e(admin_t($messages, 'news_body_label', 'Content')); ?></label>
+                                                        <textarea class="form-control" id="news_body" name="body" rows="12" required><?php echo admin_e((string)($newsEditor['body'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($newsEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($newsEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_news">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'news_save_button', 'Save news')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $newsRows = admin_news_rows($db, $newsListPerPage, ($newsListPage - 1) * $newsListPerPage);
+                                    ?>
+                                    <div class="admin-section-actions">
+                                        <a href="/admin/?page=news&amp;view=create&amp;news_list_page=<?php echo admin_e((string)$newsListPage); ?>" class="btn btn-dark">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'news_add_new', 'Add news')); ?></span>
+                                        </a>
+                                    </div>
+                                    <?php if ($newsRows): ?>
+                                        <div class="table-responsive">
+                                            <table class="table admin-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_visibility', 'Visibility')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($newsRows as $row): ?>
+                                                        <?php $newsPreview = admin_news_body_preview((string)($row['body'] ?? '')); ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
+                                                                <div class="d-flex flex-column gap-1">
+                                                                    <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e('/' . (string)($row['slug'] ?? '')); ?></span>
+                                                                    <?php if ($newsPreview !== ''): ?>
+                                                                        <span class="text-body-secondary small"><?php echo admin_e($newsPreview); ?></span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_visibility', 'Visibility')); ?>">
+                                                                <?php echo admin_e(admin_news_visibility_label((string)($row['visibility'] ?? 'customer'), $messages)); ?>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                    <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                </span>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                                <?php echo admin_e(substr((string)($row['published_at'] ?? ''), 0, 16)); ?>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-wallet-actions">
+                                                                    <a href="/admin/?page=news&amp;edit_news=<?php echo admin_e((string)$row['id']); ?>&amp;news_list_page=<?php echo admin_e((string)$newsListPage); ?>" class="btn btn-dark btn-sm">
+                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                    </a>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <?php if ($newsListTotalPages > 1): ?>
+                                            <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'news_pagination', 'News pages')); ?>">
+                                                <ul class="pagination admin-pagination">
+                                                    <?php for ($pageNumber = 1; $pageNumber <= $newsListTotalPages; $pageNumber++): ?>
+                                                        <li class="page-item<?php echo $pageNumber === $newsListPage ? ' active' : ''; ?>">
+                                                            <a class="page-link" href="/admin/?page=news&amp;news_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                        </li>
+                                                    <?php endfor; ?>
+                                                </ul>
+                                            </nav>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                    <?php
+                                    endif;
+                                    break;
+
+                                case 'live-chat':
+                                    ?>
+                                    <div class="admin-live-chat-page">
+                                        <?php if ($chatSelectedUserId <= 0): ?>
+                                            <div class="admin-metric-grid admin-live-chat-summary">
+                                                <article class="admin-metric-card admin-metric-card--blue">
+                                                    <span class="admin-metric-card__label"><?php echo admin_e(admin_t($messages, 'chat_summary_open', 'Open chats')); ?></span>
+                                                    <strong class="admin-metric-card__value"><?php echo admin_e((string)count($chatInboxEntries)); ?></strong>
+                                                    <span class="admin-metric-card__meta"><?php echo admin_e(admin_t($messages, 'chat_summary_open_meta', 'Current support queue')); ?></span>
+                                                </article>
+                                                <article class="admin-metric-card admin-metric-card--pink">
+                                                    <span class="admin-metric-card__label"><?php echo admin_e(admin_t($messages, 'chat_summary_unread', 'Unread')); ?></span>
+                                                    <strong class="admin-metric-card__value"><?php echo admin_e((string)$chatInboxUnreadCount); ?></strong>
+                                                    <span class="admin-metric-card__meta"><?php echo admin_e(admin_t($messages, 'chat_summary_unread_meta', 'Need a reply from support')); ?></span>
+                                                </article>
+                                                <article class="admin-metric-card admin-metric-card--green">
+                                                    <span class="admin-metric-card__label"><?php echo admin_e(admin_t($messages, 'chat_summary_online', 'Online now')); ?></span>
+                                                    <strong class="admin-metric-card__value"><?php echo admin_e((string)$chatOnlineCount); ?></strong>
+                                                    <span class="admin-metric-card__meta"><?php echo admin_e(admin_t($messages, 'chat_summary_online_meta', 'Customers currently on site')); ?></span>
+                                                </article>
+                                                <article class="admin-metric-card admin-metric-card--cyan">
+                                                    <span class="admin-metric-card__label"><?php echo admin_e(admin_t($messages, 'chat_summary_active', 'Recently active')); ?></span>
+                                                    <strong class="admin-metric-card__value"><?php echo admin_e((string)$chatActiveCount); ?></strong>
+                                                    <span class="admin-metric-card__meta"><?php echo admin_e(admin_t($messages, 'chat_summary_active_meta', 'Online or away in the last minutes')); ?></span>
+                                                </article>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <article class="admin-panel-card">
+                                            <div class="admin-panel-card__header admin-live-chat-page__header">
+                                                <div>
+                                                    <h2><?php echo admin_e(admin_t($messages, 'chat_workspace_title', 'Support workspace')); ?></h2>
+                                                    <p><?php echo admin_e(admin_t($messages, 'chat_workspace_intro', 'Use this queue for triage, then open the floating inbox to reply, search users or send files.')); ?></p>
+                                                </div>
+                                                <div class="admin-live-chat-page__actions">
+                                                    <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-open data-admin-chat-focus-search="1">
+                                                        <i class="bi bi-search" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'chat_workspace_search', 'Search user')); ?></span>
+                                                    </button>
+                                                    <button type="button" class="btn btn-dark btn-sm" data-admin-chat-open>
+                                                        <i class="bi bi-envelope" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'chat_workspace_open_inbox', 'Open inbox')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <?php if (!$chatInboxEntries): ?>
+                                                <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'chat_inbox_empty', 'No live chats available right now.')); ?></div>
+                                            <?php else: ?>
+                                                <div class="admin-live-chat-list">
+                                                    <?php foreach ($chatInboxEntries as $chatEntry): ?>
+                                                        <?php
+                                                        $chatRow = (array)($chatEntry['row'] ?? []);
+                                                        $displayName = (string)($chatEntry['display_name'] ?? '');
+                                                        $isUnread = !empty($chatEntry['is_unread']);
+                                                        $chatTimeLabel = (string)($chatEntry['time_label'] ?? '');
+                                                        $presence = (array)($chatEntry['presence'] ?? []);
+                                                        $chatStatus = strtolower(trim((string)($chatRow['status'] ?? 'open')));
+                                                        $customerId = (int)($chatRow['customer_id'] ?? 0);
+                                                        ?>
+                                                        <article class="admin-live-chat-item<?php echo $isUnread ? ' is-unread' : ''; ?>">
+                                                            <div class="admin-live-chat-item__main">
+                                                                <div class="admin-chat-inbox__avatar <?php echo admin_e(admin_chat_avatar_theme($chatRow)); ?>"><?php echo admin_e(admin_chat_avatar_text($chatRow, $messages)); ?></div>
+                                                                <div class="admin-live-chat-item__content">
+                                                                    <div class="admin-live-chat-item__topline">
+                                                                        <div class="admin-live-chat-item__title">
+                                                                            <span><?php echo admin_chat_presence_dot_html($presence); ?></span>
+                                                                            <?php if ($customerId > 0): ?>
+                                                                                <a href="/admin/?page=live-chat&amp;user_id=<?php echo admin_e((string)$customerId); ?>" class="admin-inline-link" title="<?php echo admin_e((string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'))); ?>"><?php echo admin_e($displayName); ?></a>
+                                                                            <?php else: ?>
+                                                                                <strong title="<?php echo admin_e((string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'))); ?>"><?php echo admin_e($displayName); ?></strong>
+                                                                            <?php endif; ?>
+                                                                        </div>
+                                                                        <span class="admin-live-chat-item__date"><?php echo admin_e($chatTimeLabel); ?></span>
+                                                                    </div>
+                                                                    <div class="admin-live-chat-item__meta">
+                                                                        <span class="admin-status-pill <?php echo admin_e(admin_chat_status_badge_class($chatStatus)); ?>">
+                                                                            <?php echo admin_e(ucfirst(str_replace('_', ' ', $chatStatus !== '' ? $chatStatus : 'open'))); ?>
+                                                                        </span>
+                                                                        <?php if ($isUnread): ?>
+                                                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>: <?php echo admin_e((string)($chatRow['unread_count'] ?? 0)); ?></span>
+                                                                        <?php endif; ?>
+                                                                        <span class="admin-live-chat-item__presence-label"><?php echo admin_e((string)($presence['label'] ?? '')); ?></span>
+                                                                    </div>
+                                                                    <p><?php echo admin_e(admin_chat_message_preview($chatRow, $messages)); ?></p>
+                                                                </div>
+                                                            </div>
+                                                                <div class="admin-live-chat-item__actions">
+                                                                    <button
+                                                                        type="button"
+                                                                        class="btn btn-dark btn-sm"
+                                                                        data-admin-chat-open-conversation
+                                                                    data-conversation-id="<?php echo admin_e((string)($chatRow['id'] ?? 0)); ?>"
+                                                                    data-display-name="<?php echo admin_e($displayName); ?>">
+                                                                    <i class="bi bi-chat-dots" aria-hidden="true"></i>
+                                                                </button>
+                                                                    <?php if ($customerId > 0): ?>
+                                                                        <a href="/admin/?page=live-chat&amp;user_id=<?php echo admin_e((string)$customerId); ?>" class="btn btn-outline-dark btn-sm" title="<?php echo admin_e(admin_t($messages, 'chat_workspace_user_page', 'Open user page')); ?>">
+                                                                            <i class="bi bi-layout-text-window-reverse" aria-hidden="true"></i>
+                                                                        </a>
+                                                                        <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$customerId); ?>" class="btn btn-outline-dark btn-sm" title="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>">
+                                                                            <i class="bi bi-person" aria-hidden="true"></i>
+                                                                        </a>
+                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$customerId); ?>" class="btn btn-outline-dark btn-sm" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
+                                                                        <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                                    </a>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        </article>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </article>
+
+                                        <?php if ($chatSelectedCustomer && $chatSelectedConversationId > 0): ?>
+                                            <article class="admin-panel-card">
+                                                <div class="admin-panel-card__header admin-live-chat-page__header">
+                                                    <div>
+                                                        <h2><?php echo admin_e(admin_t($messages, 'chat_selected_user_title', 'Selected conversation')); ?></h2>
+                                                        <p><?php echo admin_e(admin_t($messages, 'chat_selected_user_intro', 'This view stays focused on one customer so you can send quick instructions without searching again.')); ?></p>
+                                                    </div>
+                                                    <div class="admin-live-chat-page__actions">
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-dark btn-sm"
+                                                            data-admin-chat-open-conversation
+                                                            data-conversation-id="<?php echo admin_e((string)$chatSelectedConversationId); ?>"
+                                                            data-display-name="<?php echo admin_e((string)($chatSelectedCustomer['email'] ?? '')); ?>">
+                                                            <i class="bi bi-chat-dots" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'chat_workspace_open_thread', 'Open floating thread')); ?></span>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-live-chat-selected">
+                                                    <div class="admin-live-chat-selected__summary">
+                                                        <div class="admin-live-chat-selected__identity">
+                                                            <div class="admin-chat-inbox__avatar theme-1"><?php echo admin_e(strtoupper(substr((string)($chatSelectedCustomer['email'] ?? 'C'), 0, 1))); ?></div>
+                                                            <div>
+                                                                <strong><?php echo admin_e((string)($chatSelectedCustomer['email'] ?? '')); ?></strong>
+                                                                <div class="admin-live-chat-selected__meta">
+                                                                    <span><?php echo admin_chat_presence_dot_html($chatSelectedPresence); ?></span>
+                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(strtoupper((string)($chatSelectedCustomer['locale_code'] ?? 'EN'))); ?></span>
+                                                                    <span class="admin-status-pill <?php echo admin_e(admin_chat_status_badge_class((string)($chatSelectedConversationRow['status'] ?? 'open'))); ?>">
+                                                                        <?php echo admin_e(ucfirst(str_replace('_', ' ', (string)($chatSelectedConversationRow['status'] ?? 'open')))); ?>
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div class="admin-live-chat-selected__links">
+                                                            <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$chatSelectedUserId); ?>" class="btn btn-outline-dark btn-sm">
+                                                                <i class="bi bi-person" aria-hidden="true"></i>
+                                                            </a>
+                                                            <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$chatSelectedUserId); ?>" class="btn btn-outline-dark btn-sm">
+                                                                <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                            </a>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-live-chat-selected__conversation" data-admin-live-chat-selected-conversation data-conversation-id="<?php echo admin_e((string)$chatSelectedConversationId); ?>">
+                                                        <?php echo admin_render_chat_conversation_html((array)$chatSelectedConversationRow, $chatSelectedMessages, $messages); ?>
+                                                    </div>
+                                                </div>
+                                            </article>
+                                        <?php endif; ?>
+
+                                        <article class="admin-panel-card">
+                                            <div class="admin-panel-card__header admin-live-chat-page__header">
+                                                <div>
+                                                    <h2><?php echo admin_e(admin_t($messages, 'chat_quick_reply_library_title', 'Quick message instructions')); ?></h2>
+                                                    <p><?php echo admin_e(admin_t($messages, 'chat_quick_reply_library_intro', 'Store reusable instructions and send them to the selected live chat with one click.')); ?></p>
+                                                </div>
+                                                <?php if ($chatSelectedCustomer): ?>
+                                                    <div class="admin-live-chat-page__actions">
+                                                        <span class="admin-status-pill admin-status-pill--assigned">
+                                                            <?php echo admin_e(admin_t($messages, 'chat_quick_reply_target_user', 'Target')); ?>: <?php echo admin_e((string)($chatSelectedCustomer['email'] ?? '')); ?>
+                                                        </span>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+
+                                            <?php
+                                            $quickReplyDraft = $chatQuickReplyEditor
+                                                ? array_merge([
+                                                    'locale_code' => 'en',
+                                                    'title' => '',
+                                                    'message_body' => '',
+                                                    'sort_order' => 100,
+                                                    'is_active' => 1,
+                                                ], $chatQuickReplyEditor)
+                                                : $chatQuickReplyFormState;
+                                            $chatQuickReplyAccordionOpen = $chatQuickReplyEditor
+                                                || trim((string)($quickReplyDraft['title'] ?? '')) !== ''
+                                                || trim((string)($quickReplyDraft['message_body'] ?? '')) !== '';
+                                            ?>
+
+                                            <div class="accordion admin-users-accordion admin-live-chat-quick-accordion" id="adminLiveChatQuickAccordion">
+                                                <section class="accordion-item admin-users-create-card">
+                                                    <h3 class="accordion-header" id="adminLiveChatQuickHeading">
+                                                        <button class="accordion-button admin-users-create-card__toggle<?php echo $chatQuickReplyAccordionOpen ? '' : ' collapsed'; ?>" type="button" data-bs-toggle="collapse" data-bs-target="#adminLiveChatQuickCollapse" aria-expanded="<?php echo $chatQuickReplyAccordionOpen ? 'true' : 'false'; ?>" aria-controls="adminLiveChatQuickCollapse">
+                                                            <span><?php echo admin_e($chatQuickReplyEditor ? admin_t($messages, 'chat_quick_reply_editor_title', 'Edit quick reply') : admin_t($messages, 'chat_quick_reply_create_title', 'Add quick reply')); ?></span>
+                                                        </button>
+                                                    </h3>
+                                                    <div id="adminLiveChatQuickCollapse" class="accordion-collapse collapse<?php echo $chatQuickReplyAccordionOpen ? ' show' : ''; ?>" aria-labelledby="adminLiveChatQuickHeading" data-bs-parent="#adminLiveChatQuickAccordion">
+                                                        <div class="accordion-body admin-users-create-card__body">
+                                                            <div class="admin-editor-page__header">
+                                                                <div>
+                                                                    <h3><?php echo admin_e($chatQuickReplyEditor ? admin_t($messages, 'chat_quick_reply_editor_title', 'Edit quick reply') : admin_t($messages, 'chat_quick_reply_create_title', 'Add quick reply')); ?></h3>
+                                                                </div>
+                                                                <?php if ($chatQuickReplyEditor): ?>
+                                                                    <a href="/admin/?page=live-chat<?php echo $chatSelectedUserId > 0 ? '&amp;user_id=' . admin_e((string)$chatSelectedUserId) : ''; ?>" class="btn btn-outline-dark btn-sm">
+                                                                        <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'chat_quick_reply_back_to_list', 'Back to quick replies')); ?></span>
+                                                                    </a>
+                                                                <?php endif; ?>
+                                                            </div>
+
+                                                            <form method="post" class="admin-editor-form">
+                                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                <input type="hidden" name="user_id" value="<?php echo admin_e((string)$chatSelectedUserId); ?>">
+                                                                <?php if ($chatQuickReplyEditor): ?>
+                                                                    <input type="hidden" name="quick_reply_id" value="<?php echo admin_e((string)$chatQuickReplyEditId); ?>">
+                                                                <?php endif; ?>
+
+                                                                <div class="row g-3">
+                                                                    <div class="col-md-4">
+                                                                        <label class="form-label" for="chat_quick_reply_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                                        <select class="form-select" id="chat_quick_reply_locale" name="locale_code">
+                                                                            <?php foreach (admin_chat_quick_reply_locale_options((string)($quickReplyDraft['locale_code'] ?? 'en')) as $quickReplyLocaleOption): ?>
+                                                                                <option value="<?php echo admin_e($quickReplyLocaleOption); ?>"<?php echo admin_normalize_locale((string)($quickReplyDraft['locale_code'] ?? 'en')) === $quickReplyLocaleOption ? ' selected' : ''; ?>>
+                                                                                    <?php echo admin_e(strtoupper($quickReplyLocaleOption)); ?>
+                                                                                </option>
+                                                                            <?php endforeach; ?>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label class="form-label" for="chat_quick_reply_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                                        <input type="text" class="form-control" id="chat_quick_reply_title" name="title" value="<?php echo admin_e((string)($quickReplyDraft['title'] ?? '')); ?>" required>
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label class="form-label" for="chat_quick_reply_sort"><?php echo admin_e(admin_t($messages, 'chat_quick_reply_sort_label', 'Sort order')); ?></label>
+                                                                        <input type="number" class="form-control" id="chat_quick_reply_sort" name="sort_order" value="<?php echo admin_e((string)($quickReplyDraft['sort_order'] ?? '100')); ?>" min="0" step="1">
+                                                                    </div>
+                                                                    <div class="col-12">
+                                                                        <label class="form-label" for="chat_quick_reply_message"><?php echo admin_e(admin_t($messages, 'chat_quick_reply_message_label', 'Message')); ?></label>
+                                                                        <textarea class="form-control" id="chat_quick_reply_message" name="message_body" rows="8" required><?php echo admin_e((string)($quickReplyDraft['message_body'] ?? '')); ?></textarea>
+                                                                    </div>
+                                                                    <div class="col-12">
+                                                                        <div class="form-check form-switch">
+                                                                            <input class="form-check-input" type="checkbox" role="switch" id="chat_quick_reply_active" name="is_active" value="1"<?php echo !empty($quickReplyDraft['is_active']) ? ' checked' : ''; ?>>
+                                                                            <label class="form-check-label" for="chat_quick_reply_active"><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></label>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div class="admin-editor-actions">
+                                                                    <button type="submit" class="btn btn-dark" name="<?php echo $chatQuickReplyEditor ? 'admin_save_chat_quick_reply' : 'admin_create_chat_quick_reply'; ?>">
+                                                                        <i class="bi bi-save" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e($chatQuickReplyEditor ? admin_t($messages, 'chat_quick_reply_save_button', 'Save quick reply') : admin_t($messages, 'chat_quick_reply_create_button', 'Create quick reply')); ?></span>
+                                                                    </button>
+                                                                </div>
+                                                            </form>
+                                                        </div>
+                                                    </div>
+                                                </section>
+                                            </div>
+
+                                            <div class="admin-live-chat-quick-list">
+                                                <?php if (!$chatQuickReplyRows): ?>
+                                                    <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                <?php else: ?>
+                                                    <?php foreach ($chatQuickReplyRows as $quickReplyRow): ?>
+                                                        <?php
+                                                        $quickReplyId = (int)($quickReplyRow['id'] ?? 0);
+                                                        $quickReplyLocale = admin_normalize_locale((string)($quickReplyRow['locale_code'] ?? 'en'));
+                                                        $quickReplyPreview = trim((string)($quickReplyRow['message_body'] ?? ''));
+                                                        if (function_exists('mb_strlen') && mb_strlen($quickReplyPreview) > 180) {
+                                                            $quickReplyPreview = rtrim(mb_substr($quickReplyPreview, 0, 177)) . '...';
+                                                        } elseif (strlen($quickReplyPreview) > 180) {
+                                                            $quickReplyPreview = rtrim(substr($quickReplyPreview, 0, 177)) . '...';
+                                                        }
+                                                        ?>
+                                                        <article class="admin-live-chat-quick-item<?php echo $chatQuickReplyEditId === $quickReplyId ? ' is-editing' : ''; ?>">
+                                                            <div class="admin-live-chat-quick-item__main">
+                                                                <div class="admin-live-chat-quick-item__topline">
+                                                                    <strong><?php echo admin_e((string)($quickReplyRow['title'] ?? '')); ?></strong>
+                                                                    <div class="admin-live-chat-quick-item__badges">
+                                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(strtoupper($quickReplyLocale)); ?></span>
+                                                                        <span class="admin-status-pill <?php echo admin_e(!empty($quickReplyRow['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--muted'); ?>">
+                                                                            <?php echo admin_e(!empty($quickReplyRow['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                                <p><?php echo nl2br(admin_e($quickReplyPreview)); ?></p>
+                                                            </div>
+                                                            <div class="admin-live-chat-quick-item__actions">
+                                                                <?php if ($chatSelectedUserId > 0 && !empty($quickReplyRow['is_active'])): ?>
+                                                                    <form method="post">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="user_id" value="<?php echo admin_e((string)$chatSelectedUserId); ?>">
+                                                                        <input type="hidden" name="quick_reply_id" value="<?php echo admin_e((string)$quickReplyId); ?>">
+                                                                        <button type="submit" class="btn btn-dark btn-sm" name="admin_send_chat_quick_reply">
+                                                                            <i class="bi bi-send" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'chat_quick_reply_send_button', 'Send')); ?></span>
+                                                                        </button>
+                                                                    </form>
+                                                                <?php endif; ?>
+                                                                <a href="/admin/?page=live-chat<?php echo $chatSelectedUserId > 0 ? '&amp;user_id=' . admin_e((string)$chatSelectedUserId) : ''; ?>&amp;edit_quick_reply=<?php echo admin_e((string)$quickReplyId); ?>" class="btn btn-outline-dark btn-sm">
+                                                                    <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                </a>
+                                                                <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'chat_quick_reply_delete_confirm', 'Delete this quick reply?')); ?>');">
+                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                    <input type="hidden" name="user_id" value="<?php echo admin_e((string)$chatSelectedUserId); ?>">
+                                                                    <input type="hidden" name="quick_reply_id" value="<?php echo admin_e((string)$quickReplyId); ?>">
+                                                                    <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_chat_quick_reply">
+                                                                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                                                                    </button>
+                                                                </form>
+                                                            </div>
+                                                        </article>
+                                                    <?php endforeach; ?>
+                                                <?php endif; ?>
+                                            </div>
+                                        </article>
+                                    </div>
+                                    <?php
+                                    break;
+
+                                case 'email-templates':
+                                    if ($emailTemplateEditorId > 0 && is_array($emailTemplateEditor) && !empty($emailTemplateEditor['id'])):
+                                        $templateTranslations = is_array($emailTemplateEditor['translations'] ?? null) ? $emailTemplateEditor['translations'] : [];
+                                        $templateDraft = array_merge([
+                                            'subject_en' => (string)($templateTranslations['en']['subject'] ?? ''),
+                                            'body_en' => (string)($templateTranslations['en']['body'] ?? ''),
+                                            'subject_pl' => (string)($templateTranslations['pl']['subject'] ?? ''),
+                                            'body_pl' => (string)($templateTranslations['pl']['body'] ?? ''),
+                                        ], $emailTemplateEditor);
+                                        $placeholderBadges = admin_email_template_placeholder_badges((string)($emailTemplateEditor['template_key'] ?? ''));
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'email_template_editor_title', 'Edit email template')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=email-templates&amp;template_list_page=<?php echo admin_e((string)$emailTemplateListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_email_templates', 'Back to email templates')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="template_id" value="<?php echo admin_e((string)$emailTemplateEditorId); ?>">
+                                                <input type="hidden" name="template_list_page" value="<?php echo admin_e((string)$emailTemplateListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_template_key', 'Template key')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)($emailTemplateEditor['template_key'] ?? '')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="email_template_name"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="email_template_name" name="name" value="<?php echo admin_e((string)($templateDraft['name'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="email_template_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="email_template_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($templateDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($templateDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="admin-detail-inline-list">
+                                                            <span class="admin-status-pill admin-status-pill--neutral">EN</span>
+                                                            <span class="form-text"><?php echo admin_e(admin_t($messages, 'email_template_locale_en', 'English version')); ?></span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="email_template_subject_en"><?php echo admin_e(admin_t($messages, 'col_subject', 'Subject')); ?> (EN)</label>
+                                                        <input type="text" class="form-control" id="email_template_subject_en" name="subject_en" value="<?php echo admin_e((string)($templateDraft['subject_en'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="email_template_body_en"><?php echo admin_e(admin_t($messages, 'email_template_body_label', 'Message body')); ?> (EN)</label>
+                                                        <textarea class="form-control" id="email_template_body_en" name="body_en" rows="10" required><?php echo admin_e((string)($templateDraft['body_en'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="admin-detail-inline-list">
+                                                            <span class="admin-status-pill admin-status-pill--neutral">PL</span>
+                                                            <span class="form-text"><?php echo admin_e(admin_t($messages, 'email_template_locale_pl', 'Polish version')); ?></span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="email_template_subject_pl"><?php echo admin_e(admin_t($messages, 'col_subject', 'Subject')); ?> (PL)</label>
+                                                        <input type="text" class="form-control" id="email_template_subject_pl" name="subject_pl" value="<?php echo admin_e((string)($templateDraft['subject_pl'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="email_template_body_pl"><?php echo admin_e(admin_t($messages, 'email_template_body_label', 'Message body')); ?> (PL)</label>
+                                                        <textarea class="form-control" id="email_template_body_pl" name="body_pl" rows="10" required><?php echo admin_e((string)($templateDraft['body_pl'] ?? '')); ?></textarea>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'email_template_plain_text_help', 'Emails are sent as plain text only. HTML is removed automatically to keep messages cleaner and safer for deliverability.')); ?></div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'email_template_placeholders_label', 'Available placeholders')); ?></label>
+                                                        <?php if ($placeholderBadges): ?>
+                                                            <div class="admin-detail-inline-list">
+                                                                <?php foreach ($placeholderBadges as $placeholderBadge): ?>
+                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($placeholderBadge); ?></span>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php else: ?>
+                                                            <div class="form-text"><?php echo admin_e(admin_t($messages, 'email_template_placeholders_empty', 'This template does not define extra placeholders.')); ?></div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-page__actions">
+                                                    <button type="submit" class="btn btn-dark" name="admin_save_email_template">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'email_template_save_button', 'Save template')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                    <?php else:
+                                        $emailTemplateRows = admin_email_template_rows_paginated($db, $emailTemplateListPerPage, ($emailTemplateListPage - 1) * $emailTemplateListPerPage);
+                                        if ($emailTemplateRows):
+                                            ?>
+                                            <div class="admin-table-card">
+                                                <div class="admin-table-card__header">
+                                                    <div>
+                                                        <h3><?php echo admin_e(admin_t($messages, 'email_template_library_title', 'Template library')); ?></h3>
+                                                        <p><?php echo admin_e(admin_t($messages, 'email_template_library_intro', 'Edit subjects and plain-text bodies used by orders, live chat and system notifications.')); ?></p>
+                                                    </div>
+                                                </div>
+
+                                                <div class="table-responsive">
+                                                    <table class="table admin-table align-middle">
+                                                        <thead>
+                                                            <tr>
+                                                                <th><?php echo admin_e(admin_t($messages, 'col_template_key', 'Template key')); ?></th>
+                                                                <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
+                                                                <th><?php echo admin_e(admin_t($messages, 'email_template_languages', 'Languages')); ?></th>
+                                                                <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                <th><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></th>
+                                                                <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            <?php foreach ($emailTemplateRows as $row): ?>
+                                                                <tr>
+                                                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_template_key', 'Template key')); ?>">
+                                                                        <div class="fw-semibold"><?php echo admin_e((string)($row['template_key'] ?? '')); ?></div>
+                                                                    </td>
+                                                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
+                                                                        <div class="fw-semibold"><?php echo admin_e((string)($row['name'] ?? '')); ?></div>
+                                                                    </td>
+                                                                    <td data-label="<?php echo admin_e(admin_t($messages, 'email_template_languages', 'Languages')); ?>">
+                                                                        <div class="admin-detail-inline-list">
+                                                                            <span class="admin-status-pill admin-status-pill--neutral">EN</span>
+                                                                            <span class="admin-status-pill admin-status-pill--neutral">PL</span>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                        <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                            <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                        </span>
+                                                                    </td>
+                                                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?>">
+                                                                        <?php echo admin_e(substr((string)($row['updated_at'] ?? ''), 0, 16)); ?>
+                                                                    </td>
+                                                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                        <div class="admin-wallet-actions">
+                                                                            <a href="/admin/?page=email-templates&amp;edit_template=<?php echo admin_e((string)$row['id']); ?>&amp;template_list_page=<?php echo admin_e((string)$emailTemplateListPage); ?>" class="btn btn-dark btn-sm">
+                                                                                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                            </a>
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            <?php endforeach; ?>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                <?php if ($emailTemplateListTotalPages > 1): ?>
+                                                    <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'email_template_pagination', 'Email template pages')); ?>">
+                                                        <ul class="pagination admin-pagination">
+                                                            <?php for ($pageNumber = 1; $pageNumber <= $emailTemplateListTotalPages; $pageNumber++): ?>
+                                                                <li class="page-item<?php echo $pageNumber === $emailTemplateListPage ? ' active' : ''; ?>">
+                                                                    <a class="page-link" href="/admin/?page=email-templates&amp;template_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                                </li>
+                                                            <?php endfor; ?>
+                                                        </ul>
+                                                    </nav>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                        <?php
+                                        endif;
+                                    endif;
+                                    break;
+
+                                case 'faq':
+                                    if ($faqShowCreate):
+                                        $faqDraft = $faqFormState;
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'faq_create_title', 'Add FAQ entry')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_faq', 'Back to FAQ')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-7">
+                                                        <label class="form-label" for="faq_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="faq_title" name="title" value="<?php echo admin_e((string)($faqDraft['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="form-label" for="faq_slug"><?php echo admin_e(admin_t($messages, 'faq_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="faq_slug" name="slug" value="<?php echo admin_e((string)($faqDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'faq_slug_placeholder', 'generated-from-title')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="faq_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="faq_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($faqDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($faqDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'faq_type_label', 'Type')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_faq', 'FAQ')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="faq_body"><?php echo admin_e(admin_t($messages, 'faq_body_label', 'Answer / content')); ?></label>
+                                                        <textarea class="form-control" id="faq_body" name="body" rows="12" required><?php echo admin_e((string)($faqDraft['body'] ?? '')); ?></textarea>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_faq">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'faq_create_button', 'Create FAQ entry')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($faqEditorId > 0 && is_array($faqEditor) && !empty($faqEditor['id'])):
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'faq_editor_title', 'Edit FAQ entry')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_faq', 'Back to FAQ')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="faq_id" value="<?php echo admin_e((string)$faqEditor['id']); ?>">
+                                                <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-7">
+                                                        <label class="form-label" for="faq_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="faq_title" name="title" value="<?php echo admin_e((string)($faqEditor['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="form-label" for="faq_slug"><?php echo admin_e(admin_t($messages, 'faq_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="faq_slug" name="slug" value="<?php echo admin_e((string)($faqEditor['slug'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="faq_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="faq_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($faqEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($faqEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'faq_type_label', 'Type')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_faq', 'FAQ')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'faq_system_label', 'System entry')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(!empty($faqEditor['is_system']) ? admin_t($messages, 'faq_system_yes', 'Yes') : admin_t($messages, 'faq_system_no', 'No')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="faq_body"><?php echo admin_e(admin_t($messages, 'faq_body_label', 'Answer / content')); ?></label>
+                                                        <textarea class="form-control" id="faq_body" name="body" rows="12" required><?php echo admin_e((string)($faqEditor['body'] ?? '')); ?></textarea>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($faqEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($faqEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_faq">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'faq_save_button', 'Save FAQ entry')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $faqRows = admin_faq_rows($db, $faqListPerPage, ($faqListPage - 1) * $faqListPerPage);
+                                    ?>
+                                    <div class="admin-section-actions">
+                                        <a href="/admin/?page=faq&amp;view=create&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-dark">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'faq_add_new', 'Add FAQ entry')); ?></span>
+                                        </a>
+                                    </div>
+                                    <?php if ($faqRows): ?>
+                                        <div class="table-responsive">
+                                            <table class="table admin-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'faq_type_label', 'Type')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($faqRows as $row): ?>
+                                                        <?php $faqPreview = admin_news_body_preview((string)($row['body'] ?? '')); ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
+                                                                <div class="d-flex flex-column gap-1">
+                                                                    <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e('/' . (string)($row['slug'] ?? '')); ?></span>
+                                                                    <?php if ($faqPreview !== ''): ?>
+                                                                        <span class="text-body-secondary small"><?php echo admin_e($faqPreview); ?></span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'faq_type_label', 'Type')); ?>">
+                                                                <div class="d-flex flex-column gap-1">
+                                                                    <span><?php echo admin_e(admin_t($messages, 'nav_faq', 'FAQ')); ?></span>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e(!empty($row['is_system']) ? admin_t($messages, 'faq_system_yes', 'Yes') : admin_t($messages, 'faq_system_no', 'No')); ?></span>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                    <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                </span>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?>">
+                                                                <?php echo admin_e(substr((string)($row['updated_at'] ?? ''), 0, 16)); ?>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-wallet-actions">
+                                                                    <a href="/admin/?page=faq&amp;edit_faq=<?php echo admin_e((string)$row['id']); ?>&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-dark btn-sm">
+                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                    </a>
+                                                                    <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'faq_delete_confirm', 'Delete this FAQ entry?')); ?>');">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="faq_id" value="<?php echo admin_e((string)$row['id']); ?>">
+                                                                        <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
+                                                                        <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_faq" title="<?php echo admin_e(admin_t($messages, 'faq_delete_button', 'Delete FAQ entry')); ?>">
+                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </form>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <?php if ($faqListTotalPages > 1): ?>
+                                            <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'faq_pagination', 'FAQ pages')); ?>">
+                                                <ul class="pagination admin-pagination">
+                                                    <?php for ($pageNumber = 1; $pageNumber <= $faqListTotalPages; $pageNumber++): ?>
+                                                        <li class="page-item<?php echo $pageNumber === $faqListPage ? ' active' : ''; ?>">
+                                                            <a class="page-link" href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                        </li>
+                                                    <?php endfor; ?>
+                                                </ul>
+                                            </nav>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                    <?php
+                                    endif;
+                                    break;
+
+                                case 'settings':
+                                    ?>
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_site_intro', 'Update the public page name, URL, support email and basic SEO data used across the service.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form" autocomplete="off">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="site_name"><?php echo admin_e(admin_t($messages, 'settings_site_name', 'Page name')); ?></label>
+                                                    <input type="text" class="form-control" id="site_name" name="site_name" value="<?php echo admin_e((string)$siteSettingsFormState['site_name']); ?>" placeholder="Reseller" required>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="site_title"><?php echo admin_e(admin_t($messages, 'settings_site_page_title', 'Page title')); ?></label>
+                                                    <input type="text" class="form-control" id="site_title" name="site_title" value="<?php echo admin_e((string)$siteSettingsFormState['site_title']); ?>" placeholder="Reseller panel" required>
+                                                </div>
+                                                <div class="col-md-8">
+                                                    <label class="form-label" for="site_url"><?php echo admin_e(admin_t($messages, 'settings_site_url', 'Page URL')); ?></label>
+                                                    <input type="url" class="form-control" id="site_url" name="site_url" value="<?php echo admin_e((string)$siteSettingsFormState['site_url']); ?>" placeholder="https://example.com" required>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label" for="support_email"><?php echo admin_e(admin_t($messages, 'settings_support_email', 'Support email')); ?></label>
+                                                    <input type="email" class="form-control" id="support_email" name="support_email" value="<?php echo admin_e((string)$siteSettingsFormState['support_email']); ?>" placeholder="support@example.com" required>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <div
+                                                        class="admin-settings-logo-manager"
+                                                        data-site-logo-manager
+                                                        data-upload-label="<?php echo admin_e(admin_t($messages, 'settings_site_logo_upload', 'Upload logo')); ?>"
+                                                        data-uploading-label="<?php echo admin_e(admin_t($messages, 'settings_site_logo_uploading', 'Uploading logo...')); ?>"
+                                                        data-applying-label="<?php echo admin_e(admin_t($messages, 'settings_site_logo_applying', 'Saving logo URL...')); ?>"
+                                                        data-removing-label="<?php echo admin_e(admin_t($messages, 'settings_site_logo_removing', 'Removing logo...')); ?>"
+                                                        data-upload-error="<?php echo admin_e(admin_t($messages, 'settings_site_logo_upload_error', 'Unable to upload the logo right now.')); ?>"
+                                                        data-remove-error="<?php echo admin_e(admin_t($messages, 'settings_site_logo_remove_error', 'Unable to remove the logo right now.')); ?>"
+                                                        data-remove-success="<?php echo admin_e(admin_t($messages, 'settings_site_logo_remove_success', 'Logo removed.')); ?>"
+                                                        data-upload-success="<?php echo admin_e(admin_t($messages, 'settings_site_logo_upload_success', 'Logo uploaded successfully.')); ?>"
+                                                        data-url-success="<?php echo admin_e(admin_t($messages, 'settings_site_logo_url_saved', 'Logo URL has been updated.')); ?>"
+                                                        data-url-error="<?php echo admin_e(admin_t($messages, 'settings_site_logo_url_invalid', 'Provide a valid direct image URL.')); ?>"
+                                                    >
+                                                        <div class="admin-settings-logo-manager__header">
+                                                            <div>
+                                                                <label class="form-label mb-1" for="site_logo_url"><?php echo admin_e(admin_t($messages, 'settings_site_logo_url', 'Logo URL')); ?></label>
+                                                                <div class="text-muted small"><?php echo admin_e(admin_t($messages, 'settings_site_logo_upload_help', 'Upload a logo instantly or paste a direct URL below.')); ?></div>
+                                                            </div>
+                                                            <div class="admin-settings-logo-field__actions">
+                                                                <input type="file" id="site_logo_file" accept=".jpg,.jpeg,.png,.gif,.svg,image/jpeg,image/png,image/gif,image/svg+xml" hidden data-site-logo-file>
+                                                                <button type="button" class="btn btn-dark btn-sm" data-site-logo-upload-trigger>
+                                                                    <i class="bi bi-upload" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_site_logo_upload', 'Upload logo')); ?></span>
+                                                                </button>
+                                                                <button type="button" class="btn btn-outline-dark btn-sm" data-site-logo-apply-url>
+                                                                    <i class="bi bi-check2-circle" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_site_logo_apply_url', 'Use URL')); ?></span>
+                                                                </button>
+                                                                <button type="button" class="btn btn-outline-dark btn-sm" id="site_logo_clear" data-site-logo-remove>
+                                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_site_logo_clear', 'Remove logo')); ?></span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <button type="button" class="admin-settings-logo-dropzone" data-site-logo-dropzone>
+                                                            <span class="admin-settings-logo-dropzone__icon">
+                                                                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                                                            </span>
+                                                            <span class="admin-settings-logo-dropzone__title"><?php echo admin_e(admin_t($messages, 'settings_site_logo_drop_title', 'Drop logo here or click to upload')); ?></span>
+                                                            <span class="admin-settings-logo-dropzone__hint"><?php echo admin_e(admin_t($messages, 'settings_site_logo_drop_hint', 'PNG, JPG, GIF or SVG. You can also paste a direct image URL below.')); ?></span>
+                                                        </button>
+                                                        <input type="text" class="form-control" id="site_logo_url" name="site_logo_url" value="<?php echo admin_e((string)$siteSettingsFormState['site_logo_url']); ?>" placeholder="https://example.com/logo.png" data-site-logo-url>
+                                                        <div class="admin-settings-logo-manager__status text-muted small" data-site-logo-status>
+                                                            <?php echo admin_e(admin_t($messages, 'settings_site_logo_upload_help', 'Upload a logo instantly or paste a direct URL below.')); ?>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <div class="admin-settings-logo-preview" id="site_logo_preview" data-empty-text="<?php echo admin_e(admin_t($messages, 'settings_site_logo_empty', 'No logo selected yet.')); ?>" data-error-text="<?php echo admin_e(admin_t($messages, 'settings_site_logo_invalid', 'Preview could not be loaded from this address.')); ?>">
+                                                        <div class="admin-settings-logo-preview__label"><?php echo admin_e(admin_t($messages, 'settings_site_logo_preview', 'Logo preview')); ?></div>
+                                                        <div class="admin-settings-logo-preview__canvas">
+                                                            <img src="<?php echo admin_e((string)$siteSettingsFormState['site_logo_url']); ?>" alt="<?php echo admin_e((string)$siteSettingsFormState['site_name'] !== '' ? (string)$siteSettingsFormState['site_name'] : $siteName); ?>" id="site_logo_preview_image"<?php echo trim((string)$siteSettingsFormState['site_logo_url']) === '' ? ' hidden' : ''; ?>>
+                                                            <div class="admin-settings-logo-preview__empty" id="site_logo_preview_empty"<?php echo trim((string)$siteSettingsFormState['site_logo_url']) !== '' ? ' hidden' : ''; ?>>
+                                                                <?php echo admin_e(trim((string)$siteSettingsFormState['site_logo_url']) !== '' ? admin_t($messages, 'settings_site_logo_preview', 'Logo preview') : admin_t($messages, 'settings_site_logo_empty', 'No logo selected yet.')); ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <label class="form-label" for="site_description"><?php echo admin_e(admin_t($messages, 'settings_site_description', 'Description')); ?></label>
+                                                    <textarea class="form-control" id="site_description" name="site_description" rows="3" placeholder="<?php echo admin_e(admin_t($messages, 'settings_site_description_placeholder', 'Short public description used in page metadata.')); ?>"><?php echo admin_e((string)$siteSettingsFormState['site_description']); ?></textarea>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <label class="form-label" for="site_keywords"><?php echo admin_e(admin_t($messages, 'settings_site_keywords', 'Keywords')); ?></label>
+                                                    <input type="text" class="form-control" id="site_keywords" name="site_keywords" value="<?php echo admin_e((string)$siteSettingsFormState['site_keywords']); ?>" placeholder="iptv, reseller, subscriptions">
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_site_settings"><?php echo admin_e(admin_t($messages, 'settings_site_save_button', 'Save page data')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_features_title', 'Payments and assignment rules')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_features_intro', 'Control maintenance mode, payments and assignment rules from one place.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-4">
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="maintenance_mode" name="maintenance_mode"<?php echo !empty($appSettings['maintenance_mode']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="maintenance_mode"><?php echo admin_e(admin_t($messages, 'settings_maintenance_mode', 'Technical maintenance break ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_maintenance_mode_help', 'If ON, the user-facing site is temporarily replaced with a maintenance screen.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="registration_enabled" name="registration_enabled"<?php echo !empty($appSettings['registration_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="registration_enabled"><?php echo admin_e(admin_t($messages, 'settings_registration_enabled', 'Registration ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_registration_enabled_help', 'If OFF, users cannot create new accounts from the public site.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="sales_enabled" name="sales_enabled"<?php echo !empty($appSettings['sales_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="sales_enabled"><?php echo admin_e(admin_t($messages, 'settings_sales_enabled', 'Sales ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_sales_enabled_help', 'If OFF, users can view orders but cannot start new purchases, renewals or extensions.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="credits_sales_enabled" name="credits_sales_enabled"<?php echo admin_credits_sales_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="credits_sales_enabled"><?php echo admin_e(admin_t($messages, 'settings_credits_sales_enabled', 'Credits sales ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_credits_sales_enabled_help', 'If OFF, reseller accounts do not see credits products in the storefront.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="trials_enabled" name="trials_enabled"<?php echo !empty($appSettings['trials_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="trials_enabled"><?php echo admin_e(admin_t($messages, 'settings_trials_enabled', 'Trial products ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_trials_enabled_help', 'If OFF, trial products are hidden and cannot be ordered by users.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="support_chat_enabled" name="support_chat_enabled"<?php echo !empty($appSettings['support_chat_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="support_chat_enabled"><?php echo admin_e(admin_t($messages, 'settings_support_chat_enabled', 'Support chat ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_support_chat_enabled_help', 'If OFF, the live chat widget and chat shortcuts are hidden for users.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label" for="reseller_group_chat_limit"><?php echo admin_e(admin_t($messages, 'settings_reseller_group_chat_limit', 'Max reseller group chats')); ?></label>
+                                                    <input
+                                                        type="number"
+                                                        class="form-control"
+                                                        id="reseller_group_chat_limit"
+                                                        name="reseller_group_chat_limit"
+                                                        min="0"
+                                                        max="10"
+                                                        step="1"
+                                                        value="<?php echo admin_e((string)((int)($appSettings['reseller_group_chat_limit'] ?? 10))); ?>">
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_reseller_group_chat_limit_help', 'Set from 0 to 10. Value 0 disables group creation for reseller users and hides the create-group action in the user panel.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label" for="support_chat_retention_hours"><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention', 'Live chat message retention')); ?></label>
+                                                    <?php $supportChatRetentionHours = (int)($appSettings['support_chat_retention_hours'] ?? (($appSettings['support_chat_retention_days'] ?? 7) * 24)); ?>
+                                                    <select class="form-select" id="support_chat_retention_hours" name="support_chat_retention_hours">
+                                                        <option value="1"<?php echo $supportChatRetentionHours === 1 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_1h', '1 hour')); ?></option>
+                                                        <option value="24"<?php echo $supportChatRetentionHours === 24 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_24h', '24 hours')); ?></option>
+                                                        <option value="72"<?php echo $supportChatRetentionHours === 72 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_3d', '3 days')); ?></option>
+                                                        <option value="168"<?php echo $supportChatRetentionHours === 168 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_7d', '7 days')); ?></option>
+                                                        <option value="720"<?php echo $supportChatRetentionHours === 720 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_30d', '30 days')); ?></option>
+                                                    </select>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_help', 'Older live chat messages and empty conversations are removed automatically by the maintenance runner.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="contact_form_enabled" name="contact_form_enabled"<?php echo admin_contact_form_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="contact_form_enabled"><?php echo admin_e(admin_t($messages, 'settings_contact_form_enabled', 'Contact form ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_contact_form_enabled_help', 'If OFF, users cannot send messages from the contact form page.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="referrals_enabled" name="referrals_enabled"<?php echo admin_referrals_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="referrals_enabled"><?php echo admin_e(admin_t($messages, 'settings_referrals_enabled', 'Referrals ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_referrals_enabled_help', 'If OFF, referral links and the referrals page are hidden and new registrations are not attached to referrers.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="apps_page_enabled" name="apps_page_enabled"<?php echo admin_apps_page_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="apps_page_enabled"><?php echo admin_e(admin_t($messages, 'settings_apps_page_enabled', 'Apps page ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_apps_page_enabled_help', 'If OFF, the Apps page and Apps button are hidden for users.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="application_instructions_enabled" name="application_instructions_enabled"<?php echo admin_application_instructions_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="application_instructions_enabled"><?php echo admin_e(admin_t($messages, 'settings_application_instructions_enabled', 'Application instructions ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_application_instructions_enabled_help', 'If OFF, Smart IPTV, OTT Player and NewLook guides are hidden. Payment instructions stay visible.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="history_cleanup_enabled" name="history_cleanup_enabled"<?php echo !empty($appSettings['history_cleanup_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="history_cleanup_enabled"><?php echo admin_e(admin_t($messages, 'settings_history_cleanup_enabled', 'Auto-clean activity history after 12 months')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_history_cleanup_enabled_help', 'If ON, customer activity and history logs older than 12 months are deleted automatically.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="payments_cleanup_enabled" name="payments_cleanup_enabled"<?php echo !empty($appSettings['payments_cleanup_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="payments_cleanup_enabled"><?php echo admin_e(admin_t($messages, 'settings_payments_cleanup_enabled', 'Auto-clean payments after 12 months')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_payments_cleanup_enabled_help', 'If ON, closed payment requests and crypto transaction records older than 12 months are deleted automatically.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="expired_orders_cleanup_enabled" name="expired_orders_cleanup_enabled"<?php echo !empty($appSettings['expired_orders_cleanup_enabled']) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="expired_orders_cleanup_enabled"><?php echo admin_e(admin_t($messages, 'settings_expired_orders_cleanup_enabled', 'Auto-clean expired orders after 12 months')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_expired_orders_cleanup_enabled_help', 'If ON, only expired orders older than 12 months are removed automatically. Active and recent orders stay untouched.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label" for="default_currency_id"><?php echo admin_e(admin_t($messages, 'settings_default_currency', 'Service currency')); ?></label>
+                                                    <select class="form-select" id="default_currency_id" name="default_currency_id">
+                                                        <?php foreach ($serviceCurrencies as $serviceCurrency): ?>
+                                                            <option value="<?php echo admin_e((string)$serviceCurrency['id']); ?>"<?php echo (int)($appSettings['default_currency_id'] ?? 0) === (int)$serviceCurrency['id'] ? ' selected' : ''; ?>>
+                                                                <?php echo admin_e((string)$serviceCurrency['code'] . ' - ' . (string)$serviceCurrency['name']); ?>
+                                                            </option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_default_currency_help', 'This currency is used as the global service currency for balances, summaries and default storefront display.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="bank_transfers_enabled" name="bank_transfers_enabled"<?php echo admin_bank_transfers_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="bank_transfers_enabled"><?php echo admin_e(admin_t($messages, 'settings_bank_transfers_enabled', 'Bank transfers ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_bank_transfers_enabled_help', 'If OFF, the bank accounts tab is hidden in the sidebar and users cannot pay by bank transfer.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="crypto_wallet_shared_assignments_enabled" name="crypto_wallet_shared_assignments_enabled"<?php echo admin_crypto_wallet_shared_assignments_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="crypto_wallet_shared_assignments_enabled"><?php echo admin_e(admin_t($messages, 'settings_crypto_wallet_shared_assignments_enabled', 'Crypto wallet sharing ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_wallet_shared_assignments_enabled_help', 'If OFF, one crypto wallet can be assigned to one user only.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="bank_account_shared_assignments_enabled" name="bank_account_shared_assignments_enabled"<?php echo admin_bank_account_shared_assignments_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="bank_account_shared_assignments_enabled"><?php echo admin_e(admin_t($messages, 'settings_bank_account_shared_assignments_enabled', 'Bank account sharing ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_bank_account_shared_assignments_enabled_help', 'If OFF, one bank account can be assigned to one user only.')); ?></small>
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_feature_settings"><?php echo admin_e(admin_t($messages, 'settings_save_features', 'Save service settings')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_smtp_intro', 'Configure the SMTP connection used for transactional emails.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form" autocomplete="off">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="smtp_host"><?php echo admin_e(admin_t($messages, 'settings_smtp_host', 'SMTP host')); ?></label>
+                                                    <input type="text" class="form-control" id="smtp_host" name="smtp_host" value="<?php echo admin_e((string)$smtpFormState['smtp_host']); ?>" placeholder="smtp.example.com" required>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label" for="smtp_port"><?php echo admin_e(admin_t($messages, 'settings_smtp_port', 'SMTP port')); ?></label>
+                                                    <input type="number" min="1" max="65535" class="form-control" id="smtp_port" name="smtp_port" value="<?php echo admin_e((string)$smtpFormState['smtp_port']); ?>" placeholder="465" required>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="smtp_username"><?php echo admin_e(admin_t($messages, 'settings_smtp_username', 'SMTP login')); ?></label>
+                                                    <input type="email" class="form-control" id="smtp_username" name="smtp_username" value="<?php echo admin_e((string)$smtpFormState['smtp_username']); ?>" placeholder="no-reply@example.com" required>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="smtp_password"><?php echo admin_e(admin_t($messages, 'settings_smtp_password', 'SMTP password')); ?></label>
+                                                    <input type="password" class="form-control" id="smtp_password" name="smtp_password" value="" placeholder="<?php echo admin_e(admin_t($messages, 'settings_smtp_password_placeholder', 'Leave blank to keep current password')); ?>">
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_smtp_password_help', 'Leave this field empty if you do not want to change the stored SMTP password.')); ?></small>
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_smtp_settings"><?php echo admin_e(admin_t($messages, 'settings_smtp_save_button', 'Save SMTP settings')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_intro', 'Run the maintenance cycle manually or schedule the same command in cron.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-12">
+                                                    <div class="admin-settings-code"><code>php /var/www/html/dashboard-panel/scripts/system_maintenance.php</code></div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_help', 'This runner processes the email queue, archives expired payment requests, expires overdue subscriptions and applies enabled 12-month cleanup rules.')); ?></small>
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_run_maintenance_cycle"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_button', 'Run maintenance now')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access admin-settings-access--danger">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_danger_zone_title', 'Safety zone')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_danger_zone_intro', 'Manual cleanup actions with extra text confirmation.')); ?></p>
+                                        </div>
+
+                                        <div class="admin-settings-danger-actions">
+                                            <button type="button" class="btn btn-outline-danger btn-lg" data-bs-toggle="modal" data-bs-target="#adminClearHistoryModal">
+                                                <?php echo admin_e(admin_t($messages, 'settings_clear_history_button', 'Clear /history')); ?>
+                                            </button>
+                                            <button type="button" class="btn btn-danger btn-lg" data-bs-toggle="modal" data-bs-target="#adminResetSampleDataModal">
+                                                <?php echo admin_e(admin_t($messages, 'settings_reset_sample_data_button', 'Delete sample/test data')); ?>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="modal fade" id="adminClearHistoryModal" tabindex="-1" aria-hidden="true">
+                                        <div class="modal-dialog">
+                                            <div class="modal-content">
+                                                <form method="post" data-admin-danger-form>
+                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'settings_clear_history_title', 'Clear user history')); ?></h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'settings_danger_modal_cancel', 'Cancel')); ?>"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <p><?php echo admin_e(admin_t($messages, 'settings_clear_history_intro', 'This action clears activity logs and hides older entries on /history for all users.')); ?></p>
+                                                        <label class="form-label" for="danger_confirmation_clear"><?php echo admin_e(admin_t($messages, 'settings_danger_confirm_label', 'Confirmation text')); ?></label>
+                                                        <input type="text" class="form-control" id="danger_confirmation_clear" name="danger_confirmation" data-admin-danger-input data-confirm-text="CLEAR HISTORY" autocomplete="off">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_clear_history_phrase', 'Type: CLEAR HISTORY')); ?></small>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-light" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'settings_danger_modal_cancel', 'Cancel')); ?></button>
+                                                        <button type="submit" class="btn btn-danger" name="admin_clear_history_now" data-admin-danger-submit disabled><?php echo admin_e(admin_t($messages, 'settings_clear_history_confirm', 'Confirm history cleanup')); ?></button>
+                                                    </div>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="modal fade" id="adminResetSampleDataModal" tabindex="-1" aria-hidden="true">
+                                        <div class="modal-dialog">
+                                            <div class="modal-content">
+                                                <form method="post" data-admin-danger-form>
+                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'settings_reset_sample_data_title', 'Delete sample and test data')); ?></h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'settings_danger_modal_cancel', 'Cancel')); ?>"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <p><?php echo admin_e(admin_t($messages, 'settings_reset_sample_data_intro', 'This action removes sample/demo data marked as dashboard sample so you can start from a cleaner app state.')); ?></p>
+                                                        <label class="form-label" for="danger_confirmation_sample"><?php echo admin_e(admin_t($messages, 'settings_danger_confirm_label', 'Confirmation text')); ?></label>
+                                                        <input type="text" class="form-control" id="danger_confirmation_sample" name="danger_confirmation" data-admin-danger-input data-confirm-text="DELETE SAMPLE DATA" autocomplete="off">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_reset_sample_data_phrase', 'Type: DELETE SAMPLE DATA')); ?></small>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-light" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'settings_danger_modal_cancel', 'Cancel')); ?></button>
+                                                        <button type="submit" class="btn btn-danger" name="admin_reset_sample_data_now" data-admin-danger-submit disabled><?php echo admin_e(admin_t($messages, 'settings_reset_sample_data_confirm', 'Confirm sample data removal')); ?></button>
+                                                    </div>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_language_title', 'Panel language')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_language_intro', 'Choose the language used in the administrator panel.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3 align-items-end">
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="admin_locale_settings"><?php echo admin_e(admin_t($messages, 'locale_switch', 'Language')); ?></label>
+                                                    <select id="admin_locale_settings" name="admin_locale" class="form-select form-select-lg">
+                                                        <?php foreach (admin_supported_locales() as $localeCode => $localeMeta): ?>
+                                                            <option value="<?php echo admin_e($localeCode); ?>"<?php echo $currentLocale === $localeCode ? ' selected' : ''; ?>>
+                                                                <?php echo admin_e($localeMeta['label']); ?>
+                                                            </option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg"><?php echo admin_e(admin_t($messages, 'settings_save_language', 'Save language')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_profile_title', 'Live chat profile')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_profile_intro', 'Choose the public handle shown to customers in live chat. This value is safer than exposing the admin login used for panel access.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" value="<?php echo admin_e((string)$adminUser['login_name']); ?>" readonly>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_role_label', 'Role')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" value="<?php echo admin_e((string)($adminUser['role_name'] ?? '')); ?>" readonly>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label" for="admin_public_handle"><?php echo admin_e(admin_t($messages, 'admin_public_handle_label', 'Live chat handle')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" id="admin_public_handle" name="public_handle" value="<?php echo admin_e((string)($adminProfileFormState['public_handle'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'admin_public_handle_placeholder', 'support-marta')); ?>" required>
+                                                    <div class="form-text"><?php echo admin_e(admin_t($messages, 'admin_public_handle_help', 'Visible to customers in live chat. Use letters, numbers, dots, dashes or underscores.')); ?></div>
+                                                </div>
+                                            </div>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_profile_handle"><?php echo admin_e(admin_t($messages, 'admin_public_handle_save', 'Save handle')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_access_title', 'Administrator access')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_access_intro', 'Update the password for the currently logged in administrator.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-12">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" value="<?php echo admin_e((string)$adminUser['login_name']); ?>" readonly>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_current_password', 'Current password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" name="current_password" autocomplete="current-password" required>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_new_password', 'New password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" name="new_password" autocomplete="new-password" required>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_repeat_password', 'Repeat new password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" name="repeat_password" autocomplete="new-password" required>
+                                                </div>
+                                            </div>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_change_password"><?php echo admin_e(admin_t($messages, 'settings_save_password', 'Save new password')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'admin_accounts_title', 'Administrator accounts')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'admin_accounts_intro', 'Create another administrator account, assign a role and define the live chat handle visible to customers.')); ?></p>
+                                        </div>
+
+                                        <?php if ($adminUserRows): ?>
+                                            <div class="table-responsive">
+                                                <table class="table admin-table align-middle">
+                                                    <thead>
+                                                        <tr>
+                                                            <th><?php echo admin_e(admin_t($messages, 'admin_public_handle_label', 'Live chat handle')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'admin_role_label', 'Role')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?></th>
+                                                            <th class="text-end"><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <?php foreach ($adminUserRows as $adminRow): ?>
+                                                            <?php
+                                                            $adminRowIsFullBoss = (int)($adminRow['role_access_level'] ?? 0) >= 1000 && (string)($adminRow['status'] ?? 'active') === 'active';
+                                                            $adminRowIsCurrentSession = (int)($adminRow['id'] ?? 0) === (int)($adminUser['id'] ?? 0);
+                                                            $adminRowDeleteProtected = $adminRowIsCurrentSession || ($adminRowIsFullBoss && $adminActiveFullAdminCount <= 1);
+                                                            ?>
+                                                            <tr>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'admin_public_handle_label', 'Live chat handle')); ?>">
+                                                                    <strong><?php echo admin_e((string)($adminRow['public_handle'] ?? '')); ?></strong>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?>">
+                                                                    <?php echo admin_e((string)($adminRow['login_name'] ?? '')); ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?>">
+                                                                    <?php echo admin_e((string)($adminRow['email'] ?? '')); ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'admin_role_label', 'Role')); ?>">
+                                                                    <?php echo admin_e((string)($adminRow['role_name'] ?? '')); ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                    <span class="admin-status-pill <?php echo (string)($adminRow['status'] ?? '') === 'active' ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                        <?php echo admin_e((string)($adminRow['status'] ?? '')); ?>
+                                                                    </span>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?>">
+                                                                    <?php echo admin_e((string)($adminRow['last_login_at'] ?: '----')); ?>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>" class="text-end">
+                                                                    <div class="d-flex justify-content-end gap-2 flex-wrap">
+                                                                        <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#adminEditModal<?php echo admin_e((string)$adminRow['id']); ?>">
+                                                                            <?php echo admin_e(admin_t($messages, 'admin_edit_button', 'Edit')); ?>
+                                                                        </button>
+                                                                        <button type="button" class="btn btn-outline-danger btn-sm"<?php echo $adminRowDeleteProtected ? ' disabled' : ''; ?> data-bs-toggle="modal" data-bs-target="#adminDeleteModal<?php echo admin_e((string)$adminRow['id']); ?>">
+                                                                            <?php echo admin_e(admin_t($messages, 'admin_delete_button', 'Delete')); ?>
+                                                                        </button>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <?php foreach ($adminUserRows as $adminRow): ?>
+                                                <?php
+                                                $adminRowIsFullBoss = (int)($adminRow['role_access_level'] ?? 0) >= 1000 && (string)($adminRow['status'] ?? 'active') === 'active';
+                                                $adminRowIsCurrentSession = (int)($adminRow['id'] ?? 0) === (int)($adminUser['id'] ?? 0);
+                                                $adminRowDeleteProtected = $adminRowIsCurrentSession || ($adminRowIsFullBoss && $adminActiveFullAdminCount <= 1);
+                                                ?>
+                                                <div class="modal fade" id="adminEditModal<?php echo admin_e((string)$adminRow['id']); ?>" tabindex="-1" aria-hidden="true">
+                                                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                                                        <div class="modal-content">
+                                                            <form method="post">
+                                                                <div class="modal-header">
+                                                                    <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'admin_edit_modal_title', 'Edit administrator')); ?></h5>
+                                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                                </div>
+                                                                <div class="modal-body">
+                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                    <input type="hidden" name="admin_user_id" value="<?php echo admin_e((string)$adminRow['id']); ?>">
+                                                                    <div class="row g-3">
+                                                                        <div class="col-md-6">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></label>
+                                                                            <input type="text" class="form-control" name="login_name" value="<?php echo admin_e((string)($adminRow['login_name'] ?? '')); ?>" required>
+                                                                        </div>
+                                                                        <div class="col-md-6">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                                            <input type="email" class="form-control" name="email" value="<?php echo admin_e((string)($adminRow['email'] ?? '')); ?>" required>
+                                                                        </div>
+                                                                        <div class="col-md-4">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_public_handle_label', 'Live chat handle')); ?></label>
+                                                                            <input type="text" class="form-control" name="public_handle" value="<?php echo admin_e((string)($adminRow['public_handle'] ?? '')); ?>" required>
+                                                                        </div>
+                                                                        <div class="col-md-4">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_role_label', 'Role')); ?></label>
+                                                                            <select class="form-select" name="role_id" required>
+                                                                                <?php foreach ($adminRoleOptions as $roleOption): ?>
+                                                                                    <option value="<?php echo admin_e((string)($roleOption['id'] ?? 0)); ?>"<?php echo (int)($adminRow['role_id'] ?? 0) === (int)($roleOption['id'] ?? 0) ? ' selected' : ''; ?>>
+                                                                                        <?php echo admin_e((string)($roleOption['name'] ?? '')); ?>
+                                                                                    </option>
+                                                                                <?php endforeach; ?>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div class="col-md-4">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                                            <select class="form-select" name="status" required>
+                                                                                <?php foreach ($adminStatusOptions as $adminStatusOption): ?>
+                                                                                    <option value="<?php echo admin_e($adminStatusOption); ?>"<?php echo (string)($adminRow['status'] ?? 'active') === $adminStatusOption ? ' selected' : ''; ?>>
+                                                                                        <?php echo admin_e(ucfirst($adminStatusOption)); ?>
+                                                                                    </option>
+                                                                                <?php endforeach; ?>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div class="col-md-6">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_edit_password_label', 'New password (optional)')); ?></label>
+                                                                            <input type="password" class="form-control" name="password" autocomplete="new-password">
+                                                                        </div>
+                                                                        <div class="col-md-6">
+                                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_edit_password_repeat_label', 'Repeat new password')); ?></label>
+                                                                            <input type="password" class="form-control" name="repeat_password" autocomplete="new-password">
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="modal-footer">
+                                                                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'admin_modal_cancel', 'Cancel')); ?></button>
+                                                                    <button type="submit" class="btn btn-dark" name="admin_update_admin_user"><?php echo admin_e(admin_t($messages, 'admin_save_button', 'Save changes')); ?></button>
+                                                                </div>
+                                                            </form>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="modal fade" id="adminDeleteModal<?php echo admin_e((string)$adminRow['id']); ?>" tabindex="-1" aria-hidden="true">
+                                                    <div class="modal-dialog modal-dialog-centered">
+                                                        <div class="modal-content">
+                                                            <form method="post">
+                                                                <div class="modal-header">
+                                                                    <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'admin_delete_modal_title', 'Delete administrator')); ?></h5>
+                                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                                </div>
+                                                                <div class="modal-body">
+                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                    <input type="hidden" name="admin_user_id" value="<?php echo admin_e((string)$adminRow['id']); ?>">
+                                                                    <p class="mb-0">
+                                                                        <?php
+                                                                        if ($adminRowIsCurrentSession) {
+                                                                            echo admin_e(admin_t($messages, 'admin_delete_self_blocked', 'The administrator account currently used in this session cannot be deleted.'));
+                                                                        } elseif ($adminRowIsFullBoss && $adminActiveFullAdminCount <= 1) {
+                                                                            echo admin_e(admin_t($messages, 'admin_delete_last_boss_blocked', 'At least one active boss administrator must remain. The last boss cannot be deleted.'));
+                                                                        } else {
+                                                                            echo admin_e(admin_t($messages, 'admin_delete_confirm', 'Delete this administrator account? This action cannot be undone.'));
+                                                                        }
+                                                                        ?>
+                                                                    </p>
+                                                                    <div class="small text-muted mt-2">
+                                                                        <?php echo admin_e((string)($adminRow['login_name'] ?? '')); ?> • <?php echo admin_e((string)($adminRow['email'] ?? '')); ?>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="modal-footer">
+                                                                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'admin_modal_cancel', 'Cancel')); ?></button>
+                                                                    <button type="submit" class="btn btn-danger" name="admin_delete_admin_user"<?php echo $adminRowDeleteProtected ? ' disabled' : ''; ?>><?php echo admin_e(admin_t($messages, 'admin_delete_button', 'Delete')); ?></button>
+                                                                </div>
+                                                            </form>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-md-3">
+                                                    <label class="form-label" for="new_admin_login"><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" id="new_admin_login" name="login_name" value="<?php echo admin_e((string)($adminCreateFormState['login_name'] ?? '')); ?>" required>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label" for="new_admin_email"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                    <input type="email" class="form-control form-control-lg" id="new_admin_email" name="email" value="<?php echo admin_e((string)($adminCreateFormState['email'] ?? '')); ?>" required>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label" for="new_admin_handle"><?php echo admin_e(admin_t($messages, 'admin_public_handle_label', 'Live chat handle')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" id="new_admin_handle" name="public_handle" value="<?php echo admin_e((string)($adminCreateFormState['public_handle'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'admin_public_handle_placeholder', 'support-marta')); ?>" required>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label" for="new_admin_role"><?php echo admin_e(admin_t($messages, 'admin_role_label', 'Role')); ?></label>
+                                                    <select class="form-select form-select-lg" id="new_admin_role" name="role_id" required>
+                                                        <option value=""><?php echo admin_e(admin_t($messages, 'admin_role_select', 'Select role')); ?></option>
+                                                        <?php foreach ($adminRoleOptions as $roleOption): ?>
+                                                            <option value="<?php echo admin_e((string)($roleOption['id'] ?? 0)); ?>"<?php echo (int)($adminCreateFormState['role_id'] ?? 0) === (int)($roleOption['id'] ?? 0) ? ' selected' : ''; ?>>
+                                                                <?php echo admin_e((string)($roleOption['name'] ?? '')); ?>
+                                                            </option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="new_admin_password"><?php echo admin_e(admin_t($messages, 'settings_new_password', 'New password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" id="new_admin_password" name="password" autocomplete="new-password" required>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="new_admin_repeat_password"><?php echo admin_e(admin_t($messages, 'settings_repeat_password', 'Repeat new password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" id="new_admin_repeat_password" name="repeat_password" autocomplete="new-password" required>
+                                                </div>
+                                            </div>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_create_admin_user"><?php echo admin_e(admin_t($messages, 'admin_create_button', 'Create administrator')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                    <?php
+                                    $rows = [];
+                                    foreach (admin_settings_rows($db) as $row) {
+                                        $rows[] = [
+                                            (string)$row['label'],
+                                            (string)$row['value'],
+                                        ];
+                                    }
+                                    admin_render_table(
+                                        [
+                                            admin_t($messages, 'col_setting', 'Setting'),
+                                            admin_t($messages, 'col_value', 'Value'),
+                                        ],
+                                        $rows,
+                                        $messages
+                                    );
+                                    break;
+                            }
+                            ?>
+                        </article>
+                    </section>
+                <?php endif; ?>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
+    <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
+</body>
+</html>

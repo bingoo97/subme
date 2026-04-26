@@ -1,0 +1,58 @@
+Options -Indexes +FollowSymLinks
+RewriteEngine On
+
+RewriteBase /
+
+# Security headers
+Header always set X-Frame-Options "SAMEORIGIN"
+Header always set X-Content-Type-Options "nosniff"
+Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+# Never rewrite existing files or directories.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Admin front controller.
+RewriteRule ^admin/?$ admin/index.php [L,QSA]
+
+# Legacy extension URLs -> canonical extensionless URLs.
+RewriteRule ^index\.html$ / [R=301,L]
+RewriteRule ^provider_([0-9]+)\.html$ /provider_$1 [R=301,L]
+RewriteRule ^uzytkownik-([^-]+)-aktywacja\.html$ /uzytkownik-$1-aktywacja [R=301,L]
+RewriteRule ^nie_zaplacono-([a-zA-Z0-9_.-]+)\.html$ /nie_zaplacono-$1 [R=301,L]
+RewriteRule ^zaplacono-([a-zA-Z0-9_.-]+)\.html$ /zaplacono-$1 [R=301,L]
+RewriteRule ^zaplac-([^-]+)\.html$ /zaplac-$1 [R=301,L]
+RewriteRule ^update-([^-]+)\.html$ /update-$1 [R=301,L]
+RewriteRule ^order_edit-([^-]+)\.html$ /order_edit-$1 [R=301,L]
+RewriteRule ^([^-]+)\.html$ /$1 [R=301,L]
+
+# Route patterns handled by index.php.
+RewriteRule ^ref-([0-9]+)/?$ index.php?ref=$1 [L,QSA]
+RewriteRule ^([^-]+)-ref_([^-]+)$ index.php?wybierz=$1&ref=$2 [L,QSA]
+RewriteRule ^provider_([0-9]+)$ index.php?site=products&provider=$1 [L,QSA]
+RewriteRule ^uzytkownik-([^-]+)-aktywacja$ index.php?site=logowanie&aktywuj_user=$1 [L,QSA]
+RewriteRule ^nie_zaplacono-([a-zA-Z0-9_.-]+)$ index.php?site=moje_dane&platnosc_zla=$1 [L,QSA]
+RewriteRule ^zaplacono-([a-zA-Z0-9_.-]+)$ index.php?site=moje_dane&platnosc_ok=$1 [L,QSA]
+RewriteRule ^historia-transakcji-([^-]+)$ index.php?site=historia_transakcji&strona=$1 [L,QSA]
+RewriteRule ^zaplac-([^-]+)$ index.php?site=orders&zaplac=$1 [L,QSA]
+RewriteRule ^update-([^-]+)$ index.php?site=orders&update=$1 [L,QSA]
+RewriteRule ^order_edit-([^-]+)$ index.php?site=orders&order_edit=$1 [L,QSA]
+RewriteRule ^order-extend-([^-]+)$ index.php?site=orders&order_extend=$1 [L,QSA]
+RewriteRule ^order-payment-([^-]+)$ index.php?site=orders&payment=$1 [L,QSA]
+RewriteRule ^del-order-([^-]+)$ index.php?site=orders&del_order=$1 [L,QSA]
+RewriteRule ^orders-site_([^-]+)$ index.php?site=orders&strona=$1 [L,QSA]
+RewriteRule ^news-([^-]+)$ index.php?site=news&news_id=$1 [L,QSA]
+RewriteRule ^vpn_true$ index.php?vpn_pl=1 [L,QSA]
+
+# Generic site routes, e.g. /contact, /register, /login.
+RewriteRule ^([a-zA-Z][a-zA-Z0-9_-]*)/?$ index.php?site=$1 [L,QSA]
+
+<Files ~ "\.tpl$">
+	Order allow,deny
+	Deny from all
+</Files>
+
+<FilesMatch "^(_bootstrap_backend\.php|composer\.(json|lock)|\.env.*)$">
+    Require all denied
+</FilesMatch>
