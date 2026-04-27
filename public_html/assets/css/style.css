@@ -2543,6 +2543,9 @@ CONTENT
 	font-weight:600;
 	letter-spacing: 0;
 	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
 }
 
 .home_buttons .one_box.has-news-attention i{
@@ -2595,10 +2598,20 @@ CONTENT
 }
 
 .home_buttons .one_box.has-news-attention p.title .btn{
+	margin-top:-2px;
+	font-family: arial;
 	float:right;
-	text-align: right;
-	background-color:#d7182a;
-	color:#fff;
+	text-align: center;
+	width: 30px;
+	height:30px;
+	line-height:30px;;
+	padding:0;
+	background-color:#0000001c;
+	color:#ffffff;
+}
+
+.home_buttons .one_box p.title [data-news-home-badge]{
+	margin-left: auto;
 }
 
 .home-role-switch{

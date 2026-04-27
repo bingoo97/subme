@@ -207,7 +207,7 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
 
     if (app_uses_v2_schema($db)) {
         $row = $db->select_user(
-            "SELECT support_messages.id, support_messages.attachment_path, support_messages.created_at, support_conversations.conversation_type, support_conversations.id AS conversation_id
+            "SELECT support_messages.id, support_messages.attachment_path, support_messages.created_at, support_messages.sender_type, support_messages.customer_id AS message_customer_id, support_conversations.conversation_type, support_conversations.id AS conversation_id, support_conversations.group_created_by_customer_id, support_conversation_members.invite_status
              FROM support_messages
              INNER JOIN support_conversations
                 ON support_conversations.id = support_messages.conversation_id
@@ -215,13 +215,20 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
                 ON support_conversation_members.conversation_id = support_conversations.id
                AND support_conversation_members.participant_key = '" . $db->escape(chat_participant_key_for_customer($customerId)) . "'
              WHERE support_messages.id = {$messageId}
-               AND support_messages.sender_type = 'customer'
-               AND support_messages.customer_id = {$customerId}
                AND (
-                    (support_conversations.conversation_type = 'live_chat' AND support_conversations.customer_id = {$customerId})
+                    (
+                        support_conversations.conversation_type = 'live_chat'
+                        AND support_messages.sender_type = 'customer'
+                        AND support_messages.customer_id = {$customerId}
+                        AND support_conversations.customer_id = {$customerId}
+                    )
                     OR (
                         support_conversations.conversation_type = 'group_chat'
                         AND support_conversation_members.invite_status = 'accepted'
+                        AND (
+                            support_messages.customer_id = {$customerId}
+                            OR support_conversations.group_created_by_customer_id = {$customerId}
+                        )
                     )
                )
              LIMIT 1"
@@ -229,6 +236,12 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
 
         if (!is_array($row) || empty($row['id'])) {
             return false;
+        }
+
+        if ((string)($row['conversation_type'] ?? '') === 'group_chat') {
+            chat_delete_uploaded_file(isset($row['attachment_path']) ? (string)$row['attachment_path'] : '');
+            $db->query("DELETE FROM support_messages WHERE id = {$messageId} LIMIT 1");
+            return true;
         }
 
         $createdAtTimestamp = strtotime((string)$row['created_at']);
@@ -279,6 +292,11 @@ function chat_render_payload(
         'html' => $smarty->fetch('messanger_content.tpl'),
         'unread_count' => (int)$smarty->getTemplateVars('chat_nieprzeczytane'),
         'last_message_id' => (int)$smarty->getTemplateVars('chat_last_message_id'),
+        'message_limit' => (int)$smarty->getTemplateVars('chat_message_limit'),
+        'loaded_message_count' => (int)$smarty->getTemplateVars('chat_loaded_message_count'),
+        'total_message_count' => (int)$smarty->getTemplateVars('chat_total_message_count'),
+        'has_more_messages' => (bool)$smarty->getTemplateVars('chat_has_more_messages'),
+        'oldest_message_id' => (int)$smarty->getTemplateVars('chat_oldest_message_id'),
     ];
 }
 
@@ -325,7 +343,7 @@ function chat_rate_limit_payload(array $state): array
 
     return [
         'ok' => false,
-        'message' => 'You can send up to 3 messages in a row. Please wait ' . $remainingSeconds . ' seconds before sending the next message.',
+        'message' => 'Please wait ' . $remainingSeconds . ' seconds.',
         'cooldown_seconds' => $remainingSeconds,
         'cooldown_active' => true,
     ];
@@ -876,6 +894,11 @@ if ($responseFormat === 'json') {
         'html' => $payload['html'],
         'unread_count' => $payload['unread_count'],
         'last_message_id' => $payload['last_message_id'],
+        'message_limit' => $payload['message_limit'],
+        'loaded_message_count' => $payload['loaded_message_count'],
+        'total_message_count' => $payload['total_message_count'],
+        'has_more_messages' => $payload['has_more_messages'],
+        'oldest_message_id' => $payload['oldest_message_id'],
         'group_invites_html' => $smarty->fetch('profil/group_chat_invites.tpl'),
         'cooldown_active' => !empty($rateLimitState['is_blocked']),
         'cooldown_seconds' => (int)($rateLimitState['remaining_seconds'] ?? 0),

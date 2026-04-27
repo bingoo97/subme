@@ -230,16 +230,28 @@ $(function () {
         return true;
     }
 
-    function parseSettingsAvatarUploadResponse(xhr) {
+    function parseSettingsAvatarUploadResponse(input) {
         var raw = '';
+        var marker = '__SETTINGS_JSON__';
+        var markerIndex = -1;
 
-        if (xhr && xhr.responseJSON && typeof xhr.responseJSON === 'object') {
-            return xhr.responseJSON;
+        if (input && input.responseJSON && typeof input.responseJSON === 'object') {
+            return input.responseJSON;
         }
 
-        raw = xhr && typeof xhr.responseText === 'string' ? $.trim(xhr.responseText) : '';
+        if (input && typeof input === 'object' && typeof input.responseText === 'string') {
+            raw = $.trim(input.responseText);
+        } else if (typeof input === 'string') {
+            raw = $.trim(input);
+        }
+
         if (!raw) {
             return null;
+        }
+
+        markerIndex = raw.indexOf(marker);
+        if (markerIndex !== -1) {
+            raw = $.trim(raw.slice(markerIndex + marker.length));
         }
 
         try {
@@ -269,8 +281,10 @@ $(function () {
             data: formData,
             processData: false,
             contentType: false,
-            dataType: 'json'
-        }).done(function (response) {
+            dataType: 'text'
+        }).done(function (responseText) {
+            var response = parseSettingsAvatarUploadResponse(responseText);
+
             if (applySettingsAvatarUploadSuccess(response, successMessage)) {
                 return;
             }

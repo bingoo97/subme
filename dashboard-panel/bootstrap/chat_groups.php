@@ -1931,15 +1931,55 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         );
     }
 
-    function chat_group_messages_query(Mysql_ks $db, int $conversationId): array
+    function chat_customer_message_page_size(): int
+    {
+        return 10;
+    }
+
+    function chat_customer_normalize_message_limit($value): int
+    {
+        $defaultLimit = chat_customer_message_page_size();
+        $limit = (int)$value;
+        if ($limit <= 0) {
+            return $defaultLimit;
+        }
+
+        if ($limit < $defaultLimit) {
+            return $defaultLimit;
+        }
+
+        if ($limit > 200) {
+            return 200;
+        }
+
+        return $limit;
+    }
+
+    function chat_group_message_count(Mysql_ks $db, int $conversationId): int
+    {
+        chat_ensure_group_chat_runtime($db);
+        if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
+            return 0;
+        }
+
+        $row = $db->select_user(
+            "SELECT COUNT(*) AS total
+             FROM support_messages
+             WHERE conversation_id = {$conversationId}"
+        );
+
+        return (int)($row['total'] ?? 0);
+    }
+
+    function chat_group_messages_query(Mysql_ks $db, int $conversationId, int $messageLimit = 0): array
     {
         chat_ensure_group_chat_runtime($db);
         if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
             return [];
         }
 
-        return $db->select_full_user(
-            "SELECT
+        $safeLimit = chat_customer_normalize_message_limit($messageLimit);
+        $baseQuery = "SELECT
                 support_messages.id,
                 support_messages.sender_type,
                 support_messages.customer_id,
@@ -1955,8 +1995,16 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
              FROM support_messages
              LEFT JOIN admin_users ON admin_users.id = support_messages.admin_user_id
              LEFT JOIN customers ON customers.id = support_messages.customer_id
-             WHERE support_messages.conversation_id = {$conversationId}
-             ORDER BY support_messages.id ASC"
+             WHERE support_messages.conversation_id = {$conversationId}";
+
+        return $db->select_full_user(
+            "SELECT *
+             FROM (
+                {$baseQuery}
+                ORDER BY support_messages.id DESC
+                LIMIT {$safeLimit}
+             ) AS recent_messages
+             ORDER BY id ASC"
         );
     }
 
@@ -2152,12 +2200,46 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         ];
     }
 
+    function chat_messages_total_for_customer_conversation(
+        Mysql_ks $db,
+        array $customer,
+        array $conversationState
+    ): int {
+        chat_ensure_group_chat_runtime($db);
+        $customerId = (int)($customer['id'] ?? 0);
+        if ($customerId <= 0) {
+            return 0;
+        }
+
+        if (($conversationState['type'] ?? '') === 'group_chat' && !empty($conversationState['id'])) {
+            return chat_group_message_count($db, (int)$conversationState['id']);
+        }
+
+        $conversationId = (int)($conversationState['id'] ?? 0);
+        if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
+            return 0;
+        }
+
+        $row = $db->select_user(
+            "SELECT COUNT(*) AS total
+             FROM support_messages
+             INNER JOIN support_conversations
+                ON support_conversations.id = support_messages.conversation_id
+             WHERE support_conversations.id = {$conversationId}
+               AND support_conversations.customer_id = {$customerId}
+               AND support_conversations.conversation_type = 'live_chat'"
+        );
+
+        return (int)($row['total'] ?? 0);
+    }
+
     function chat_messages_for_customer_conversation(
         Mysql_ks $db,
         array $customer,
         array $conversationState,
         array $reseller = [],
-        string $defaultSupportLabel = 'Support'
+        string $defaultSupportLabel = 'Support',
+        int $messageLimit = 0
     ): array {
         chat_ensure_group_chat_runtime($db);
         $customerId = (int)($customer['id'] ?? 0);
@@ -2165,8 +2247,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return [];
         }
 
+        $safeLimit = chat_customer_normalize_message_limit($messageLimit);
+
         if (($conversationState['type'] ?? '') === 'group_chat' && !empty($conversationState['id'])) {
-            return chat_group_messages_query($db, (int)$conversationState['id']);
+            return chat_group_messages_query($db, (int)$conversationState['id'], $safeLimit);
         }
 
         $conversationId = (int)($conversationState['id'] ?? 0);
@@ -2174,8 +2258,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return [];
         }
 
-        return $db->select_full_user(
-            "SELECT
+        $baseQuery = "SELECT
                 support_messages.id,
                 support_conversations.customer_id AS user1,
                 COALESCE(support_messages.admin_user_id, support_conversations.assigned_admin_id, 1) AS user2,
@@ -2195,8 +2278,16 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 ON admin_users.id = COALESCE(support_messages.admin_user_id, support_conversations.assigned_admin_id)
              WHERE support_conversations.id = {$conversationId}
                AND support_conversations.customer_id = {$customerId}
-               AND support_conversations.conversation_type = 'live_chat'
-             ORDER BY support_messages.id ASC"
+               AND support_conversations.conversation_type = 'live_chat'";
+
+        return $db->select_full_user(
+            "SELECT *
+             FROM (
+                {$baseQuery}
+                ORDER BY support_messages.id DESC
+                LIMIT {$safeLimit}
+             ) AS recent_messages
+             ORDER BY id ASC"
         );
     }
 }

@@ -443,7 +443,7 @@ return [
         'chat_invalid_image' => 'Wybrany plik nie jest obsługiwanym obrazem.',
         'chat_delete' => 'Usuń',
         'chat_delete_failed' => 'Nie udało się usunąć wiadomości.',
-        'chat_cooldown_notice' => 'Poczekaj chwilę przed wysłaniem kolejnej wiadomości.',
+        'chat_cooldown_notice' => 'Poczekaj {seconds} sekund.',
         'chat_intro_message' => 'Czy chcesz o coś zapytać lub potrzebujesz pomocy ze swoją subskrypcją?',
         'chat_quick_questions_label' => 'Szybkie pytania',
         'chat_typing_label' => 'Support pisze...',

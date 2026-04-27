@@ -9,6 +9,8 @@ switch ($site) {
 
         $smarty->assign('settings_open_password_modal', false);
         $sendSettingsJson = static function (array $payload): void {
+            $jsonPrefix = '__SETTINGS_JSON__';
+
             while (ob_get_level() > 0) {
                 ob_end_clean();
             }
@@ -17,7 +19,7 @@ switch ($site) {
                 header('Content-Type: application/json; charset=utf-8');
             }
 
-            echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            echo $jsonPrefix . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             exit;
         };
 

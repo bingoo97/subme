@@ -26,17 +26,26 @@ $smarty->assign('chat_faq_prompts', $chatFaqPrompts);
 $chatSupportLabel = localization_translate(isset($t) && is_array($t) ? $t : [], 'support', 'Support');
 $smarty->assign('chat_support_label', $chatSupportLabel);
 $requestedConversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
+$chatMessageLimit = function_exists('chat_customer_normalize_message_limit')
+    ? chat_customer_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0)
+    : 10;
 
 if (app_uses_v2_schema($db)) {
     $chatConversations = chat_customer_conversation_list($db, $user, $reseller, $chatSupportLabel);
     $chatActiveConversation = chat_customer_selected_conversation($db, $user, $requestedConversationId);
-    $chatMessages = chat_messages_for_customer_conversation($db, $user, $chatActiveConversation, $reseller, $chatSupportLabel);
+    $chatMessages = chat_messages_for_customer_conversation($db, $user, $chatActiveConversation, $reseller, $chatSupportLabel, $chatMessageLimit);
+    $chatTotalMessages = function_exists('chat_messages_total_for_customer_conversation')
+        ? chat_messages_total_for_customer_conversation($db, $user, $chatActiveConversation)
+        : count($chatMessages ?: []);
     $normalizedChat = chat_normalize_messages($chatMessages ?: [], (int)$user['id'], $reseller, $chatSupportLabel);
     $chatUnreadCount = 0;
     foreach ($chatConversations as $chatConversation) {
         $chatUnreadCount += (int)($chatConversation['unread_count'] ?? 0);
     }
     $lastMessageId = !empty($normalizedChat) ? (int)$normalizedChat[count($normalizedChat) - 1]['id'] : 0;
+    $oldestMessageId = !empty($normalizedChat) ? (int)$normalizedChat[0]['id'] : 0;
+    $loadedMessageCount = count($normalizedChat);
+    $hasMoreMessages = $chatTotalMessages > $loadedMessageCount;
     $activeConversationId = (int)($chatActiveConversation['id'] ?? 0);
     $activeConversationType = (string)($chatActiveConversation['type'] ?? 'live_chat');
     $activeConversationRow = (array)($chatActiveConversation['row'] ?? []);
@@ -81,8 +90,37 @@ if (app_uses_v2_schema($db)) {
         }
     }
 
+    if ($activeConversationType === 'group_chat' && !empty($normalizedChat) && !empty($chatMessages)) {
+        $canManageGroupMessages = (int)($activeConversationRow['group_created_by_customer_id'] ?? 0) === (int)$user['id'];
+        $rawMessageMap = [];
+
+        foreach ($chatMessages as $chatMessageRow) {
+            $rawMessageId = (int)($chatMessageRow['id'] ?? 0);
+            if ($rawMessageId > 0) {
+                $rawMessageMap[$rawMessageId] = $chatMessageRow;
+            }
+        }
+
+        foreach ($normalizedChat as $chatIndex => $normalizedMessage) {
+            $normalizedMessageId = (int)($normalizedMessage['id'] ?? 0);
+            $rawMessageRow = isset($rawMessageMap[$normalizedMessageId]) && is_array($rawMessageMap[$normalizedMessageId]) ? $rawMessageMap[$normalizedMessageId] : [];
+            $isOwnGroupMessage = (string)($rawMessageRow['sender_type'] ?? '') === 'customer'
+                && (int)($rawMessageRow['customer_id'] ?? 0) === (int)$user['id'];
+            $canDeleteMessage = $canManageGroupMessages || $isOwnGroupMessage;
+
+            $normalizedChat[$chatIndex]['can_delete'] = $canDeleteMessage;
+            $normalizedChat[$chatIndex]['delete_mode'] = 'icon';
+            $normalizedChat[$chatIndex]['delete_forever'] = $canDeleteMessage;
+        }
+    }
+
     $smarty->assign('chat', $normalizedChat);
     $smarty->assign('chat_conversations', $chatConversations);
+    $smarty->assign('chat_message_limit', $chatMessageLimit);
+    $smarty->assign('chat_loaded_message_count', $loadedMessageCount);
+    $smarty->assign('chat_total_message_count', $chatTotalMessages);
+    $smarty->assign('chat_has_more_messages', $hasMoreMessages);
+    $smarty->assign('chat_oldest_message_id', $oldestMessageId);
     $smarty->assign('chat_active_conversation_id', $activeConversationId);
     $smarty->assign('chat_active_conversation_type', $activeConversationType);
     $smarty->assign('chat_active_conversation_title', $activeConversationTitle);
@@ -129,7 +167,13 @@ foreach (($chat ?: []) as $chatRow) {
 }
 
 $lastMessageId = !empty($chat) ? (int)$chat[count($chat) - 1]['id'] : 0;
+$oldestMessageId = !empty($chat) ? (int)$chat[0]['id'] : 0;
 $smarty->assign('chat', $chat ?: []);
+$smarty->assign('chat_message_limit', count($chat ?: []));
+$smarty->assign('chat_loaded_message_count', count($chat ?: []));
+$smarty->assign('chat_total_message_count', count($chat ?: []));
+$smarty->assign('chat_has_more_messages', false);
+$smarty->assign('chat_oldest_message_id', $oldestMessageId);
 $smarty->assign('chat_nieprzeczytane', $chat_nieprzeczytane);
 $smarty->assign('chat_last_message_id', $lastMessageId);
 ?>

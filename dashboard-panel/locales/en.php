@@ -438,7 +438,7 @@ return [
         'chat_invalid_image' => 'The selected file is not a supported image.',
         'chat_delete' => 'Delete',
         'chat_delete_failed' => 'Message deletion failed.',
-        'chat_cooldown_notice' => 'Please wait before sending another message.',
+        'chat_cooldown_notice' => 'Please wait {seconds} seconds.',
         'chat_intro_message' => 'Would you like to ask something or do you need help with your subscription?',
         'chat_quick_questions_label' => 'Quick questions',
         'chat_typing_label' => 'Support is typing...',

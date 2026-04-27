@@ -44,6 +44,15 @@
 		groupTargetConversationId: 0,
 		resellerViewMode: 'list',
 		conversationTransitionTimer: null,
+		restoreOpenScrollToBottomPending: false,
+		messagePageSize: 10,
+		loadOlderBatchSize: 5,
+		activeConversationMessageLimit: 10,
+		activeConversationLoadedCount: 0,
+		activeConversationTotalMessages: 0,
+		oldestMessageId: 0,
+		hasMoreMessages: false,
+		loadingOlderMessages: false,
 		initDone: false,
 
 		config: function () {
@@ -117,6 +126,21 @@
 
 		chatScroll: function () {
 			return $('#chat_scroll');
+		},
+
+		bindChatScrollHandler: function () {
+			var self = this;
+			var $scroll = this.chatScroll();
+
+			if (!$scroll.length) {
+				return;
+			}
+
+			$scroll.off('.messengerUiScroll');
+			$scroll.on('scroll.messengerUiScroll', function () {
+				self.lastKnownScrollTop = this.scrollTop;
+				self.maybeLoadOlderMessages();
+			});
 		},
 
 		uploadProgressBox: function () {
@@ -228,6 +252,11 @@
 			return 'messenger:panel-open:' + String(cfg.userId || 0);
 		},
 
+		activeConversationStorageKey: function () {
+			var cfg = this.config();
+			return 'messenger:active-conversation:' + String(cfg.userId || 0);
+		},
+
 		savePanelState: function (isOpen) {
 			if (!this.storageAvailable()) {
 				return;
@@ -248,6 +277,65 @@
 			} catch (error) {
 				return false;
 			}
+		},
+
+		saveActiveConversationState: function () {
+			var payload;
+			if (!this.storageAvailable() || !this.hasResellerInboxLayout()) {
+				return;
+			}
+
+			payload = {
+				id: parseInt(this.activeConversationId || 0, 10) || 0,
+				type: String(this.activeConversationType || 'live_chat'),
+				view: this.resellerViewMode === 'conversation' ? 'conversation' : 'list',
+				messageLimit: parseInt(this.activeConversationMessageLimit || this.messagePageSize || 10, 10) || 10
+			};
+
+			try {
+				window.localStorage.setItem(this.activeConversationStorageKey(), JSON.stringify(payload));
+			} catch (error) {
+				return;
+			}
+		},
+
+		restoreActiveConversationState: function () {
+			var storedValue;
+			var parsed;
+
+			if (!this.storageAvailable() || !this.hasResellerInboxLayout()) {
+				return false;
+			}
+
+			try {
+				storedValue = window.localStorage.getItem(this.activeConversationStorageKey());
+			} catch (error) {
+				return false;
+			}
+
+			if (!storedValue) {
+				return false;
+			}
+
+			try {
+				parsed = JSON.parse(storedValue);
+			} catch (error) {
+				return false;
+			}
+
+			if (!parsed || typeof parsed !== 'object') {
+				return false;
+			}
+
+			this.activeConversationId = parseInt(parsed.id || 0, 10) || 0;
+			this.activeConversationType = String(parsed.type || 'live_chat');
+			this.resellerViewMode = parsed.view === 'conversation' ? 'conversation' : 'list';
+			this.activeConversationMessageLimit = parseInt(parsed.messageLimit || this.messagePageSize || 10, 10) || this.messagePageSize;
+			if (this.activeConversationMessageLimit < this.messagePageSize) {
+				this.activeConversationMessageLimit = this.messagePageSize;
+			}
+
+			return true;
 		},
 
 		updateViewportMetrics: function () {
@@ -344,8 +432,17 @@
 			var tick = function () {
 				self.chatBox().find('.messenger-delete-button').each(function () {
 					var $button = $(this);
+					if ($button.hasClass('messenger-delete-button--icon')) {
+						return;
+					}
+
 					var deleteUntil = parseInt($button.data('deleteUntil') || 0, 10);
 					var defaultLabel = String($button.data('deleteLabel') || 'Delete');
+
+					if (deleteUntil <= 0) {
+						return;
+					}
+
 					var remaining = deleteUntil - Math.floor(Date.now() / 1000);
 
 					if (remaining <= 0) {
@@ -413,14 +510,27 @@
 			var raf = window.requestAnimationFrame || function (callback) {
 				return window.setTimeout(callback, 16);
 			};
+			var delays = [0, 80, 220, 480, 900];
 
-			[0, 80, 220].forEach(function (delay) {
+			if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
+				delays = delays.concat([1300, 1800]);
+			}
+
+			delays.forEach(function (delay) {
 				window.setTimeout(function () {
+					if (self.hasResellerInboxLayout() && self.activeConversationId > 0 && self.resellerViewMode === 'conversation') {
+						self.showConversationView();
+					}
+					self.refreshOpenLayout(true);
 					self.scrollToBottom();
 				}, delay);
 			});
 
 			raf(function () {
+				if (self.hasResellerInboxLayout() && self.activeConversationId > 0 && self.resellerViewMode === 'conversation') {
+					self.showConversationView();
+				}
+				self.refreshOpenLayout(true);
 				self.scrollToBottom();
 			});
 		},
@@ -762,7 +872,7 @@
 			}
 		},
 
-		syncConversationStateFromMarkup: function () {
+		syncConversationStateFromMarkup: function (skipPersist) {
 			var $content = this.contentRoot();
 			var conversationId = 0;
 			var canSend = true;
@@ -783,7 +893,94 @@
 			this.activeCanSend = canSend;
 			this.activeCanManageGroup = canManageGroup;
 			this.activeConversationTitle = conversationTitle;
+			this.oldestMessageId = parseInt($content.attr('data-chat-oldest-id') || '0', 10) || 0;
+			this.activeConversationMessageLimit = parseInt($content.attr('data-chat-message-limit') || String(this.activeConversationMessageLimit || this.messagePageSize || 10), 10) || this.messagePageSize;
+			this.activeConversationLoadedCount = parseInt($content.attr('data-chat-loaded-message-count') || '0', 10) || 0;
+			this.activeConversationTotalMessages = parseInt($content.attr('data-chat-total-message-count') || '0', 10) || 0;
+			this.hasMoreMessages = String($content.attr('data-chat-has-more-messages') || '0') === '1';
+			if (!this.hasMoreMessages && this.activeConversationTotalMessages > this.activeConversationLoadedCount) {
+				this.hasMoreMessages = true;
+			}
+			if (!this.hasMoreMessages && this.oldestMessageId > 0 && this.activeConversationLoadedCount >= this.activeConversationMessageLimit) {
+				this.hasMoreMessages = true;
+			}
 			this.updateComposerAvailability();
+			this.updateConversationIntroVisibility();
+			if (this.hasResellerInboxLayout() && !skipPersist) {
+				this.saveActiveConversationState();
+			}
+		},
+
+		updateConversationIntroVisibility: function () {
+			var shouldHide;
+			var $intro = this.chatBox().find('.messenger-item--intro');
+
+			if (!$intro.length) {
+				return;
+			}
+
+			shouldHide = this.activeConversationTotalMessages > this.messagePageSize
+				|| this.activeConversationLoadedCount > this.messagePageSize
+				|| this.hasMoreMessages;
+
+			$intro.toggleClass('is-collapsed', !!shouldHide);
+		},
+
+		ensureScrollableHistory: function () {
+			var self = this;
+			var metrics = this.getScrollMetrics();
+			var shouldPrefetchTop = false;
+
+			if (!this.isOpen() || !this.hasResellerInboxLayout() || this.resellerViewMode !== 'conversation') {
+				return;
+			}
+
+			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages || this.fetchInFlight) {
+				return;
+			}
+
+			if (!metrics) {
+				return;
+			}
+
+			shouldPrefetchTop = metrics.scrollTop <= 48;
+			if (!shouldPrefetchTop && metrics.scrollHeight > (metrics.clientHeight + 40)) {
+				return;
+			}
+
+			window.setTimeout(function () {
+				self.maybeLoadOlderMessages();
+			}, shouldPrefetchTop ? 20 : 60);
+		},
+
+		maybeLoadOlderMessages: function () {
+			var self = this;
+			var metrics = this.getScrollMetrics();
+			var nextLimit;
+
+			if (!this.isOpen() || !this.hasResellerInboxLayout() || this.resellerViewMode !== 'conversation') {
+				return;
+			}
+
+			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages || this.fetchInFlight) {
+				return;
+			}
+
+			if (!metrics || metrics.scrollTop > 48) {
+				return;
+			}
+
+			nextLimit = Math.max(this.activeConversationMessageLimit + this.loadOlderBatchSize, this.messagePageSize);
+			this.loadingOlderMessages = true;
+			this.fetch({
+				force: true,
+				conversationId: this.activeConversationId,
+				messageLimit: nextLimit,
+				preservePrependOffset: true,
+				scrollToBottom: false
+			}).always(function () {
+				self.loadingOlderMessages = false;
+			});
 		},
 
 		hasResellerInboxLayout: function () {
@@ -799,6 +996,7 @@
 			this.setConversationLoadingState(false);
 			this.listView().prop('hidden', false);
 			this.conversationView().prop('hidden', true);
+			this.saveActiveConversationState();
 		},
 
 		showConversationView: function () {
@@ -809,6 +1007,7 @@
 			this.resellerViewMode = 'conversation';
 			this.listView().prop('hidden', true);
 			this.conversationView().prop('hidden', false);
+			this.saveActiveConversationState();
 		},
 
 		setConversationLoadingState: function (isLoading) {
@@ -1308,6 +1507,11 @@
 				force: true,
 				scrollToBottom: true
 			});
+			window.setTimeout(function () {
+				if (self.isOpen()) {
+					self.scheduleScrollToBottom();
+				}
+			}, 360);
 			return false;
 		},
 
@@ -1327,6 +1531,10 @@
 		renderPayload: function (payload, options) {
 			var previousMetrics = this.getScrollMetrics();
 			var keepBottom = false;
+			var preservePrependOffset = false;
+			var previousScrollHeight = previousMetrics ? previousMetrics.scrollHeight : 0;
+			var previousScrollTop = previousMetrics ? previousMetrics.scrollTop : 0;
+			var previousLoadedCount = this.activeConversationLoadedCount;
 			options = options || {};
 			if (!payload || typeof payload.html !== 'string') {
 				return;
@@ -1339,6 +1547,15 @@
 				keepBottom = !!options.scrollToBottom;
 			}
 
+			if (this.restoreOpenScrollToBottomPending && this.isOpen()) {
+				keepBottom = true;
+			}
+
+			preservePrependOffset = !!options.preservePrependOffset && !!previousMetrics;
+			if (preservePrependOffset) {
+				keepBottom = false;
+			}
+
 			if (payload.html !== this.lastRenderedHtml || options.force) {
 				this.chatBox().html(payload.html);
 				this.lastRenderedHtml = payload.html;
@@ -1346,6 +1563,10 @@
 				this.closeGroupSettingsMenu();
 				this.closeGroupMembersPopover();
 				this.syncConversationStateFromMarkup();
+				if (preservePrependOffset && this.activeConversationLoadedCount <= previousLoadedCount) {
+					this.hasMoreMessages = false;
+				}
+				this.bindChatScrollHandler();
 				if (this.hasResellerInboxLayout()) {
 					if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0) {
 						this.showConversationView();
@@ -1362,13 +1583,32 @@
 					this.showTypingIndicator();
 				}
 
-				if (keepBottom) {
+				if (preservePrependOffset) {
+					var currentMetrics = this.getScrollMetrics();
+					if (currentMetrics && currentMetrics.element) {
+						currentMetrics.element.scrollTop = Math.max(0, previousScrollTop + (currentMetrics.scrollHeight - previousScrollHeight));
+						this.lastKnownScrollTop = currentMetrics.element.scrollTop;
+					}
+				} else if (keepBottom) {
 					this.scheduleScrollToBottom();
 				} else if (previousMetrics) {
 					this.restoreScrollPosition(previousMetrics.scrollTop);
 				}
 
 				this.bindScrollMedia(keepBottom);
+				this.ensureScrollableHistory();
+			}
+
+			if (keepBottom && this.restoreOpenScrollToBottomPending) {
+				if (this.hasResellerInboxLayout() && this.activeConversationId > 0) {
+					this.showConversationView();
+				}
+				this.restoreOpenScrollToBottomPending = false;
+				this.scheduleScrollToBottom();
+			}
+
+			if (!keepBottom) {
+				this.ensureScrollableHistory();
 			}
 
 			this.lastMessageId = parseInt(payload.last_message_id || 0, 10);
@@ -1393,7 +1633,8 @@
 			requestConversationId = options.hasOwnProperty('conversationId') ? (parseInt(options.conversationId || 0, 10) || 0) : this.activeConversationId;
 			requestData = {
 				action: options.markRead ? 'read' : 'fetch',
-				format: 'json'
+				format: 'json',
+				message_limit: parseInt(options.messageLimit || this.activeConversationMessageLimit || this.messagePageSize || 10, 10) || this.messagePageSize
 			};
 
 			if (options.markRead) {
@@ -1415,6 +1656,7 @@
 					self.renderPayload(payload, {
 						force: !!options.force,
 						scrollToBottom: !!options.scrollToBottom,
+						preservePrependOffset: !!options.preservePrependOffset,
 						animateConversation: !!options.animateConversation
 					});
 				} else if (payload && payload.cooldown_active) {
@@ -1718,7 +1960,14 @@
 
 			this.activeConversationId = nextConversationId;
 			this.activeConversationType = nextConversationType;
+			this.activeConversationMessageLimit = this.messagePageSize;
+			this.activeConversationLoadedCount = 0;
+			this.activeConversationTotalMessages = 0;
+			this.oldestMessageId = 0;
+			this.hasMoreMessages = false;
 			if (this.hasResellerInboxLayout()) {
+				this.resellerViewMode = 'conversation';
+				this.saveActiveConversationState();
 				this.showConversationView();
 				this.setConversationLoadingState(true);
 			}
@@ -2025,10 +2274,6 @@
 				self.sendMessage();
 			});
 
-			$(document).on('scroll.messengerUi', '#chat_scroll', function () {
-				self.lastKnownScrollTop = this.scrollTop;
-			});
-
 			$(document).on('keydown.messengerUi', '#tresc', function (event) {
 				if (event.which === 13 && !event.shiftKey) {
 					event.preventDefault();
@@ -2243,10 +2488,12 @@
 			}
 
 			shouldRestoreOpenState = this.restorePanelState();
+			this.restoreOpenScrollToBottomPending = !!shouldRestoreOpenState;
 			this.updateViewportMetrics();
-			this.syncConversationStateFromMarkup();
+			this.syncConversationStateFromMarkup(true);
 			if (this.hasResellerInboxLayout()) {
-				if (this.activeConversationId > 0 && shouldRestoreOpenState) {
+				this.restoreActiveConversationState();
+				if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0 && shouldRestoreOpenState) {
 					this.showConversationView();
 				} else {
 					this.showConversationList();

@@ -1,5 +1,5 @@
 {if $user.logged}
-	<div id="content_chat_profil" data-chat-last-id="{$chat_last_message_id|default:0}" data-chat-active-conversation-id="{$chat_active_conversation_id|default:0}" data-chat-active-conversation-type="{$chat_active_conversation_type|default:'live_chat'}" data-chat-active-conversation-title="{$chat_active_conversation_title|default:''|escape:'html'}" data-chat-can-send="{if $chat_active_conversation_can_send|default:true}1{else}0{/if}" data-chat-can-manage-group="{if $chat_active_conversation_can_manage|default:false}1{else}0{/if}">
+	<div id="content_chat_profil" data-chat-last-id="{$chat_last_message_id|default:0}" data-chat-oldest-id="{$chat_oldest_message_id|default:0}" data-chat-message-limit="{$chat_message_limit|default:10}" data-chat-loaded-message-count="{$chat_loaded_message_count|default:0}" data-chat-total-message-count="{$chat_total_message_count|default:0}" data-chat-has-more-messages="{if $chat_has_more_messages|default:false}1{else}0{/if}" data-chat-active-conversation-id="{$chat_active_conversation_id|default:0}" data-chat-active-conversation-type="{$chat_active_conversation_type|default:'live_chat'}" data-chat-active-conversation-title="{$chat_active_conversation_title|default:''|escape:'html'}" data-chat-can-send="{if $chat_active_conversation_can_send|default:true}1{else}0{/if}" data-chat-can-manage-group="{if $chat_active_conversation_can_manage|default:false}1{else}0{/if}">
         {if $user.customer_type|default:'client' eq 'reseller' && isset($chat_conversations) && $chat_conversations|@count gt 0}
         <div class="admin-chat-inbox__list-view messenger-inbox__list-view" data-chat-list-view>
             <div class="admin-chat-inbox__list">
@@ -85,7 +85,6 @@
                         <span class="{if isset($chatConversation.presence.class_name)}{$chatConversation.presence.class_name|escape:'html'}{else}admin-chat-presence admin-chat-presence--offline{/if} messenger-avatar-stack__presence" title="{if isset($chatConversation.presence.label)}{$chatConversation.presence.label|escape:'html'}{else}Offline{/if}" aria-label="{if isset($chatConversation.presence.label)}{$chatConversation.presence.label|escape:'html'}{else}Offline{/if}"></span>
                     </span>
                     {/if}
-                    <span class="messenger-conversation-chip__title">{$chatConversation.title|truncate:13:"..."|escape:'html'}</span>
                     {if $chatConversation.unread_count|default:0 gt 0}
                     <strong>{$chatConversation.unread_count}</strong>
                     {/if}
@@ -204,6 +203,17 @@
 					{/if}
                 </li>
                 {/if}
+                {if $chat_active_conversation_type|default:'live_chat' ne 'live_chat'}
+                <li class="messenger-retention-hint">
+                    <span>
+                        {if $chat_active_conversation_retention_hours|default:'' ne ''}
+                        Auto-usuwanie po {$chat_active_conversation_retention_hours}h
+                        {else}
+                        Auto-usuwanie wyłączone
+                        {/if}
+                    </span>
+                </li>
+                {/if}
                 {section name=i loop=$chat}
                 {if $chat[i].time_anchor_label ne ''}
                 <li class="messenger-time-anchor">
@@ -228,12 +238,18 @@
                     {if $chat[i].can_delete}
                     <button
                         type="button"
-                        class="messenger-delete-button"
+                        class="messenger-delete-button{if $chat[i].delete_mode|default:'' eq 'icon'} messenger-delete-button--icon{/if}"
                         data-message-id="{$chat[i].id}"
                         data-delete-until="{$chat[i].delete_until_timestamp}"
                         data-delete-label="{$t.chat_delete|default:'Delete'}"
+                        title="{$t.chat_delete|default:'Delete'}"
+                        aria-label="{$t.chat_delete|default:'Delete'}"
                     >
+                        {if $chat[i].delete_mode|default:'' eq 'icon'}
+                        <i class="fa fa-trash" aria-hidden="true"></i>
+                        {else}
                         {$t.chat_delete|default:'Delete'} ({$chat[i].delete_remaining_seconds}s)
+                        {/if}
                     </button>
                     {/if}
                 </li>
