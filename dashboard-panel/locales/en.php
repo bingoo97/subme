@@ -175,7 +175,7 @@ return [
         'payment_note_placeholder' => 'Enter additional information etc.',
         'payment_save_note' => 'Save note',
         'payment_choose_method_title' => 'Choose payment method',
-        'payment_choose_method_intro' => 'Available methods depend on the active payment data configured by the admin.',
+        'payment_choose_method_intro' => 'Choose one of the available payment methods.',
         'payment_method_crypto' => 'Pay with crypto',
         'payment_method_bank' => 'Pay by bank transfer',
         'payment_step' => 'Step',

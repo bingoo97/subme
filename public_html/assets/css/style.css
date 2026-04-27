@@ -3316,7 +3316,7 @@ CONTENT
 
 .payment-method-hero{
 	display:flex;
-	justify-content:center;
+	justify-content: left;
 	margin: 16px 0 0;
 }
 
@@ -3334,17 +3334,18 @@ CONTENT
 }
 
 .payment-method-start__buttons{
-	display:flex;
+	display:block;
 	flex-wrap:wrap;
 	gap:12px;
+	margin: 2rem 0;
 }
 
 .payment-method-start__button{
-	display:inline-flex;
+	display:flex;
 	align-items:center;
-	justify-content:center;
+	justify-content:left;
 	gap:10px;
-	min-width:220px;
+	min-width:320px;
 	border: 1px solid #eeeeee;
 	background:#000000;
 	color:#ffffff;
@@ -3352,6 +3353,7 @@ CONTENT
 	padding: 15px;
 	font-weight: 600;
 	font-size: 18px;
+	padding-left:1.5rem;
 }
 
 .payment-method-start__button:hover{

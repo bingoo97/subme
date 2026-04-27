@@ -175,7 +175,7 @@ return [
         'payment_note_placeholder' => 'Wpisz dodatkowe informacje itp.',
         'payment_save_note' => 'Zapisz notatkę',
         'payment_choose_method_title' => 'Wybierz metodę płatności',
-        'payment_choose_method_intro' => 'Dostępne metody zależą od aktywnych danych płatniczych skonfigurowanych przez admina.',
+        'payment_choose_method_intro' => 'Wybierz jedną z dostępnych metod płatności.',
         'payment_method_crypto' => 'Zapłać kryptowalutą',
         'payment_method_bank' => 'Zapłać przelewem bankowym',
         'payment_step' => 'Krok',
