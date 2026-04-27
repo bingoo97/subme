@@ -3561,6 +3561,20 @@ CONTENT
 	margin-top:22px;
 }
 
+button[name="create_crypto_payment"]{
+	background-color: #FFD700;
+	color: #000000;
+	height: 70px;
+	border: none;
+	font-weight: 700;
+	animation: newsAlertPulse 1.8s ease-in-out infinite;
+}
+
+button[name="create_crypto_payment"]:hover{
+	background-color: #FFC700;
+	color: #000000;
+}
+
 .payment-step--disabled{
 	opacity:.65;
 }

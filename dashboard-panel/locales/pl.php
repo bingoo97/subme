@@ -182,7 +182,7 @@ return [
         'payment_choose_crypto' => 'Wybierz kryptowalutę',
         'payment_no_crypto_wallet' => 'Dla tego zamówienia nie jest obecnie dostępny żaden portfel krypto. Skontaktuj się z supportem, aby aktywować płatność krypto.',
         'payment_choose_package' => 'Wybierz pakiet',
-        'payment_create_crypto' => 'Utwórz płatność krypto',
+        'payment_create_crypto' => 'Zapłać teraz',
         'payment_action_crypto_hint_line_1' => 'Sprawdź jeszcze raz wybraną kryptowalutę i pakiet przed utworzeniem płatności.',
         'payment_action_crypto_hint_line_2' => 'Po kliknięciu pokażemy gotowe dane do wpłaty przypisane do Twojego zamówienia.',
         'payment_choose_bank_account' => 'Wybierz konto bankowe',

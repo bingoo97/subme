@@ -135,7 +135,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
 
                             <div class="payment-step__actions">
                                 <button type="submit" class="btn btn-success btn-lg" name="create_crypto_payment" {if !$payment_has_crypto_assignments}disabled="disabled"{/if}>
-                                    {$t.payment_create_crypto|default:'Create crypto payment'}
+                                    {$t.payment_create_crypto|default:'Create crypto payment'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
                                 </button>
                             </div>
                         </form>
@@ -165,7 +165,6 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                             <input type="radio" name="bank_account_assignment_id" value="{$payment_bank_accounts[i].bank_account_assignment_id}" {if $smarty.section.i.first}checked{/if}>
                                             <span class="bank-choice-card__inner">
                                                 <strong>{$payment_bank_accounts[i].bank_name}</strong>
-                                                <span>{$payment_bank_accounts[i].account_holder_name}</span>
                                                 <span>{if $payment_bank_accounts[i].iban}{$payment_bank_accounts[i].iban}{else}{$payment_bank_accounts[i].account_number}{/if}</span>
                                             </span>
                                         </label>

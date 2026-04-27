@@ -182,7 +182,7 @@ return [
         'payment_choose_crypto' => 'Choose cryptocurrency',
         'payment_no_crypto_wallet' => 'No crypto wallet is currently available for this order. Contact support to activate crypto payment.',
         'payment_choose_package' => 'Choose package',
-        'payment_create_crypto' => 'Create crypto payment',
+        'payment_create_crypto' => 'Pay now',
         'payment_action_crypto_hint_line_1' => 'Check the selected cryptocurrency and package one more time before creating the payment.',
         'payment_action_crypto_hint_line_2' => 'After clicking, we will show the payment details assigned to your order.',
         'payment_choose_bank_account' => 'Choose bank account',
