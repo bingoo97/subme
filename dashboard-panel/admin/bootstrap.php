@@ -8985,7 +8985,72 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
         return false;
     }
 
-    $db->query("DELETE FROM support_conversations WHERE id = {$conversationId} LIMIT 1");
+    $conversationRow = $db->select_user(
+        "SELECT id
+         FROM support_conversations
+         WHERE id = {$conversationId}
+         LIMIT 1"
+    );
+    if (!is_array($conversationRow) || empty($conversationRow['id'])) {
+        return false;
+    }
+
+    $attachmentPaths = [];
+    if (schema_object_exists($db, 'support_messages')) {
+        $messageRows = $db->select_full_user(
+            "SELECT attachment_path
+             FROM support_messages
+             WHERE conversation_id = {$conversationId}"
+        );
+        foreach ($messageRows as $messageRow) {
+            $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
+            if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
+                $attachmentPaths[] = $attachmentPath;
+            }
+        }
+    }
+
+    $db->query('START TRANSACTION');
+
+    if (schema_object_exists($db, 'support_conversation_members')) {
+        if ($db->query("DELETE FROM support_conversation_members WHERE conversation_id = {$conversationId}") === false) {
+            $db->query('ROLLBACK');
+            return false;
+        }
+    }
+
+    if (schema_object_exists($db, 'support_messages')) {
+        if ($db->query("DELETE FROM support_messages WHERE conversation_id = {$conversationId}") === false) {
+            $db->query('ROLLBACK');
+            return false;
+        }
+    }
+
+    if ($db->query("DELETE FROM support_conversations WHERE id = {$conversationId} LIMIT 1") === false) {
+        $db->query('ROLLBACK');
+        return false;
+    }
+
+    $conversationStillExists = $db->select_user(
+        "SELECT id
+         FROM support_conversations
+         WHERE id = {$conversationId}
+         LIMIT 1"
+    );
+    if (is_array($conversationStillExists) && !empty($conversationStillExists['id'])) {
+        $db->query('ROLLBACK');
+        return false;
+    }
+
+    $db->commit();
+
+    foreach (array_unique($attachmentPaths) as $attachmentPath) {
+        $absoluteAttachmentPath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
+        if (is_file($absoluteAttachmentPath)) {
+            @unlink($absoluteAttachmentPath);
+        }
+    }
+
     return true;
 }
 

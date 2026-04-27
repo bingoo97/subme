@@ -42,6 +42,11 @@ Active user-facing emails:
 - `live-chat-customer-notify`
   - sent only when admin writes and customer is offline
   - 15-minute cooldown per conversation recipient
+- `reseller-chat-customer-notify`
+  - sent only for reseller messenger conversations (`1 na 1` and groups)
+  - skipped when the recipient disabled email notifications for that conversation
+  - skipped when the recipient is currently online
+  - 60-minute cooldown per recipient to avoid bursts from active messenger threads
 - `news-broadcast`
   - sent when admin creates a new active public/customer news entry
   - should stay generic and point customer to `/news`
@@ -63,6 +68,7 @@ Disabled by design to reduce noise:
 - no automatic email on subscription expiry
 - no automatic email on order cancellation
 - no duplicate live chat email bursts while the same conversation is active
+- no reseller messenger email bursts more often than once per hour for the same recipient
 
 Anti-spam rules:
 - all emails are plain text only

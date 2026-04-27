@@ -900,7 +900,9 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     ],
                     $recipientCustomerId,
                     null,
-                    900,
+                    function_exists('app_reseller_chat_email_cooldown_seconds')
+                        ? app_reseller_chat_email_cooldown_seconds()
+                        : 3600,
                     true,
                     (string)($row['locale_code'] ?? '')
                 )

@@ -5,8 +5,26 @@ switch ($site) {
 			$tenantId = tenant_current_id($user);
 			$customerProductType = app_customer_product_type($user);
 			$orderSalesAvailable = app_customer_sales_enabled($user, $settings);
+			$orderCatalogHasProducts = false;
+
+			if (app_uses_v2_schema($db)) {
+				$productTypeSql = app_product_type_sql($db, $user);
+				$productCountRow = $db->select_user(
+					"SELECT COUNT(*) AS total
+					 FROM products
+					 INNER JOIN product_providers
+					    ON product_providers.id = products.provider_id
+					 WHERE products.is_active = 1
+					   AND product_providers.is_active = 1
+					   AND products.product_type = {$productTypeSql}
+					   " . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0")
+				);
+				$orderCatalogHasProducts = (int)($productCountRow['total'] ?? 0) > 0;
+			}
+
 			$smarty->assign('order_catalog_product_type', $customerProductType);
 			$smarty->assign('order_sales_available', $orderSalesAvailable ? 1 : 0);
+			$smarty->assign('order_catalog_has_products', $orderCatalogHasProducts ? 1 : 0);
 
 			if (app_uses_v2_schema($db) && isset($_POST["order_note_save"])) {
 				$orderId = isset($_POST["order_note_id"]) ? (int)$_POST["order_note_id"] : 0;

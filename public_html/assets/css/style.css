@@ -3314,6 +3314,21 @@ CONTENT
 	margin-bottom: 0;
 }
 
+.payment-method-hero{
+	display:flex;
+	justify-content:center;
+	margin: 16px 0 0;
+}
+
+.payment-method-hero__image{
+	display:block;
+	width:100%;
+	max-width:420px;
+	height:auto;
+	border-radius:18px;
+	object-fit:cover;
+}
+
 .payment-method-start.is-hidden{
 	display:none;
 }
@@ -3355,6 +3370,21 @@ CONTENT
 
 .payment-method-panel__toolbar{
 	margin-bottom:18px;
+}
+
+.payment-step__hint{
+	margin: 16px 0 0;
+}
+
+.payment-step__hint p{
+	margin: 0 0 6px;
+	color:#6e7784;
+	font-size:13px;
+	line-height:1.55;
+}
+
+.payment-step__hint p:last-child{
+	margin-bottom:0;
 }
 
 .payment-method-back{
@@ -3887,6 +3917,14 @@ CONTENT
 .balance-topup-step__head h4{
 	margin:0;
 	font-size:22px;
+}
+
+.payment-method-hero--modal{
+	margin: 14px 0 0;
+}
+
+.balance-topup-modal .payment-method-hero__image{
+	max-width:360px;
 }
 
 .balance-topup-method-btn{

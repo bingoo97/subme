@@ -48,7 +48,7 @@
                               <i class="fa fa-angle-double-left" aria-hidden="true"></i> Back 
                            </button>
 						   <button type="submit" class="btn btn-dark btn-lg" id="add_product" disabled>
-							  Add <i class="fa fa-angle-double-right" aria-hidden="true"></i>
+							  {$t.order_add_continue|default:'Przejdź dalej'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
 						   </button>
                            
 						</div>

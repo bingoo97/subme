@@ -33,6 +33,10 @@
                                 <i class="fa fa-btc" aria-hidden="true"></i> {$t.payment_method_crypto|default:'Pay with crypto'}
                             </button>
                         </div>
+
+                        <div class="payment-method-hero payment-method-hero--modal">
+                            <img src="/img/package.jpg" alt="Payment package" class="payment-method-hero__image" />
+                        </div>
                     </div>
 
                     <div class="balance-topup-step" data-balance-topup-step="crypto">

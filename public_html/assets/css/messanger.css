@@ -663,9 +663,16 @@
 }
 
 .messanger .panel-footer{
+	display:none;
 	padding:12px 14px;
 	border-top:1px solid #efefef;
 	background:#fff;
+}
+
+.messanger.is-open .panel-footer,
+.messanger .panel-collapse.is-visible .panel-footer,
+.messanger .panel-collapse.in .panel-footer{
+	display:block;
 }
 
 .messenger-alert{

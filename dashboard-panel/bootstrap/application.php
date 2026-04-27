@@ -3997,6 +3997,11 @@ function app_live_chat_email_cooldown_seconds(): int
     return 900;
 }
 
+function app_reseller_chat_email_cooldown_seconds(): int
+{
+    return 3600;
+}
+
 function app_admin_last_seen_is_online(string $lastSeenAt = '', ?int $currentTime = null): bool
 {
     $currentTime = $currentTime ?? time();

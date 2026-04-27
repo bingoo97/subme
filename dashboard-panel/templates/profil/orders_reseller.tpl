@@ -49,7 +49,7 @@
                 </td>
                 <td class="orders-history-actions">
                     {if $can_pending_payment_actions}
-                        <a href="order-payment-{$wygrane[i].id}" class="btn btn-dark btn-xs">{$t.orders_action_payment|default:'Payment'}</a>
+                        <a href="order-payment-{$wygrane[i].id}" class="btn btn-danger btn-xs"><i class="fa fa-credit-card" aria-hidden="true"></i> {$t.orders_action_payment|default:'Payment'}</a>
                     {/if}
                     <button type="button" class="btn btn-outline-dark btn-xs user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}">
                         <i class="fa fa-search"></i> Details

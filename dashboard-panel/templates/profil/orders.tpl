@@ -1,7 +1,7 @@
 <div class="content-box orders-view{if $order_catalog_product_type|default:'subscription' eq 'credits'} orders-view-history{else} orders-view-modern{/if}">
     <div class="orders-header{if $order_catalog_product_type|default:'subscription' eq 'credits'} orders-header--history{/if}">
         <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.orders|default:'Orders'}</h1>
-        {if $order_sales_available}
+        {if $order_sales_available && $order_catalog_has_products|default:false}
             <form action="" method="post">
                 <input type="hidden" name="_csrf" value="{$csrf_token|default:''}">
                 <button type="submit" class="btn btn-dark btn-lg" name="order_add">
@@ -13,11 +13,19 @@
                 </button>
             </form>
         {else}
-            <div class="text-muted">
-                {if $order_catalog_product_type|default:'subscription' eq 'credits'}
-                    {$t.credits_sales_disabled_notice|default:'Credits sales are currently unavailable.'}
+            <div class="alert alert-warning orders-header__warning">
+                {if !$order_sales_available}
+                    {if $order_catalog_product_type|default:'subscription' eq 'credits'}
+                        {$t.credits_sales_disabled_notice|default:'Credits sales are currently unavailable.'}
+                    {else}
+                        {$t.sales_disabled_notice|default:'Sales are currently unavailable.'}
+                    {/if}
                 {else}
-                    {$t.sales_disabled_notice|default:'Sales are currently unavailable.'}
+                    {if $order_catalog_product_type|default:'subscription' eq 'credits'}
+                        {$t.order_add_no_products_credits_notice|default:'There are currently no available credits packages for your account.'}
+                    {else}
+                        {$t.order_add_no_products_subscription_notice|default:'There are currently no available subscription packages for your account.'}
+                    {/if}
                 {/if}
             </div>
         {/if}

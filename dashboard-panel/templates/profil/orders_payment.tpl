@@ -60,6 +60,9 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         </button>
                     {/if}
                     </div>
+                    <div class="payment-method-hero">
+                        <img src="/img/package.jpg" alt="Payment package" class="payment-method-hero__image" />
+                    </div>
                 </div>
 
                 {if $payment_can_use_crypto}
@@ -125,6 +128,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                 </div>
                             </div>
 
+                            <div class="payment-step__hint">
+                                <p>{$t.payment_action_crypto_hint_line_1|default:'Sprawdź jeszcze raz wybraną kryptowalutę i pakiet przed utworzeniem płatności.'}</p>
+                                <p>{$t.payment_action_crypto_hint_line_2|default:'Po kliknięciu pokażemy gotowe dane do wpłaty przypisane do Twojego zamówienia.'}</p>
+                            </div>
+
                             <div class="payment-step__actions">
                                 <button type="submit" class="btn btn-success btn-lg" name="create_crypto_payment" {if !$payment_has_crypto_assignments}disabled="disabled"{/if}>
                                     {$t.payment_create_crypto|default:'Create crypto payment'}
@@ -178,6 +186,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                         </label>
                                     {/section}
                                 </div>
+                            </div>
+
+                            <div class="payment-step__hint">
+                                <p>{$t.payment_action_bank_hint_line_1|default:'Sprawdź jeszcze raz wybrane konto bankowe i pakiet przed utworzeniem płatności.'}</p>
+                                <p>{$t.payment_action_bank_hint_line_2|default:'Po kliknięciu pokażemy komplet danych do przelewu przypisanych do Twojego zamówienia.'}</p>
                             </div>
 
                             <div class="payment-step__actions">

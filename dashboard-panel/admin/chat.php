@@ -129,7 +129,12 @@ if ($action === 'delete_conversation') {
         exit;
     }
 
-    admin_delete_chat_conversation($db, $conversationId);
+    if (!admin_delete_chat_conversation($db, $conversationId)) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'message' => 'Unable to remove this conversation.']);
+        exit;
+    }
+
     echo json_encode(['ok' => true, 'deleted' => true, 'conversation_id' => $conversationId]);
     exit;
 }
