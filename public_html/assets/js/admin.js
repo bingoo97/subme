@@ -533,6 +533,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var searchResults = q('[data-admin-chat-search-results]', root);
         var body = q('[data-admin-chat-conversation-body]', root);
         var title = q('[data-admin-chat-conversation-title]', root);
+        var conversationAvatar = q('[data-admin-chat-conversation-avatar]', root);
         var status = q('[data-admin-chat-conversation-status]', root);
         var conversationBadge = q('[data-admin-chat-conversation-badge]', root);
         var composerAlert = q('[data-admin-chat-alert]', root);
@@ -626,6 +627,32 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function adminChatPanelStateKey() {
             return 'admin-chat:panel-open:' + String(window.location.pathname || '/admin/');
+        }
+
+        function refreshAdminChatViewportHeight() {
+            var viewportHeight = window.visualViewport && window.visualViewport.height
+                ? window.visualViewport.height
+                : window.innerHeight;
+
+            document.documentElement.style.setProperty('--admin-chat-viewport-height', Math.max(320, Math.round(viewportHeight)) + 'px');
+        }
+
+        function renderAvatarMarkup(item, extraClass) {
+            var classes = ['admin-chat-inbox__avatar'];
+            var avatarTheme = item && item.avatar_theme ? item.avatar_theme : 'theme-1';
+            var avatarUrl = item && item.avatar_url ? String(item.avatar_url) : '';
+            var avatarText = item && item.avatar_text ? String(item.avatar_text) : 'U';
+
+            classes.push(avatarTheme);
+            if (extraClass) {
+                classes.push(extraClass);
+            }
+
+            if (avatarUrl) {
+                return '<span class="' + escapeHtml(classes.join(' ')) + '"><img src="' + escapeHtml(avatarUrl) + '" alt="' + escapeHtml(avatarText || 'Avatar') + '"></span>';
+            }
+
+            return '<span class="' + escapeHtml(classes.join(' ')) + '">' + escapeHtml(avatarText || 'U') + '</span>';
         }
 
         function saveAdminChatPanelState(isOpen) {
@@ -1081,6 +1108,28 @@ document.addEventListener('DOMContentLoaded', function () {
             }).join('');
         }
 
+        function normalizeInviteIdentifier(value) {
+            var normalized = String(value || '').trim().toLowerCase();
+
+            if (normalized.charAt(0) === '@') {
+                normalized = '@' + normalized.slice(1).replace(/[^a-z0-9._-]+/g, '');
+            }
+
+            return normalized;
+        }
+
+        function isValidInviteIdentifier(value) {
+            if (!value) {
+                return false;
+            }
+
+            if (value.charAt(0) === '@') {
+                return /^@[a-z0-9._-]{2,}$/i.test(value);
+            }
+
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+        }
+
         function resetGroupModal() {
             groupEmails = [];
             groupEmailRequests = {};
@@ -1138,12 +1187,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function addGroupEmail() {
-            var email = groupEmailInput ? groupEmailInput.value.trim().toLowerCase() : '';
+            var email = groupEmailInput ? normalizeInviteIdentifier(groupEmailInput.value) : '';
             if (!email) {
                 return;
             }
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                showGroupAlert('Enter a valid email address.', true);
+            if (!isValidInviteIdentifier(email)) {
+                showGroupAlert('Enter a valid email address or handle starting with @.', true);
                 return;
             }
             if (groupEmails.indexOf(email) !== -1) {
@@ -1359,6 +1408,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function openPanel(focusSearch) {
+            refreshAdminChatViewportHeight();
             if (panel) {
                 setHidden(panel, false);
             }
@@ -1441,15 +1491,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 title.textContent = payload.title || title.textContent;
                 title.setAttribute('href', activeConversationType === 'live_chat' && activeCustomerId > 0 ? '/admin/?page=live-chat&user_id=' + activeCustomerId : '#');
             }
+            if (conversationAvatar) {
+                conversationAvatar.innerHTML = payload.avatar_html || renderAvatarMarkup({ avatar_text: 'S', avatar_theme: 'theme-6' }, 'admin-chat-inbox__avatar--sm');
+            }
             if (conversationBadge) {
                 conversationBadge.textContent = root.getAttribute('data-group-chat-badge') || 'Admin group';
                 setHidden(conversationBadge, activeConversationType !== 'group_chat');
             }
             if (status) {
-                var groupPresenceLabel = root.getAttribute('data-group-chat-status-label') || 'Group chat';
-                status.innerHTML = activeConversationType === 'group_chat'
-                    ? renderPresenceDot({ class_name: 'admin-chat-presence admin-chat-presence--online', label: groupPresenceLabel })
-                    : renderPresenceDot(payload.presence || null);
+                status.innerHTML = renderPresenceDot(payload.presence || null);
             }
             if (readonlyToggle) {
                 readonlyToggle.innerHTML = payload.is_group_read_only ? '<i class="bi bi-lock-fill" aria-hidden="true"></i>' : '<i class="bi bi-unlock" aria-hidden="true"></i>';
@@ -1576,6 +1626,12 @@ document.addEventListener('DOMContentLoaded', function () {
         if (restoreAdminChatPanelState()) {
             openPanel(false);
             showList();
+        }
+
+        refreshAdminChatViewportHeight();
+        window.addEventListener('resize', refreshAdminChatViewportHeight);
+        if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+            window.visualViewport.addEventListener('resize', refreshAdminChatViewportHeight);
         }
 
         qa('[data-admin-chat-open]').forEach(function (button) {
@@ -1710,9 +1766,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     searchResults.innerHTML = items.map(function (item) {
                         return '' +
-                            '<button type="button" class="admin-chat-inbox__search-item" data-admin-chat-search-result data-customer-id="' + escapeHtml(item.customer_id) + '" data-conversation-id="' + escapeHtml(item.conversation_id) + '">' +
-                                '<strong>' + escapeHtml(item.display_name || item.email || '') + '</strong>' +
-                                '<span>' + escapeHtml(item.email || '') + '</span>' +
+                            '<button type="button" class="admin-chat-inbox__search-item" data-admin-chat-search-result data-participant-type="' + escapeHtml(item.participant_type || 'customer') + '" data-customer-id="' + escapeHtml(item.customer_id) + '" data-admin-user-id="' + escapeHtml(item.admin_user_id || 0) + '" data-conversation-id="' + escapeHtml(item.conversation_id) + '">' +
+                                renderAvatarMarkup(item) +
+                                '<span class="admin-chat-inbox__search-copy">' +
+                                    '<strong>' + escapeHtml(item.display_name || item.email || '') + '</strong>' +
+                                    '<span>' + escapeHtml(item.meta_label || item.email || '') + '</span>' +
+                                '</span>' +
                             '</button>';
                     }).join('');
                     setHidden(searchResults, false);
@@ -1871,17 +1930,28 @@ document.addEventListener('DOMContentLoaded', function () {
             if (searchResult) {
                 var existingConversationId = parseInt(searchResult.getAttribute('data-conversation-id') || '0', 10) || 0;
                 var customerId = parseInt(searchResult.getAttribute('data-customer-id') || '0', 10) || 0;
+                var adminUserId = parseInt(searchResult.getAttribute('data-admin-user-id') || '0', 10) || 0;
+                var participantType = searchResult.getAttribute('data-participant-type') || 'customer';
                 if (existingConversationId > 0) {
                     fetchConversation(existingConversationId);
                     return;
                 }
-                if (!customerId) {
+                if (participantType === 'customer' && !customerId) {
+                    return;
+                }
+                if (participantType === 'admin' && !adminUserId) {
                     return;
                 }
                 jsonFetch(chatUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-                    body: toQuery({ action: 'start_conversation', customer_id: customerId, _csrf: csrfToken })
+                    body: toQuery({
+                        action: 'start_conversation',
+                        participant_type: participantType,
+                        customer_id: customerId,
+                        admin_user_id: adminUserId,
+                        _csrf: csrfToken
+                    })
                 }).then(function (payload) {
                     if (!payload.ok) {
                         showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);

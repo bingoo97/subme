@@ -1214,8 +1214,12 @@
 				return false;
 			}
 
-			if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailInvalid || 'Enter a valid email address.', true);
+			if (email.charAt(0) === '@') {
+				email = '@' + email.slice(1).replace(/[^a-z0-9._-]+/g, '');
+			}
+
+			if (!(/^@[a-z0-9._-]{2,}$/i.test(email) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailInvalid || 'Enter a valid email address or handle starting with @.', true);
 				return false;
 			}
 

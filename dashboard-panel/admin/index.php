@@ -2424,7 +2424,11 @@ $chatActiveCount = 0;
 
 foreach ($chatInboxRows as $chatRow) {
     if ((string)($chatRow['conversation_type'] ?? 'live_chat') === 'group_chat') {
-        $chatPresence = ['key' => 'online', 'label' => admin_t($messages, 'group_chat_badge', 'Group chat'), 'class_name' => 'admin-chat-presence admin-chat-presence--online'];
+        $chatPresence = [
+            'key' => (string)($chatRow['summary_presence_key'] ?? 'offline'),
+            'label' => (string)($chatRow['summary_presence_label'] ?? admin_t($messages, 'group_chat_badge', 'Group chat')),
+            'class_name' => (string)($chatRow['summary_presence_class_name'] ?? 'admin-chat-presence admin-chat-presence--offline'),
+        ];
     } else {
         $chatPresence = admin_chat_customer_presence(
             $db,
@@ -2706,7 +2710,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 role="button"
                                                 tabindex="0"
                                                 aria-label="<?php echo admin_e($displayName); ?>">
-                                                <div class="admin-chat-inbox__avatar <?php echo admin_e(admin_chat_avatar_theme($chatRow)); ?>"><?php echo admin_e(admin_chat_avatar_text($chatRow, $messages)); ?></div>
+                                                <?php echo admin_chat_avatar_html($chatRow, $messages); ?>
                                                 <div class="admin-chat-inbox__item-content">
                                                     <div class="admin-chat-inbox__item-head">
                                                         <div class="admin-chat-inbox__item-title">
@@ -2747,6 +2751,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <i class="bi bi-arrow-left"></i>
                                     </button>
                                     <div class="admin-chat-inbox__conversation-title-wrap">
+                                        <span data-admin-chat-conversation-avatar><?php echo admin_chat_avatar_html(['conversation_type' => 'group_chat', 'avatar_text' => 'S', 'avatar_theme' => 'theme-6'], $messages, 'admin-chat-inbox__avatar--sm'); ?></span>
                                         <span data-admin-chat-conversation-status><?php echo admin_chat_presence_dot_html(['class_name' => 'admin-chat-presence admin-chat-presence--offline', 'label' => admin_t($messages, 'chat_presence_offline', 'Offline')]); ?></span>
                                         <a href="#" class="admin-chat-inbox__conversation-title" data-admin-chat-conversation-title><?php echo admin_e(admin_t($messages, 'chat_inbox_title', 'Live chat inbox')); ?></a>
                                         <span class="admin-chat-inbox__conversation-badge" data-admin-chat-conversation-badge hidden><?php echo admin_e(admin_t($messages, 'chat_group_header_badge', 'Admin group')); ?></span>
@@ -2888,7 +2893,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <div class="admin-chat-inbox__quick-header">
                                         <div>
                                             <strong><?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?></strong>
-                                            <p><?php echo admin_e(admin_t($messages, 'group_chat_create_intro', 'Add reseller or admin emails and create a compact group chat. Invitations expire automatically after 24 hours if they are not accepted.')); ?></p>
+                                            <p><?php echo admin_e(admin_t($messages, 'group_chat_create_intro', 'Add reseller or admin email, or start typing a handle with @, to create a compact group chat. Invitations expire automatically after 24 hours if they are not accepted.')); ?></p>
                                         </div>
                                         <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-group-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
                                             <i class="bi bi-x-lg" aria-hidden="true"></i>
@@ -2901,9 +2906,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <input type="text" class="form-control" data-admin-chat-group-name maxlength="20" placeholder="<?php echo admin_e(admin_t($messages, 'group_chat_name_placeholder', 'Example: Reseller briefing')); ?>">
                                             </label>
                                         <label class="form-label">
-                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_add_by_email', 'Add participant by email')); ?></span>
+                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_add_by_email', 'Add participant by email or @handle')); ?></span>
                                             <div class="admin-chat-group-modal__add-row">
-                                                <input type="email" class="form-control" data-admin-chat-group-email placeholder="name@example.com">
+                                                <input type="text" class="form-control" data-admin-chat-group-email placeholder="name@example.com lub @nick">
                                                 <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-group-add><?php echo admin_e(admin_t($messages, 'add', 'Add')); ?></button>
                                             </div>
                                             <small class="admin-chat-group-modal__hint"><?php echo admin_e(admin_t($messages, 'group_chat_invite_expiry_note', 'Each invitation is valid for 24 hours. If it is not accepted in time, it is removed automatically.')); ?></small>
@@ -6987,7 +6992,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         ?>
                                                         <article class="admin-live-chat-item<?php echo $isUnread ? ' is-unread' : ''; ?>">
                                                             <div class="admin-live-chat-item__main">
-                                                                <div class="admin-chat-inbox__avatar <?php echo admin_e(admin_chat_avatar_theme($chatRow)); ?>"><?php echo admin_e(admin_chat_avatar_text($chatRow, $messages)); ?></div>
+                                                                <?php echo admin_chat_avatar_html($chatRow, $messages); ?>
                                                                 <div class="admin-live-chat-item__content">
                                                                     <div class="admin-live-chat-item__topline">
                                                                         <div class="admin-live-chat-item__title">
@@ -7062,7 +7067,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div class="admin-live-chat-selected">
                                                     <div class="admin-live-chat-selected__summary">
                                                         <div class="admin-live-chat-selected__identity">
-                                                            <div class="admin-chat-inbox__avatar theme-1"><?php echo admin_e(strtoupper(substr((string)($chatSelectedCustomer['email'] ?? 'C'), 0, 1))); ?></div>
+                                                            <?php echo admin_chat_avatar_html((array)$chatSelectedConversationRow, $messages); ?>
                                                             <div>
                                                                 <strong><?php echo admin_e((string)($chatSelectedCustomer['email'] ?? '')); ?></strong>
                                                                 <div class="admin-live-chat-selected__meta">

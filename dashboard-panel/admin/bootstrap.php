@@ -7792,6 +7792,8 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
             support_conversations.last_customer_message_at,
             support_conversations.last_admin_message_at,
             customers.email AS customer_email,
+            NULLIF(TRIM(customers.public_handle), '') AS customer_public_handle,
+            customers.avatar_url AS customer_avatar_url,
             customers.last_login_at AS customer_last_login_at,
             (
                 SELECT support_messages.message_body
@@ -7827,7 +7829,24 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     );
 
     if ($adminUserId > 0) {
-        $rows = array_merge($rows, chat_admin_group_conversation_rows($db, $adminUserId));
+        $groupRows = chat_admin_group_conversation_rows($db, $adminUserId);
+        foreach ($groupRows as &$groupRow) {
+            $summary = chat_group_conversation_summary(
+                $db,
+                (int)($groupRow['id'] ?? 0),
+                ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
+                $groupRow
+            );
+            $groupRow['summary_title'] = (string)($summary['title'] ?? '');
+            $groupRow['summary_presence_key'] = (string)($summary['presence']['key'] ?? 'offline');
+            $groupRow['summary_presence_label'] = (string)($summary['presence']['label'] ?? 'Offline');
+            $groupRow['summary_presence_class_name'] = (string)($summary['presence']['class_name'] ?? 'admin-chat-presence admin-chat-presence--offline');
+            $groupRow['avatar_url'] = (string)($summary['avatar_url'] ?? '');
+            $groupRow['avatar_text'] = (string)($summary['avatar_text'] ?? 'G');
+            $groupRow['avatar_theme'] = (string)($summary['avatar_theme'] ?? 'theme-6');
+        }
+        unset($groupRow);
+        $rows = array_merge($rows, $groupRows);
     }
 
     usort($rows, static function (array $left, array $right): int {
@@ -8233,34 +8252,187 @@ function admin_chat_presence_dot_html(array $presence): string
     return '<span class="' . admin_e($className) . '" title="' . admin_e($label) . '" aria-label="' . admin_e($label) . '"></span>';
 }
 
-function admin_chat_search_customers(Mysql_ks $db, string $query, int $limit = 8): array
+function admin_find_existing_admin_direct_conversation_id(Mysql_ks $db, int $adminUserId, int $targetAdminUserId): int
+{
+    if (
+        $adminUserId <= 0
+        || $targetAdminUserId <= 0
+        || $adminUserId === $targetAdminUserId
+        || !schema_object_exists($db, 'support_conversations')
+        || !schema_object_exists($db, 'support_conversation_members')
+    ) {
+        return 0;
+    }
+
+    $selfKey = $db->escape(chat_participant_key_for_admin($adminUserId));
+    $targetKey = $db->escape(chat_participant_key_for_admin($targetAdminUserId));
+    $row = $db->select_user(
+        "SELECT support_conversations.id
+         FROM support_conversations
+         INNER JOIN support_conversation_members AS member_self
+            ON member_self.conversation_id = support_conversations.id
+         INNER JOIN support_conversation_members AS member_target
+            ON member_target.conversation_id = support_conversations.id
+         WHERE support_conversations.conversation_type = 'group_chat'
+           AND member_self.participant_key = '{$selfKey}'
+           AND member_self.invite_status = 'accepted'
+           AND member_target.participant_key = '{$targetKey}'
+           AND member_target.invite_status = 'accepted'
+           AND NOT EXISTS (
+                SELECT 1
+                FROM support_conversation_members AS other_members
+                WHERE other_members.conversation_id = support_conversations.id
+                  AND other_members.invite_status = 'accepted'
+                  AND other_members.participant_key NOT IN ('{$selfKey}', '{$targetKey}')
+           )
+         ORDER BY support_conversations.id ASC
+         LIMIT 1"
+    );
+
+    return (int)($row['id'] ?? 0);
+}
+
+function admin_find_or_create_admin_direct_conversation(Mysql_ks $db, int $adminUserId, int $targetAdminUserId): int
+{
+    $existingConversationId = admin_find_existing_admin_direct_conversation_id($db, $adminUserId, $targetAdminUserId);
+    if ($existingConversationId > 0) {
+        return $existingConversationId;
+    }
+
+    if ($targetAdminUserId <= 0 || !schema_object_exists($db, 'admin_users')) {
+        return 0;
+    }
+
+    $targetAdmin = $db->select_user(
+        "SELECT id, email
+         FROM admin_users
+         WHERE id = {$targetAdminUserId}
+           AND status = 'active'
+         LIMIT 1"
+    );
+    if (!is_array($targetAdmin) || empty($targetAdmin['id']) || trim((string)($targetAdmin['email'] ?? '')) === '') {
+        return 0;
+    }
+
+    $result = admin_chat_create_group_conversation($db, $adminUserId, '', [(string)$targetAdmin['email']], false);
+    if (empty($result['ok'])) {
+        return 0;
+    }
+
+    return (int)($result['conversation_id'] ?? 0);
+}
+
+function admin_chat_search_customers(Mysql_ks $db, string $query, int $limit = 8, int $adminUserId = 0): array
 {
     $query = trim($query);
-    if ($query === '' || !schema_object_exists($db, 'customers')) {
+    if ($query === '') {
         return [];
     }
 
     $limit = max(1, min(15, $limit));
-    $safeLike = $db->escape('%' . $query . '%');
+    $isHandleSearch = strpos($query, '@') === 0;
+    $needle = $isHandleSearch ? chat_normalize_public_handle((string)substr($query, 1)) : strtolower($query);
+    if ($needle === '') {
+        return [];
+    }
 
-    return $db->select_full_user(
-        "SELECT
-            customers.id,
-            customers.email,
-            customers.status,
-            (
-                SELECT support_conversations.id
-                FROM support_conversations
-                WHERE support_conversations.customer_id = customers.id
-                  AND support_conversations.conversation_type = 'live_chat'
-                ORDER BY support_conversations.id DESC
-                LIMIT 1
-            ) AS conversation_id
-         FROM customers
-         WHERE customers.email LIKE '{$safeLike}'
-         ORDER BY customers.email ASC
-         LIMIT {$limit}"
-    );
+    $rows = [];
+    $safeLike = $db->escape('%' . $needle . '%');
+
+    if (schema_object_exists($db, 'customers')) {
+        $customerWhere = $isHandleSearch
+            ? "LOWER(customers.public_handle) LIKE '{$safeLike}'"
+            : "LOWER(customers.email) LIKE '{$safeLike}'";
+        $customerRows = $db->select_full_user(
+            "SELECT
+                customers.id,
+                customers.email,
+                customers.status,
+                customers.public_handle,
+                customers.avatar_url,
+                customers.customer_type,
+                (
+                    SELECT support_conversations.id
+                    FROM support_conversations
+                    WHERE support_conversations.customer_id = customers.id
+                      AND support_conversations.conversation_type = 'live_chat'
+                    ORDER BY support_conversations.id DESC
+                    LIMIT 1
+                ) AS conversation_id
+             FROM customers
+             WHERE {$customerWhere}
+             ORDER BY customers.email ASC
+             LIMIT {$limit}"
+        );
+
+        foreach ($customerRows as $customerRow) {
+            $customerAvatar = admin_chat_avatar_payload([
+                'conversation_type' => 'live_chat',
+                'customer_email' => (string)($customerRow['email'] ?? ''),
+                'customer_public_handle' => (string)($customerRow['public_handle'] ?? ''),
+                'customer_avatar_url' => (string)($customerRow['avatar_url'] ?? ''),
+            ]);
+            $rows[] = [
+                'participant_type' => 'customer',
+                'id' => (int)($customerRow['id'] ?? 0),
+                'email' => (string)($customerRow['email'] ?? ''),
+                'display_name' => (string)($customerRow['public_handle'] ?? '') !== '' ? '@' . (string)$customerRow['public_handle'] : admin_string_truncate((string)($customerRow['email'] ?? ''), 20),
+                'meta_label' => (string)($customerRow['email'] ?? ''),
+                'conversation_id' => (int)($customerRow['conversation_id'] ?? 0),
+                'avatar_url' => (string)($customerAvatar['url'] ?? ''),
+                'avatar_text' => (string)($customerAvatar['text'] ?? 'U'),
+                'avatar_theme' => (string)($customerAvatar['theme'] ?? 'theme-1'),
+            ];
+        }
+    }
+
+    if (schema_object_exists($db, 'admin_users')) {
+        $adminWhere = $isHandleSearch
+            ? "LOWER(admin_users.public_handle) LIKE '{$safeLike}'"
+            : "(LOWER(admin_users.email) LIKE '{$safeLike}' OR LOWER(admin_users.login_name) LIKE '{$safeLike}')";
+        $adminRows = $db->select_full_user(
+            "SELECT
+                admin_users.id,
+                admin_users.email,
+                admin_users.login_name,
+                admin_users.public_handle,
+                admin_users.avatar_url
+             FROM admin_users
+             WHERE admin_users.status = 'active'
+               AND {$adminWhere}
+             ORDER BY admin_users.email ASC
+             LIMIT {$limit}"
+        );
+
+        foreach ($adminRows as $adminRow) {
+            $targetAdminId = (int)($adminRow['id'] ?? 0);
+            if ($targetAdminId <= 0 || $targetAdminId === $adminUserId) {
+                continue;
+            }
+            $adminAvatar = chat_admin_avatar_payload_from_row([
+                'public_handle' => (string)($adminRow['public_handle'] ?? ''),
+                'login_name' => (string)($adminRow['login_name'] ?? ''),
+                'avatar_url' => (string)($adminRow['avatar_url'] ?? ''),
+            ]);
+            $rows[] = [
+                'participant_type' => 'admin',
+                'id' => $targetAdminId,
+                'email' => (string)($adminRow['email'] ?? ''),
+                'display_name' => '@' . chat_admin_display_label($adminRow),
+                'meta_label' => 'Administrator',
+                'conversation_id' => admin_find_existing_admin_direct_conversation_id($db, $adminUserId, $targetAdminId),
+                'avatar_url' => (string)($adminAvatar['avatar_url'] ?? ''),
+                'avatar_text' => (string)($adminAvatar['avatar_text'] ?? 'A'),
+                'avatar_theme' => (string)($adminAvatar['avatar_theme'] ?? 'theme-6'),
+            ];
+        }
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return strcasecmp((string)($left['display_name'] ?? ''), (string)($right['display_name'] ?? ''));
+    });
+
+    return array_slice($rows, 0, $limit);
 }
 
 function admin_string_truncate(string $value, int $maxLength = 20): string
@@ -8288,7 +8460,11 @@ function admin_string_truncate(string $value, int $maxLength = 20): string
 function admin_chat_display_name(array $row, array $messages, int $maxLength = 20): string
 {
     if (trim((string)($row['conversation_type'] ?? '')) === 'group_chat') {
-        return admin_string_truncate(chat_group_conversation_title($row, admin_t($messages, 'group_chat_badge', 'Group chat')), $maxLength);
+        $title = trim((string)($row['summary_title'] ?? ''));
+        if ($title === '') {
+            $title = chat_group_conversation_title($row, admin_t($messages, 'group_chat_badge', 'Group chat'));
+        }
+        return admin_string_truncate($title, $maxLength);
     }
 
     $email = trim((string)($row['customer_email'] ?? ''));
@@ -8299,24 +8475,68 @@ function admin_chat_display_name(array $row, array $messages, int $maxLength = 2
     return admin_string_truncate($email, $maxLength);
 }
 
-function admin_chat_avatar_text(array $row, array $messages): string
+function admin_chat_avatar_payload(array $row, array $messages = []): array
 {
     if (trim((string)($row['conversation_type'] ?? '')) === 'group_chat') {
-        return 'G';
+        $avatarUrl = trim((string)($row['avatar_url'] ?? ''));
+        $avatarText = trim((string)($row['avatar_text'] ?? 'G'));
+        $avatarTheme = trim((string)($row['avatar_theme'] ?? 'theme-6'));
+
+        return [
+            'url' => $avatarUrl,
+            'text' => $avatarText !== '' ? $avatarText : 'G',
+            'theme' => $avatarTheme !== '' ? $avatarTheme : 'theme-6',
+        ];
     }
 
-    $email = trim((string)($row['customer_email'] ?? ''));
-    if ($email === '') {
-        return 'C';
+    $customerRow = [
+        'public_handle' => (string)($row['customer_public_handle'] ?? ''),
+        'email' => (string)($row['customer_email'] ?? ''),
+        'avatar_url' => (string)($row['customer_avatar_url'] ?? ''),
+    ];
+
+    $avatarUrl = function_exists('app_customer_avatar_url')
+        ? app_customer_avatar_url((string)$customerRow['avatar_url'])
+        : trim((string)$customerRow['avatar_url']);
+    $avatarText = function_exists('app_customer_avatar_initial')
+        ? app_customer_avatar_initial($customerRow)
+        : strtoupper(substr((string)($customerRow['public_handle'] ?: $customerRow['email'] ?: 'U'), 0, 1));
+    $avatarTheme = function_exists('app_customer_avatar_theme')
+        ? app_customer_avatar_theme($customerRow)
+        : admin_chat_avatar_theme($row);
+
+    return [
+        'url' => $avatarUrl,
+        'text' => $avatarText !== '' ? $avatarText : 'U',
+        'theme' => $avatarTheme !== '' ? $avatarTheme : 'theme-1',
+    ];
+}
+
+function admin_chat_avatar_html(array $row, array $messages = [], string $extraClass = ''): string
+{
+    $avatar = admin_chat_avatar_payload($row, $messages);
+    $classes = trim('admin-chat-inbox__avatar ' . (string)($avatar['theme'] ?? 'theme-1') . ' ' . $extraClass);
+    $label = trim((string)($avatar['text'] ?? 'U'));
+    $url = trim((string)($avatar['url'] ?? ''));
+
+    if ($url !== '') {
+        return '<span class="' . admin_e($classes) . '"><img src="' . admin_e($url) . '" alt="' . admin_e($label !== '' ? $label : 'Avatar') . '"></span>';
     }
 
-    return strtoupper(substr($email, 0, 1));
+    return '<span class="' . admin_e($classes) . '">' . admin_e($label !== '' ? $label : 'U') . '</span>';
+}
+
+function admin_chat_avatar_text(array $row, array $messages): string
+{
+    $avatar = admin_chat_avatar_payload($row, $messages);
+    return (string)($avatar['text'] ?? 'U');
 }
 
 function admin_chat_avatar_theme(array $row): string
 {
     if (trim((string)($row['conversation_type'] ?? '')) === 'group_chat') {
-        return 'theme-6';
+        $theme = trim((string)($row['avatar_theme'] ?? 'theme-6'));
+        return $theme !== '' ? $theme : 'theme-6';
     }
 
     $seed = trim((string)($row['customer_email'] ?? ''));
@@ -8373,6 +8593,8 @@ function admin_chat_conversation_row(Mysql_ks $db, int $conversationId): ?array
             support_conversations.created_at,
             support_conversations.updated_at,
             customers.email AS customer_email,
+            NULLIF(TRIM(customers.public_handle), '') AS customer_public_handle,
+            customers.avatar_url AS customer_avatar_url,
             customers.last_login_at AS customer_last_login_at,
             customers.locale_code AS customer_locale_code
          FROM support_conversations

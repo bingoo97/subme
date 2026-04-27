@@ -448,8 +448,15 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         chat_ensure_group_chat_runtime($db);
         chat_expire_stale_group_invites($db);
-        $email = strtolower(trim($email));
-        if ($email === '') {
+        $identifierRaw = trim($email);
+        if ($identifierRaw === '') {
+            return null;
+        }
+
+        $isHandleLookup = strpos($identifierRaw, '@') === 0;
+        $email = strtolower($identifierRaw);
+        $handle = $isHandleLookup ? chat_normalize_public_handle((string)substr($identifierRaw, 1)) : '';
+        if ($isHandleLookup && $handle === '') {
             return null;
         }
 
@@ -458,13 +465,23 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 app_ensure_customer_runtime_columns($db);
             }
 
-            $safeEmail = $db->escape($email);
-            $customer = $db->select_user(
-                "SELECT id, email, customer_type, public_handle, avatar_url
-                 FROM customers
-                 WHERE LOWER(email) = '{$safeEmail}'
-                 LIMIT 1"
-            );
+            if ($isHandleLookup) {
+                $safeHandle = $db->escape($handle);
+                $customer = $db->select_user(
+                    "SELECT id, email, customer_type, public_handle, avatar_url
+                     FROM customers
+                     WHERE LOWER(public_handle) = '{$safeHandle}'
+                     LIMIT 1"
+                );
+            } else {
+                $safeEmail = $db->escape($email);
+                $customer = $db->select_user(
+                    "SELECT id, email, customer_type, public_handle, avatar_url
+                     FROM customers
+                     WHERE LOWER(email) = '{$safeEmail}'
+                     LIMIT 1"
+                );
+            }
             if (is_array($customer) && !empty($customer['id']) && chat_customer_can_use_groups($customer)) {
                 return [
                     'participant_type' => 'customer',
@@ -478,14 +495,25 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         if (schema_object_exists($db, 'admin_users')) {
-            $safeEmail = $db->escape($email);
-            $admin = $db->select_user(
-                "SELECT id, email, login_name, public_handle
-                 FROM admin_users
-                 WHERE LOWER(email) = '{$safeEmail}'
-                   AND status = 'active'
-                 LIMIT 1"
-            );
+            if ($isHandleLookup) {
+                $safeHandle = $db->escape($handle);
+                $admin = $db->select_user(
+                    "SELECT id, email, login_name, public_handle
+                     FROM admin_users
+                     WHERE LOWER(public_handle) = '{$safeHandle}'
+                       AND status = 'active'
+                     LIMIT 1"
+                );
+            } else {
+                $safeEmail = $db->escape($email);
+                $admin = $db->select_user(
+                    "SELECT id, email, login_name, public_handle
+                     FROM admin_users
+                     WHERE LOWER(email) = '{$safeEmail}'
+                       AND status = 'active'
+                     LIMIT 1"
+                );
+            }
             if (is_array($admin) && !empty($admin['id'])) {
                 return [
                     'participant_type' => 'admin',
@@ -506,14 +534,25 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         chat_ensure_group_chat_runtime($db);
         chat_expire_stale_group_invites($db);
 
-        $normalizedEmail = strtolower(trim($email));
-        if ($normalizedEmail === '' || !filter_var($normalizedEmail, FILTER_VALIDATE_EMAIL)) {
-            return ['ok' => false, 'message' => 'Enter a valid email address.'];
+        $normalizedEmail = trim($email);
+        $isHandleLookup = strpos($normalizedEmail, '@') === 0;
+        if ($normalizedEmail === '') {
+            return ['ok' => false, 'message' => 'Enter a valid email address or handle starting with @.'];
+        }
+
+        if ($isHandleLookup) {
+            $normalizedHandle = chat_normalize_public_handle((string)substr($normalizedEmail, 1));
+            if ($normalizedHandle === '') {
+                return ['ok' => false, 'message' => 'Enter a valid handle starting with @.'];
+            }
+            $normalizedEmail = '@' . $normalizedHandle;
+        } elseif (!filter_var(strtolower($normalizedEmail), FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => false, 'message' => 'Enter a valid email address or handle starting with @.'];
         }
 
         $invitee = chat_resolve_group_invitee_by_email($db, $normalizedEmail);
         if (!$invitee) {
-            return ['ok' => false, 'message' => 'No reseller or admin account was found for this email.'];
+            return ['ok' => false, 'message' => 'No reseller or admin account was found for this email or handle.'];
         }
 
         $creatorType = trim((string)($creator['participant_type'] ?? ''));

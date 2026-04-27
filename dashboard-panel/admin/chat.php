@@ -38,15 +38,21 @@ if ($action === 'validate_group_email' && !admin_csrf_is_valid($_POST['_csrf'] ?
 
 if ($action === 'search_users') {
     $query = trim((string)($_GET['q'] ?? $_POST['q'] ?? ''));
-    $rows = admin_chat_search_customers($db, $query);
+    $rows = admin_chat_search_customers($db, $query, 8, (int)$adminUser['id']);
     echo json_encode([
         'ok' => true,
         'items' => array_map(static function (array $row): array {
             return [
-                'customer_id' => (int)$row['id'],
+                'participant_type' => (string)($row['participant_type'] ?? 'customer'),
+                'customer_id' => (string)($row['participant_type'] ?? 'customer') === 'customer' ? (int)$row['id'] : 0,
+                'admin_user_id' => (string)($row['participant_type'] ?? '') === 'admin' ? (int)$row['id'] : 0,
                 'email' => (string)$row['email'],
-                'display_name' => admin_string_truncate((string)$row['email'], 20),
+                'display_name' => (string)($row['display_name'] ?? admin_string_truncate((string)$row['email'], 20)),
+                'meta_label' => (string)($row['meta_label'] ?? (string)$row['email']),
                 'conversation_id' => !empty($row['conversation_id']) ? (int)$row['conversation_id'] : 0,
+                'avatar_url' => (string)($row['avatar_url'] ?? ''),
+                'avatar_text' => (string)($row['avatar_text'] ?? 'U'),
+                'avatar_theme' => (string)($row['avatar_theme'] ?? 'theme-1'),
             ];
         }, $rows),
     ]);
@@ -113,13 +119,31 @@ if ($action === 'leave_group') {
 
 if ($action === 'start_conversation') {
     $customerId = isset($_POST['customer_id']) ? (int)$_POST['customer_id'] : 0;
-    if ($customerId <= 0) {
-        http_response_code(422);
-        echo json_encode(['ok' => false, 'message' => 'Customer ID is required.']);
-        exit;
+    $targetAdminUserId = isset($_POST['admin_user_id']) ? (int)$_POST['admin_user_id'] : 0;
+    $participantType = trim((string)($_POST['participant_type'] ?? ($targetAdminUserId > 0 ? 'admin' : 'customer')));
+    if ($participantType === 'admin') {
+        if ($targetAdminUserId <= 0) {
+            http_response_code(422);
+            echo json_encode(['ok' => false, 'message' => 'Admin ID is required.']);
+            exit;
+        }
+
+        $conversationId = admin_find_or_create_admin_direct_conversation($db, (int)$adminUser['id'], $targetAdminUserId);
+    } else {
+        if ($customerId <= 0) {
+            http_response_code(422);
+            echo json_encode(['ok' => false, 'message' => 'Customer ID is required.']);
+            exit;
+        }
+
+        $conversationId = admin_find_or_create_chat_conversation($db, $customerId, (int)$adminUser['id']);
     }
 
-    $conversationId = admin_find_or_create_chat_conversation($db, $customerId, (int)$adminUser['id']);
+    if ($conversationId <= 0) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Unable to start conversation.']);
+        exit;
+    }
 }
 
 if ($action === 'delete_conversation') {
@@ -226,6 +250,8 @@ $conversationRow = $db->select_user(
         support_conversations.created_at,
         support_conversations.updated_at,
         customers.email AS customer_email,
+        NULLIF(TRIM(customers.public_handle), '') AS customer_public_handle,
+        customers.avatar_url AS customer_avatar_url,
         customers.last_login_at AS customer_last_login_at,
         customers.locale_code AS customer_locale_code
      FROM support_conversations
@@ -246,18 +272,40 @@ if ((string)($conversationRow['conversation_type'] ?? 'live_chat') === 'group_ch
     exit;
 }
 
-if ((string)($conversationRow['conversation_type'] ?? 'live_chat') === 'group_chat') {
+$conversationType = (string)($conversationRow['conversation_type'] ?? 'live_chat');
+
+if ($conversationType === 'group_chat') {
     chat_mark_group_read_for_admin($db, (int)$adminUser['id'], $conversationId);
 } else {
     admin_mark_chat_conversation_read($db, $conversationId);
 }
 
+$conversationTitle = admin_chat_display_name($conversationRow, $messages, 20);
 $presence = admin_chat_customer_presence(
     $db,
     (int)($conversationRow['customer_id'] ?? 0),
     (string)($conversationRow['customer_last_login_at'] ?? ''),
     $messages
 );
+$avatarHtml = admin_chat_avatar_html($conversationRow, $messages, 'admin-chat-inbox__avatar--sm');
+
+if ($conversationType === 'group_chat') {
+    $summary = chat_group_conversation_summary(
+        $db,
+        $conversationId,
+        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => (int)$adminUser['id']],
+        $conversationRow
+    );
+    if ($summary) {
+        $conversationRow['summary_title'] = (string)($summary['title'] ?? '');
+        $conversationRow['avatar_url'] = (string)($summary['avatar_url'] ?? '');
+        $conversationRow['avatar_text'] = (string)($summary['avatar_text'] ?? 'G');
+        $conversationRow['avatar_theme'] = (string)($summary['avatar_theme'] ?? 'theme-6');
+        $conversationTitle = admin_chat_display_name($conversationRow, $messages, 20);
+        $presence = is_array($summary['presence'] ?? null) ? $summary['presence'] : $presence;
+        $avatarHtml = admin_chat_avatar_html($conversationRow, $messages, 'admin-chat-inbox__avatar--sm');
+    }
+}
 
 if ($action === 'payment_modal') {
     if ((string)($conversationRow['conversation_type'] ?? 'live_chat') !== 'live_chat') {
@@ -433,10 +481,11 @@ echo json_encode([
     'ok' => true,
     'conversation_id' => $conversationId,
     'customer_id' => (int)($conversationRow['customer_id'] ?? 0),
-    'conversation_type' => (string)($conversationRow['conversation_type'] ?? 'live_chat'),
+    'conversation_type' => $conversationType,
     'is_group_read_only' => !empty($conversationRow['is_group_read_only']),
-    'title' => admin_chat_display_name($conversationRow, $messages, 20),
+    'title' => $conversationTitle,
     'presence' => $presence,
+    'avatar_html' => $avatarHtml,
     'pending_crypto_payment' => $pendingCryptoPayment,
     'html' => admin_render_chat_conversation_html($conversationRow, $messageRows, $messages),
     'quick_replies' => array_map(static function (array $row): array {

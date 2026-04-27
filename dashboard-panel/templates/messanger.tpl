@@ -106,12 +106,12 @@
                                     <div class="messenger-group-context" id="messenger_group_context_title"></div>
                                 </div>
                                 <div class="messenger-group-field">
-                                    <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Dodaj resellera po emailu'}</span>
+                                    <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Dodaj resellera po emailu lub @nicku'}</span>
                                     <div class="messenger-group-add-row">
-                                        <input type="email" class="form-control" id="messenger_group_email" placeholder="name@example.com">
+                                        <input type="text" class="form-control" id="messenger_group_email" placeholder="name@example.com lub @nick">
                                         <button type="button" class="btn btn-default" data-messenger-group-add>{$t.add|default:'Add'}</button>
                                     </div>
-                                    <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email resellera, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
+                                    <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email resellera lub wpisz @nick, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
                                 </div>
                                 <div class="messenger-group-members" id="messenger_group_members"></div>
                                 <div class="messenger-group-actions">

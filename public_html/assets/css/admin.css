@@ -397,6 +397,14 @@ body.admin-login-page{
     z-index:1050;
 }
 
+.admin-chat-inbox__avatar img{
+    width:100%;
+    height:100%;
+    display:block;
+    object-fit:cover;
+    border-radius:50%;
+}
+
 .admin-chat-inbox__list-view,
 .admin-chat-inbox__conversation-view{
     height:100%;
@@ -563,6 +571,13 @@ body.admin-login-page{
     cursor:pointer;
 }
 
+.admin-chat-inbox__search-copy{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:.12rem;
+}
+
 .admin-chat-inbox__search-item + .admin-chat-inbox__search-item{
     margin-top:.55rem;
 }
@@ -723,6 +738,13 @@ body.admin-login-page{
     letter-spacing:.03em;
     text-transform:uppercase;
     white-space:nowrap;
+}
+
+.admin-chat-inbox__avatar--sm{
+    width:38px;
+    height:38px;
+    flex:0 0 38px;
+    font-size:.88rem;
 }
 
 .admin-chat-inbox__item-head strong{
@@ -5141,7 +5163,9 @@ body.admin-login-page{
         right:0;
         left:0;
         width:100vw;
-        height:100vh;
+        width:100dvw;
+        height:var(--admin-chat-viewport-height, 100dvh);
+        max-height:var(--admin-chat-viewport-height, 100dvh);
         border-radius:0;
         border:none;
         box-shadow:none;
@@ -5152,6 +5176,10 @@ body.admin-login-page{
         padding:1rem 1rem .9rem;
     }
 
+    .admin-chat-inbox__conversation-view{
+        min-height:0;
+    }
+
     .admin-chat-inbox__header{
         gap:.65rem;
     }
@@ -5159,6 +5187,18 @@ body.admin-login-page{
     .admin-chat-inbox__list,
     .admin-chat-inbox__conversation-body{
         padding:.75rem;
+    }
+
+    .admin-chat-inbox__composer{
+        padding:.75rem .75rem calc(.75rem + env(safe-area-inset-bottom, 0px));
+    }
+
+    .admin-chat-inbox__composer-row{
+        align-items:flex-end;
+    }
+
+    .admin-chat-inbox__composer-input{
+        min-height:44px;
     }
 
     .admin-chat-inbox__remove{
