@@ -27,6 +27,7 @@
 		noticeTimer: null,
 		lastUnreadCount: 0,
 		lastKnownScrollTop: 0,
+		userBrowsingHistory: false,
 		linkPreviewTimer: null,
 		linkPreviewUrl: '',
 		linkPreviewData: null,
@@ -138,7 +139,9 @@
 
 			$scroll.off('.messengerUiScroll');
 			$scroll.on('scroll.messengerUiScroll', function () {
+				var distanceFromBottom = Math.max(0, this.scrollHeight - this.clientHeight - this.scrollTop);
 				self.lastKnownScrollTop = this.scrollTop;
+				self.userBrowsingHistory = distanceFromBottom > 24;
 				self.maybeLoadOlderMessages();
 			});
 		},
@@ -490,6 +493,7 @@
 			if (metrics && metrics.element) {
 				metrics.element.scrollTop = metrics.element.scrollHeight;
 				this.lastKnownScrollTop = metrics.element.scrollTop;
+				this.userBrowsingHistory = false;
 			}
 		},
 
@@ -503,6 +507,7 @@
 
 			metrics.element.scrollTop = Math.min(safeScrollTop, Math.max(0, metrics.element.scrollHeight - metrics.element.clientHeight));
 			this.lastKnownScrollTop = metrics.element.scrollTop;
+			this.userBrowsingHistory = Math.max(0, metrics.element.scrollHeight - metrics.element.clientHeight - metrics.element.scrollTop) > 24;
 		},
 
 		scheduleScrollToBottom: function () {
@@ -833,7 +838,7 @@
 				window.setTimeout(function () {
 					self.fetch({
 						force: true,
-						scrollToBottom: true
+						scrollToBottom: false
 					});
 				}, delay);
 			});
@@ -1542,7 +1547,7 @@
 
 			if (previousMetrics) {
 				this.lastKnownScrollTop = previousMetrics.scrollTop;
-				keepBottom = !!options.scrollToBottom || (this.isOpen() && previousMetrics.distanceFromBottom <= 48);
+				keepBottom = !!options.scrollToBottom || (this.isOpen() && !this.userBrowsingHistory && previousMetrics.distanceFromBottom <= 48);
 			} else {
 				keepBottom = !!options.scrollToBottom;
 			}

@@ -784,6 +784,7 @@
 	overflow:auto;
 	padding:.65rem;
 	background:#fbfbfb;
+	min-height: 450px;
 	scrollbar-width:none;
 	-ms-overflow-style:none;
 }
