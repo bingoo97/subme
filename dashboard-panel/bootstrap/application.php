@@ -1899,7 +1899,7 @@ function app_admin_avatar_url(string $value): string
 
 function app_customer_avatar_upload_directory(): string
 {
-    return dirname(__DIR__, 2) . '/public_html/uploads/avatars/customers';
+    return app_public_path('uploads/avatars/customers');
 }
 
 function app_customer_avatar_create_image_resource(string $sourcePath, string $mimeType)
@@ -2024,7 +2024,7 @@ function app_delete_customer_avatar_file(string $publicPath): bool
         return false;
     }
 
-    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
+    $publicRoot = realpath(app_public_path());
     if ($publicRoot === false) {
         return false;
     }
