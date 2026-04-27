@@ -3337,14 +3337,14 @@ CONTENT
 	display:block;
 	flex-wrap:wrap;
 	gap:12px;
-	margin: 2rem 0;
+	margin: 1.7rem 0;
 }
 
 .payment-method-start__button{
 	display:flex;
 	align-items:center;
 	justify-content:left;
-	gap:10px;
+	gap:12px;
 	min-width:320px;
 	border: 1px solid #eeeeee;
 	background:#000000;
@@ -3354,12 +3354,15 @@ CONTENT
 	font-weight: 600;
 	font-size: 18px;
 	padding-left:1.5rem;
+	margin: 10px 0;
+	border-width:2px;
 }
 
 .payment-method-start__button:hover{
-	background:#111;
+	background:#ffffff;
 	border-color:#111;
-	color:#fff;
+	color:#111;
+	border-width:2px;
 }
 
 .payment-method-panel{
