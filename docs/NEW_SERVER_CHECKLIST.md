@@ -216,7 +216,6 @@ Na serwerze:
 
 ```bash
 cd ~/app
-git stash push -m "docs-before-pull" -- docs/namecheap-deploy.sh docs/namecheap-rollback.sh docs/namecheap-import-db.sh docs/namecheap-import-canonical-db.sh docs/namecheap-init-instance.sh docs/namecheap-list-instances.sh docs/namecheap-multi-instance.md docs/README.md docs/SINGLE_DOMAIN_DEPLOYMENT_PLAN.md docs/NEW_SERVER_CHECKLIST.md || true
 git pull --ff-only origin main
 chmod +x ~/app/docs/namecheap-*.sh
 SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/app APP_URL=https://panel.twojadomena.pl ~/app/docs/namecheap-deploy.sh

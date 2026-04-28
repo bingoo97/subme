@@ -1,74 +1,107 @@
-# Deployment And Database Source Of Truth
+# Dokumentacja Aplikacji
 
-Ten plik jest glownym zrodlem prawdy dla deployu i pracy z baza danych w tym repo.
+Ten katalog opisuje tylko aktualny sposob dzialania aplikacji, deployu i bazy danych.
 
-## Co aplikacja naprawde wykorzystuje
+Nie trzymamy tu juz planow historycznych, starych modeli multi-instance ani notatek o wersjach przejsciowych.
 
-Aplikacja nie czyta danych z pliku `.sql` podczas normalnej pracy.
+## Najwazniejsze zasady
 
-W runtime zawsze korzysta z prawdziwej bazy MySQL:
+### 1. Jedno runtime source of truth dla danych
+
+Aplikacja podczas normalnej pracy korzysta z prawdziwej bazy MySQL.
 
 - lokalnie:
   - `dashboard-panel/config/mysql.php`
-  - w Dockerze domyslnie:
-    - `DB_HOST=db`
-    - `DB_NAME=reseller_v2`
-    - `DB_USER=marbodz_reseller`
+  - Docker domyslnie laczy sie z baza `reseller_v2`
 - na serwerze:
-  - instancjowy plik `mysql.php` z katalogu `~/.subme-secrets/<app-slug>/mysql.php`
-  - po deployu ten config trafia do aktywnego backendu
+  - aktywny `mysql.php` z `~/.subme-secrets/<app-slug>/mysql.php`
 
-To oznacza:
+Plik backupu SQL nie jest baza runtime.
 
-- `localhost` nie korzysta z backupu SQL jako bazy runtime
-- produkcja nie korzysta z backupu SQL jako bazy runtime
-- backup SQL jest tylko snapshotem do odtworzenia danych, nie aktywna baza
+### 2. Jedno source of truth dla schematu
 
-## Jedno zrodlo prawdy dla schematu
-
-Jedynym canonical source of truth dla schematu i seedow jest katalog:
+Jedynym canonical source of truth dla schematu i seedow jest:
 
 - `dashboard-panel/database/v2/`
 
 Najwazniejsze pliki:
 
-- `dashboard-panel/database/v2/001_core_schema.sql`
-  - tabele, kolumny, klucze, indeksy
-- `dashboard-panel/database/v2/002_seed_defaults.sql`
-  - ustawienia startowe, role, nawigacja, seedy
-- `dashboard-panel/database/v2/003_operational_views.sql`
-  - widoki operacyjne
+- `001_core_schema.sql`
+- `002_seed_defaults.sql`
+- `003_operational_views.sql`
 
-## Czego NIE traktujemy jako source of truth
+Kazda zmiana tabel, kolumn, indeksow lub widokow musi byc zapisana w tym katalogu.
+
+### 3. Jeden panel, jedna baza, jedna glowna instancja
+
+Aktualny kierunek projektu:
+
+- jedna glowna instancja panelu
+- jedna baza danych dla panelu
+- osobny landing page bez SQL
+- brak utrzymywania wielu subdomen z tym samym panelem jako modelu docelowego
+
+### 4. Panel nie jest jeszcze gotowy pod subfolder typu `/app`
+
+Kod nadal uzywa wielu sciezek absolutnych od `/`, dlatego:
+
+- panel najlepiej wdrazac jako osobny webroot / vhost
+- landing najlepiej trzymac jako osobny statyczny projekt
+
+## Najwazniejsza funkcjonalnosc
+
+Pelny opis jest tutaj:
+
+- `docs/FUNCTIONALITY.md`
+
+Najkrotsze podsumowanie:
+
+- user kupuje subskrypcje lub doladowuje saldo
+- admin zarzadza userami, produktami, zamowieniami, platnosciami i tresciami
+- crypto i bank transfery sa obslugiwane recznie z panelu admina
+- resellerzy i admini maja rozbudowany messenger z grupami i rozmowami `1 na 1`
+
+## Portfele krypto
+
+To jest aktualna i obowiazujaca logika systemu:
+
+- klient nie musi miec portfela przypisanego recznie z gory
+- jesli wybiera platnosc krypto i w puli jest wolny adres dla danego assetu, aplikacja przypisuje go automatycznie
+- request platnosci zapisuje `wallet_assignment_id`
+- jesli request zostanie anulowany i usuniety, assignment ma zostac zwolniony, a adres powinien wrocic na `available`
+
+Kluczowe tabele:
+
+- `crypto_wallet_addresses`
+- `crypto_wallet_assignments`
+- `crypto_deposit_requests`
+
+Przy przenoszeniu bazy na inny serwer trzeba pilnowac spojnosci tych trzech tabel.
+
+## Co jest tylko snapshotem, a nie source of truth
 
 Ponizsze rzeczy nie sa glownym zrodlem prawdy:
 
 - backup SQL pobrany z panelu admina
-- reczny export z phpMyAdmin
-- aktualny stan lokalnej bazy po testach
-- aktualny stan produkcyjnej bazy po klikaniu w panelu
-- same funkcje runtime typu `app_ensure_*` albo `chat_ensure_*`
-- sam katalog `dashboard-panel/migrations/`
+- export z phpMyAdmin
+- lokalny stan bazy po testach
+- produkcyjny stan bazy po klikaniu w panelu
+- runtime helpery typu `app_ensure_*`
 
-Wazne:
+Backup SQL sluzy tylko do archiwizacji i awaryjnego restore.
 
-- `dashboard-panel/migrations/` nie jest uruchamiany automatycznie w standardowym deployu Namecheap
-- jesli dodasz migracje, to ta sama zmiana i tak musi byc zapisana w `dashboard-panel/database/v2/`
-- helpery runtime w PHP sa tylko warstwa zgodnosci / safety net dla dzialajacych instancji
+## Aktualny workflow zmian DB
 
-## Zasada na przyszlosc
+Kazda zmiana DB powinna isc w tej kolejnosci:
 
-Kazda zmiana DB ma isc zawsze w tej kolejnosci:
+1. najpierw zmiana w `dashboard-panel/database/v2/`
+2. potem zmiana w PHP
+3. jesli trzeba, tymczasowy helper zgodnosci runtime
+4. aktualizacja dokumentacji w `docs/`, jesli zmiana jest operacyjnie wazna
 
-1. Najpierw zmieniasz SQL w `dashboard-panel/database/v2/`.
-2. Potem dopiero dopinasz kod PHP korzystajacy z tej zmiany.
-3. Jesli trzeba utrzymac zgodnosc ze stara, juz dzialajaca baza, mozesz dodac tymczasowy runtime helper `ALTER TABLE` / `CREATE TABLE`.
-4. Ale ten helper nigdy nie zastępuje wpisu w `dashboard-panel/database/v2/`.
-5. Jesli zmiana dotyczy deployu albo procesu DB, aktualizujesz tez ten plik `docs/README.md`.
+## Aktualny deploy
 
-## Normalny deploy kodu
-
-Na Macu:
+### Lokalnie
 
 ```bash
 cd /Users/bodzianek/CascadeProjects/RESELLER/reseller
@@ -77,206 +110,52 @@ git commit -m "Opis zmian"
 git push origin main
 ```
 
-Na serwerze:
+### Na serwerze
 
 ```bash
-cd ~/subme
-git stash push -m "docs-before-pull" -- docs/namecheap-deploy.sh docs/namecheap-rollback.sh docs/namecheap-import-db.sh docs/namecheap-import-canonical-db.sh docs/namecheap-init-instance.sh docs/namecheap-list-instances.sh || true
+cd ~/app
 git pull --ff-only origin main
-chmod +x ~/subme/docs/namecheap-*.sh
-SITE_HOST=dashboard.subme.pro APP_SLUG=dashboard-subme-pro WEB_DIR=~/dashboard.subme.pro REPO_DIR=~/subme ~/subme/docs/namecheap-deploy.sh
+chmod +x ~/app/docs/namecheap-*.sh
+SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/app APP_URL=https://panel.twojadomena.pl ~/app/docs/namecheap-deploy.sh
 ```
 
-Repo nie musi nazywac sie `subme`.
+Repo nie musi nazywac sie `subme`. W skryptach wazne sa:
 
-Mozesz trzymac kod np. w:
+- `REPO_DIR`
+- `WEB_DIR`
+- `SITE_HOST`
+- `APP_SLUG`
+- `APP_URL`
 
-- `~/app`
-- `~/reseller`
-- `~/project`
-
-Wtedy po prostu podajesz:
-
-- `REPO_DIR=~/app`
-
-## Model docelowy na nowy serwer
-
-Docelowo chcesz miec:
-
-- glowna domene
-- landing page bez SQL
-- jeden panel aplikacji
-- zero klonow tej samej aplikacji na wiele subdomen i wiele baz
-
-To jest dobry kierunek i zapisujemy go jako nowa zasade.
-
-### Nowa zasada architektoniczna
-
-Na nowym serwerze zakladamy:
-
-- jedna glowna aplikacja panelowa
-- jedna baza danych dla tej aplikacji
-- jeden katalog secrets dla tej aplikacji
-- jeden katalog rollbackow dla tej aplikacji
-- osobny landing statyczny bez polaczenia z MySQL
-
-### Bardzo wazne ograniczenie techniczne
-
-Obecny panel nie jest jeszcze gotowy do pracy pod subsciezka typu:
-
-- `https://twojadomena.pl/app`
-- `https://twojadomena.pl/panel`
-
-bo obecny kod ma wiele sciezek absolutnych typu:
-
-- `/admin/`
-- `/assets/`
-- `/uploads/`
-- `/check.php`
-
-To oznacza:
-
-- jesli panel ma dzialac bez subdomeny, najbezpieczniej dzisiaj uruchomic go jako glowna aplikacje w glownym webroot
-- jesli strona glowna ma byc osobnym landing page bez SQL, to wymaga to osobnego webroota albo przyszlego refaktoru aplikacji pod base-path
-
-### Co rekomenduje na teraz
-
-Najbezpieczniejsza sciezka do latwego przeniesienia na nowy serwer:
-
-1. repo aplikacji trzymaj w jednym katalogu, np. `~/app`
-2. panel aplikacji deployuj jednym skryptem z `REPO_DIR`, `SITE_HOST`, `WEB_DIR`, `APP_SLUG`
-3. landing page trzymaj jako osobny statyczny projekt
-4. nie mieszaj landingu i panelu w jednym webroot, dopoki panel nie dostanie obslugi `base path`
-
-## Jeden model kopiowania na nowy serwer
-
-Docelowo chcesz miec mozliwosc skopiowania aplikacji w prosty sposob. Ten model ma byc taki:
-
-- repo z kodem: dowolny katalog, np. `~/app`
-- webroot panelu: np. `~/public_html` albo inny wskazany przez `WEB_DIR`
-- backend aplikacji: `~/.subme-apps/<app-slug>/dashboard-panel`
-- config bazy: `~/.subme-secrets/<app-slug>/mysql.php`
-- rollbacki: `~/.subme-releases/<app-slug>`
-
-W praktyce do uruchomienia na nowym serwerze wystarczy:
-
-1. skopiowac repo
-2. ustawic `mysql.php`
-3. odbudowac baze canonical SQL albo odtworzyc snapshot
-4. uruchomic deploy z prawidlowym `WEB_DIR`
-
-## Jak odbudowac baze z canonical SQL z repo
+## Odbudowa bazy
 
 Do czystej odbudowy schematu z repo uzywaj:
 
 - `docs/namecheap-import-canonical-db.sh`
 
-Ten skrypt bierze tylko canonical SQL z:
+Ten skrypt bierze tylko:
 
 - `001_core_schema.sql`
 - `002_seed_defaults.sql`
 - `003_operational_views.sql`
 
-czyli dokladnie z jednego miejsca, a nie z backupu pobranego z panelu.
+Backup z panelu admina sluzy tylko do restore konkretnego snapshotu:
 
-Przyklad:
+- `docs/namecheap-import-db.sh`
 
-```bash
-cd ~/subme
-DB_NAME=twoja_baza DB_USER=twoj_user CONFIRM_RESET=YES ~/subme/docs/namecheap-import-canonical-db.sh
-```
+## Najwazniejsze pliki w tym katalogu
 
-## Do czego sluzy backup SQL z panelu admina
-
-Przycisk `Pobierz backup SQL` w `Settings` sluzy tylko do:
-
-- awaryjnego backupu
-- archiwizacji
-- przywrocenia calego snapshotu, jesli swiadomie chcesz odtworzyc stan z danego dnia
-
-Nie sluzy do:
-
-- wdrazania nowych kolumn
-- synchronizacji schematu miedzy localhost a serwerem
-- ustalania, co jest aktualna wersja bazy
-
-## Auto-przypisanie portfeli krypto
-
-To jest teraz czesc docelowej logiki systemu i trzeba to traktowac jako stala zasade przy deployu i migracjach.
-
-Jesli klient inicjuje platnosc krypto i:
-
-- nie ma jeszcze przypisanego portfela dla wybranego assetu
-- ale w puli istnieje wolny adres tej kryptowaluty
-
-to aplikacja automatycznie:
-
-- pokazuje te kryptowalute w UI usera
-- wybiera wolny adres z puli
-- tworzy `crypto_wallet_assignments`
-- tworzy request platnosci powiazany z `wallet_assignment_id`
-
-To oznacza:
-
-- admin nie musi recznie przypisywac portfela kazdemu nowemu userowi
-- kluczowe tabele dla tego flow to:
-  - `crypto_wallet_addresses`
-  - `crypto_wallet_assignments`
-  - `crypto_deposit_requests`
-
-## Zwolnienie portfela po anulowaniu lub usunieciu requestu
-
-Jesli request krypto zostanie:
-
-- anulowany i potem skasowany przez admina z `Payments`
-- usuniety zbiorczo przez `Usuń anulowane`
-- usuniety przez klienta w top-up krypto
-
-to aplikacja ma zwolnic powiazany `wallet_assignment_id`, a status adresu powinien wrocic na:
-
-- `available`
-
-To jest wazne przy przenoszeniu aplikacji na inny serwer, bo po imporcie bazy:
-
-- assignmenty i requesty musza pozostac spojne
-- nie wolno recznie kasowac tylko samych requestow bez uwzglednienia assignmentow
-
-Jesli odtwarzasz snapshot bazy i cos wyglada zle w puli portfeli, najpierw sprawdz:
-
-- czy `crypto_deposit_requests.wallet_assignment_id` zgadza sie z `crypto_wallet_assignments.id`
-- czy adresy w `crypto_wallet_addresses` nie zostaly na stale w statusie `assigned` bez aktywnego assignmentu
-
-## Szybka odpowiedz na Twoje pytanie
-
-Jesli pytanie brzmi:
-
-- "z czego aplikacja korzysta na localhost?"
-
-to odpowiedz brzmi:
-
-- z MySQL `reseller_v2`, nie z pliku `.sql`
-
-Jesli pytanie brzmi:
-
-- "z czego produkcja korzysta na serwerze?"
-
-to odpowiedz brzmi:
-
-- z instancyjnej bazy MySQL wskazanej przez `mysql.php`, nie z pliku `.sql`
-
-Jesli pytanie brzmi:
-
-- "jaki plik jest zrodlem prawdy dla schematu?"
-
-to odpowiedz brzmi:
-
-- `dashboard-panel/database/v2/`
-
-## Powiazane pliki
-
+- `docs/FUNCTIONALITY.md`
 - `docs/NEW_SERVER_CHECKLIST.md`
+- `docs/LOCAL_DOCKER.md`
+- `docs/00_SYSTEM_MAINTENANCE_RUNNER.md`
+- `docs/00_EMAIL_NOTIFICATION_RULES.md`
+- `docs/00_DATA_RETENTION_RULES.md`
+- `docs/00_PROVIDER_DELIVERY_RULES.md`
+- `docs/live-chat.md`
+- `docs/namecheap-deploy.sh`
 - `docs/namecheap-import-canonical-db.sh`
 - `docs/namecheap-import-db.sh`
-- `docs/namecheap-multi-instance.md`
-- `dashboard-panel/docs/00_DATABASE_RUNTIME_SOURCE_OF_TRUTH.md`
-- `dashboard-panel/database/v2/README.md`
+- `docs/namecheap-init-instance.sh`
+- `docs/namecheap-list-instances.sh`
+- `docs/namecheap-rollback.sh`
