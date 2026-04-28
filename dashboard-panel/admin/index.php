@@ -2426,12 +2426,19 @@ if ($route === 'bank-accounts') {
 }
 
 if ($route === 'users') {
+    $userQuickCreateProviderRows = admin_provider_visibility_option_rows($db);
     $userQuickCreateState = [
         'email' => trim((string)($_POST['quick_email'] ?? '')),
+        'public_handle' => trim((string)($_POST['quick_public_handle'] ?? '')),
         'password' => (string)($_POST['quick_password'] ?? ''),
         'locale_code' => admin_normalize_locale((string)($_POST['quick_locale_code'] ?? 'pl')),
         'status' => strtolower(trim((string)($_POST['quick_status'] ?? 'active'))),
+        'customer_type' => app_normalize_customer_type((string)($_POST['quick_customer_type'] ?? 'client')),
         'send_password_email' => isset($_POST['quick_send_password_email']) ? 1 : 0,
+        'provider_visibility_form_present' => isset($_POST['provider_visibility_form_present']) ? 1 : 0,
+        'visible_provider_ids' => array_map('intval', (array)($_POST['visible_provider_ids'] ?? array_map(static function (array $providerRow): int {
+            return (int)($providerRow['id'] ?? 0);
+        }, $userQuickCreateProviderRows))),
     ];
     $userImportState = [
         'source_text' => trim((string)($_POST['import_source_text'] ?? '')),
@@ -2449,9 +2456,13 @@ if ($route === 'users') {
                 (string)($userQuickCreateState['email'] ?? ''),
                 (string)($userQuickCreateState['password'] ?? ''),
                 [
+                    'public_handle' => (string)($userQuickCreateState['public_handle'] ?? ''),
                     'locale_code' => (string)($userQuickCreateState['locale_code'] ?? 'pl'),
                     'status' => (string)($userQuickCreateState['status'] ?? 'active'),
+                    'customer_type' => (string)($userQuickCreateState['customer_type'] ?? 'client'),
                     'send_password_email' => !empty($userQuickCreateState['send_password_email']),
+                    'provider_visibility_form_present' => !empty($userQuickCreateState['provider_visibility_form_present']) ? 1 : 0,
+                    'visible_provider_ids' => (array)($userQuickCreateState['visible_provider_ids'] ?? []),
                 ],
                 (int)($adminUser['id'] ?? 0),
                 $requestIp
@@ -2473,10 +2484,16 @@ if ($route === 'users') {
                 }
                 $userQuickCreateState = [
                     'email' => '',
+                    'public_handle' => '',
                     'password' => '',
                     'locale_code' => admin_normalize_locale((string)($userQuickCreateState['locale_code'] ?? 'pl')),
                     'status' => strtolower(trim((string)($userQuickCreateState['status'] ?? 'active'))),
+                    'customer_type' => 'client',
                     'send_password_email' => 1,
+                    'provider_visibility_form_present' => 1,
+                    'visible_provider_ids' => array_map(static function (array $providerRow): int {
+                        return (int)($providerRow['id'] ?? 0);
+                    }, $userQuickCreateProviderRows),
                 ];
             } else {
                 $pageAlert = (string)($quickCreateResult['message'] ?? '');
@@ -4329,6 +4346,42 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <?php endforeach; ?>
                                                     </select>
                                                 </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="chat_create_customer_type"><?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?></label>
+                                                    <select class="form-select" id="chat_create_customer_type" data-admin-chat-create-customer-type>
+                                                        <?php foreach (admin_customer_type_options('client') as $customerTypeOption): ?>
+                                                            <option value="<?php echo admin_e($customerTypeOption); ?>"<?php echo $customerTypeOption === 'client' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'customer_type_' . $customerTypeOption, ucfirst($customerTypeOption))); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                                <?php $chatCreateCustomerProviderRows = admin_provider_visibility_option_rows($db); ?>
+                                                <?php if (!empty($chatCreateCustomerProviderRows)): ?>
+                                                    <div class="col-12">
+                                                        <div class="admin-user-provider-visibility admin-user-provider-visibility--compact">
+                                                            <div class="admin-user-provider-visibility__head">
+                                                                <strong><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_title', 'Provider visibility')); ?></strong>
+                                                                <p><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_intro', 'New users see all active providers by default. Uncheck a provider here to hide its products from this user in Add new subscription.')); ?></p>
+                                                            </div>
+                                                            <div class="admin-user-provider-visibility__grid">
+                                                                <?php foreach ($chatCreateCustomerProviderRows as $providerVisibilityRow): ?>
+                                                                    <?php
+                                                                    $providerVisibilityId = (int)($providerVisibilityRow['id'] ?? 0);
+                                                                    $providerVisibilityActive = !empty($providerVisibilityRow['is_active']);
+                                                                    ?>
+                                                                    <label class="admin-user-provider-visibility__item">
+                                                                        <input type="checkbox" data-admin-chat-create-customer-provider value="<?php echo admin_e((string)$providerVisibilityId); ?>" checked>
+                                                                        <span class="admin-user-provider-visibility__copy">
+                                                                            <span class="admin-user-provider-visibility__name"><?php echo admin_e((string)($providerVisibilityRow['name'] ?? 'Provider')); ?></span>
+                                                                            <span class="admin-status-pill admin-status-pill--xs <?php echo $providerVisibilityActive ? 'admin-status-pill--available' : 'admin-status-pill--muted'; ?>">
+                                                                                <?php echo admin_e($providerVisibilityActive ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_inactive', 'Inactive')); ?>
+                                                                            </span>
+                                                                        </span>
+                                                                    </label>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
                                                 <div class="col-12">
                                                     <label class="admin-chat-group-modal__checkbox">
                                                         <input type="checkbox" data-admin-chat-create-customer-send-email checked>
@@ -6114,16 +6167,21 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                                     <form method="post" class="admin-user-form">
                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                        <div class="row g-3">
-                                                            <div class="col-md-6">
-                                                                <label class="form-label" for="customer_email"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
-                                                                <input type="email" class="form-control" id="customer_email" name="email" value="<?php echo admin_e((string)$selectedCustomer['email']); ?>" required>
-                                                            </div>
-                                                            <div class="col-md-3">
-                                                                <label class="form-label" for="customer_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
-                                                                <select class="form-select" id="customer_locale" name="locale_code">
-                                                                    <option value="en"<?php echo (string)$selectedCustomer['locale_code'] === 'en' ? ' selected' : ''; ?>>EN</option>
-                                                                    <option value="pl"<?php echo (string)$selectedCustomer['locale_code'] === 'pl' ? ' selected' : ''; ?>>PL</option>
+                                                            <div class="row g-3">
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="customer_email"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                                    <input type="email" class="form-control" id="customer_email" name="email" value="<?php echo admin_e((string)$selectedCustomer['email']); ?>" required>
+                                                                </div>
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label" for="customer_public_handle"><?php echo admin_e(admin_t($messages, 'customer_public_handle_label', 'Messenger handle')); ?></label>
+                                                                    <input type="text" class="form-control" id="customer_public_handle" name="public_handle" value="<?php echo admin_e((string)($selectedCustomer['public_handle'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'customer_public_handle_placeholder', 'leave empty to generate')); ?>">
+                                                                    <div class="form-text"><?php echo admin_e(admin_t($messages, 'customer_public_handle_help', 'Visible in messenger. Use letters, numbers, dots, dashes or underscores.')); ?></div>
+                                                                </div>
+                                                                <div class="col-md-3">
+                                                                    <label class="form-label" for="customer_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                                    <select class="form-select" id="customer_locale" name="locale_code">
+                                                                        <option value="en"<?php echo (string)$selectedCustomer['locale_code'] === 'en' ? ' selected' : ''; ?>>EN</option>
+                                                                        <option value="pl"<?php echo (string)$selectedCustomer['locale_code'] === 'pl' ? ' selected' : ''; ?>>PL</option>
                                                                 </select>
                                                             </div>
                                                             <div class="col-md-3">
@@ -6874,6 +6932,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="email" class="form-control" id="quick_email" name="quick_email" value="<?php echo admin_e((string)($userQuickCreateState['email'] ?? '')); ?>" required>
                                                                 </div>
                                                                 <div class="col-md-6">
+                                                                    <label class="form-label" for="quick_public_handle"><?php echo admin_e(admin_t($messages, 'customer_public_handle_label', 'Messenger handle')); ?></label>
+                                                                    <input type="text" class="form-control" id="quick_public_handle" name="quick_public_handle" value="<?php echo admin_e((string)($userQuickCreateState['public_handle'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'customer_public_handle_placeholder', 'leave empty to generate')); ?>">
+                                                                    <div class="form-text"><?php echo admin_e(admin_t($messages, 'users_quick_add_handle_help', 'Optional. Leave empty to generate from email.')); ?></div>
+                                                                </div>
+                                                                <div class="col-md-6">
                                                                     <label class="form-label" for="quick_password"><?php echo admin_e(admin_t($messages, 'users_quick_add_password', 'Password')); ?></label>
                                                                     <input type="text" class="form-control" id="quick_password" name="quick_password" value="<?php echo admin_e((string)($userQuickCreateState['password'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'users_quick_add_password_placeholder', 'Leave empty to generate a random password')); ?>">
                                                                 </div>
@@ -6894,12 +6957,49 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </select>
                                                                 </div>
                                                                 <div class="col-md-4">
+                                                                    <label class="form-label" for="quick_customer_type"><?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?></label>
+                                                                    <select class="form-select" id="quick_customer_type" name="quick_customer_type">
+                                                                        <?php foreach (admin_customer_type_options((string)($userQuickCreateState['customer_type'] ?? 'client')) as $customerTypeOption): ?>
+                                                                            <option value="<?php echo admin_e($customerTypeOption); ?>"<?php echo (string)($userQuickCreateState['customer_type'] ?? 'client') === $customerTypeOption ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'customer_type_' . $customerTypeOption, ucfirst($customerTypeOption))); ?></option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
                                                                     <label class="form-label d-block"><?php echo admin_e(admin_t($messages, 'users_email_password_label', 'Password email')); ?></label>
                                                                     <div class="form-check form-switch mt-2">
                                                                         <input class="form-check-input" type="checkbox" role="switch" id="quick_send_password_email" name="quick_send_password_email" value="1"<?php echo !array_key_exists('quick_send_password_email', $_POST) || !empty($userQuickCreateState['send_password_email']) ? ' checked' : ''; ?>>
                                                                         <label class="form-check-label" for="quick_send_password_email"><?php echo admin_e(admin_t($messages, 'users_email_password_send', 'Send login email with password')); ?></label>
                                                                     </div>
                                                                 </div>
+                                                                <?php if (!empty($userQuickCreateProviderRows)): ?>
+                                                                    <div class="col-12">
+                                                                        <div class="admin-user-provider-visibility">
+                                                                            <input type="hidden" name="provider_visibility_form_present" value="1">
+                                                                            <div class="admin-user-provider-visibility__head">
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_title', 'Provider visibility')); ?></strong>
+                                                                                <p><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_intro', 'New users see all active providers by default. Uncheck a provider here to hide its products from this user in Add new subscription.')); ?></p>
+                                                                            </div>
+                                                                            <div class="admin-user-provider-visibility__grid">
+                                                                                <?php foreach ($userQuickCreateProviderRows as $providerVisibilityRow): ?>
+                                                                                    <?php
+                                                                                    $providerVisibilityId = (int)($providerVisibilityRow['id'] ?? 0);
+                                                                                    $providerVisibilityActive = !empty($providerVisibilityRow['is_active']);
+                                                                                    $providerVisible = in_array($providerVisibilityId, (array)($userQuickCreateState['visible_provider_ids'] ?? []), true);
+                                                                                    ?>
+                                                                                    <label class="admin-user-provider-visibility__item">
+                                                                                        <input type="checkbox" name="visible_provider_ids[]" value="<?php echo admin_e((string)$providerVisibilityId); ?>"<?php echo $providerVisible ? ' checked' : ''; ?>>
+                                                                                        <span class="admin-user-provider-visibility__copy">
+                                                                                            <span class="admin-user-provider-visibility__name"><?php echo admin_e((string)($providerVisibilityRow['name'] ?? 'Provider')); ?></span>
+                                                                                            <span class="admin-status-pill admin-status-pill--xs <?php echo $providerVisibilityActive ? 'admin-status-pill--available' : 'admin-status-pill--muted'; ?>">
+                                                                                                <?php echo admin_e($providerVisibilityActive ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_inactive', 'Inactive')); ?>
+                                                                                            </span>
+                                                                                        </span>
+                                                                                    </label>
+                                                                                <?php endforeach; ?>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                <?php endif; ?>
                                                             </div>
                                                             <div class="admin-editor-actions">
                                                                 <button type="submit" class="btn btn-dark" name="admin_quick_create_customer">

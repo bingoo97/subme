@@ -122,7 +122,10 @@ if ($action === 'quick_create_customer') {
         [
             'locale_code' => (string)($_POST['locale_code'] ?? 'pl'),
             'status' => (string)($_POST['status'] ?? 'active'),
+            'customer_type' => (string)($_POST['customer_type'] ?? 'client'),
             'send_password_email' => !empty($_POST['send_password_email']),
+            'provider_visibility_form_present' => isset($_POST['provider_visibility_form_present']) ? 1 : 0,
+            'visible_provider_ids' => array_map('intval', (array)($_POST['visible_provider_ids'] ?? [])),
         ],
         (int)($adminUser['id'] ?? 0),
         admin_request_ip()

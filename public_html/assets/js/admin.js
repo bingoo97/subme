@@ -2376,7 +2376,9 @@ document.addEventListener('DOMContentLoaded', function () {
         var createCustomerPasswordInput = q('[data-admin-chat-create-customer-password]', root);
         var createCustomerLocaleInput = q('[data-admin-chat-create-customer-locale]', root);
         var createCustomerStatusInput = q('[data-admin-chat-create-customer-status]', root);
+        var createCustomerTypeInput = q('[data-admin-chat-create-customer-type]', root);
         var createCustomerSendEmailInput = q('[data-admin-chat-create-customer-send-email]', root);
+        var createCustomerProviderInputs = qa('[data-admin-chat-create-customer-provider]', root);
         var readonlyToggle = q('[data-admin-chat-readonly-toggle]', root);
         var leaveGroupButton = q('[data-admin-chat-leave-group]', root);
         var groupInvitesWrap = q('[data-admin-chat-group-invites]', root);
@@ -3230,9 +3232,15 @@ document.addEventListener('DOMContentLoaded', function () {
             if (createCustomerStatusInput) {
                 createCustomerStatusInput.value = 'active';
             }
+            if (createCustomerTypeInput) {
+                createCustomerTypeInput.value = 'client';
+            }
             if (createCustomerSendEmailInput) {
                 createCustomerSendEmailInput.checked = true;
             }
+            createCustomerProviderInputs.forEach(function (input) {
+                input.checked = true;
+            });
             showCreateCustomerAlert('', false);
         }
 
@@ -3324,7 +3332,14 @@ document.addEventListener('DOMContentLoaded', function () {
             formData.append('password', createCustomerPasswordInput ? createCustomerPasswordInput.value : '');
             formData.append('locale_code', createCustomerLocaleInput ? createCustomerLocaleInput.value : 'pl');
             formData.append('status', createCustomerStatusInput ? createCustomerStatusInput.value : 'active');
+            formData.append('customer_type', createCustomerTypeInput ? createCustomerTypeInput.value : 'client');
             formData.append('send_password_email', createCustomerSendEmailInput && createCustomerSendEmailInput.checked ? '1' : '0');
+            formData.append('provider_visibility_form_present', createCustomerProviderInputs.length ? '1' : '0');
+            createCustomerProviderInputs.forEach(function (input) {
+                if (input.checked) {
+                    formData.append('visible_provider_ids[]', String(input.value || ''));
+                }
+            });
 
             jsonFetch(chatUrl, {
                 method: 'POST',

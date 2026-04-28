@@ -148,6 +148,8 @@ Komenda:
 DB_NAME=twoja_baza DB_USER=twoj_user ~/subme/docs/namecheap-import-db.sh /sciezka/do/backupu.sql
 ```
 
+Jesli repo nie jest sklonowane do `~/subme`, podmien ta sciezke na swoj realny katalog repo, np. `~/app/docs/namecheap-import-db.sh`.
+
 Nie uzywaj tej drogi jako standardowego deployu schematu.
 
 ## 7a. Jak aktualizowac tabele i kolumny na istniejacym serwerze
@@ -257,6 +259,529 @@ git commit -m "Opis zmian"
 git push origin main
 ```
 
+## 12. Pelny przyklad 1:1 dla zoki.pro na root domeny
+
+To jest realny przyklad wdrozenia panelu bez subdomeny, bez subfolderu, bezposrednio do:
+
+- `https://zoki.pro`
+- webroot: `~/public_html`
+- repo na serwerze: `~/subme`
+- app slug: `main-panel`
+
+To jest instrukcja "dla laika", czyli:
+
+- co przygotowac
+- co wkleic po kolei do terminala
+- co kliknac w `phpMyAdmin`
+- co ustawic w DNS
+- jak sprawdzic, czy wszystko rzeczywiscie dziala
+
+### 12.0. Co musisz miec zanim zaczniesz
+
+Przed startem przygotuj:
+
+- dane SSH do nowego serwera
+- nazwe bazy MySQL, np. `zokiscya_reseller`
+- nazwe usera MySQL, np. `zokiscya_reseller`
+- haslo do tego usera MySQL
+- dostep do `phpMyAdmin` na starym serwerze albo gotowy plik backupu `.sql`
+- dostep do panelu DNS domeny `zoki.pro` w Namecheap
+
+W tym konkretnym wdrozeniu finalnie bylo tak:
+
+- domena: `zoki.pro`
+- konto SSH: `zokiscya`
+- serwer: `198.54.114.134`
+- port SSH: `21098`
+- repo na serwerze: `~/subme`
+- produkcyjny webroot: `~/public_html`
+- backend aplikacji: `~/.subme-apps/main-panel/dashboard-panel`
+- config bazy: `~/.subme-secrets/main-panel/mysql.php`
+
+### 12.0a. Co oznacza "instalacja na root domeny"
+
+To znaczy, ze panel nie dziala pod:
+
+- `https://zoki.pro/panel`
+- `https://panel.zoki.pro`
+
+tylko bezposrednio pod:
+
+- `https://zoki.pro`
+- `https://zoki.pro/admin/`
+
+W praktyce oznacza to, ze wdrazasz aplikacje do:
+
+```text
+~/public_html
+```
+
+a nie do dodatkowego katalogu typu:
+
+```text
+~/panel-webroot
+```
+
+### 12.1. Logowanie na serwer
+
+Najpierw zaloguj sie po SSH:
+
+```bash
+ssh -p 21098 zokiscya@198.54.114.134
+```
+
+Po zalogowaniu warto sprawdzic, gdzie jestes i co masz w katalogu domowym:
+
+```bash
+pwd
+cd ~
+ls
+```
+
+To jest przydatne, bo wiele bledow bierze sie z tego, ze repo nie jest tam, gdzie myslisz.
+
+### 12.2. Klon repo i przygotowanie skryptow
+
+Jesli repo nie jest jeszcze wgrane na serwer, sklonuj je:
+
+```bash
+cd ~
+git clone https://github.com/bingoo97/subme.git subme
+cd ~/subme
+git checkout main
+chmod +x ~/subme/docs/namecheap-*.sh
+```
+
+Co robia te komendy:
+
+- `git clone ... subme` pobiera repo do katalogu `~/subme`
+- `git checkout main` ustawia glowna galaz
+- `chmod +x ...` nadaje prawa do uruchamiania skryptom deployowym
+
+Jesli repo juz istnieje:
+
+```bash
+cd ~/subme
+git pull --ff-only origin main
+chmod +x ~/subme/docs/namecheap-*.sh
+```
+
+Jesli nie jestes pewien, czy repo juz istnieje:
+
+```bash
+cd ~
+ls
+```
+
+Jesli widzisz `subme`, to repo juz jest.
+
+### 12.2a. Najczestszy blad na tym etapie
+
+Jesli wpiszesz cos w stylu:
+
+```bash
+git clone <URL-REPO> subme
+```
+
+to nie zadziala, bo `<URL-REPO>` to tylko placeholder z dokumentacji.
+
+Musisz podac prawdziwy adres repo, np.:
+
+```bash
+git clone https://github.com/bingoo97/subme.git subme
+```
+
+### 12.3. Import bazy danych
+
+Sa 2 poprawne drogi:
+
+1. odtwarzasz prawdziwa baze z backupu SQL
+2. stawiasz czysta baze startowa z repo
+
+W tym wdrozeniu dla `zoki.pro` baza zostala wgrana recznie przez `phpMyAdmin`, wiec nie byl uzyty import przez shell.
+
+#### 12.3a. Wariant A: masz stara baze i chcesz ja przeniesc 1:1
+
+Na starym serwerze w `phpMyAdmin`:
+
+1. wybierz baze
+2. kliknij `Export`
+3. wybierz `Quick` albo `Custom`
+4. format: `SQL`
+5. pobierz plik `.sql`
+
+Potem masz 2 opcje:
+
+- wgrac ten plik przez `phpMyAdmin` na nowym serwerze
+- wrzucic plik na serwer i zaimportowac przez shell
+
+Jesli chcesz sprawdzic, czy backup jest juz na serwerze:
+
+```bash
+find ~ -type f -name "*.sql"
+find ~ -type f \( -name "*.sql" -o -name "*.sql.gz" \)
+```
+
+Jesli backup lezalby np. w katalogu domowym jako `backup.sql`, import przez shell wyglada tak:
+
+```bash
+DB_NAME=zokiscya_reseller DB_USER=zokiscya_reseller ~/subme/docs/namecheap-import-db.sh ~/backup.sql
+```
+
+Jesli masz plik skompresowany `.sql.gz`, najpierw go rozpakuj:
+
+```bash
+gzip -dk ~/backup.sql.gz
+```
+
+a potem importuj:
+
+```bash
+DB_NAME=zokiscya_reseller DB_USER=zokiscya_reseller ~/subme/docs/namecheap-import-db.sh ~/backup.sql
+```
+
+#### 12.3b. Wariant B: nie przenosisz starych danych, tylko chcesz czysta baze
+
+Jesli nie chcesz przenosic starych kont, produktow, zamowien i ustawien, tylko postawic czysta baze startowa z repo, uzyj:
+
+```bash
+DB_NAME=zokiscya_reseller DB_USER=zokiscya_reseller CONFIRM_RESET=YES ~/subme/docs/namecheap-import-canonical-db.sh
+```
+
+Ta komenda:
+
+- wgrywa canonical schema
+- tworzy czysta baze startowa
+- nie przywraca Twoich starych danych z produkcji
+
+#### 12.3c. Jak bylo zrobione dla zoki.pro
+
+Dla `zoki.pro` finalnie:
+
+- repo zostalo sklonowane na serwer
+- baza zostala wgrana recznie przez `phpMyAdmin`
+- potem aplikacja zostala podlaczona do tej bazy przez `mysql.php`
+
+Czyli jesli chcesz miec kopie 1:1 starej strony, najbezpieczniej:
+
+1. eksport ze starego `phpMyAdmin`
+2. import do nowego `phpMyAdmin`
+3. ustawienie poprawnego `mysql.php`
+4. deploy panelu
+
+### 12.3d. O czym latwo zapomniec przy bazie
+
+Sama baza i sam user MySQL to za malo. User musi miec jeszcze prawa do tej bazy.
+
+Jesli panel po deployu pokazuje blad typu:
+
+- `No database`
+- brak polaczenia z baza
+- biala strona po logowaniu
+
+to czesto znaczy, ze:
+
+- haslo w `mysql.php` jest zle
+- albo user nie ma uprawnien do tej bazy
+
+W realnym wdrozeniu `zoki.pro` trzeba bylo jeszcze dopiac uprawnienia usera do bazy, bo sama baza istniala, ale user nie mial odpowiednich praw.
+
+### 12.4. Inicjalizacja instancji na root domeny
+
+To jest wariant bez subdomeny, bez `~/panel-webroot`, bez osobnego katalogu publikacji.
+
+Najpierw utworz webroot:
+
+```bash
+cd ~/subme
+mkdir -p ~/public_html
+SITE_HOST=zoki.pro APP_SLUG=main-panel WEB_DIR=~/public_html REPO_DIR=~/subme APP_URL=https://zoki.pro ~/subme/docs/namecheap-init-instance.sh zoki.pro
+```
+
+Co robi ta komenda:
+
+- przygotowuje instancje o slug `main-panel`
+- podpina ja do domeny `zoki.pro`
+- ustawia katalog publikacji na `~/public_html`
+- przygotowuje backend w `~/.subme-apps/main-panel`
+- przygotowuje katalog secrets w `~/.subme-secrets/main-panel`
+
+Jesli komenda przejdzie, to znaczy, ze struktura instancji jest gotowa, ale strona jeszcze nie musi dzialac, bo przed nami nadal jest konfiguracja bazy i deploy.
+
+### 12.5. Konfiguracja MySQL dla panelu
+
+Teraz musisz podac aplikacji prawdziwe dane do MySQL.
+
+Otworz plik:
+
+```bash
+nano ~/.subme-secrets/main-panel/mysql.php
+```
+
+Wklej tam:
+
+```php
+<?php
+$db_host = getenv("DB_HOST") ?: "localhost";
+$db_name = getenv("DB_NAME") ?: "zokiscya_reseller";
+$db_user = getenv("DB_USER") ?: "zokiscya_reseller";
+$db_pass = getenv("DB_PASS") ?: "TUTAJ_WPISZ_HASLO_DO_BAZY";
+```
+
+Podmien:
+
+- `TUTAJ_WPISZ_HASLO_DO_BAZY`
+
+na prawdziwe haslo usera MySQL.
+
+Jesli baza jest na tym samym hostingu, zwykle:
+
+- host to `localhost`
+
+Jak zapisac plik w `nano`:
+
+1. `Ctrl + O`
+2. `Enter`
+3. `Ctrl + X`
+
+Po zapisaniu mozesz sprawdzic, czy plik istnieje:
+
+```bash
+ls -l ~/.subme-secrets/main-panel/mysql.php
+```
+
+#### 12.5a. Dlaczego ten plik jest taki wazny
+
+To jest najwazniejszy plik laczacy aplikacje z baza.
+
+Jesli:
+
+- domena dziala
+- pliki sa wdrozone
+- ale panel nie laczy sie z baza
+
+to prawie zawsze problem siedzi w:
+
+- `mysql.php`
+- albo w samych prawach usera MySQL
+- albo w zlej nazwie bazy / usera / hasla
+
+### 12.6. Deploy na glowny root domeny
+
+Teraz dopiero robisz wlasciwe wdrozenie:
+
+```bash
+SITE_HOST=zoki.pro APP_SLUG=main-panel WEB_DIR=~/public_html REPO_DIR=~/subme APP_URL=https://zoki.pro ~/subme/docs/namecheap-deploy.sh
+```
+
+Co robi deploy:
+
+- kopiuje publiczne pliki do `~/public_html`
+- kopiuje backend do `~/.subme-apps/main-panel/dashboard-panel`
+- przygotowuje aktywna wersje aplikacji
+- tworzy snapshot rollbacku
+
+Jesli wszystko jest ok, zobaczysz komunikat o zakonczeniu deployu i adres strony.
+
+### 12.7. Kontrola po deployu
+
+Po deployu sprawdz:
+
+```bash
+cat ~/.subme-secrets/main-panel/mysql.php
+cat ~/.subme-apps/main-panel/dashboard-panel/.public-root-path
+ls -l ~/public_html/index.php
+cat ~/public_html/.backend-path
+curl -I --max-time 15 http://zoki.pro/
+curl -I --max-time 15 https://zoki.pro/
+curl -I --max-time 15 https://zoki.pro/admin/
+```
+
+Co oznaczaja te komendy:
+
+- `cat ~/.subme-secrets/main-panel/mysql.php` pokazuje, czy config bazy jest na miejscu
+- `cat ~/.subme-apps/main-panel/dashboard-panel/.public-root-path` pokazuje, jaki webroot ma aktywna instancja
+- `ls -l ~/public_html/index.php` sprawdza, czy plik startowy strony w ogole zostal wdrozony
+- `cat ~/public_html/.backend-path` pokazuje, na jaki backend wskazuje katalog publiczny
+- `curl -I ...` sprawdza, czy domena odpowiada
+
+Jesli `curl` na `https://zoki.pro/` timeoutuje, a deploy byl poprawny, to zwykle problemem nie jest aplikacja, tylko DNS albo SSL.
+
+### 12.8. DNS dla root domeny w Namecheap
+
+Dla `zoki.pro` finalnie potrzebne byly takie rekordy:
+
+```text
+A Record      @      198.54.114.134
+CNAME Record  www    zoki.pro
+```
+
+Trzeba usunac stare rekordy typu:
+
+- `URL Redirect Record` dla `@`
+- `CNAME www -> parkingpage.namecheap.com`
+
+To bardzo wazne:
+
+- nie moze zostac przekierowanie Namecheap
+- nie moze zostac parking Namecheap
+
+Jesli te stare rekordy zostana, domena nie pokaze Twojej strony, nawet jesli deploy i baza sa poprawne.
+
+Do sprawdzenia propagacji:
+
+```bash
+dig zoki.pro @8.8.8.8 +short
+dig www.zoki.pro @8.8.8.8 +short
+curl -I --resolve zoki.pro:80:198.54.114.134 http://zoki.pro/
+curl -I --resolve zoki.pro:443:198.54.114.134 https://zoki.pro/
+curl -I --resolve zoki.pro:443:198.54.114.134 https://zoki.pro/admin/
+```
+
+Jesli zobaczysz:
+
+- `198.54.114.134`
+
+to DNS juz wskazuje na poprawny serwer.
+
+### 12.8a. SSL dla zoki.pro
+
+Po ustawieniu DNS trzeba jeszcze miec poprawny certyfikat SSL dla:
+
+- `zoki.pro`
+- `www.zoki.pro`
+
+W praktyce na tym wdrozeniu:
+
+- HTTP zaczelo dzialac najpierw
+- HTTPS poczatkowo nie dzialalo, bo serwer pokazywal zly certyfikat
+- dopiero po instalacji SSL domena zaczela dzialac poprawnie po `https://`
+
+Po instalacji SSL warto sprawdzic:
+
+```bash
+curl -I http://zoki.pro/
+curl -I https://zoki.pro/
+curl -I https://zoki.pro/admin/
+```
+
+Docelowo:
+
+- `http://zoki.pro/` moze dawac `301` lub `302` do HTTPS
+- `https://zoki.pro/` powinno dawac `200`
+- `https://zoki.pro/admin/` powinno dawac `200`
+
+### 12.9. Cron dla production
+
+Na `zoki.pro` zostal dodany taki cron:
+
+```cron
+MAILTO="support@zoki.pro"
+*/5 * * * * /usr/local/bin/php /home/zokiscya/.subme-apps/main-panel/dashboard-panel/scripts/system_maintenance.php >/dev/null 2>&1
+```
+
+To jest cron, ktory wykonuje maintenance aplikacji co 5 minut.
+
+Jesli dodajesz go w `crontab -e`, wklejasz cala linie razem z `*/5 * * * *`.
+
+Jesli dodajesz go przez formularz `Cron Jobs` w cPanel:
+
+- czasy ustawiasz w polach formularza
+- w pole `Command` wklejasz tylko:
+
+```bash
+/usr/local/bin/php /home/zokiscya/.subme-apps/main-panel/dashboard-panel/scripts/system_maintenance.php >/dev/null 2>&1
+```
+
+Do testu recznego:
+
+```bash
+/usr/local/bin/php /home/zokiscya/.subme-apps/main-panel/dashboard-panel/scripts/system_maintenance.php
+```
+
+Jesli skrypt dziala poprawnie, powinien zakonczyc sie bez bledu.
+
+### 12.10. Kolejny deploy po zmianach w kodzie
+
+Lokalnie na Macu:
+
+```bash
+cd /Users/bodzianek/CascadeProjects/RESELLER/reseller
+git add .
+git commit -m "Opis zmian"
+git push origin main
+```
+
+Na serwerze:
+
+```bash
+cd ~/subme
+git pull --ff-only origin main
+SITE_HOST=zoki.pro APP_SLUG=main-panel WEB_DIR=~/public_html REPO_DIR=~/subme APP_URL=https://zoki.pro ~/subme/docs/namecheap-deploy.sh
+```
+
+To jest juz normalny cykl aktualizacji:
+
+1. zmieniasz kod lokalnie
+2. robisz `git push`
+3. na serwerze robisz `git pull`
+4. odpalasz deploy
+
+### 12.11. Szybka wersja: wszystkie komendy po kolei
+
+Jesli masz juz:
+
+- dzialajacy DNS
+- utworzona baze
+- usera MySQL
+- haslo do bazy
+- backup SQL albo czysta baze
+
+to najkrotsza wersja wyglada tak:
+
+```bash
+ssh -p 21098 zokiscya@198.54.114.134
+cd ~
+git clone https://github.com/bingoo97/subme.git subme
+cd ~/subme
+git checkout main
+chmod +x ~/subme/docs/namecheap-*.sh
+mkdir -p ~/public_html
+SITE_HOST=zoki.pro APP_SLUG=main-panel WEB_DIR=~/public_html REPO_DIR=~/subme APP_URL=https://zoki.pro ~/subme/docs/namecheap-init-instance.sh zoki.pro
+nano ~/.subme-secrets/main-panel/mysql.php
+SITE_HOST=zoki.pro APP_SLUG=main-panel WEB_DIR=~/public_html REPO_DIR=~/subme APP_URL=https://zoki.pro ~/subme/docs/namecheap-deploy.sh
+cat ~/.subme-apps/main-panel/dashboard-panel/.public-root-path
+curl -I --max-time 15 http://zoki.pro/
+curl -I --max-time 15 https://zoki.pro/
+curl -I --max-time 15 https://zoki.pro/admin/
+```
+
+Jesli importujesz backup SQL przez shell, dorzucasz przed deployem:
+
+```bash
+DB_NAME=zokiscya_reseller DB_USER=zokiscya_reseller ~/subme/docs/namecheap-import-db.sh ~/backup.sql
+```
+
+Jesli stawiasz czysta baze canonical, zamiast backupu:
+
+```bash
+DB_NAME=zokiscya_reseller DB_USER=zokiscya_reseller CONFIRM_RESET=YES ~/subme/docs/namecheap-import-canonical-db.sh
+```
+
+### 12.12. Jak rozpoznac, ze wdrozenie 1:1 jest gotowe
+
+Wdrozenie mozna uznac za zakonczone dopiero wtedy, gdy jednoczesnie:
+
+- `https://zoki.pro/` otwiera frontend
+- `https://zoki.pro/admin/` otwiera panel
+- panel loguje sie do bazy bez bledu
+- CSS i JS laduja sie poprawnie
+- cron dziala
+- SSL jest poprawny
+- DNS wskazuje na nowy serwer
+
+Jesli choc jeden z tych punktow nie dziala, to znaczy, ze migracja nie jest jeszcze domknieta.
+
 Na serwerze:
 
 ```bash
@@ -313,6 +838,7 @@ Jesli widzisz cos takiego:
 - `cd: /home/.../app: No such file or directory`
 - `fatal: not a git repository`
 - `.../docs/namecheap-deploy.sh: No such file or directory`
+- `.../docs/namecheap-import-db.sh: No such file or directory`
 
 to znaczy, ze:
 

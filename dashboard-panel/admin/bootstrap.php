@@ -2929,6 +2929,16 @@ function admin_save_customer_profile(Mysql_ks $db, int $customerId, array $paylo
         return ['ok' => false, 'message' => 'This email address is already assigned to another user.'];
     }
 
+    $handleResult = app_resolve_customer_public_handle(
+        $db,
+        (string)($payload['public_handle'] ?? ($current['public_handle'] ?? '')),
+        $email,
+        $customerId
+    );
+    if (empty($handleResult['ok'])) {
+        return ['ok' => false, 'message' => (string)($handleResult['message'] ?? 'Unable to save username.')];
+    }
+
     $localeCode = admin_normalize_locale((string)($payload['locale_code'] ?? 'en'));
     $countryCode = strtoupper(substr(trim((string)($payload['country_code'] ?? '')), 0, 2));
     $ipValue = trim((string)($payload['ip_address'] ?? ''));
@@ -2947,6 +2957,7 @@ function admin_save_customer_profile(Mysql_ks $db, int $customerId, array $paylo
     $emailNotification = isset($payload['email_notification']) ? 1 : 0;
     $updateColumns = [
         'email',
+        'public_handle',
         'locale_code',
         'country_code',
         'ip_address',
@@ -2958,6 +2969,7 @@ function admin_save_customer_profile(Mysql_ks $db, int $customerId, array $paylo
     ];
     $updateValues = [
         $email,
+        (string)($handleResult['handle'] ?? ''),
         $localeCode,
         $countryCode !== '' ? $countryCode : null,
         $ipValue !== '' ? $ipValue : null,
@@ -3026,6 +3038,23 @@ function admin_customer_provider_visibility_rows(Mysql_ks $db, int $customerId):
             {$visibilitySelect}
          FROM product_providers
          {$visibilityJoin}
+         ORDER BY product_providers.name ASC, product_providers.id ASC"
+    );
+}
+
+function admin_provider_visibility_option_rows(Mysql_ks $db): array
+{
+    if (!schema_object_exists($db, 'product_providers')) {
+        return [];
+    }
+
+    return $db->select_full_user(
+        "SELECT
+            product_providers.id,
+            product_providers.name,
+            product_providers.is_active,
+            1 AS is_visible
+         FROM product_providers
          ORDER BY product_providers.name ASC, product_providers.id ASC"
     );
 }
@@ -6916,8 +6945,12 @@ function admin_create_customer_account(
 
     $localeCode = admin_normalize_locale((string)($options['locale_code'] ?? 'en'));
     $status = strtolower(trim((string)($options['status'] ?? 'active')));
+    $customerType = app_normalize_customer_type((string)($options['customer_type'] ?? 'client'));
     if (!in_array($status, admin_customer_status_options($status), true)) {
         $status = 'active';
+    }
+    if ($customerType === '') {
+        $customerType = 'client';
     }
 
     $sendPasswordEmail = !empty($options['send_password_email']);
@@ -6925,7 +6958,7 @@ function admin_create_customer_account(
         ? (!empty($options['email_notification']) ? 1 : 0)
         : (array_key_exists('is_newsletter_subscribed', $options) ? (!empty($options['is_newsletter_subscribed']) ? 1 : 0) : 1);
     $currentTime = date('Y-m-d H:i:s');
-    $handleResult = app_resolve_customer_public_handle($db, '', $email);
+    $handleResult = app_resolve_customer_public_handle($db, (string)($options['public_handle'] ?? ''), $email);
     if (empty($handleResult['ok'])) {
         return ['ok' => false, 'message' => (string)($handleResult['message'] ?? 'Unable to generate username.')];
     }
@@ -6951,7 +6984,7 @@ function admin_create_customer_account(
         $localeCode,
         $ipAddress !== '' ? $ipAddress : null,
         $status,
-        'client',
+        $customerType,
         $currentTime,
         $currentTime,
         null,
@@ -6972,6 +7005,11 @@ function admin_create_customer_account(
     $customerId = (int)$db->id();
     if ($customerId <= 0) {
         return ['ok' => false, 'message' => 'Customer was created, but could not be loaded.'];
+    }
+
+    if (array_key_exists('provider_visibility_form_present', $options)) {
+        $visibleProviderIds = array_map('intval', (array)($options['visible_provider_ids'] ?? []));
+        app_save_customer_provider_visibility($db, $customerId, $visibleProviderIds);
     }
 
     admin_log_customer_and_admin(
