@@ -1652,6 +1652,8 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
         return null;
     }
 
+    app_ensure_customer_runtime_columns($db);
+
     $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
         ? 'orders.delivery_link_visible'
         : '0 AS delivery_link_visible';
@@ -3638,6 +3640,8 @@ function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): arr
         return [];
     }
 
+    app_ensure_customer_runtime_columns($db);
+
     $limit = max(1, min(20, $limit));
     $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
         ? 'customers.public_handle'
@@ -3699,6 +3703,8 @@ function admin_topbar_notification_new_customer_rows(Mysql_ks $db, int $limit = 
         return [];
     }
 
+    app_ensure_customer_runtime_columns($db);
+
     $limit = max(1, min(20, $limit));
     $handleSql = schema_column_exists($db, 'customers', 'public_handle')
         ? 'customers.public_handle'
@@ -3728,6 +3734,8 @@ function admin_topbar_notification_expiring_subscription_data(Mysql_ks $db, int 
     if (!schema_object_exists($db, 'orders')) {
         return ['total' => 0, 'rows' => []];
     }
+
+    app_ensure_customer_runtime_columns($db);
 
     $limit = max(1, min(20, $limit));
     $hours = max(1, min(168, $hours));
@@ -4482,6 +4490,8 @@ function admin_topbar_notification_order_row_by_id(Mysql_ks $db, int $orderId): 
     if ($orderId <= 0 || !schema_object_exists($db, 'orders')) {
         return null;
     }
+
+    app_ensure_customer_runtime_columns($db);
 
     $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
         ? 'customers.public_handle'
