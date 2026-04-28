@@ -1313,6 +1313,25 @@ function app_ensure_product_provider_runtime_columns(Mysql_ks $db): void
         return;
     }
 
+    if (!schema_column_exists($db, 'product_providers', 'logo_url')) {
+        @$db->query(
+            "ALTER TABLE product_providers
+             ADD COLUMN logo_url VARCHAR(255) DEFAULT NULL
+             AFTER description"
+        );
+        schema_forget_column_cache('product_providers', 'logo_url');
+    }
+
+    if (schema_column_exists($db, 'product_providers', 'logo_url') && schema_column_exists($db, 'product_providers', 'icon_url')) {
+        @$db->query(
+            "UPDATE product_providers
+             SET logo_url = NULLIF(TRIM(icon_url), '')
+             WHERE (logo_url IS NULL OR TRIM(logo_url) = '')
+               AND icon_url IS NOT NULL
+               AND TRIM(icon_url) != ''"
+        );
+    }
+
     if (!schema_column_exists($db, 'product_providers', 'url_replacement_from')) {
         @$db->query(
             "ALTER TABLE product_providers

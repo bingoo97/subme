@@ -205,7 +205,7 @@ CREATE TABLE `product_providers` (
   `name` VARCHAR(120) NOT NULL,
   `slug` VARCHAR(120) NOT NULL,
   `description` TEXT DEFAULT NULL,
-  `icon_url` VARCHAR(255) DEFAULT NULL,
+  `logo_url` VARCHAR(255) DEFAULT NULL,
   `dashboard_url` VARCHAR(255) DEFAULT NULL,
   `supports_manual_delivery` TINYINT(1) NOT NULL DEFAULT 1,
   `supports_url_replacement` TINYINT(1) NOT NULL DEFAULT 0,

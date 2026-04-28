@@ -691,6 +691,219 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initProviderLogoManagers() {
+        function normalizeLogoUrl(value) {
+            var url = String(value || '').trim();
+            if (!url) {
+                return '';
+            }
+
+            if (/^https?:\/\//i.test(url) || url.charAt(0) === '/') {
+                return url;
+            }
+
+            return '/' + url.replace(/^\/+/, '');
+        }
+
+        qa('[data-product-provider-logo-manager]').forEach(function (manager) {
+            var form = closest(manager, 'form');
+            var csrfInput = form ? q('input[name="_csrf"]', form) : null;
+            var fileInput = q('[data-product-provider-logo-file]', manager);
+            var uploadTrigger = q('[data-product-provider-logo-upload-trigger]', manager);
+            var removeTrigger = q('[data-product-provider-logo-remove]', manager);
+            var dropzone = q('[data-product-provider-logo-dropzone]', manager);
+            var urlInput = q('[data-product-provider-logo-url]', manager);
+            var statusNode = q('[data-product-provider-logo-status]', manager);
+            var preview = form ? q('[data-product-provider-logo-preview]', form) : null;
+            var previewImage = preview ? q('[data-product-provider-logo-preview-image]', preview) : null;
+            var previewEmpty = preview ? q('[data-product-provider-logo-preview-empty]', preview) : null;
+            var busy = false;
+            var defaultStatus = statusNode ? String(statusNode.textContent || '') : '';
+
+            if (!form || !csrfInput || !fileInput || !uploadTrigger || !removeTrigger || !dropzone || !urlInput || !statusNode || !preview || !previewImage || !previewEmpty) {
+                return;
+            }
+
+            function currentUrl() {
+                return String(urlInput.value || '').trim();
+            }
+
+            function setBusy(nextBusy) {
+                busy = !!nextBusy;
+                manager.classList.toggle('is-busy', busy);
+                uploadTrigger.disabled = busy;
+                removeTrigger.disabled = busy || currentUrl() === '';
+                urlInput.disabled = busy;
+                dropzone.disabled = busy;
+            }
+
+            function setStatus(message, tone) {
+                statusNode.textContent = String(message || '');
+                statusNode.classList.toggle('is-error', tone === 'error');
+                statusNode.classList.toggle('is-success', tone === 'success');
+            }
+
+            function renderPreview(rawUrl) {
+                var normalizedUrl = normalizeLogoUrl(rawUrl);
+                var emptyText = preview.getAttribute('data-empty-text') || 'Provider logo is not set yet.';
+                var errorText = preview.getAttribute('data-error-text') || 'Preview could not be loaded from this address.';
+
+                if (!normalizedUrl) {
+                    previewImage.setAttribute('hidden', 'hidden');
+                    previewImage.removeAttribute('src');
+                    previewEmpty.textContent = emptyText;
+                    previewEmpty.removeAttribute('hidden');
+                    removeTrigger.disabled = busy;
+                    return;
+                }
+
+                previewImage.onload = function () {
+                    previewImage.removeAttribute('hidden');
+                    previewEmpty.setAttribute('hidden', 'hidden');
+                };
+                previewImage.onerror = function () {
+                    previewImage.setAttribute('hidden', 'hidden');
+                    previewEmpty.textContent = errorText;
+                    previewEmpty.removeAttribute('hidden');
+                };
+                previewImage.src = normalizedUrl;
+                previewImage.removeAttribute('hidden');
+                previewEmpty.setAttribute('hidden', 'hidden');
+                removeTrigger.disabled = busy ? true : false;
+            }
+
+            function uploadFile(file) {
+                var formData;
+
+                if (!file || busy) {
+                    return;
+                }
+
+                formData = new window.FormData();
+                formData.append('admin_product_provider_logo_ajax', '1');
+                formData.append('logo_action', 'upload');
+                formData.append('current_logo_url', currentUrl());
+                formData.append('_csrf', String(csrfInput.value || ''));
+                formData.append('provider_logo_file', file);
+
+                setBusy(true);
+                setStatus(manager.getAttribute('data-uploading-label') || 'Uploading provider logo...', '');
+
+                jsonFetch(window.location.href, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                }).then(function (payload) {
+                    if (!payload || !payload.ok) {
+                        setStatus((payload && payload.message) ? payload.message : (manager.getAttribute('data-upload-error') || 'Unable to upload the provider logo right now.'), 'error');
+                        return;
+                    }
+
+                    urlInput.value = String(payload.url || '');
+                    renderPreview(urlInput.value);
+                    setStatus(payload.message || manager.getAttribute('data-upload-success') || 'Provider logo uploaded successfully.', 'success');
+                }).catch(function () {
+                    setStatus(manager.getAttribute('data-upload-error') || 'Unable to upload the provider logo right now.', 'error');
+                }).finally(function () {
+                    setBusy(false);
+                    fileInput.value = '';
+                });
+            }
+
+            function clearLogo() {
+                var existingUrl = currentUrl();
+                var formData;
+
+                if (busy || existingUrl === '') {
+                    return;
+                }
+
+                if (existingUrl.indexOf('/uploads/providers/') !== 0) {
+                    urlInput.value = '';
+                    renderPreview('');
+                    setStatus(manager.getAttribute('data-remove-success') || 'Provider logo removed.', 'success');
+                    return;
+                }
+
+                formData = new window.FormData();
+                formData.append('admin_product_provider_logo_ajax', '1');
+                formData.append('logo_action', 'remove');
+                formData.append('current_logo_url', existingUrl);
+                formData.append('_csrf', String(csrfInput.value || ''));
+
+                setBusy(true);
+                setStatus(manager.getAttribute('data-removing-label') || 'Removing provider logo...', '');
+
+                jsonFetch(window.location.href, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                }).then(function (payload) {
+                    if (!payload || !payload.ok) {
+                        setStatus((payload && payload.message) ? payload.message : (manager.getAttribute('data-remove-error') || 'Unable to remove the provider logo right now.'), 'error');
+                        return;
+                    }
+
+                    urlInput.value = '';
+                    renderPreview('');
+                    setStatus(payload.message || manager.getAttribute('data-remove-success') || 'Provider logo removed.', 'success');
+                }).catch(function () {
+                    setStatus(manager.getAttribute('data-remove-error') || 'Unable to remove the provider logo right now.', 'error');
+                }).finally(function () {
+                    setBusy(false);
+                });
+            }
+
+            uploadTrigger.addEventListener('click', function () {
+                if (!busy) {
+                    fileInput.click();
+                }
+            });
+
+            dropzone.addEventListener('click', function () {
+                if (!busy) {
+                    fileInput.click();
+                }
+            });
+
+            dropzone.addEventListener('dragover', function (event) {
+                event.preventDefault();
+                if (!busy) {
+                    dropzone.classList.add('is-dragover');
+                }
+            });
+
+            dropzone.addEventListener('dragleave', function () {
+                dropzone.classList.remove('is-dragover');
+            });
+
+            dropzone.addEventListener('drop', function (event) {
+                var file = event.dataTransfer && event.dataTransfer.files ? event.dataTransfer.files[0] : null;
+                event.preventDefault();
+                dropzone.classList.remove('is-dragover');
+                uploadFile(file);
+            });
+
+            fileInput.addEventListener('change', function () {
+                var file = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+                uploadFile(file);
+            });
+
+            removeTrigger.addEventListener('click', function () {
+                clearLogo();
+            });
+
+            urlInput.addEventListener('input', function () {
+                renderPreview(urlInput.value);
+                setStatus(defaultStatus, '');
+            });
+
+            renderPreview(currentUrl());
+            setStatus(defaultStatus, '');
+            setBusy(false);
+        });
+    }
+
     function initProductTypeForms() {
         qa('[data-product-form-scope]').forEach(function (scope) {
             var typeField = q('[data-product-type-select]', scope);
@@ -4707,6 +4920,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initSidebarAndDropdowns();
     initDangerForms();
     initProviderUrlReplacement();
+    initProviderLogoManagers();
     initProductTypeForms();
     initOrderStatusForms();
     initOrderCreateForms();

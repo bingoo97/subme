@@ -867,6 +867,65 @@ if ($route === 'settings' && isset($_POST['admin_site_logo_ajax'])) {
     exit;
 }
 
+if ($route === 'products' && isset($_POST['admin_product_provider_logo_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'product_provider_logo_csrf_error', 'Your session expired. Refresh the page and try again.'),
+        ]);
+        exit;
+    }
+
+    $logoAction = trim((string)($_POST['logo_action'] ?? ''));
+    $currentLogoUrl = trim((string)($_POST['current_logo_url'] ?? ''));
+
+    if ($logoAction === 'upload') {
+        $uploadedLogoUrl = admin_product_provider_logo_public_path($_FILES['provider_logo_file'] ?? [], (int)$adminUser['id']);
+        if ($uploadedLogoUrl === null) {
+            http_response_code(422);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'product_provider_logo_upload_error', 'Unable to upload the provider logo right now.'),
+            ]);
+            exit;
+        }
+
+        if ($currentLogoUrl !== '' && $currentLogoUrl !== $uploadedLogoUrl) {
+            admin_delete_product_provider_logo_file($currentLogoUrl);
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'url' => $uploadedLogoUrl,
+            'message' => admin_t($messages, 'product_provider_logo_upload_success', 'Provider logo uploaded successfully.'),
+        ]);
+        exit;
+    }
+
+    if ($logoAction === 'remove') {
+        if ($currentLogoUrl !== '') {
+            admin_delete_product_provider_logo_file($currentLogoUrl);
+        }
+
+        echo json_encode([
+            'ok' => true,
+            'url' => '',
+            'message' => admin_t($messages, 'product_provider_logo_remove_success', 'Provider logo removed.'),
+        ]);
+        exit;
+    }
+
+    http_response_code(400);
+    echo json_encode([
+        'ok' => false,
+        'message' => admin_t($messages, 'product_provider_logo_upload_error', 'Unable to upload the provider logo right now.'),
+    ]);
+    exit;
+}
+
 if ($route === 'settings' && isset($_POST['admin_save_smtp_settings'])) {
     $smtpFormState = [
         'smtp_host' => trim((string)($_POST['smtp_host'] ?? '')),
@@ -1075,6 +1134,7 @@ $productProviderFormState = [
     'name' => '',
     'slug' => '',
     'description' => '',
+    'logo_url' => '',
     'dashboard_url' => '',
     'url_replacement_from' => '',
     'url_replacement_to' => '',
@@ -1463,6 +1523,7 @@ if ($route === 'products') {
             'name' => trim((string)($_POST['name'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
             'description' => trim((string)($_POST['description'] ?? '')),
+            'logo_url' => trim((string)($_POST['logo_url'] ?? '')),
             'dashboard_url' => trim((string)($_POST['dashboard_url'] ?? '')),
             'url_replacement_from' => trim((string)($_POST['url_replacement_from'] ?? '')),
             'url_replacement_to' => trim((string)($_POST['url_replacement_to'] ?? '')),
@@ -1493,6 +1554,7 @@ if ($route === 'products') {
             'name' => trim((string)($_POST['name'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
             'description' => trim((string)($_POST['description'] ?? '')),
+            'logo_url' => trim((string)($_POST['logo_url'] ?? '')),
             'dashboard_url' => trim((string)($_POST['dashboard_url'] ?? '')),
             'url_replacement_from' => trim((string)($_POST['url_replacement_from'] ?? '')),
             'url_replacement_to' => trim((string)($_POST['url_replacement_to'] ?? '')),
@@ -5163,6 +5225,59 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-label" for="product_provider_slug"><?php echo admin_e(admin_t($messages, 'product_provider_slug_label', 'Slug')); ?></label>
                                                         <input type="text" class="form-control" id="product_provider_slug" name="slug" value="<?php echo admin_e((string)($productProviderDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'product_provider_slug_placeholder', 'generated-from-name')); ?>">
                                                     </div>
+                                                    <div class="col-12">
+                                                        <?php $providerDraftLogoUrl = admin_optional_media_url((string)($productProviderDraft['logo_url'] ?? '')); ?>
+                                                        <div
+                                                            class="admin-settings-logo-manager"
+                                                            data-product-provider-logo-manager
+                                                            data-uploading-label="<?php echo admin_e(admin_t($messages, 'product_provider_logo_uploading', 'Uploading provider logo...')); ?>"
+                                                            data-removing-label="<?php echo admin_e(admin_t($messages, 'product_provider_logo_removing', 'Removing provider logo...')); ?>"
+                                                            data-upload-error="<?php echo admin_e(admin_t($messages, 'product_provider_logo_upload_error', 'Unable to upload the provider logo right now.')); ?>"
+                                                            data-remove-error="<?php echo admin_e(admin_t($messages, 'product_provider_logo_remove_error', 'Unable to remove the provider logo right now.')); ?>"
+                                                            data-remove-success="<?php echo admin_e(admin_t($messages, 'product_provider_logo_remove_success', 'Provider logo removed.')); ?>"
+                                                            data-upload-success="<?php echo admin_e(admin_t($messages, 'product_provider_logo_upload_success', 'Provider logo uploaded successfully.')); ?>"
+                                                        >
+                                                            <div class="admin-settings-logo-manager__header">
+                                                                <div>
+                                                                    <label class="form-label mb-1" for="product_provider_logo_url_create"><?php echo admin_e(admin_t($messages, 'product_provider_logo_url', 'Logo URL')); ?></label>
+                                                                    <div class="text-muted small"><?php echo admin_e(admin_t($messages, 'product_provider_logo_help', 'Upload a provider logo instantly or paste a direct image URL below.')); ?></div>
+                                                                </div>
+                                                                <div class="admin-settings-logo-field__actions">
+                                                                    <input type="file" id="product_provider_logo_file_create" accept=".jpg,.jpeg,.png,.gif,.svg,image/jpeg,image/png,image/gif,image/svg+xml" hidden data-product-provider-logo-file>
+                                                                    <button type="button" class="btn btn-dark btn-sm" data-product-provider-logo-upload-trigger>
+                                                                        <i class="bi bi-upload" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_logo_upload', 'Upload logo')); ?></span>
+                                                                    </button>
+                                                                    <button type="button" class="btn btn-outline-dark btn-sm"<?php echo $providerDraftLogoUrl === '' ? ' disabled' : ''; ?> data-product-provider-logo-remove>
+                                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_logo_clear', 'Remove logo')); ?></span>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                            <button type="button" class="admin-settings-logo-dropzone" data-product-provider-logo-dropzone>
+                                                                <span class="admin-settings-logo-dropzone__icon">
+                                                                    <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                                                                </span>
+                                                                <span class="admin-settings-logo-dropzone__title"><?php echo admin_e(admin_t($messages, 'product_provider_logo_drop_title', 'Drop provider logo here or click to upload')); ?></span>
+                                                                <span class="admin-settings-logo-dropzone__hint"><?php echo admin_e(admin_t($messages, 'product_provider_logo_drop_hint', 'PNG, JPG, GIF or SVG. You can also paste a direct image URL below.')); ?></span>
+                                                            </button>
+                                                            <input type="text" class="form-control" id="product_provider_logo_url_create" name="logo_url" value="<?php echo admin_e((string)($productProviderDraft['logo_url'] ?? '')); ?>" placeholder="https://example.com/provider-logo.png" data-product-provider-logo-url>
+                                                            <div class="admin-settings-logo-manager__status text-muted small" data-product-provider-logo-status>
+                                                                <?php echo admin_e(admin_t($messages, 'product_provider_logo_help', 'Upload a provider logo instantly or paste a direct image URL below.')); ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="admin-settings-logo-preview" data-product-provider-logo-preview data-empty-text="<?php echo admin_e(admin_t($messages, 'product_provider_logo_empty', 'Provider logo is not set yet.')); ?>" data-error-text="<?php echo admin_e(admin_t($messages, 'product_provider_logo_invalid', 'Preview could not be loaded from this address.')); ?>">
+                                                            <div class="admin-settings-logo-preview__label"><?php echo admin_e(admin_t($messages, 'product_provider_logo_preview', 'Logo preview')); ?></div>
+                                                            <div class="admin-settings-logo-preview__canvas">
+                                                                <img src="<?php echo admin_e($providerDraftLogoUrl); ?>" alt="<?php echo admin_e((string)($productProviderDraft['name'] ?? 'Provider')); ?>" data-product-provider-logo-preview-image<?php echo $providerDraftLogoUrl === '' ? ' hidden' : ''; ?>>
+                                                                <div class="admin-settings-logo-preview__empty" data-product-provider-logo-preview-empty<?php echo $providerDraftLogoUrl !== '' ? ' hidden' : ''; ?>>
+                                                                    <?php echo admin_e($providerDraftLogoUrl !== '' ? admin_t($messages, 'product_provider_logo_preview', 'Logo preview') : admin_t($messages, 'product_provider_logo_empty', 'Provider logo is not set yet.')); ?>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                     <div class="col-md-8">
                                                         <label class="form-label" for="product_provider_dashboard_url"><?php echo admin_e(admin_t($messages, 'product_provider_dashboard_url', 'Dashboard URL')); ?></label>
                                                         <input type="url" class="form-control" id="product_provider_dashboard_url" name="dashboard_url" value="<?php echo admin_e((string)($productProviderDraft['dashboard_url'] ?? '')); ?>" placeholder="https://">
@@ -5250,6 +5365,59 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-4">
                                                         <label class="form-label" for="product_provider_slug"><?php echo admin_e(admin_t($messages, 'product_provider_slug_label', 'Slug')); ?></label>
                                                         <input type="text" class="form-control" id="product_provider_slug" name="slug" value="<?php echo admin_e((string)($productProviderEditor['slug'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <?php $providerEditorLogoUrl = admin_optional_media_url((string)($productProviderEditor['logo_url'] ?? '')); ?>
+                                                        <div
+                                                            class="admin-settings-logo-manager"
+                                                            data-product-provider-logo-manager
+                                                            data-uploading-label="<?php echo admin_e(admin_t($messages, 'product_provider_logo_uploading', 'Uploading provider logo...')); ?>"
+                                                            data-removing-label="<?php echo admin_e(admin_t($messages, 'product_provider_logo_removing', 'Removing provider logo...')); ?>"
+                                                            data-upload-error="<?php echo admin_e(admin_t($messages, 'product_provider_logo_upload_error', 'Unable to upload the provider logo right now.')); ?>"
+                                                            data-remove-error="<?php echo admin_e(admin_t($messages, 'product_provider_logo_remove_error', 'Unable to remove the provider logo right now.')); ?>"
+                                                            data-remove-success="<?php echo admin_e(admin_t($messages, 'product_provider_logo_remove_success', 'Provider logo removed.')); ?>"
+                                                            data-upload-success="<?php echo admin_e(admin_t($messages, 'product_provider_logo_upload_success', 'Provider logo uploaded successfully.')); ?>"
+                                                        >
+                                                            <div class="admin-settings-logo-manager__header">
+                                                                <div>
+                                                                    <label class="form-label mb-1" for="product_provider_logo_url_edit"><?php echo admin_e(admin_t($messages, 'product_provider_logo_url', 'Logo URL')); ?></label>
+                                                                    <div class="text-muted small"><?php echo admin_e(admin_t($messages, 'product_provider_logo_help', 'Upload a provider logo instantly or paste a direct image URL below.')); ?></div>
+                                                                </div>
+                                                                <div class="admin-settings-logo-field__actions">
+                                                                    <input type="file" id="product_provider_logo_file_edit" accept=".jpg,.jpeg,.png,.gif,.svg,image/jpeg,image/png,image/gif,image/svg+xml" hidden data-product-provider-logo-file>
+                                                                    <button type="button" class="btn btn-dark btn-sm" data-product-provider-logo-upload-trigger>
+                                                                        <i class="bi bi-upload" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_logo_upload', 'Upload logo')); ?></span>
+                                                                    </button>
+                                                                    <button type="button" class="btn btn-outline-dark btn-sm"<?php echo $providerEditorLogoUrl === '' ? ' disabled' : ''; ?> data-product-provider-logo-remove>
+                                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'product_provider_logo_clear', 'Remove logo')); ?></span>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                            <button type="button" class="admin-settings-logo-dropzone" data-product-provider-logo-dropzone>
+                                                                <span class="admin-settings-logo-dropzone__icon">
+                                                                    <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                                                                </span>
+                                                                <span class="admin-settings-logo-dropzone__title"><?php echo admin_e(admin_t($messages, 'product_provider_logo_drop_title', 'Drop provider logo here or click to upload')); ?></span>
+                                                                <span class="admin-settings-logo-dropzone__hint"><?php echo admin_e(admin_t($messages, 'product_provider_logo_drop_hint', 'PNG, JPG, GIF or SVG. You can also paste a direct image URL below.')); ?></span>
+                                                            </button>
+                                                            <input type="text" class="form-control" id="product_provider_logo_url_edit" name="logo_url" value="<?php echo admin_e((string)($productProviderEditor['logo_url'] ?? '')); ?>" placeholder="https://example.com/provider-logo.png" data-product-provider-logo-url>
+                                                            <div class="admin-settings-logo-manager__status text-muted small" data-product-provider-logo-status>
+                                                                <?php echo admin_e(admin_t($messages, 'product_provider_logo_help', 'Upload a provider logo instantly or paste a direct image URL below.')); ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="admin-settings-logo-preview" data-product-provider-logo-preview data-empty-text="<?php echo admin_e(admin_t($messages, 'product_provider_logo_empty', 'Provider logo is not set yet.')); ?>" data-error-text="<?php echo admin_e(admin_t($messages, 'product_provider_logo_invalid', 'Preview could not be loaded from this address.')); ?>">
+                                                            <div class="admin-settings-logo-preview__label"><?php echo admin_e(admin_t($messages, 'product_provider_logo_preview', 'Logo preview')); ?></div>
+                                                            <div class="admin-settings-logo-preview__canvas">
+                                                                <img src="<?php echo admin_e($providerEditorLogoUrl); ?>" alt="<?php echo admin_e((string)($productProviderEditor['name'] ?? 'Provider')); ?>" data-product-provider-logo-preview-image<?php echo $providerEditorLogoUrl === '' ? ' hidden' : ''; ?>>
+                                                                <div class="admin-settings-logo-preview__empty" data-product-provider-logo-preview-empty<?php echo $providerEditorLogoUrl !== '' ? ' hidden' : ''; ?>>
+                                                                    <?php echo admin_e($providerEditorLogoUrl !== '' ? admin_t($messages, 'product_provider_logo_preview', 'Logo preview') : admin_t($messages, 'product_provider_logo_empty', 'Provider logo is not set yet.')); ?>
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                     </div>
                                                     <div class="col-md-8">
                                                         <label class="form-label" for="product_provider_dashboard_url"><?php echo admin_e(admin_t($messages, 'product_provider_dashboard_url', 'Dashboard URL')); ?></label>
@@ -5652,17 +5820,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <?php
                                                         $providerDescriptionPreview = admin_news_body_preview((string)($providerRow['description'] ?? ''), 90);
                                                         $providerDashboardUrl = trim((string)($providerRow['dashboard_url'] ?? ''));
-                                                        $providerLogoUrl = trim((string)($providerRow['logo_url'] ?? ''));
+                                                        $providerLogoUrl = admin_optional_media_url((string)($providerRow['logo_url'] ?? ''));
                                                         ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?>">
                                                                 <div class="d-flex align-items-center gap-3">
                                                                     <?php
                                                                     $logoSrc = $providerLogoUrl !== '' ? $providerLogoUrl : '/img/no-image.png';
-                                                                    $logoSrc = str_replace('admin/', '', $logoSrc);
-                                                                    if (strpos($logoSrc, '/') !== 0) {
-                                                                        $logoSrc = '/' . $logoSrc;
-                                                                    }
                                                                     ?>
                                                                     <img src="<?php echo admin_e($logoSrc); ?>" alt="<?php echo admin_e((string)($providerRow['name'] ?? '')); ?>" width="40" height="40" style="border-radius: 8px; object-fit: cover;">
                                                                     <div class="d-flex flex-column gap-1">

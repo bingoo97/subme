@@ -196,7 +196,7 @@ INSERT INTO `product_providers` (
   `name`,
   `slug`,
   `description`,
-  `icon_url`,
+  `logo_url`,
   `dashboard_url`,
   `supports_manual_delivery`,
   `supports_url_replacement`,

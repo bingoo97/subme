@@ -5063,6 +5063,20 @@ function admin_product_provider_unique_slug(Mysql_ks $db, string $name, string $
     }
 }
 
+function admin_product_provider_logo_reference_is_valid(string $value): bool
+{
+    $value = trim($value);
+    if ($value === '') {
+        return true;
+    }
+
+    if (filter_var($value, FILTER_VALIDATE_URL) !== false) {
+        return true;
+    }
+
+    return strpos($value, '/') === 0;
+}
+
 function admin_create_product_provider(Mysql_ks $db, array $input): array
 {
     if (!schema_object_exists($db, 'product_providers')) {
@@ -5072,6 +5086,7 @@ function admin_create_product_provider(Mysql_ks $db, array $input): array
     $name = trim((string)($input['name'] ?? ''));
     $slugInput = trim((string)($input['slug'] ?? ''));
     $description = trim((string)($input['description'] ?? ''));
+    $logoUrl = trim((string)($input['logo_url'] ?? ''));
     $dashboardUrl = trim((string)($input['dashboard_url'] ?? ''));
     $urlReplacementFrom = trim((string)($input['url_replacement_from'] ?? ''));
     $urlReplacementTo = trim((string)($input['url_replacement_to'] ?? ''));
@@ -5087,6 +5102,10 @@ function admin_create_product_provider(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'Dashboard URL must be a valid link.'];
     }
 
+    if (!admin_product_provider_logo_reference_is_valid($logoUrl)) {
+        return ['ok' => false, 'message' => 'Provider logo must be a valid image URL or uploaded file.'];
+    }
+
     if (($urlReplacementFrom !== '' || $urlReplacementTo !== '') && ($urlReplacementFrom === '' || $urlReplacementTo === '')) {
         return ['ok' => false, 'message' => 'Both URL replacement values are required.'];
     }
@@ -5100,8 +5119,8 @@ function admin_create_product_provider(Mysql_ks $db, array $input): array
     }
 
     $slug = admin_product_provider_unique_slug($db, $name, $slugInput);
-    $insertFields = ['name', 'slug', 'description', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
-    $insertValues = [$name, $slug, $description !== '' ? $description : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
+    $insertFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
+    $insertValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
 
     if (schema_column_exists($db, 'product_providers', 'url_replacement_from')) {
         $insertFields[] = 'url_replacement_from';
@@ -5139,6 +5158,7 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
     $name = trim((string)($input['name'] ?? ''));
     $slugInput = trim((string)($input['slug'] ?? ''));
     $description = trim((string)($input['description'] ?? ''));
+    $logoUrl = trim((string)($input['logo_url'] ?? ''));
     $dashboardUrl = trim((string)($input['dashboard_url'] ?? ''));
     $urlReplacementFrom = trim((string)($input['url_replacement_from'] ?? ''));
     $urlReplacementTo = trim((string)($input['url_replacement_to'] ?? ''));
@@ -5154,6 +5174,10 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
         return ['ok' => false, 'message' => 'Dashboard URL must be a valid link.'];
     }
 
+    if (!admin_product_provider_logo_reference_is_valid($logoUrl)) {
+        return ['ok' => false, 'message' => 'Provider logo must be a valid image URL or uploaded file.'];
+    }
+
     if (($urlReplacementFrom !== '' || $urlReplacementTo !== '') && ($urlReplacementFrom === '' || $urlReplacementTo === '')) {
         return ['ok' => false, 'message' => 'Both URL replacement values are required.'];
     }
@@ -5167,8 +5191,9 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
     }
 
     $slug = admin_product_provider_unique_slug($db, $name, $slugInput, $providerId);
-    $updateFields = ['name', 'slug', 'description', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
-    $updateValues = [$name, $slug, $description !== '' ? $description : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
+    $previousLogoUrl = trim((string)($provider['logo_url'] ?? ''));
+    $updateFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
+    $updateValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
 
     if (schema_column_exists($db, 'product_providers', 'url_replacement_from')) {
         $updateFields[] = 'url_replacement_from';
@@ -5184,6 +5209,10 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
     $updateValues[] = $isActive;
 
     $updated = $db->update_using_id($updateFields, $updateValues, 'product_providers', $providerId);
+
+    if ($updated && $previousLogoUrl !== '' && $previousLogoUrl !== $logoUrl) {
+        admin_delete_product_provider_logo_file($previousLogoUrl);
+    }
 
     return [
         'ok' => (bool)$updated,
@@ -5207,6 +5236,9 @@ function admin_delete_product_provider(Mysql_ks $db, int $providerId): array
     }
 
     $deleted = $db->delete_using_id('product_providers', $providerId);
+    if ($deleted) {
+        admin_delete_product_provider_logo_file((string)($provider['logo_url'] ?? ''));
+    }
     return [
         'ok' => (bool)$deleted,
         'message' => $deleted ? 'Provider deleted successfully.' : 'Unable to delete provider.',
@@ -11086,6 +11118,11 @@ function admin_site_logo_upload_directory(): string
     return dirname(__DIR__, 2) . '/public_html/uploads/branding';
 }
 
+function admin_product_provider_logo_upload_directory(): string
+{
+    return dirname(__DIR__, 2) . '/public_html/uploads/providers';
+}
+
 function admin_site_logo_is_valid_svg(string $tmpPath): bool
 {
     if ($tmpPath === '' || !is_file($tmpPath) || !is_readable($tmpPath)) {
@@ -11146,6 +11183,52 @@ function admin_site_logo_public_path(array $file, int $adminUserId): ?string
     return '/uploads/branding/' . $fileName;
 }
 
+function admin_product_provider_logo_public_path(array $file, int $adminUserId): ?string
+{
+    $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+    $originalName = (string)($file['name'] ?? '');
+    $tmpPath = (string)($file['tmp_name'] ?? '');
+    $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg'];
+    $mimeType = function_exists('mime_content_type') ? (string)mime_content_type($tmpPath) : '';
+    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/svg+xml', 'text/plain', 'text/xml', 'application/xml'];
+    $isSvg = $extension === 'svg';
+
+    if (
+        $uploadError !== UPLOAD_ERR_OK
+        || !is_uploaded_file($tmpPath)
+        || !in_array($extension, $allowedExtensions, true)
+        || (!$isSvg && $mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true))
+        || ($isSvg && !admin_site_logo_is_valid_svg($tmpPath))
+    ) {
+        return null;
+    }
+
+    $uploadDirectory = admin_product_provider_logo_upload_directory();
+    if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+        return null;
+    }
+
+    $safeExtension = $extension === 'jpeg' ? 'jpg' : $extension;
+    $fileName = 'provider_logo_' . $adminUserId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $safeExtension;
+    $destinationPath = $uploadDirectory . '/' . $fileName;
+
+    $saved = false;
+    if (!$isSvg && $mimeType !== '' && function_exists('imagecreatetruecolor')) {
+        $saved = admin_chat_resize_image($tmpPath, $destinationPath, $mimeType);
+    }
+
+    if (!$saved) {
+        $saved = move_uploaded_file($tmpPath, $destinationPath);
+    }
+
+    if (!$saved) {
+        return null;
+    }
+
+    return '/uploads/providers/' . $fileName;
+}
+
 function admin_delete_site_logo_file(string $publicPath): bool
 {
     $publicPath = trim($publicPath);
@@ -11161,6 +11244,27 @@ function admin_delete_site_logo_file(string $publicPath): bool
     $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
     $realFilePath = realpath($filePath);
     if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/branding/') !== 0 || !is_file($realFilePath)) {
+        return false;
+    }
+
+    return @unlink($realFilePath);
+}
+
+function admin_delete_product_provider_logo_file(string $publicPath): bool
+{
+    $publicPath = trim($publicPath);
+    if ($publicPath === '' || strpos($publicPath, '/uploads/providers/') !== 0) {
+        return false;
+    }
+
+    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
+    if ($publicRoot === false) {
+        return false;
+    }
+
+    $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
+    $realFilePath = realpath($filePath);
+    if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/providers/') !== 0 || !is_file($realFilePath)) {
         return false;
     }
 
