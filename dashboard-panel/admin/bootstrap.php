@@ -165,6 +165,11 @@ function admin_payment_test_mode_notice_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'payment_test_mode_notice_enabled', false);
 }
 
+function admin_crypto_daily_backup_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'crypto_daily_backup_enabled', false);
+}
+
 function admin_crypto_wallet_shared_assignments_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'crypto_wallet_shared_assignments_enabled', false);
@@ -495,6 +500,39 @@ function admin_user_can_access_route(array $adminUser, string $route): bool
     return admin_user_access_level($adminUser) >= admin_route_minimum_access_level($route);
 }
 
+function admin_sensitive_routes(): array
+{
+    return ['settings', 'email-templates'];
+}
+
+function admin_route_requires_sensitive_unlock(string $route): bool
+{
+    return in_array($route, admin_sensitive_routes(), true);
+}
+
+function admin_sensitive_route_password(): string
+{
+    return '1234567890';
+}
+
+function admin_sensitive_routes_unlocked(): bool
+{
+    return !empty($_SESSION['admin_sensitive_routes_unlocked']);
+}
+
+function admin_unlock_sensitive_routes(string $password): bool
+{
+    $provided = trim($password);
+    $expected = admin_sensitive_route_password();
+
+    if ($provided === '' || !hash_equals($expected, $provided)) {
+        return false;
+    }
+
+    $_SESSION['admin_sensitive_routes_unlocked'] = 1;
+    return true;
+}
+
 function admin_route_label_key(string $route): string
 {
     $map = [
@@ -510,6 +548,7 @@ function admin_route_label_key(string $route): string
         'live-chat' => 'nav_live_chat',
         'email-templates' => 'nav_email_templates',
         'faq' => 'nav_faq',
+        'help' => 'nav_help',
         'settings' => 'nav_settings',
     ];
 
@@ -986,6 +1025,7 @@ function admin_navigation_config(array $settings = [], ?array $adminUser = null)
             ['route' => 'live-chat', 'icon' => 'bi-chat-dots', 'label_key' => 'nav_live_chat'],
             ['route' => 'email-templates', 'icon' => 'bi-envelope-paper', 'label_key' => 'nav_email_templates'],
             ['route' => 'faq', 'icon' => 'bi-question-circle', 'label_key' => 'nav_faq'],
+            ['route' => 'help', 'icon' => 'bi-life-preserver', 'label_key' => 'nav_help'],
         ],
         'system' => [
             ['route' => 'settings', 'icon' => 'bi-gear', 'label_key' => 'nav_settings'],
@@ -1062,7 +1102,7 @@ function admin_dashboard_metrics(Mysql_ks $db): array
     }
 
     if (schema_object_exists($db, 'crypto_deposit_requests')) {
-        $row = $db->select_user("SELECT COUNT(*) AS total FROM crypto_deposit_requests WHERE status IN ('pending', 'awaiting_confirmation')");
+        $row = $db->select_user("SELECT COUNT(*) AS total FROM crypto_deposit_requests WHERE status IN ('pending', 'awaiting_confirmation', 'awaiting_review')");
         $metrics['crypto_open'] = (int)($row['total'] ?? 0);
     }
 
@@ -1446,6 +1486,25 @@ function admin_order_count(Mysql_ks $db, int $customerId = 0): int
     return (int)($row['total'] ?? 0);
 }
 
+function admin_order_count_filtered(Mysql_ks $db, int $customerId = 0, int $orderId = 0): int
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return 0;
+    }
+
+    $whereParts = [];
+    if ($customerId > 0) {
+        $whereParts[] = 'customer_id = ' . $customerId;
+    }
+    if ($orderId > 0) {
+        $whereParts[] = 'id = ' . $orderId;
+    }
+
+    $where = $whereParts ? (' WHERE ' . implode(' AND ', $whereParts)) : '';
+    $row = $db->select_user("SELECT COUNT(*) AS total FROM orders{$where}");
+    return (int)($row['total'] ?? 0);
+}
+
 function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $customerId = 0): array
 {
     if (!schema_object_exists($db, 'orders')) {
@@ -1507,6 +1566,76 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
     );
 }
 
+function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 0, int $customerId = 0, int $orderId = 0): array
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return [];
+    }
+
+    $limit = max(1, min(100, $limit));
+    $offset = max(0, $offset);
+    $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
+        ? 'orders.delivery_link_visible'
+        : '0 AS delivery_link_visible';
+    $providerUrlReplacementFromSelect = schema_column_exists($db, 'product_providers', 'url_replacement_from')
+        ? 'product_providers.url_replacement_from'
+        : 'NULL';
+    $providerUrlReplacementToSelect = schema_column_exists($db, 'product_providers', 'url_replacement_to')
+        ? 'product_providers.url_replacement_to'
+        : 'NULL';
+
+    $whereParts = [];
+    if ($customerId > 0) {
+        $whereParts[] = 'orders.customer_id = ' . $customerId;
+    }
+    if ($orderId > 0) {
+        $whereParts[] = 'orders.id = ' . $orderId;
+    }
+
+    $where = $whereParts ? ('WHERE ' . implode(' AND ', $whereParts)) : '';
+
+    return $db->select_full_user(
+        "SELECT
+            orders.id,
+            orders.customer_id,
+            orders.product_id,
+            orders.payment_method,
+            orders.status,
+            orders.payment_status,
+            orders.fulfillment_status,
+            orders.total_amount,
+            orders.order_reference,
+            orders.support_note,
+            orders.transaction_reference,
+            orders.customer_note,
+            orders.delivery_link,
+            {$deliveryLinkVisibleSelect},
+            orders.started_at,
+            orders.created_at,
+            orders.expires_at,
+            orders.paid_at,
+            customers.email AS customer_email,
+            products.provider_id,
+            products.name AS product_name,
+            products.duration_hours,
+            product_providers.name AS provider_name,
+            product_providers.dashboard_url,
+            product_providers.supports_manual_delivery,
+            product_providers.supports_url_replacement,
+            {$providerUrlReplacementFromSelect} AS url_replacement_from,
+            {$providerUrlReplacementToSelect} AS url_replacement_to,
+            currencies.code AS currency_code
+         FROM orders
+         LEFT JOIN customers ON customers.id = orders.customer_id
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         LEFT JOIN currencies ON currencies.id = orders.currency_id
+         {$where}
+         ORDER BY orders.id DESC
+         LIMIT {$offset}, {$limit}"
+    );
+}
+
 function admin_order_find(Mysql_ks $db, int $orderId): ?array
 {
     if ($orderId <= 0 || !schema_object_exists($db, 'orders')) {
@@ -1522,6 +1651,9 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
     $providerUrlReplacementToSelect = schema_column_exists($db, 'product_providers', 'url_replacement_to')
         ? 'product_providers.url_replacement_to'
         : 'NULL';
+    $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
 
     $row = $db->select_user(
         "SELECT
@@ -1545,6 +1677,7 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
             orders.paid_at,
             orders.created_at,
             customers.email AS customer_email,
+            {$customerHandleSelect},
             products.provider_id,
             products.name AS product_name,
             products.duration_hours,
@@ -1709,7 +1842,7 @@ function admin_order_status_visual(array $order): array
 
     if ($status === 'pending_payment' && $paymentStatus === 'paid' && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)) {
         return [
-            'icon' => 'bi bi-check-circle-fill',
+            'icon' => 'bi bi-arrow-repeat',
             'class' => 'admin-order-status-icon--awaiting-activation',
             'label' => 'Payment confirmed',
         ];
@@ -1772,11 +1905,18 @@ function admin_format_datetime_local(?string $value): string
 function admin_format_money_value($amount, string $currencyCode = ''): string
 {
     $currencyCode = trim($currencyCode);
+    $currencyLabel = match (strtoupper($currencyCode)) {
+        'EUR' => '€',
+        'USD' => '$',
+        'GBP' => '£',
+        'PLN' => 'zł',
+        default => $currencyCode,
+    };
     if (!is_numeric($amount)) {
-        return trim('— ' . $currencyCode);
+        return trim('— ' . $currencyLabel);
     }
 
-    return trim(number_format((float)$amount, 2, '.', '') . ' ' . $currencyCode);
+    return trim(number_format((float)$amount, 2, '.', '') . ' ' . $currencyLabel);
 }
 
 function admin_format_money_value_with_symbol($amount, string $currencyCode = '', string $currencySymbol = ''): string
@@ -1867,7 +2007,7 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
         ? "(SELECT COUNT(*) FROM orders WHERE orders.customer_id = customers.id AND orders.status = 'pending_payment')"
         : '0';
     $openCryptoPaymentsSelect = schema_object_exists($db, 'crypto_deposit_requests')
-        ? "(SELECT COUNT(*) FROM crypto_deposit_requests WHERE crypto_deposit_requests.customer_id = customers.id AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation'))"
+        ? "(SELECT COUNT(*) FROM crypto_deposit_requests WHERE crypto_deposit_requests.customer_id = customers.id AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review'))"
         : '0';
     $openBankPaymentsSelect = schema_object_exists($db, 'bank_transfer_requests')
         ? "(SELECT COUNT(*) FROM bank_transfer_requests WHERE bank_transfer_requests.customer_id = customers.id AND bank_transfer_requests.status IN ('pending_payment', 'awaiting_review'))"
@@ -1934,7 +2074,7 @@ function admin_customer_management_summary(Mysql_ks $db, int $customerId): array
             "SELECT COUNT(*) AS total
              FROM crypto_deposit_requests
              WHERE customer_id = {$customerId}
-               AND status IN ('pending', 'awaiting_confirmation')"
+               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
         );
         $openPaymentsTotal += (int)($row['total'] ?? 0);
     }
@@ -2435,6 +2575,56 @@ function admin_customer_leave_group_chat(
     ];
 }
 
+function admin_customer_delete_group_chat(
+    Mysql_ks $db,
+    int $customerId,
+    int $conversationId,
+    int $adminUserId,
+    string $ipAddress = ''
+): array {
+    chat_ensure_group_chat_runtime($db);
+    if ($customerId <= 0 || $conversationId <= 0) {
+        return ['ok' => false, 'message' => 'Group conversation not found.'];
+    }
+
+    $participantKey = chat_participant_key_for_customer($customerId);
+    $member = chat_group_member_row($db, $conversationId, $participantKey);
+    $conversation = chat_group_conversation_row($db, $conversationId);
+    if (
+        !$member
+        || !$conversation
+        || (int)($member['customer_id'] ?? 0) !== $customerId
+        || (int)($conversation['group_created_by_customer_id'] ?? 0) !== $customerId
+    ) {
+        return ['ok' => false, 'message' => 'Only the group owner can remove this group from the customer profile.'];
+    }
+
+    $result = chat_delete_group_conversation($db, $conversationId, [
+        'participant_type' => 'customer',
+        'customer_id' => $customerId,
+        'admin_user_id' => $adminUserId,
+    ]);
+
+    if (!empty($result['ok'])) {
+        $title = chat_group_conversation_title((array)$conversation, 'Group chat');
+        admin_log_customer_and_admin(
+            $db,
+            $customerId,
+            $adminUserId,
+            'customer_group_chat_deleted',
+            'Deleted group chat "' . $title . '" from admin profile.',
+            $ipAddress
+        );
+    }
+
+    return [
+        'ok' => !empty($result['ok']),
+        'message' => !empty($result['ok'])
+            ? 'Group chat deleted successfully.'
+            : (string)($result['message'] ?? 'Unable to delete the group chat.'),
+    ];
+}
+
 function admin_delete_customer_wallet_assignment(
     Mysql_ks $db,
     int $customerId,
@@ -2739,6 +2929,11 @@ function admin_save_customer_profile(Mysql_ks $db, int $customerId, array $paylo
         return ['ok' => false, 'message' => 'Unable to save customer profile.'];
     }
 
+    if (isset($payload['provider_visibility_form_present'])) {
+        $visibleProviderIds = array_map('intval', (array)($payload['visible_provider_ids'] ?? []));
+        app_save_customer_provider_visibility($db, $customerId, $visibleProviderIds);
+    }
+
     $actionKey = 'profile_updated';
     $description = 'Customer profile updated by admin.';
     if ((string)($current['status'] ?? '') !== $status) {
@@ -2753,6 +2948,35 @@ function admin_save_customer_profile(Mysql_ks $db, int $customerId, array $paylo
     }
 
     return ['ok' => true, 'message' => 'Customer profile saved.'];
+}
+
+function admin_customer_provider_visibility_rows(Mysql_ks $db, int $customerId): array
+{
+    $customerId = (int)$customerId;
+    if ($customerId <= 0 || !schema_object_exists($db, 'product_providers')) {
+        return [];
+    }
+
+    app_ensure_customer_provider_visibility_runtime_table($db);
+    $visibilityJoin = schema_object_exists($db, 'customer_provider_visibility')
+        ? "LEFT JOIN customer_provider_visibility
+              ON customer_provider_visibility.provider_id = product_providers.id
+             AND customer_provider_visibility.customer_id = {$customerId}"
+        : '';
+    $visibilitySelect = schema_object_exists($db, 'customer_provider_visibility')
+        ? 'COALESCE(customer_provider_visibility.is_visible, 1) AS is_visible'
+        : '1 AS is_visible';
+
+    return $db->select_full_user(
+        "SELECT
+            product_providers.id,
+            product_providers.name,
+            product_providers.is_active,
+            {$visibilitySelect}
+         FROM product_providers
+         {$visibilityJoin}
+         ORDER BY product_providers.name ASC, product_providers.id ASC"
+    );
 }
 
 function admin_adjust_customer_balance(Mysql_ks $db, int $customerId, array $payload, int $adminUserId, string $ipAddress = ''): array
@@ -2816,6 +3040,175 @@ function admin_adjust_customer_balance(Mysql_ks $db, int $customerId, array $pay
     return ['ok' => true, 'message' => 'Customer balance updated.'];
 }
 
+function admin_ensure_customer_balance_runtime_table(Mysql_ks $db): void
+{
+    if (schema_object_exists($db, 'customer_balance_runtime_events')) {
+        return;
+    }
+
+    @$db->query(
+        "CREATE TABLE IF NOT EXISTS customer_balance_runtime_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            customer_id INT UNSIGNED NOT NULL,
+            source_type VARCHAR(40) NOT NULL,
+            source_key VARCHAR(120) NOT NULL,
+            direction VARCHAR(10) NOT NULL,
+            amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            note VARCHAR(255) DEFAULT NULL,
+            created_by_admin_user_id INT UNSIGNED DEFAULT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uniq_customer_balance_runtime_event (source_type, source_key, direction),
+            KEY idx_customer_balance_runtime_customer (customer_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+
+function admin_apply_customer_balance_runtime_event(
+    Mysql_ks $db,
+    int $customerId,
+    float $amount,
+    string $direction,
+    string $sourceType,
+    string $sourceKey,
+    string $note,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    if ($customerId <= 0 || $amount <= 0) {
+        return ['ok' => false, 'message' => 'Customer balance event is invalid.'];
+    }
+
+    if (!schema_object_exists($db, 'customers') || !schema_column_exists($db, 'customers', 'balance_amount')) {
+        return ['ok' => false, 'message' => 'Balance is not available in this database schema yet.'];
+    }
+
+    $direction = strtolower(trim($direction));
+    if (!in_array($direction, ['credit', 'debit'], true)) {
+        return ['ok' => false, 'message' => 'Customer balance event direction is invalid.'];
+    }
+
+    admin_ensure_customer_balance_runtime_table($db);
+
+    $sourceType = substr(trim($sourceType), 0, 40);
+    $sourceKey = substr(trim($sourceKey), 0, 120);
+    $note = trim($note);
+    if ($sourceType === '' || $sourceKey === '') {
+        return ['ok' => false, 'message' => 'Customer balance event source is invalid.'];
+    }
+
+    $safeSourceType = $db->escape($sourceType);
+    $safeSourceKey = $db->escape($sourceKey);
+
+    $db->query('START TRANSACTION');
+
+    $existingEvent = $db->select_user(
+        "SELECT id
+         FROM customer_balance_runtime_events
+         WHERE source_type = '" . $safeSourceType . "'
+           AND source_key = '" . $safeSourceKey . "'
+           AND direction = '" . $db->escape($direction) . "'
+         LIMIT 1"
+    );
+
+    if (is_array($existingEvent) && !empty($existingEvent['id'])) {
+        $db->query('COMMIT');
+        return [
+            'ok' => true,
+            'already_applied' => true,
+            'message' => 'Customer balance event was already applied.',
+        ];
+    }
+
+    $customerRow = $db->select_user(
+        "SELECT id, balance_amount
+         FROM customers
+         WHERE id = {$customerId}
+         LIMIT 1"
+    );
+
+    if (!is_array($customerRow) || empty($customerRow['id'])) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
+    $delta = round($amount, 2);
+
+    if ($direction === 'debit' && $currentBalance + 0.00001 < $delta) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Customer balance is too low for this action.'];
+    }
+
+    $newBalance = $direction === 'credit'
+        ? round($currentBalance + $delta, 2)
+        : round($currentBalance - $delta, 2);
+
+    $updated = $db->update_using_id(
+        ['balance_amount'],
+        [number_format($newBalance, 2, '.', '')],
+        'customers',
+        $customerId
+    );
+
+    if (!$updated) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to update customer balance.'];
+    }
+
+    $inserted = $db->insert(
+        [
+            'customer_id',
+            'source_type',
+            'source_key',
+            'direction',
+            'amount',
+            'note',
+            'created_by_admin_user_id',
+        ],
+        [
+            $customerId,
+            $sourceType,
+            $sourceKey,
+            $direction,
+            number_format($delta, 2, '.', ''),
+            $note !== '' ? $note : null,
+            $adminUserId > 0 ? $adminUserId : null,
+        ],
+        'customer_balance_runtime_events'
+    );
+
+    if (!$inserted) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to save customer balance event.'];
+    }
+
+    $db->query('COMMIT');
+
+    $description = ($direction === 'debit' ? 'Balance debited automatically: ' : 'Balance credited automatically: ')
+        . number_format($delta, 2, '.', '');
+    if ($note !== '') {
+        $description .= ' (' . $note . ')';
+    }
+
+    admin_log_customer_and_admin(
+        $db,
+        $customerId,
+        $adminUserId,
+        $direction === 'debit' ? 'balance_debit' : 'balance_credit',
+        $description,
+        $ipAddress
+    );
+
+    return [
+        'ok' => true,
+        'already_applied' => false,
+        'new_balance' => number_format($newBalance, 2, '.', ''),
+        'message' => 'Customer balance updated.',
+    ];
+}
+
 function admin_payment_default_status(string $paymentType): string
 {
     $paymentType = strtolower(trim($paymentType));
@@ -2825,7 +3218,27 @@ function admin_payment_default_status(string $paymentType): string
 function admin_payment_review_status(string $paymentType): string
 {
     $paymentType = strtolower(trim($paymentType));
-    return $paymentType === 'crypto' ? 'awaiting_confirmation' : 'awaiting_review';
+    return 'awaiting_review';
+}
+
+function admin_payment_success_statuses(string $paymentType): array
+{
+    $paymentType = strtolower(trim($paymentType));
+    if ($paymentType === 'crypto_topup') {
+        return ['archived'];
+    }
+
+    return ['confirmed', 'approved', 'paid', 'completed', 'archived'];
+}
+
+function admin_payment_cancelled_statuses(string $paymentType): array
+{
+    $paymentType = strtolower(trim($paymentType));
+    if ($paymentType === 'crypto_topup') {
+        return [];
+    }
+
+    return ['cancelled', 'rejected', 'failed'];
 }
 
 function admin_payment_runtime_statuses(Mysql_ks $db, string $paymentType): array
@@ -2837,7 +3250,7 @@ function admin_payment_runtime_statuses(Mysql_ks $db, string $paymentType): arra
 
     $tableName = $paymentType === 'crypto' ? 'crypto_deposit_requests' : 'bank_transfer_requests';
     $knownStatuses = $paymentType === 'crypto'
-        ? ['pending', 'awaiting_confirmation', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived']
+        ? ['pending', 'awaiting_review', 'awaiting_confirmation', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived']
         : ['pending_payment', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived'];
 
     if (!schema_object_exists($db, $tableName)) {
@@ -2864,15 +3277,22 @@ function admin_payment_statuses_for_scope(Mysql_ks $db, string $paymentType, str
 {
     $paymentType = strtolower(trim($paymentType));
     $scope = strtolower(trim($scope));
+    $successStatuses = admin_payment_success_statuses($paymentType);
+    $approvedStatuses = array_values(array_filter($successStatuses, static function (string $status): bool {
+        return $status !== 'archived';
+    }));
 
     if ($paymentType === 'crypto' || $paymentType === 'crypto_topup') {
-        $openStatuses = $paymentType === 'crypto_topup' ? ['pending'] : ['pending', 'awaiting_confirmation'];
+        $openStatuses = $paymentType === 'crypto_topup' ? ['pending'] : ['pending', 'awaiting_review', 'awaiting_confirmation'];
         $allStatuses = admin_payment_runtime_statuses($db, $paymentType);
         if ($scope === 'new') {
             return ['pending'];
         }
         if ($scope === 'review' && $paymentType !== 'crypto_topup') {
-            return ['awaiting_confirmation'];
+            return ['awaiting_review', 'awaiting_confirmation'];
+        }
+        if ($scope === 'approved' && $paymentType !== 'crypto_topup') {
+            return $approvedStatuses;
         }
     } else {
         $openStatuses = ['pending_payment', 'awaiting_review'];
@@ -2883,11 +3303,14 @@ function admin_payment_statuses_for_scope(Mysql_ks $db, string $paymentType, str
         if ($scope === 'review') {
             return ['awaiting_review'];
         }
+        if ($scope === 'approved') {
+            return $approvedStatuses;
+        }
     }
 
     if ($scope === 'archived') {
-        return array_values(array_filter($allStatuses, static function (string $status) use ($openStatuses): bool {
-            return !in_array($status, $openStatuses, true);
+        return array_values(array_filter($allStatuses, static function (string $status): bool {
+            return $status === 'archived';
         }));
     }
 
@@ -3039,9 +3462,13 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
         'open_total' => 0,
         'new_total' => 0,
         'review_total' => 0,
+        'approved_total' => 0,
         'archived_total' => 0,
+        'cancelled_total' => 0,
         'crypto_total' => 0,
+        'crypto_cancelled_total' => 0,
         'bank_total' => 0,
+        'bank_cancelled_total' => 0,
     ];
 
     $customerWhereCrypto = $customerId > 0 ? ' WHERE customer_id = ' . $customerId : '';
@@ -3052,14 +3479,19 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
             "SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_total,
-                SUM(CASE WHEN status = 'awaiting_confirmation' THEN 1 ELSE 0 END) AS review_total,
-                SUM(CASE WHEN status IN ('cancelled', 'rejected', 'failed', 'archived', 'confirmed', 'approved', 'paid', 'completed') THEN 1 ELSE 0 END) AS archived_total
+                SUM(CASE WHEN status IN ('awaiting_review', 'awaiting_confirmation') THEN 1 ELSE 0 END) AS review_total,
+                SUM(CASE WHEN status IN ('cancelled', 'rejected', 'failed') THEN 1 ELSE 0 END) AS cancelled_total,
+                SUM(CASE WHEN status IN ('confirmed', 'approved', 'paid', 'completed') THEN 1 ELSE 0 END) AS approved_total,
+                SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived_total
              FROM crypto_deposit_requests" . $customerWhereCrypto
         );
 
         $summary['crypto_total'] += (int)($row['total'] ?? 0);
         $summary['new_total'] += (int)($row['pending_total'] ?? 0);
         $summary['review_total'] += (int)($row['review_total'] ?? 0);
+        $summary['approved_total'] += (int)($row['approved_total'] ?? 0);
+        $summary['crypto_cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
+        $summary['cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
         $summary['archived_total'] += (int)($row['archived_total'] ?? 0);
     }
 
@@ -3086,13 +3518,18 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
                 COUNT(*) AS total,
                 SUM(CASE WHEN status = 'pending_payment' THEN 1 ELSE 0 END) AS pending_total,
                 SUM(CASE WHEN status = 'awaiting_review' THEN 1 ELSE 0 END) AS review_total,
-                SUM(CASE WHEN status IN ('cancelled', 'rejected', 'failed', 'archived', 'confirmed', 'approved', 'paid', 'completed') THEN 1 ELSE 0 END) AS archived_total
+                SUM(CASE WHEN status IN ('cancelled', 'rejected', 'failed') THEN 1 ELSE 0 END) AS cancelled_total,
+                SUM(CASE WHEN status IN ('confirmed', 'approved', 'paid', 'completed') THEN 1 ELSE 0 END) AS approved_total,
+                SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived_total
              FROM bank_transfer_requests" . $customerWhereBank
         );
 
         $summary['bank_total'] += (int)($row['total'] ?? 0);
         $summary['new_total'] += (int)($row['pending_total'] ?? 0);
         $summary['review_total'] += (int)($row['review_total'] ?? 0);
+        $summary['approved_total'] += (int)($row['approved_total'] ?? 0);
+        $summary['bank_cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
+        $summary['cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
         $summary['archived_total'] += (int)($row['archived_total'] ?? 0);
     }
 
@@ -3102,17 +3539,307 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
     return $summary;
 }
 
+function admin_topbar_notification_payment_rows(Mysql_ks $db, bool $includeBankTransfers = true, int $limit = 8): array
+{
+    return admin_payment_rows($db, max(1, min(20, $limit)), 0, 'new', '', $includeBankTransfers);
+}
+
+function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): array
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return [];
+    }
+
+    $limit = max(1, min(20, $limit));
+    $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
+
+    return $db->select_full_user(
+        "SELECT
+            orders.id,
+            orders.customer_id,
+            orders.product_id,
+            orders.payment_method,
+            orders.status,
+            orders.payment_status,
+            orders.fulfillment_status,
+            orders.total_amount,
+            orders.created_at,
+            orders.paid_at,
+            customers.email AS customer_email,
+            {$customerHandleSelect},
+            products.provider_id,
+            products.name AS product_name,
+            products.duration_hours,
+            product_providers.name AS provider_name,
+            product_providers.dashboard_url,
+            currencies.code AS currency_code,
+            (
+                SELECT crypto_deposit_requests.id
+                FROM crypto_deposit_requests
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS crypto_payment_id,
+            (
+                SELECT bank_transfer_requests.id
+                FROM bank_transfer_requests
+                WHERE bank_transfer_requests.order_id = orders.id
+                ORDER BY bank_transfer_requests.id DESC
+                LIMIT 1
+            ) AS bank_payment_id
+         FROM orders
+         LEFT JOIN customers ON customers.id = orders.customer_id
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         LEFT JOIN currencies ON currencies.id = orders.currency_id
+         WHERE orders.payment_status = 'paid'
+           AND (
+                orders.status <> 'active'
+                OR COALESCE(orders.fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
+           )
+           AND COALESCE(orders.status, '') <> 'cancelled'
+         ORDER BY COALESCE(orders.paid_at, orders.created_at) DESC, orders.id DESC
+         LIMIT {$limit}"
+    );
+}
+
+function admin_topbar_notification_new_customer_rows(Mysql_ks $db, int $limit = 5): array
+{
+    if (!schema_object_exists($db, 'customers')) {
+        return [];
+    }
+
+    $limit = max(1, min(20, $limit));
+    $handleSql = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
+    $avatarSql = schema_column_exists($db, 'customers', 'avatar_url')
+        ? 'customers.avatar_url'
+        : "'' AS avatar_url";
+
+    return $db->select_full_user(
+        "SELECT
+            customers.id,
+            customers.email,
+            {$handleSql},
+            {$avatarSql},
+            customers.status,
+            customers.registered_at,
+            customers.last_login_at
+         FROM customers
+         WHERE DATE(customers.registered_at) = CURDATE()
+         ORDER BY customers.registered_at DESC, customers.id DESC
+         LIMIT {$limit}"
+    );
+}
+
+function admin_topbar_notification_expiring_subscription_data(Mysql_ks $db, int $limit = 8, int $hours = 24): array
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return ['total' => 0, 'rows' => []];
+    }
+
+    $limit = max(1, min(20, $limit));
+    $hours = max(1, min(168, $hours));
+    $handleSql = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
+
+    $whereSql = "orders.status = 'active'
+           AND COALESCE(orders.payment_status, '') = 'paid'
+           AND orders.expires_at IS NOT NULL
+           AND orders.expires_at > NOW()
+           AND orders.expires_at <= DATE_ADD(NOW(), INTERVAL {$hours} HOUR)";
+
+    $countRow = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM orders
+         WHERE {$whereSql}"
+    );
+
+    $rows = $db->select_full_user(
+        "SELECT
+            orders.id,
+            orders.customer_id,
+            orders.product_id,
+            orders.total_amount,
+            orders.expires_at,
+            customers.email AS customer_email,
+            {$handleSql},
+            products.provider_id,
+            products.name AS product_name,
+            product_providers.name AS provider_name,
+            product_providers.dashboard_url,
+            currencies.code AS currency_code
+         FROM orders
+         LEFT JOIN customers ON customers.id = orders.customer_id
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         LEFT JOIN currencies ON currencies.id = orders.currency_id
+         WHERE {$whereSql}
+         ORDER BY orders.expires_at ASC, orders.id ASC
+         LIMIT {$limit}"
+    );
+
+    return [
+        'total' => (int)($countRow['total'] ?? 0),
+        'rows' => $rows,
+    ];
+}
+
+function admin_topbar_manual_backup_notice(array $settings, int $intervalHours = 168): array
+{
+    $lastBackupAt = trim((string)($settings['manual_database_backup_last_downloaded_at'] ?? ''));
+    $lastBackupTimestamp = $lastBackupAt !== '' ? strtotime($lastBackupAt) : false;
+    $intervalHours = max(1, $intervalHours);
+    $isOverdue = $lastBackupTimestamp === false || (time() - $lastBackupTimestamp) >= ($intervalHours * 3600);
+
+    return [
+        'show' => $isOverdue,
+        'last_backup_at' => $lastBackupAt,
+        'last_backup_label' => $lastBackupTimestamp !== false ? date('d.m.Y H:i', $lastBackupTimestamp) : '',
+        'last_backup_compact_label' => $lastBackupTimestamp !== false ? admin_compact_datetime_label($lastBackupAt) : '',
+        'interval_hours' => $intervalHours,
+    ];
+}
+
+function admin_topbar_apply_order_action(
+    Mysql_ks $db,
+    int $orderId,
+    string $action,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $order = admin_order_find($db, $orderId);
+    if (!$order) {
+        return ['ok' => false, 'message' => 'Order not found.'];
+    }
+
+    $action = strtolower(trim($action));
+    if (!in_array($action, ['accept', 'reject'], true)) {
+        return ['ok' => false, 'message' => 'Unsupported order action.'];
+    }
+
+    $payload = [
+        'order_reference' => (string)($order['order_reference'] ?? ''),
+        'payment_method' => (string)($order['payment_method'] ?? ''),
+        'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
+        'customer_note' => (string)($order['customer_note'] ?? ''),
+        'support_note' => (string)($order['support_note'] ?? ''),
+        'delivery_link' => (string)($order['delivery_link'] ?? ''),
+        'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
+        'started_at' => (string)($order['started_at'] ?? ''),
+        'expires_at' => (string)($order['expires_at'] ?? ''),
+        'paid_at' => (string)($order['paid_at'] ?? ''),
+        'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
+        'status' => $action === 'accept' ? 'active' : 'cancelled',
+        'payment_status' => (string)($order['payment_status'] ?? 'paid'),
+        'fulfillment_status' => $action === 'accept' ? 'delivered' : 'cancelled',
+    ];
+
+    return admin_save_order_info($db, $orderId, $payload, $adminUserId, $ipAddress);
+}
+
+function admin_delete_cancelled_payments(
+    Mysql_ks $db,
+    int $customerId = 0,
+    string $paymentTypeFilter = '',
+    bool $includeBankTransfers = true,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $paymentTypeFilter = strtolower(trim($paymentTypeFilter));
+    $cancelledStatuses = "'cancelled','rejected','failed'";
+    $deletedTotal = 0;
+
+    if ($paymentTypeFilter === '' || $paymentTypeFilter === 'crypto') {
+        if (schema_object_exists($db, 'crypto_deposit_requests')) {
+            $whereSql = "status IN ({$cancelledStatuses})";
+            if ($customerId > 0) {
+                $whereSql .= ' AND customer_id = ' . $customerId;
+            }
+            $rows = $db->select_full_user(
+                "SELECT id, customer_id, order_id
+                 FROM crypto_deposit_requests
+                 WHERE {$whereSql}"
+            );
+
+            foreach ($rows as $row) {
+                $deleted = $db->delete_using_id('crypto_deposit_requests', (int)($row['id'] ?? 0));
+                if ($deleted) {
+                    $deletedTotal++;
+                    $description = 'Bulk deleted cancelled crypto payment request #' . (int)($row['id'] ?? 0);
+                    if (!empty($row['order_id'])) {
+                        $description .= ' for order #' . (int)$row['order_id'];
+                    }
+                    admin_log_customer_and_admin(
+                        $db,
+                        (int)($row['customer_id'] ?? 0),
+                        $adminUserId,
+                        'payment_deleted',
+                        $description . '.',
+                        $ipAddress
+                    );
+                }
+            }
+        }
+    }
+
+    if (($paymentTypeFilter === '' || $paymentTypeFilter === 'bank') && $includeBankTransfers && schema_object_exists($db, 'bank_transfer_requests')) {
+        $whereSql = "status IN ({$cancelledStatuses})";
+        if ($customerId > 0) {
+            $whereSql .= ' AND customer_id = ' . $customerId;
+        }
+        $rows = $db->select_full_user(
+            "SELECT id, customer_id, order_id
+             FROM bank_transfer_requests
+             WHERE {$whereSql}"
+        );
+
+        foreach ($rows as $row) {
+            $deleted = $db->delete_using_id('bank_transfer_requests', (int)($row['id'] ?? 0));
+            if ($deleted) {
+                $deletedTotal++;
+                $description = 'Bulk deleted cancelled bank payment request #' . (int)($row['id'] ?? 0);
+                if (!empty($row['order_id'])) {
+                    $description .= ' for order #' . (int)$row['order_id'];
+                }
+                admin_log_customer_and_admin(
+                    $db,
+                    (int)($row['customer_id'] ?? 0),
+                    $adminUserId,
+                    'payment_deleted',
+                    $description . '.',
+                    $ipAddress
+                );
+            }
+        }
+    }
+
+    return [
+        'ok' => true,
+        'deleted_total' => $deletedTotal,
+        'message' => $deletedTotal > 0
+            ? 'Cancelled payment requests deleted successfully.'
+            : 'There are no cancelled payment requests to delete.',
+    ];
+}
+
 function admin_payment_status_options(string $paymentType, string $current = ''): array
 {
     $paymentType = strtolower(trim($paymentType));
     $current = strtolower(trim($current));
 
     if ($paymentType === 'crypto') {
-        $options = ['pending', 'awaiting_confirmation', 'cancelled', 'archived'];
+        $options = ['pending', 'awaiting_review', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
     } elseif ($paymentType === 'crypto_topup') {
         $options = ['pending', 'archived'];
     } else {
-        $options = ['pending_payment', 'awaiting_review', 'cancelled', 'archived'];
+        $options = ['pending_payment', 'awaiting_review', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
     }
 
     if ($current !== '' && !in_array($current, $options, true)) {
@@ -3425,6 +4152,388 @@ function admin_delete_payment(
     ];
 }
 
+function admin_find_order_payment_balance_credit_event(Mysql_ks $db, int $orderId): ?array
+{
+    if (
+        $orderId <= 0
+        || !schema_object_exists($db, 'customer_balance_runtime_events')
+    ) {
+        return null;
+    }
+
+    $eventRows = [];
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoEventRows = $db->select_full_user(
+            "SELECT
+                customer_balance_runtime_events.id AS event_id,
+                customer_balance_runtime_events.source_type,
+                customer_balance_runtime_events.source_key,
+                'crypto' AS payment_type,
+                crypto_deposit_requests.id AS payment_id
+             FROM customer_balance_runtime_events
+             INNER JOIN crypto_deposit_requests
+                ON customer_balance_runtime_events.source_type = 'payment_approval'
+               AND customer_balance_runtime_events.source_key = CONCAT('crypto:', crypto_deposit_requests.id)
+             WHERE customer_balance_runtime_events.direction = 'credit'
+               AND crypto_deposit_requests.order_id = {$orderId}"
+        );
+        if (is_array($cryptoEventRows) && $cryptoEventRows) {
+            $eventRows = array_merge($eventRows, $cryptoEventRows);
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankEventRows = $db->select_full_user(
+            "SELECT
+                customer_balance_runtime_events.id AS event_id,
+                customer_balance_runtime_events.source_type,
+                customer_balance_runtime_events.source_key,
+                'bank' AS payment_type,
+                bank_transfer_requests.id AS payment_id
+             FROM customer_balance_runtime_events
+             INNER JOIN bank_transfer_requests
+                ON customer_balance_runtime_events.source_type = 'payment_approval'
+               AND customer_balance_runtime_events.source_key = CONCAT('bank:', bank_transfer_requests.id)
+             WHERE customer_balance_runtime_events.direction = 'credit'
+               AND bank_transfer_requests.order_id = {$orderId}"
+        );
+        if (is_array($bankEventRows) && $bankEventRows) {
+            $eventRows = array_merge($eventRows, $bankEventRows);
+        }
+    }
+
+    if (!$eventRows) {
+        return null;
+    }
+
+    usort($eventRows, static function (array $left, array $right): int {
+        return ((int)($left['event_id'] ?? 0)) <=> ((int)($right['event_id'] ?? 0));
+    });
+
+    return isset($eventRows[0]) && is_array($eventRows[0]) ? $eventRows[0] : null;
+}
+
+function admin_payment_accept_with_order(
+    Mysql_ks $db,
+    string $paymentType,
+    int $paymentId,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $payment = admin_payment_find($db, $paymentType, $paymentId);
+    if (!is_array($payment) || empty($payment['id'])) {
+        return ['ok' => false, 'message' => 'Payment request not found.'];
+    }
+
+    $paymentType = strtolower((string)($payment['payment_type'] ?? $paymentType));
+    if (!in_array($paymentType, ['crypto', 'bank'], true)) {
+        return ['ok' => false, 'message' => 'This payment cannot be accepted from topbar.'];
+    }
+
+    $orderId = (int)($payment['order_id'] ?? 0);
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    $amountValue = round((float)($payment['amount_value'] ?? 0), 2);
+    if ($customerId <= 0 || $amountValue <= 0) {
+        return ['ok' => false, 'message' => 'This payment cannot be credited to customer balance.'];
+    }
+
+    $currentPaymentSourceKey = $paymentType . ':' . $paymentId;
+    $balanceAlreadyAppliedForThisPayment = false;
+
+    if ($orderId > 0) {
+        $existingOrderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
+        if (is_array($existingOrderCreditEvent) && !empty($existingOrderCreditEvent['source_key'])) {
+            $creditedSourceKey = (string)($existingOrderCreditEvent['source_key'] ?? '');
+            if ($creditedSourceKey === $currentPaymentSourceKey) {
+                $balanceAlreadyAppliedForThisPayment = true;
+            } else {
+                return [
+                    'ok' => false,
+                    'message' => 'This order was already credited to customer balance from another payment request.',
+                ];
+            }
+        }
+    }
+
+    $paymentUpdateInput = [];
+    if ($paymentType === 'crypto') {
+        $paymentUpdateInput = [
+            'status' => 'approved',
+            'requested_at' => (string)($payment['requested_at'] ?? ''),
+            'expires_at' => (string)($payment['expires_at'] ?? ''),
+            'request_note' => (string)($payment['request_note'] ?? ''),
+        ];
+    } else {
+        $paymentUpdateInput = [
+            'status' => 'approved',
+            'requested_at' => (string)($payment['requested_at'] ?? ''),
+            'expires_at' => (string)($payment['expires_at'] ?? ''),
+            'submitted_at' => (string)($payment['submitted_at'] ?? ''),
+            'approved_at' => trim((string)($payment['approved_at'] ?? '')) !== '' ? (string)$payment['approved_at'] : date('Y-m-d H:i:s'),
+            'rejected_at' => null,
+            'payment_reference' => (string)($payment['payment_reference'] ?? ''),
+            'payer_name' => (string)($payment['payer_name'] ?? ''),
+            'payer_bank_name' => (string)($payment['payer_bank_name'] ?? ''),
+            'customer_transfer_note' => (string)($payment['customer_transfer_note'] ?? ''),
+            'admin_review_note' => (string)($payment['admin_review_note'] ?? ''),
+        ];
+    }
+
+    $paymentSaveResult = admin_save_payment(
+        $db,
+        $paymentType,
+        $paymentId,
+        $paymentUpdateInput,
+        $adminUserId,
+        $ipAddress
+    );
+    if (empty($paymentSaveResult['ok'])) {
+        return $paymentSaveResult;
+    }
+
+    $balanceCreditResult = [
+        'ok' => true,
+        'already_applied' => $balanceAlreadyAppliedForThisPayment,
+    ];
+
+    if (!$balanceAlreadyAppliedForThisPayment) {
+        $balanceCreditResult = admin_apply_customer_balance_runtime_event(
+            $db,
+            $customerId,
+            $amountValue,
+            'credit',
+            'payment_approval',
+            $currentPaymentSourceKey,
+            'Approved ' . ucfirst($paymentType) . ' payment #' . $paymentId,
+            $adminUserId,
+            $ipAddress
+        );
+        if (empty($balanceCreditResult['ok'])) {
+            return $balanceCreditResult;
+        }
+    }
+
+    if ($orderId > 0) {
+        $order = admin_order_find($db, $orderId);
+        if (!$order) {
+            return ['ok' => false, 'message' => 'Linked order not found.'];
+        }
+
+        $orderSaveResult = admin_save_order_info(
+            $db,
+            $orderId,
+            [
+                'order_reference' => (string)($order['order_reference'] ?? ''),
+                'payment_method' => (string)($order['payment_method'] ?? ''),
+                'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
+                'customer_note' => (string)($order['customer_note'] ?? ''),
+                'support_note' => (string)($order['support_note'] ?? ''),
+                'delivery_link' => (string)($order['delivery_link'] ?? ''),
+                'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
+                'started_at' => (string)($order['started_at'] ?? ''),
+                'expires_at' => (string)($order['expires_at'] ?? ''),
+                'paid_at' => trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s'),
+                'status' => (string)($order['status'] ?? 'pending'),
+                'payment_status' => 'paid',
+                'fulfillment_status' => (string)($order['fulfillment_status'] ?? 'pending'),
+                'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
+            ],
+            $adminUserId,
+            $ipAddress
+        );
+
+        if (empty($orderSaveResult['ok'])) {
+            return $orderSaveResult;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'message' => !empty($balanceCreditResult['already_applied'])
+            ? 'Payment was accepted, but customer balance was not credited again because this payment was already processed earlier.'
+            : 'Payment was accepted and customer balance was credited.',
+        'order_id' => $orderId,
+        'customer_id' => $customerId,
+        'already_applied' => !empty($balanceCreditResult['already_applied']),
+    ];
+}
+
+function admin_topbar_notification_order_row_by_id(Mysql_ks $db, int $orderId): ?array
+{
+    if ($orderId <= 0 || !schema_object_exists($db, 'orders')) {
+        return null;
+    }
+
+    $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
+
+    $rows = $db->select_full_user(
+        "SELECT
+            orders.id,
+            orders.customer_id,
+            orders.product_id,
+            orders.payment_method,
+            orders.status,
+            orders.payment_status,
+            orders.fulfillment_status,
+            orders.total_amount,
+            orders.created_at,
+            orders.paid_at,
+            customers.email AS customer_email,
+            {$customerHandleSelect},
+            products.provider_id,
+            products.name AS product_name,
+            products.duration_hours,
+            product_providers.name AS provider_name,
+            product_providers.dashboard_url,
+            currencies.code AS currency_code,
+            (
+                SELECT crypto_deposit_requests.id
+                FROM crypto_deposit_requests
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS crypto_payment_id,
+            (
+                SELECT bank_transfer_requests.id
+                FROM bank_transfer_requests
+                WHERE bank_transfer_requests.order_id = orders.id
+                ORDER BY bank_transfer_requests.id DESC
+                LIMIT 1
+            ) AS bank_payment_id
+         FROM orders
+         LEFT JOIN customers ON customers.id = orders.customer_id
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         LEFT JOIN currencies ON currencies.id = orders.currency_id
+         WHERE orders.id = {$orderId}
+           AND orders.payment_status = 'paid'
+           AND (
+                orders.status <> 'active'
+                OR COALESCE(orders.fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
+           )
+           AND COALESCE(orders.status, '') <> 'cancelled'
+         LIMIT 1"
+    );
+
+    if (!$rows || !isset($rows[0]) || !is_array($rows[0])) {
+        return null;
+    }
+
+    return $rows[0];
+}
+
+function admin_payment_cancel_with_order(
+    Mysql_ks $db,
+    string $paymentType,
+    int $paymentId,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $payment = admin_payment_find($db, $paymentType, $paymentId);
+    if (!is_array($payment) || empty($payment['id'])) {
+        return ['ok' => false, 'message' => 'Payment request not found.'];
+    }
+
+    $paymentType = strtolower((string)($payment['payment_type'] ?? $paymentType));
+    if (!in_array($paymentType, ['crypto', 'bank'], true)) {
+        return ['ok' => false, 'message' => 'This payment cannot be cancelled from topbar.'];
+    }
+
+    $orderId = (int)($payment['order_id'] ?? 0);
+
+    if ($paymentType === 'crypto') {
+        $paymentSaveResult = admin_save_payment(
+            $db,
+            $paymentType,
+            $paymentId,
+            [
+                'status' => 'cancelled',
+                'requested_at' => (string)($payment['requested_at'] ?? ''),
+                'expires_at' => (string)($payment['expires_at'] ?? ''),
+                'request_note' => (string)($payment['request_note'] ?? ''),
+            ],
+            $adminUserId,
+            $ipAddress
+        );
+    } else {
+        $paymentSaveResult = admin_save_payment(
+            $db,
+            $paymentType,
+            $paymentId,
+            [
+                'status' => 'cancelled',
+                'requested_at' => (string)($payment['requested_at'] ?? ''),
+                'expires_at' => (string)($payment['expires_at'] ?? ''),
+                'submitted_at' => (string)($payment['submitted_at'] ?? ''),
+                'approved_at' => null,
+                'rejected_at' => date('Y-m-d H:i:s'),
+                'payment_reference' => (string)($payment['payment_reference'] ?? ''),
+                'payer_name' => (string)($payment['payer_name'] ?? ''),
+                'payer_bank_name' => (string)($payment['payer_bank_name'] ?? ''),
+                'customer_transfer_note' => (string)($payment['customer_transfer_note'] ?? ''),
+                'admin_review_note' => (string)($payment['admin_review_note'] ?? ''),
+            ],
+            $adminUserId,
+            $ipAddress
+        );
+    }
+
+    if (empty($paymentSaveResult['ok'])) {
+        return $paymentSaveResult;
+    }
+
+    if ($orderId <= 0) {
+        return [
+            'ok' => true,
+            'message' => 'Payment was cancelled successfully.',
+            'order_id' => 0,
+        ];
+    }
+
+    $order = admin_order_find($db, $orderId);
+    if (!$order) {
+        return ['ok' => false, 'message' => 'Linked order not found.'];
+    }
+
+    $orderSaveResult = admin_save_order_info(
+        $db,
+        $orderId,
+        [
+            'order_reference' => (string)($order['order_reference'] ?? ''),
+            'payment_method' => (string)($order['payment_method'] ?? ''),
+            'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
+            'customer_note' => (string)($order['customer_note'] ?? ''),
+            'support_note' => (string)($order['support_note'] ?? ''),
+            'delivery_link' => (string)($order['delivery_link'] ?? ''),
+            'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
+            'started_at' => (string)($order['started_at'] ?? ''),
+            'expires_at' => (string)($order['expires_at'] ?? ''),
+            'paid_at' => null,
+            'status' => 'cancelled',
+            'payment_status' => 'unpaid',
+            'fulfillment_status' => 'cancelled',
+            'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
+        ],
+        $adminUserId,
+        $ipAddress
+    );
+
+    if (empty($orderSaveResult['ok'])) {
+        return $orderSaveResult;
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Payment and linked order were cancelled successfully.',
+        'order_id' => $orderId,
+    ];
+}
+
 function admin_payment_asset_logo_url(string $assetCode, string $fallbackPath = ''): string
 {
     $assetCode = strtolower(trim($assetCode));
@@ -3479,6 +4588,14 @@ function admin_payment_apply_quick_action(
 
     if ($action === 'delete') {
         return admin_delete_payment($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
+    }
+
+    if ($action === 'accept') {
+        return admin_payment_accept_with_order($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
+    }
+
+    if ($action === 'cancel') {
+        return admin_payment_cancel_with_order($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
     }
 
     $payment = admin_payment_find($db, $paymentType, $paymentId);
@@ -3555,6 +4672,10 @@ function admin_payment_status_badge_class(string $status): string
         return 'admin-status-pill--muted';
     }
 
+    if (in_array($status, ['confirmed', 'approved', 'paid', 'completed'], true)) {
+        return 'admin-status-pill--available';
+    }
+
     if (in_array($status, ['cancelled', 'rejected', 'failed'], true)) {
         return 'admin-status-pill--danger';
     }
@@ -3584,7 +4705,7 @@ function admin_payment_progress_state(string $status): array
     if ($status === 'archived') {
         return [
             'show_bar' => false,
-            'tone' => 'neutral',
+            'tone' => 'success',
             'percent' => 0,
             'status_label_key' => 'payment_stage_archived',
             'status_fallback' => 'Archived',
@@ -4549,6 +5670,87 @@ function admin_crypto_wallet_rows(Mysql_ks $db, int $limit = 20, int $offset = 0
     );
 }
 
+function admin_crypto_wallet_count_filtered(Mysql_ks $db, int $walletId = 0): int
+{
+    if (!schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return 0;
+    }
+
+    $whereParts = [];
+    if ($walletId > 0) {
+        $whereParts[] = 'crypto_wallet_addresses.id = ' . $walletId;
+    }
+
+    $whereSql = $whereParts ? 'WHERE ' . implode(' AND ', $whereParts) : '';
+    $row = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM crypto_wallet_addresses
+         {$whereSql}"
+    );
+
+    return (int)($row['total'] ?? 0);
+}
+
+function admin_crypto_wallet_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 0, int $walletId = 0): array
+{
+    if (!schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return [];
+    }
+
+    $limit = max(1, min(50, $limit));
+    $offset = max(0, $offset);
+    $whereParts = [];
+    if ($walletId > 0) {
+        $whereParts[] = 'crypto_wallet_addresses.id = ' . $walletId;
+    }
+    $whereSql = $whereParts ? 'WHERE ' . implode(' AND ', $whereParts) : '';
+
+    return $db->select_full_user(
+        "SELECT
+            crypto_wallet_addresses.id,
+            crypto_wallet_addresses.crypto_asset_id,
+            crypto_wallet_addresses.label,
+            crypto_wallet_addresses.owner_full_name,
+            crypto_wallet_addresses.address,
+            crypto_wallet_addresses.network_code,
+            crypto_wallet_addresses.memo_tag,
+            crypto_wallet_addresses.wallet_provider,
+            crypto_wallet_addresses.status,
+            crypto_wallet_addresses.notes,
+            crypto_assets.code AS asset_code,
+            crypto_assets.name AS asset_name,
+            crypto_assets.logo_url AS asset_logo_url,
+            (
+                SELECT customer_crypto_wallets.customer_email
+                FROM customer_crypto_wallets
+                WHERE customer_crypto_wallets.wallet_address_id = crypto_wallet_addresses.id
+                  AND customer_crypto_wallets.status IN ('reserved', 'active')
+                ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC
+                LIMIT 1
+            ) AS assigned_customer_email,
+            (
+                SELECT customer_crypto_wallets.customer_id
+                FROM customer_crypto_wallets
+                WHERE customer_crypto_wallets.wallet_address_id = crypto_wallet_addresses.id
+                  AND customer_crypto_wallets.status IN ('reserved', 'active')
+                ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC
+                LIMIT 1
+            ) AS assigned_customer_id,
+            (
+                SELECT COUNT(*)
+                FROM crypto_wallet_assignments
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+            ) AS active_assignment_count,
+            crypto_wallet_addresses.updated_at
+         FROM crypto_wallet_addresses
+         LEFT JOIN crypto_assets ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
+         {$whereSql}
+         ORDER BY crypto_wallet_addresses.id DESC
+         LIMIT {$offset}, {$limit}"
+    );
+}
+
 function admin_crypto_asset_rows(Mysql_ks $db, bool $onlyActive = false): array
 {
     if (!schema_object_exists($db, 'crypto_assets')) {
@@ -4686,8 +5888,8 @@ function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'US
             $rows[$index]['rate_refresh_label'] = '';
             $rate = isset($row['current_rate_fiat']) ? (float)$row['current_rate_fiat'] : 0.0;
             $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
-            $rowUpdatedAt = !empty($row['updated_at']) ? strtotime((string)$row['updated_at']) : 0;
-            if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rowUpdatedAt <= 0 || ($now - $rowUpdatedAt) >= $cacheTtl) {
+            $rateUpdatedAt = !empty($row['rate_updated_at']) ? strtotime((string)$row['rate_updated_at']) : 0;
+            if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
                 $needsRefresh = true;
             }
         }
@@ -4743,6 +5945,17 @@ function admin_crypto_asset_count(Mysql_ks $db): int
     return (int)($row['total'] ?? 0);
 }
 
+function admin_crypto_asset_is_protected($asset): bool
+{
+    if (is_array($asset)) {
+        $assetCode = strtoupper(trim((string)($asset['code'] ?? '')));
+    } else {
+        $assetCode = strtoupper(trim((string)$asset));
+    }
+
+    return $assetCode === 'BTC';
+}
+
 function admin_crypto_asset_find(Mysql_ks $db, int $assetId): ?array
 {
     if ($assetId <= 0 || !schema_object_exists($db, 'crypto_assets')) {
@@ -4770,9 +5983,14 @@ function admin_save_crypto_asset(Mysql_ks $db, int $assetId, array $input): arra
     $coingeckoId = trim((string)($input['coingecko_id'] ?? ''));
     $logoUrl = trim((string)($input['logo_url'] ?? ''));
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+    $isProtected = admin_crypto_asset_is_protected($asset);
 
     if ($name === '') {
         return ['ok' => false, 'message' => 'Asset name is required.'];
+    }
+
+    if ($isProtected) {
+        $isActive = 1;
     }
 
     if ($coingeckoId === '') {
@@ -4925,6 +6143,10 @@ function admin_toggle_crypto_asset(Mysql_ks $db, int $assetId): array
     $asset = admin_crypto_asset_find($db, $assetId);
     if (!$asset) {
         return ['ok' => false, 'message' => 'Asset not found.'];
+    }
+
+    if (admin_crypto_asset_is_protected($asset)) {
+        return ['ok' => false, 'message' => 'Bitcoin cannot be disabled or removed.'];
     }
 
     $nextState = !empty($asset['is_active']) ? 0 : 1;
@@ -5164,7 +6386,9 @@ function admin_save_order_info(
         $paymentStatus = 'paid';
         $fulfillmentStatus = 'delivered';
     } elseif ($status === 'pending_payment') {
-        $paymentStatus = 'unpaid';
+        if ($paymentStatus !== 'paid') {
+            $paymentStatus = 'unpaid';
+        }
         $fulfillmentStatus = 'pending';
     }
 
@@ -5188,6 +6412,25 @@ function admin_save_order_info(
 
     if ($paymentStatus === 'paid' && $paidAt === null) {
         $paidAt = date('Y-m-d H:i:s');
+    }
+
+    $wasActiveBefore = strtolower(trim((string)($order['status'] ?? ''))) === 'active';
+    $becomesActiveNow = $status === 'active';
+    if (!$wasActiveBefore && $becomesActiveNow) {
+        $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+            $db,
+            (int)($order['customer_id'] ?? 0),
+            round((float)$totalAmountRaw, 2),
+            'debit',
+            'order_activation',
+            (string)$orderId,
+            'Activated order #' . $orderId,
+            $adminUserId,
+            $ipAddress
+        );
+        if (empty($balanceDebitResult['ok'])) {
+            return $balanceDebitResult;
+        }
     }
 
     $updateFields = [
@@ -5344,6 +6587,12 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
         return ['ok' => false, 'message' => 'Selected package cannot be used for subscription extension.'];
     }
 
+    $orderStatus = strtolower(trim((string)($order['status'] ?? '')));
+    $orderPaymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
+    if (!in_array($orderStatus, ['active', 'expired'], true) || $orderPaymentStatus !== 'paid') {
+        return ['ok' => false, 'message' => 'Only active or expired paid orders can be extended.'];
+    }
+
     $durationHours = (int)($product['duration_hours'] ?? 0);
     if ($durationHours <= 0) {
         return ['ok' => false, 'message' => 'Selected package has no duration.'];
@@ -5353,6 +6602,21 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
     $currentExpiry = !empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0;
     $baseTimestamp = $currentExpiry > $now ? $currentExpiry : $now;
     $newExpiry = date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
+    $extensionAmount = round((float)($product['price_amount'] ?? 0), 2);
+
+    $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+        $db,
+        (int)($order['customer_id'] ?? 0),
+        $extensionAmount,
+        'debit',
+        'order_extension',
+        $orderId . ':' . $productId . ':' . $newExpiry,
+        'Extended order #' . $orderId . ' with package #' . $productId,
+        isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : 0
+    );
+    if (empty($balanceDebitResult['ok'])) {
+        return $balanceDebitResult;
+    }
 
     $updated = $db->update_using_id(
         ['product_id', 'total_amount', 'currency_id', 'expires_at'],
@@ -6010,7 +7274,7 @@ function admin_customer_has_pending_crypto_payment(Mysql_ks $db, int $customerId
         "SELECT COUNT(*) AS total
          FROM crypto_deposit_requests
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'awaiting_confirmation')
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
            AND expires_at > NOW()"
     );
     return (int)($row['total'] ?? 0) > 0;
@@ -6181,7 +7445,7 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
               {$currentCustomerFilter}
              LEFT JOIN crypto_deposit_requests AS open_request
                ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation')
+              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                AND crypto_wallet_addresses.disabled_at IS NULL
                AND crypto_wallet_addresses.status IN ('available', 'assigned')
@@ -6218,7 +7482,7 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
               AND crypto_wallet_assignments.status IN ('reserved', 'active')
              LEFT JOIN crypto_deposit_requests AS open_request
                ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation')
+              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                AND crypto_wallet_addresses.status = 'available'
                AND crypto_wallet_addresses.disabled_at IS NULL
@@ -8444,8 +9708,26 @@ function admin_string_truncate(string $value, int $maxLength = 20): string
 
     if (function_exists('mb_strlen') && function_exists('mb_substr')) {
         if (mb_strlen($value) <= $maxLength) {
-            return $value;
-        }
+    return $value;
+}
+
+function admin_compact_wallet_address(string $address, int $prefixLength = 5, int $suffixLength = 5): string
+{
+    $address = trim($address);
+    if ($address === '') {
+        return '';
+    }
+
+    $length = function_exists('mb_strlen') ? mb_strlen($address) : strlen($address);
+    if ($length <= ($prefixLength + $suffixLength + 3)) {
+        return $address;
+    }
+
+    $prefix = function_exists('mb_substr') ? mb_substr($address, 0, $prefixLength) : substr($address, 0, $prefixLength);
+    $suffix = function_exists('mb_substr') ? mb_substr($address, -$suffixLength) : substr($address, -$suffixLength);
+
+    return $prefix . '...' . $suffix;
+}
 
         return rtrim(mb_substr($value, 0, max(5, $maxLength - 4))) . '...';
     }
@@ -8865,7 +10147,7 @@ function admin_chat_create_crypto_payment_request(
         "UPDATE crypto_deposit_requests
          SET status = 'archived'
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'awaiting_confirmation')
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
            AND expires_at IS NOT NULL
            AND expires_at < '{$now}'"
     );
@@ -8873,7 +10155,7 @@ function admin_chat_create_crypto_payment_request(
         "SELECT id, customer_id, order_id
          FROM crypto_deposit_requests
          WHERE wallet_address_id = {$walletAddressId}
-           AND status IN ('pending', 'awaiting_confirmation')
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
          ORDER BY id DESC
          LIMIT 1"
     );
@@ -10011,6 +11293,639 @@ function admin_delete_faq(Mysql_ks $db, int $faqId): array
     ];
 }
 
+function admin_help_topic_audience_options(): array
+{
+    return [
+        'all' => 'All users',
+        'admin' => 'Admin',
+        'client' => 'Client',
+        'reseller' => 'Reseller',
+    ];
+}
+
+function admin_help_topic_normalize_audience(string $audience): string
+{
+    $audience = strtolower(trim($audience));
+    $options = admin_help_topic_audience_options();
+
+    return isset($options[$audience]) ? $audience : 'all';
+}
+
+function admin_help_topic_seed_rows(): array
+{
+    return [
+        [
+            'question' => 'Jak dodać nowego użytkownika?',
+            'audience_code' => 'admin',
+            'keywords' => 'user klient reseller konto rejestracja dodawanie',
+            'sort_order' => 10,
+            'answer_html' => '<p>Wejdź w zakładkę Użytkownicy i użyj formularza dodawania nowego konta.</p><p>Wpisz email, a login i handle mogą uzupełnić się automatycznie.</p><p>Po zapisaniu konto od razu pojawi się na liście i w wyszukiwarce panelu.</p>',
+        ],
+        [
+            'question' => 'Jak dodać środki do salda użytkownika?',
+            'audience_code' => 'admin',
+            'keywords' => 'saldo balance credits doładowanie środki',
+            'sort_order' => 20,
+            'answer_html' => '<p>Otwórz kartę użytkownika i przejdź do sekcji działań na koncie.</p><p>Możesz tam dodać środki ręcznie albo poprowadzić użytkownika przez standardowe doładowanie.</p><ul><li>Ręczne dodanie działa od razu.</li><li>Doładowanie tworzy ślad płatności i jest lepsze do rozliczeń.</li></ul>',
+        ],
+        [
+            'question' => 'Jak utworzyć ticket płatności za zamówienie?',
+            'audience_code' => 'admin',
+            'keywords' => 'płatność crypto bank transfer request zamówienie ticket',
+            'sort_order' => 30,
+            'answer_html' => '<p>Wejdź w zamówienie albo otwórz rozmowę z klientem i użyj akcji generowania płatności.</p><p>Wybierz kryptowalutę lub przelew bankowy, a system przypisze adres albo konto.</p><p>Po utworzeniu ticketu klient zobaczy instrukcję, a Ty dostaniesz ślad w płatnościach.</p>',
+        ],
+        [
+            'question' => 'Jak utworzyć grupę na chacie?',
+            'audience_code' => 'all',
+            'keywords' => 'grupa group chat messenger rozmowa zaproszenie reseller',
+            'sort_order' => 40,
+            'answer_html' => '<p>W messengerze użyj tworzenia nowej rozmowy i dodaj co najmniej jedną osobę.</p><p>Jedno zaproszenie utworzy rozmowę 1 na 1, a kilka osób stworzy grupę.</p><p>Po utworzeniu możesz dalej dopraszać członków i ustawić auto-usuwanie wiadomości.</p>',
+        ],
+        [
+            'question' => 'Jak ukryć providera tylko dla jednego użytkownika?',
+            'audience_code' => 'admin',
+            'keywords' => 'provider widoczność produkty ukrywanie user dostęp',
+            'sort_order' => 50,
+            'answer_html' => '<p>Na karcie użytkownika znajdziesz sekcję widoczności providerów.</p><p>Odznacz providera, którego nie chcesz pokazywać temu kontu.</p><p>Od tej chwili użytkownik nie zobaczy tego providera ani jego produktów w dodawaniu nowej subskrypcji.</p>',
+        ],
+        [
+            'question' => 'Jak klient lub reseller ma zapłacić za zamówienie?',
+            'audience_code' => 'client',
+            'keywords' => 'jak zapłacić krypto bank przelew zamówienie klient reseller',
+            'sort_order' => 60,
+            'answer_html' => '<p>Po wejściu w zamówienie wybierz metodę płatności i przejdź do kolejnego kroku.</p><p>System pokaże dokładną kwotę, dane portfela albo dane przelewu i czas ważności.</p><p>Po opłaceniu wystarczy wysłać potwierdzenie, jeśli dana metoda tego wymaga.</p>',
+        ],
+        [
+            'question' => 'Jak reseller zmienia avatar i własny nick?',
+            'audience_code' => 'reseller',
+            'keywords' => 'avatar nick handle ustawienia reseller profil',
+            'sort_order' => 70,
+            'answer_html' => '<p>W ustawieniach profilu możesz kliknąć avatar, wgrać nowy obrazek i od razu zobaczyć podgląd.</p><p>Nick jest edytowalny z poziomu ustawień i potem pokazuje się w messengerze.</p><p>Jeśli zmieniasz zdjęcie, najlepiej używać prostych grafik JPG, PNG albo WEBP.</p>',
+        ],
+        [
+            'question' => 'Jak znaleźć konkretną osobę lub zamówienie w adminie?',
+            'audience_code' => 'admin',
+            'keywords' => 'wyszukiwarka email handle @nick zamówienie portfel admin',
+            'sort_order' => 80,
+            'answer_html' => '<p>Użyj globalnej wyszukiwarki w górnym pasku panelu.</p><p>Dla użytkowników możesz szukać po emailu albo po nicku zaczynając od znaku @.</p><p>Dla zamówień i portfeli wyniki prowadzą od razu do właściwego widoku szczegółowego.</p>',
+        ],
+        [
+            'question' => 'Ręczne dodanie zamówienia dla klienta',
+            'audience_code' => 'admin',
+            'keywords' => 'zamówienie ręczne create order klient admin',
+            'sort_order' => 90,
+            'answer_html' => '<p>Wejdź w kartę użytkownika albo w sekcję zamówień i użyj opcji dodania nowego zamówienia.</p><p>Wybierz providera, produkt i okres subskrypcji, a potem przejdź do zapisania formularza.</p><p>Po utworzeniu zamówienia możesz od razu wygenerować ticket płatności albo aktywować je ręcznie.</p>',
+        ],
+        [
+            'question' => 'Potwierdzanie płatności krypto',
+            'audience_code' => 'admin',
+            'keywords' => 'krypto płatność potwierdzenie crypto verify',
+            'sort_order' => 100,
+            'answer_html' => '<p>Otwórz sekcję Payments i przejdź do oczekującej płatności krypto.</p><p>Sprawdź kwotę, adres portfela i hash transakcji, a następnie porównaj dane z explorerem blockchain.</p><p>Jeśli wszystko się zgadza, zatwierdź płatność i dopiero potem przejdź do realizacji zamówienia.</p>',
+        ],
+        [
+            'question' => 'Potwierdzanie przelewu bankowego',
+            'audience_code' => 'admin',
+            'keywords' => 'bank przelew płatność potwierdzenie payment',
+            'sort_order' => 110,
+            'answer_html' => '<p>W Payments otwórz oczekujący przelew bankowy i porównaj dane z potwierdzeniem od klienta.</p><p>Zwróć uwagę na kwotę, nazwę płatnika i czas wpływu środków.</p><p>Po zatwierdzeniu płatności zamówienie będzie można bezpiecznie aktywować.</p>',
+        ],
+        [
+            'question' => 'Odrzucanie płatności i czyszczenie anulowanych wpisów',
+            'audience_code' => 'admin',
+            'keywords' => 'odrzucenie anulowane failed cleanup payments',
+            'sort_order' => 120,
+            'answer_html' => '<p>Jeśli płatność ma błędne dane albo wygasła, oznacz ją jako odrzuconą lub anulowaną.</p><p>W sekcji Payments możesz potem jednym kliknięciem usunąć anulowane wpisy z bieżącego widoku.</p><p>To porządkuje listę i zostawia tylko realne sprawy do obsługi.</p>',
+        ],
+        [
+            'question' => 'Dodawanie nowego portfela krypto do puli',
+            'audience_code' => 'admin',
+            'keywords' => 'portfel wallet crypto pula adres dodawanie',
+            'sort_order' => 130,
+            'answer_html' => '<p>Przejdź do Crypto Wallets i dodaj nowy adres dla wybranego aktywa.</p><p>Uzupełnij nazwę, właściciela i sam adres portfela, a potem zapisz rekord.</p><p>Nowy portfel od razu trafi do puli dostępnej dla płatności, jeśli ma status aktywny.</p>',
+        ],
+        [
+            'question' => 'Ręczne przypisanie portfela do klienta',
+            'audience_code' => 'admin',
+            'keywords' => 'przypisanie portfela wallet klient ręcznie',
+            'sort_order' => 140,
+            'answer_html' => '<p>Otwórz profil klienta albo listę portfeli i wybierz akcję ręcznego przypisania.</p><p>Po przypisaniu dany adres będzie widoczny przy generowaniu płatności dla tego użytkownika.</p><p>Jeśli współdzielenie portfeli jest wyłączone, jeden adres powinien pozostać przypisany tylko do jednego konta.</p>',
+        ],
+        [
+            'question' => 'Dodawanie konta bankowego do płatności',
+            'audience_code' => 'admin',
+            'keywords' => 'konto bankowe iban swift przelew bank add',
+            'sort_order' => 150,
+            'answer_html' => '<p>Wejdź w Bank Transfers i utwórz nowe konto z kompletem danych do przelewu.</p><p>Najważniejsze pola to właściciel konta, bank, IBAN lub numer rachunku oraz SWIFT.</p><p>Po zapisaniu konto będzie mogło zostać przypisane do nowych ticketów płatności bankowej.</p>',
+        ],
+        [
+            'question' => 'Tworzenie produktu trial 6h, 12h lub 24h',
+            'audience_code' => 'admin',
+            'keywords' => 'trial produkt 6h 12h 24h pakiet',
+            'sort_order' => 160,
+            'answer_html' => '<p>W produktach wybierz krótki okres 6h, 12h albo 24h, a system potraktuje go jako trial.</p><p>Przy tych wariantach pole trial jest pilnowane także po stronie backendu.</p><p>Dzięki temu krótkie pakiety nie będą mylone ze zwykłą sprzedażą miesięczną lub roczną.</p>',
+        ],
+        [
+            'question' => 'Włączanie i wyłączanie sprzedaży w panelu',
+            'audience_code' => 'admin',
+            'keywords' => 'sprzedaż sales settings on off',
+            'sort_order' => 170,
+            'answer_html' => '<p>W Settings możesz osobno sterować sprzedażą subskrypcji, triali, creditsów i płatności.</p><p>Po wyłączeniu danej funkcji użytkownik nie zobaczy odpowiednich akcji w swoim panelu.</p><p>To wygodne rozwiązanie, gdy chcesz zrobić przerwę techniczną bez blokowania całej strony.</p>',
+        ],
+        [
+            'question' => 'Blokowanie konta użytkownika',
+            'audience_code' => 'admin',
+            'keywords' => 'blokada block user status konto',
+            'sort_order' => 180,
+            'answer_html' => '<p>Na karcie użytkownika możesz zmienić status konta, gdy trzeba wstrzymać dostęp.</p><p>Po blokadzie konto nadal pozostaje w bazie, ale użytkownik nie powinien korzystać z panelu jak aktywne konto.</p><p>To lepsze niż kasowanie danych, jeśli sprawa wymaga tylko czasowego zatrzymania dostępu.</p>',
+        ],
+        [
+            'question' => 'Reset hasła użytkownika',
+            'audience_code' => 'admin',
+            'keywords' => 'reset hasła password user klient reseller',
+            'sort_order' => 190,
+            'answer_html' => '<p>Otwórz profil użytkownika i użyj akcji resetu hasła albo wygenerowania nowego dostępu.</p><p>Po zmianie hasła warto od razu poinformować użytkownika, aby zalogował się i ustawił własne dane.</p><p>Jeśli konto jest używane przez resellera, dobrze też sprawdzić czy email powiadomień jest aktualny.</p>',
+        ],
+        [
+            'question' => 'Dodawanie newsa lub komunikatu na stronę',
+            'audience_code' => 'admin',
+            'keywords' => 'news komunikat wpis aktualność strona',
+            'sort_order' => 200,
+            'answer_html' => '<p>W sekcji News dodaj nowy wpis z tytułem, treścią i statusem aktywności.</p><p>Możesz zaplanować publikację albo ukryć wpis bez jego usuwania.</p><p>To dobre miejsce na komunikaty o przerwach technicznych, zmianach cen lub nowych funkcjach.</p>',
+        ],
+        [
+            'question' => 'Edycja szablonów email',
+            'audience_code' => 'admin',
+            'keywords' => 'email templates szablon wiadomość powiadomienie',
+            'sort_order' => 210,
+            'answer_html' => '<p>W Email Templates zmienisz temat i treść wiadomości wysyłanych automatycznie przez system.</p><p>Zachowaj placeholdery typu {site_name} albo {payment_url}, bo są podmieniane dynamicznie.</p><p>Po zapisaniu najlepiej od razu sprawdzić efekt na prostym scenariuszu testowym.</p>',
+        ],
+        [
+            'question' => 'Wykonanie ręcznego backupu SQL',
+            'audience_code' => 'admin',
+            'keywords' => 'backup sql baza export settings',
+            'sort_order' => 220,
+            'answer_html' => '<p>Wejdź do Settings i użyj przycisku pobrania backupu bazy danych.</p><p>Plik zapisze się na Twój dysk jako pełny eksport SQL z tabelami, widokami i danymi.</p><p>Warto robić taki backup regularnie, szczególnie przed większymi zmianami w panelu albo importem danych.</p>',
+        ],
+        [
+            'question' => 'Weryfikacja kończących się subskrypcji',
+            'audience_code' => 'admin',
+            'keywords' => 'subskrypcja wygasa expires soon renewal',
+            'sort_order' => 230,
+            'answer_html' => '<p>W powiadomieniach topbara zobaczysz listę subskrypcji, które kończą się w ciągu najbliższych 24 godzin.</p><p>Możesz z niej przejść do użytkownika, zamówienia albo dashboardu providera.</p><p>To pomaga szybko wychwycić konta wymagające kontaktu, odnowienia lub ręcznej kontroli.</p>',
+        ],
+        [
+            'question' => 'Korzystanie z powiadomień w górnym pasku',
+            'audience_code' => 'admin',
+            'keywords' => 'powiadomienia topbar bell payments orders backup',
+            'sort_order' => 240,
+            'answer_html' => '<p>Ikona powiadomień zbiera najważniejsze rzeczy do obsługi, zaczynając od płatności i zamówień.</p><p>Niżej zobaczysz także nowe konta, wygasające subskrypcje i przypomnienia o backupie.</p><p>Dzięki temu nie musisz ręcznie sprawdzać każdej sekcji panelu po kolei.</p>',
+        ],
+        [
+            'question' => 'Zapraszanie resellera do rozmowy 1 na 1',
+            'audience_code' => 'reseller',
+            'keywords' => 'reseller direct chat zaproszenie 1 na 1 messenger',
+            'sort_order' => 250,
+            'answer_html' => '<p>W messengerze użyj tworzenia nowej rozmowy i wpisz email resellera albo jego @nick.</p><p>Jedna zaakceptowana osoba tworzy od razu prywatną rozmowę 1 na 1.</p><p>Adminów nie da się dodać z tego poziomu, więc lista wyników pokazuje tylko dozwolone konta resellerów.</p>',
+        ],
+        [
+            'question' => 'Zarządzanie powiadomieniami email w rozmowie',
+            'audience_code' => 'reseller',
+            'keywords' => 'email powiadomienia rozmowa mute messenger reseller',
+            'sort_order' => 260,
+            'answer_html' => '<p>W nagłówku rozmowy otwórz menu ustawień i użyj przełącznika powiadomień email dla tej konkretnej rozmowy.</p><p>Wyłączenie działa dla grup i rozmów reseller-reseller, ale nie zastępuje głównego chatu Support.</p><p>To dobre rozwiązanie, gdy chcesz ograniczyć spam bez wyłączania całych maili konta.</p>',
+        ],
+        [
+            'question' => 'Ustawienie auto-usuwania wiadomości w grupie',
+            'audience_code' => 'reseller',
+            'keywords' => 'auto-usuwanie retention grupa chat wiadomości',
+            'sort_order' => 270,
+            'answer_html' => '<p>Twórca grupy może w ustawieniach rozmowy wybrać czas auto-usuwania wiadomości.</p><p>Dostępne są krótkie przedziały, dzięki którym rozmowa sama się porządkuje bez ręcznego kasowania.</p><p>Informacja o aktywnym czasie kasowania pokazuje się też nad historią wiadomości.</p>',
+        ],
+        [
+            'question' => 'Wysyłanie potwierdzenia płatności przez klienta',
+            'audience_code' => 'client',
+            'keywords' => 'klient potwierdzenie płatność support chat bank',
+            'sort_order' => 280,
+            'answer_html' => '<p>Po opłaceniu zamówienia klient powinien otworzyć live chat albo instrukcję płatności i wysłać potwierdzenie, jeśli dana metoda tego wymaga.</p><p>Najważniejsze są czytelny zrzut albo PDF z kwotą oraz czasem wykonania płatności.</p><p>To przyspiesza weryfikację i ogranicza potrzebę dodatkowych pytań od supportu.</p>',
+        ],
+        [
+            'question' => 'Jak uruchomić maintenance runner ręcznie?',
+            'audience_code' => 'admin',
+            'keywords' => 'maintenance runner cron ręcznie cleanup email queue',
+            'sort_order' => 290,
+            'answer_html' => '<p>W Settings znajdziesz sekcję maintenance z przyciskiem ręcznego uruchomienia procesów systemowych.</p><p>Ten runner obsługuje kolejkę maili, wygasanie płatności i reguły automatycznego czyszczenia.</p><p>To przydatne po większych zmianach lub gdy chcesz od razu wymusić wykonanie zadań bez czekania na cron.</p>',
+        ],
+        [
+            'question' => 'Jak sprawdzić, dlaczego użytkownik nie widzi produktu?',
+            'audience_code' => 'admin',
+            'keywords' => 'produkt niewidoczny user provider trial sales',
+            'sort_order' => 300,
+            'answer_html' => '<p>Najpierw sprawdź, czy produkt i provider są aktywne oraz czy globalna sprzedaż nie jest wyłączona.</p><p>Potem zobacz na karcie użytkownika, czy provider nie został dla niego ukryty indywidualnie.</p><p>Jeśli to trial albo credits, upewnij się też, że odpowiedni switch w Settings jest włączony.</p>',
+        ],
+        [
+            'question' => 'Jak działa testowy tryb płatności?',
+            'audience_code' => 'admin',
+            'keywords' => 'test mode płatności warning settings',
+            'sort_order' => 310,
+            'answer_html' => '<p>W Settings możesz włączyć ostrzeżenie testowe dla płatności.</p><p>Użytkownik nadal wygeneruje request krypto albo bankowy, ale na ekranie zobaczy wyraźny komunikat, aby nic nie wpłacać.</p><p>To dobre rozwiązanie przy testach, migracji lub sprawdzaniu nowych danych płatniczych.</p>',
+        ],
+        [
+            'question' => 'Jak zmienić logo, nazwę i adres strony?',
+            'audience_code' => 'admin',
+            'keywords' => 'logo site name title url settings',
+            'sort_order' => 320,
+            'answer_html' => '<p>Wejdź do Settings i edytuj pola nazwy strony, tytułu, adresu URL oraz logo.</p><p>Zmiany wpływają na wygląd panelu, wiadomości email i część linków generowanych przez system.</p><p>Po zapisaniu warto odświeżyć stronę i sprawdzić, czy nowe logo oraz adres pokazują się poprawnie.</p>',
+        ],
+        [
+            'question' => 'Jak zmienić domyślną walutę serwisu?',
+            'audience_code' => 'admin',
+            'keywords' => 'default currency waluta settings usd eur',
+            'sort_order' => 330,
+            'answer_html' => '<p>Domyślną walutę ustawisz w Settings w polu waluty głównej serwisu.</p><p>Wpływa ona na salda, podsumowania, kalkulator krypto i część wyliczeń płatności.</p><p>Po zmianie waluty warto sprawdzić kursy aktywów i kilka przykładowych zamówień, aby upewnić się, że wszystko liczy się zgodnie z oczekiwaniem.</p>',
+        ],
+        [
+            'question' => 'Jak korzystać z kalkulatora wymiany krypto?',
+            'audience_code' => 'admin',
+            'keywords' => 'kalkulator wymiany crypto converter kurs admin',
+            'sort_order' => 340,
+            'answer_html' => '<p>W górnym pasku admina otwórz kalkulator wymiany i wpisz kwotę FIAT.</p><p>Po wyborze aktywa system pokaże, ile powinno wyjść w danej kryptowalucie oraz kiedy kurs był ostatnio aktualizowany.</p><p>Kliknięcie w wynik krypto kopiuje wartość do schowka, co przyspiesza obsługę klienta.</p>',
+        ],
+        [
+            'question' => 'Jak odświeżyć kurs kryptowaluty ręcznie?',
+            'audience_code' => 'admin',
+            'keywords' => 'kurs crypto refresh coingecko rate updated',
+            'sort_order' => 350,
+            'answer_html' => '<p>W kalkulatorze wymiany przy dacie aktualizacji kursu pojawi się ikona odświeżenia, jeśli kurs jest starszy niż 15 minut.</p><p>Po kliknięciu system pobierze świeży kurs dla waluty głównej serwisu z używanego źródła notowań.</p><p>To pozwala uniknąć zbyt częstego odpytywania API, a jednocześnie daje ręczną kontrolę, gdy naprawdę jest potrzebna.</p>',
+        ],
+        [
+            'question' => 'Jak sprawdzić, czy portfel jest naprawdę wolny?',
+            'audience_code' => 'admin',
+            'keywords' => 'portfel wolny assigned request pending wallet',
+            'sort_order' => 360,
+            'answer_html' => '<p>Sama lista portfeli to nie wszystko, bo adres może być blokowany przez aktywne przypisanie albo otwarty request płatności.</p><p>Najlepiej sprawdzić status portfela, historię przypisań i czy nie ma oczekującego ticketu krypto.</p><p>Dopiero wtedy wiadomo, czy dany adres można bezpiecznie użyć dla kolejnego użytkownika.</p>',
+        ],
+        [
+            'question' => 'Jak otworzyć rozmowę z użytkownikiem z poziomu płatności?',
+            'audience_code' => 'admin',
+            'keywords' => 'chat user płatność payments quick action support',
+            'sort_order' => 370,
+            'answer_html' => '<p>W wielu miejscach panelu, szczególnie przy płatnościach i powiadomieniach, masz szybkie akcje otwierające rozmowę z danym użytkownikiem.</p><p>To pozwala od razu poprosić o potwierdzenie lub doprecyzować brakujące dane bez szukania klienta ręcznie.</p><p>Dzięki temu obsługa płatności i zamówień jest dużo szybsza.</p>',
+        ],
+        [
+            'question' => 'Jak usunąć całą rozmowę z chatu?',
+            'audience_code' => 'admin',
+            'keywords' => 'usunąć rozmowę chat delete conversation attachments',
+            'sort_order' => 380,
+            'answer_html' => '<p>W liście rozmów użyj akcji usunięcia tylko wtedy, gdy naprawdę chcesz wyczyścić cały wątek.</p><p>System usuwa wtedy samą rozmowę, wiadomości, członków grupy i załączniki powiązane z tym czatem.</p><p>To jest operacja porządkowa, więc przed kliknięciem warto upewnić się, że nic ważnego nie zostanie utracone.</p>',
+        ],
+        [
+            'question' => 'Jak dodać lub edytować stronę statyczną?',
+            'audience_code' => 'admin',
+            'keywords' => 'strona statyczna pages edycja content',
+            'sort_order' => 390,
+            'answer_html' => '<p>W sekcji Pages możesz tworzyć i edytować zwykłe podstrony informacyjne.</p><p>To dobre miejsce na regulamin, kontakt, politykę prywatności albo własne treści pomocnicze.</p><p>Po zapisaniu strony sprawdź jej aktywność i slug, aby link publiczny był poprawny.</p>',
+        ],
+        [
+            'question' => 'Jak edytować FAQ dla klientów?',
+            'audience_code' => 'admin',
+            'keywords' => 'faq klient pytania odpowiedzi edycja',
+            'sort_order' => 400,
+            'answer_html' => '<p>W zakładce FAQ możesz zmienić krótkie pytania i odpowiedzi widoczne dla użytkowników.</p><p>To dobre miejsce na podstawowe informacje o płatnościach, aktywacji i najczęstszych problemach.</p><p>Jeśli temat dotyczy tylko admina, lepiej dodaj go do modułu Pomoc zamiast do publicznego FAQ.</p>',
+        ],
+        [
+            'question' => 'Jak włączyć lub wyłączyć live chat dla użytkowników?',
+            'audience_code' => 'admin',
+            'keywords' => 'live chat support toggle settings',
+            'sort_order' => 410,
+            'answer_html' => '<p>W Settings znajdziesz przełącznik odpowiedzialny za widoczność live chatu po stronie użytkownika.</p><p>Po wyłączeniu widget, skróty czatu i część akcji powiązanych z supportem znikną z panelu klienta.</p><p>To przydatne, gdy chcesz na chwilę wstrzymać obsługę wiadomości lub zrobić prace techniczne.</p>',
+        ],
+        [
+            'question' => 'Jak sprawdzić ostatnie logowanie klienta?',
+            'audience_code' => 'admin',
+            'keywords' => 'last login ostatnie logowanie user customer',
+            'sort_order' => 420,
+            'answer_html' => '<p>Na karcie użytkownika i w wynikach wyszukiwania zobaczysz informację o ostatnim logowaniu.</p><p>Jeśli logowanie było dzisiaj, panel zwykle pokazuje samą godzinę, co ułatwia szybką ocenę aktywności.</p><p>To dobra wskazówka, gdy chcesz sprawdzić, czy klient faktycznie wraca do panelu po wysłaniu instrukcji.</p>',
+        ],
+        [
+            'question' => 'Jak włączyć codzienny backup płatności krypto?',
+            'audience_code' => 'admin',
+            'keywords' => 'daily backup crypto csv settings email',
+            'sort_order' => 430,
+            'answer_html' => '<p>W Settings włącz dzienny backup płatności krypto i wskaż adres email odbiorcy raportu.</p><p>Po północy system wyśle plik CSV tylko wtedy, gdy poprzedniego dnia były potwierdzone płatności.</p><p>To praktyczne zabezpieczenie na wypadek awarii lub potrzeby późniejszego odtworzenia danych.</p>',
+        ],
+        [
+            'question' => 'Jak odczytać raport CSV z płatności krypto?',
+            'audience_code' => 'admin',
+            'keywords' => 'csv raport płatności crypto backup',
+            'sort_order' => 440,
+            'answer_html' => '<p>W pliku CSV znajdziesz podstawowe dane potrzebne do odtworzenia i audytu opłaconych transakcji krypto.</p><p>Najważniejsze kolumny to użytkownik, email, aktywo, kwota krypto, adres portfela i powiązanie z zamówieniem lub requestem.</p><p>Dzięki temu możesz wrócić do danych nawet wtedy, gdy później trzeba porównać stan z innym systemem.</p>',
+        ],
+        [
+            'question' => 'Jak kontrolować sprzedaż creditsów dla resellerów?',
+            'audience_code' => 'admin',
+            'keywords' => 'credits reseller sprzedaż toggle settings',
+            'sort_order' => 450,
+            'answer_html' => '<p>W Settings możesz osobno włączyć lub wyłączyć sprzedaż produktów typu credits.</p><p>Jeśli przełącznik jest wyłączony, reseller nie zobaczy tych pozycji w swoim panelu zakupowym.</p><p>To pozwala łatwo sterować modelem sprzedaży bez usuwania samych produktów z bazy.</p>',
+        ],
+        [
+            'question' => 'Jak działają instrukcje aplikacji i podpowiedzi stron?',
+            'audience_code' => 'admin',
+            'keywords' => 'instrukcje aplikacji podpowiedzi stron settings',
+            'sort_order' => 460,
+            'answer_html' => '<p>W Settings masz osobne przełączniki dla instrukcji aplikacji oraz dla niebieskich podpowiedzi pod stronami.</p><p>Pierwszy steruje poradnikami typu Smart IPTV i podobnymi, a drugi dodatkowymi opisami interfejsu oraz dużym opisem homepage.</p><p>Dzięki rozdzieleniu tych opcji możesz precyzyjnie decydować, ile treści pomocniczych ma widzieć użytkownik.</p>',
+        ],
+        [
+            'question' => 'Jak używać modułu Pomoc w adminie?',
+            'audience_code' => 'admin',
+            'keywords' => 'pomoc help modal search admin tutorial',
+            'sort_order' => 470,
+            'answer_html' => '<p>Zielony przycisk w lewym dolnym rogu otwiera szybki modal Pomoc z wyszukiwaniem tematów.</p><p>To najszybszy sposób, aby znaleźć instrukcję bez wychodzenia z aktualnej podstrony.</p><p>Jeśli czegoś brakuje, możesz potem dopisać własny wpis w zakładce Pomoc w sidebarze.</p>',
+        ],
+        [
+            'question' => 'Jak dodać własny temat do modułu Pomoc?',
+            'audience_code' => 'admin',
+            'keywords' => 'dodaj help topic pomoc admin wpis',
+            'sort_order' => 480,
+            'answer_html' => '<p>W sidebarze otwórz zakładkę Pomoc i użyj formularza dodania nowego wątku.</p><p>Możesz wskazać odbiorcę, słowa kluczowe, kolejność oraz krótką odpowiedź w HTML.</p><p>Najlepiej pisać zwięźle, tak aby nowa osoba mogła po jednym wpisie od razu wykonać daną czynność.</p>',
+        ],
+        [
+            'question' => 'Jak działają dwa typy użytkowników w systemie?',
+            'audience_code' => 'admin',
+            'keywords' => 'typy użytkowników client reseller role konto',
+            'sort_order' => 490,
+            'answer_html' => '<p>W systemie podstawowo działają dwa typy kont: klient i reseller.</p><p>Klient skupia się na zakupie i obsłudze własnych subskrypcji, a reseller dodatkowo dostaje funkcje salda, creditsów i własnego messengera.</p><p>Przy dodawaniu lub edycji konta warto od razu sprawdzić, jaki typ najlepiej pasuje do sposobu pracy danej osoby.</p>',
+        ],
+        [
+            'question' => 'Jak reseller korzysta z rozmów 1 na 1?',
+            'audience_code' => 'reseller',
+            'keywords' => 'reseller direct chat 1 na 1 messenger',
+            'sort_order' => 500,
+            'answer_html' => '<p>Reseller może rozpocząć prywatną rozmowę 1 na 1 z innym resellerem z poziomu własnego messengera.</p><p>Wystarczy wpisać email drugiej osoby albo jej @nick i wysłać zaproszenie.</p><p>Po zaakceptowaniu rozmowa działa jak osobny, prywatny kanał do szybkich ustaleń.</p>',
+        ],
+        [
+            'question' => 'Jak działają grupy resellerów?',
+            'audience_code' => 'reseller',
+            'keywords' => 'grupy resellerów group chat messenger invite',
+            'sort_order' => 510,
+            'answer_html' => '<p>Reseller może tworzyć grupy, jeśli limit grup w Settings nie jest ustawiony na zero.</p><p>Do grupy można dopraszać innych resellerów, a członkowie akceptują lub odrzucają zaproszenie.</p><p>To wygodne miejsce do pracy zespołowej, przekazywania ustaleń i utrzymywania historii rozmów wewnętrznych.</p>',
+        ],
+        [
+            'question' => 'Jak admin rozmawia z innymi adminami?',
+            'audience_code' => 'admin',
+            'keywords' => 'admin do admina chat rozmowa prywatna',
+            'sort_order' => 520,
+            'answer_html' => '<p>Admin może wyszukać innego admina w panelu chatu i rozpocząć z nim prywatną rozmowę.</p><p>Taki czat przydaje się do przekazywania zadań, notatek i ustaleń operacyjnych bez mieszania tego z rozmowami klientów.</p><p>Wyszukiwanie działa także po @nick, jeśli administrator ma ustawiony publiczny handle.</p>',
+        ],
+        [
+            'question' => 'Jak admin tworzy grupę w panelu chatu?',
+            'audience_code' => 'admin',
+            'keywords' => 'admin group chat create grupa messenger',
+            'sort_order' => 530,
+            'answer_html' => '<p>W rozwiniętym panelu chatu admin może użyć modala tworzenia grupy i dodać do niej wybrane osoby.</p><p>Grupa może służyć zarówno do współpracy między adminami, jak i do ustaleń z resellerami.</p><p>Po utworzeniu grupy można dopraszać kolejne osoby, a twórca grupy ma szersze uprawnienia do zarządzania rozmową.</p>',
+        ],
+        [
+            'question' => 'Kto może usuwać wiadomości w rozmowach grupowych?',
+            'audience_code' => 'all',
+            'keywords' => 'usuwanie wiadomości grupa chat owner creator',
+            'sort_order' => 540,
+            'answer_html' => '<p>W grupach zwykły uczestnik usuwa tylko własne wiadomości.</p><p>Twórca grupy może usuwać pojedynczo wszystkie wiadomości w tej konkretnej rozmowie.</p><p>Dzięki temu da się utrzymać porządek bez odbierania podstawowej kontroli zwykłym użytkownikom.</p>',
+        ],
+        [
+            'question' => 'Jak działa wybór rodzaju płatności przez admina?',
+            'audience_code' => 'admin',
+            'keywords' => 'rodzaj płatności admin crypto bank payment type',
+            'sort_order' => 550,
+            'answer_html' => '<p>Przy tworzeniu ticketu płatności admin wybiera, czy ma to być krypto czy przelew bankowy.</p><p>Od tego wyboru zależy, czy system przypisze portfel, czy konto bankowe oraz jakie instrukcje dostanie użytkownik.</p><p>Warto wybrać metodę zgodną z tym, co klient realnie chce opłacić i jak szybko może przesłać potwierdzenie.</p>',
+        ],
+        [
+            'question' => 'Jak wyłączyć przelewy bankowe albo płatności krypto?',
+            'audience_code' => 'admin',
+            'keywords' => 'wyłączenie przelewy bankowe crypto payments settings',
+            'sort_order' => 560,
+            'answer_html' => '<p>W Settings są osobne przełączniki dla przelewów bankowych i płatności krypto.</p><p>Po wyłączeniu danej metody użytkownik nie zobaczy jej w wyborze płatności, a odpowiednie sekcje panelu mogą zostać ukryte.</p><p>To wygodne przy zmianie dostawcy, aktualizacji danych lub chwilowym wstrzymaniu konkretnego kanału płatności.</p>',
+        ],
+        [
+            'question' => 'Jak działa współdzielenie kont bankowych i adresów krypto?',
+            'audience_code' => 'admin',
+            'keywords' => 'współdzielenie kont bankowych adresów krypto shared assignments',
+            'sort_order' => 570,
+            'answer_html' => '<p>W Settings możesz niezależnie zdecydować, czy konta bankowe i adresy krypto mogą być współdzielone między użytkownikami.</p><p>Gdy współdzielenie jest wyłączone, jeden zasób powinien być przypisany tylko do jednej osoby naraz.</p><p>To zwiększa porządek i bezpieczeństwo, ale wymaga utrzymywania większej puli dostępnych danych płatniczych.</p>',
+        ],
+        [
+            'question' => 'Jak odróżnić czat Support od rozmów wewnętrznych?',
+            'audience_code' => 'all',
+            'keywords' => 'support chat rozmowy wewnętrzne reseller admin różnica',
+            'sort_order' => 580,
+            'answer_html' => '<p>Główny czat Support służy do kontaktu użytkownika z obsługą i jest oddzielony od rozmów reseller-reseller oraz grup wewnętrznych.</p><p>Rozmowy prywatne i grupowe między resellerami lub adminami są przeznaczone do ustaleń operacyjnych i nie zastępują oficjalnego kontaktu z supportem.</p><p>Dzięki temu łatwiej utrzymać porządek i nie mieszać zgłoszeń klientów z komunikacją zespołową.</p>',
+        ],
+    ];
+}
+
+function admin_ensure_help_topics_runtime_table(Mysql_ks $db): void
+{
+    static $ready = false;
+    if ($ready && schema_object_exists($db, 'admin_help_topics')) {
+        return;
+    }
+
+    if (!schema_object_exists($db, 'admin_help_topics')) {
+        $db->query(
+            "CREATE TABLE IF NOT EXISTS admin_help_topics (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                question VARCHAR(191) NOT NULL,
+                answer_html LONGTEXT NOT NULL,
+                audience_code VARCHAR(20) NOT NULL DEFAULT 'all',
+                keywords VARCHAR(500) DEFAULT NULL,
+                sort_order INT NOT NULL DEFAULT 100,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY idx_admin_help_topics_active_sort (is_active, sort_order, id),
+                KEY idx_admin_help_topics_audience (audience_code)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_help_topics']);
+    }
+
+    if (!schema_object_exists($db, 'admin_help_topics')) {
+        return;
+    }
+
+    $countRow = $db->select_user("SELECT COUNT(*) AS total FROM admin_help_topics");
+    if ((int)($countRow['total'] ?? 0) === 0) {
+        foreach (admin_help_topic_seed_rows() as $row) {
+            $db->insert(
+                ['question', 'answer_html', 'audience_code', 'keywords', 'sort_order', 'is_active'],
+                [
+                    (string)($row['question'] ?? ''),
+                    (string)($row['answer_html'] ?? ''),
+                    admin_help_topic_normalize_audience((string)($row['audience_code'] ?? 'all')),
+                    (string)($row['keywords'] ?? ''),
+                    (int)($row['sort_order'] ?? 100),
+                    1,
+                ],
+                'admin_help_topics'
+            );
+        }
+    }
+
+    $ready = true;
+}
+
+function admin_help_topic_count(Mysql_ks $db): int
+{
+    admin_ensure_help_topics_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_topics')) {
+        return 0;
+    }
+
+    $row = $db->select_user("SELECT COUNT(*) AS total FROM admin_help_topics");
+
+    return (int)($row['total'] ?? 0);
+}
+
+function admin_help_topic_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
+{
+    admin_ensure_help_topics_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_topics')) {
+        return [];
+    }
+
+    $limit = max(1, min(200, $limit));
+    $offset = max(0, $offset);
+
+    return $db->select_full_user(
+        "SELECT id, question, answer_html, audience_code, keywords, sort_order, is_active, created_at, updated_at
+         FROM admin_help_topics
+         ORDER BY sort_order ASC, id ASC
+         LIMIT {$offset}, {$limit}"
+    );
+}
+
+function admin_active_help_topic_rows(Mysql_ks $db): array
+{
+    admin_ensure_help_topics_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_topics')) {
+        return [];
+    }
+
+    return $db->select_full_user(
+        "SELECT id, question, answer_html, audience_code, keywords, sort_order
+         FROM admin_help_topics
+         WHERE is_active = 1
+         ORDER BY sort_order ASC, id ASC"
+    );
+}
+
+function admin_help_topic_find(Mysql_ks $db, int $topicId): ?array
+{
+    admin_ensure_help_topics_runtime_table($db);
+    if ($topicId <= 0 || !schema_object_exists($db, 'admin_help_topics')) {
+        return null;
+    }
+
+    $row = $db->select_user(
+        "SELECT id, question, answer_html, audience_code, keywords, sort_order, is_active, created_at, updated_at
+         FROM admin_help_topics
+         WHERE id = {$topicId}
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
+function admin_create_help_topic(Mysql_ks $db, array $input): array
+{
+    admin_ensure_help_topics_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_topics')) {
+        return ['ok' => false, 'message' => 'Help storage is not available.'];
+    }
+
+    $question = trim((string)($input['question'] ?? ''));
+    $answerHtml = trim((string)($input['answer_html'] ?? ''));
+    $audienceCode = admin_help_topic_normalize_audience((string)($input['audience_code'] ?? 'all'));
+    $keywords = trim((string)($input['keywords'] ?? ''));
+    $sortOrder = (int)($input['sort_order'] ?? 100);
+    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($question === '') {
+        return ['ok' => false, 'message' => 'Help question is required.'];
+    }
+
+    if ($answerHtml === '') {
+        return ['ok' => false, 'message' => 'Help answer is required.'];
+    }
+
+    $inserted = $db->insert(
+        ['question', 'answer_html', 'audience_code', 'keywords', 'sort_order', 'is_active'],
+        [$question, $answerHtml, $audienceCode, $keywords, $sortOrder, $isActive],
+        'admin_help_topics'
+    );
+
+    if (!$inserted) {
+        return ['ok' => false, 'message' => 'Unable to create help topic.'];
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Help topic created successfully.',
+        'help_topic_id' => (int)$db->id(),
+    ];
+}
+
+function admin_save_help_topic(Mysql_ks $db, int $topicId, array $input): array
+{
+    $topic = admin_help_topic_find($db, $topicId);
+    if (!is_array($topic) || empty($topic['id'])) {
+        return ['ok' => false, 'message' => 'Help topic not found.'];
+    }
+
+    $question = trim((string)($input['question'] ?? ''));
+    $answerHtml = trim((string)($input['answer_html'] ?? ''));
+    $audienceCode = admin_help_topic_normalize_audience((string)($input['audience_code'] ?? 'all'));
+    $keywords = trim((string)($input['keywords'] ?? ''));
+    $sortOrder = (int)($input['sort_order'] ?? 100);
+    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($question === '') {
+        return ['ok' => false, 'message' => 'Help question is required.'];
+    }
+
+    if ($answerHtml === '') {
+        return ['ok' => false, 'message' => 'Help answer is required.'];
+    }
+
+    $updated = $db->update_using_id(
+        ['question', 'answer_html', 'audience_code', 'keywords', 'sort_order', 'is_active'],
+        [$question, $answerHtml, $audienceCode, $keywords, $sortOrder, $isActive],
+        'admin_help_topics',
+        $topicId
+    );
+
+    return [
+        'ok' => (bool)$updated,
+        'message' => $updated ? 'Help topic saved successfully.' : 'Unable to save help topic.',
+    ];
+}
+
+function admin_delete_help_topic(Mysql_ks $db, int $topicId): array
+{
+    $topic = admin_help_topic_find($db, $topicId);
+    if (!is_array($topic) || empty($topic['id'])) {
+        return ['ok' => false, 'message' => 'Help topic not found.'];
+    }
+
+    $deleted = $db->delete_using_id('admin_help_topics', $topicId);
+
+    return [
+        'ok' => (bool)$deleted,
+        'message' => $deleted ? 'Help topic deleted successfully.' : 'Unable to delete help topic.',
+    ];
+}
+
 function admin_settings_rows(Mysql_ks $db): array
 {
     $settings = admin_app_settings($db);
@@ -10042,6 +11957,9 @@ function admin_search_order_rows(Mysql_ks $db, string $query, int $limit = 20): 
 
     $limit = max(1, min(50, $limit));
     $safeLike = $db->escape('%' . $query . '%');
+    $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
+        ? 'orders.delivery_link_visible'
+        : '0';
 
     $whereParts = [
         "customers.email LIKE '{$safeLike}'",
@@ -10158,16 +12076,20 @@ function admin_search_order_rows(Mysql_ks $db, string $query, int $limit = 20): 
     return $db->select_full_user(
         "SELECT
             orders.id,
+            orders.customer_id,
             orders.payment_method,
             orders.payment_status,
-            orders.status AS order_status,
+            orders.status,
             orders.fulfillment_status,
             orders.total_amount,
+            orders.delivery_link,
             orders.created_at,
             orders.expires_at,
             customers.email AS customer_email,
             products.name AS product_name,
+            products.duration_hours,
             product_providers.name AS provider_name,
+            {$deliveryLinkVisibleSelect} AS delivery_link_visible,
             {$currencySelect},
             {$walletAddressSelect} AS wallet_address,
             {$walletAssetSelect} AS wallet_asset_code
@@ -10190,10 +12112,16 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
     }
 
     $limit = max(1, min(50, $limit));
-    $safeLike = $db->escape('%' . $query . '%');
+    $isHandleSearch = strpos($query, '@') === 0;
+    $needle = $isHandleSearch ? ltrim($query, '@') : $query;
+    $safeLike = $db->escape('%' . $needle . '%');
     $whereParts = [
         "customers.email LIKE '{$safeLike}'",
     ];
+
+    if (schema_column_exists($db, 'customers', 'public_handle')) {
+        $whereParts[] = "customers.public_handle LIKE '{$safeLike}'";
+    }
 
     if (ctype_digit($query)) {
         $whereParts[] = 'customers.id = ' . (int)$query;
@@ -10205,6 +12133,7 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
             customers.email,
             customers.status,
             customers.locale_code,
+            customers.avatar_url,
             customers.registered_at,
             customers.last_login_at
          FROM customers
@@ -10283,6 +12212,75 @@ function admin_crypto_asset_logo_url(string $assetCode): string
     return '/img/crypto/blockchain.png';
 }
 
+function admin_customer_status_badge_class(string $status): string
+{
+    $status = strtolower(trim($status));
+
+    if (in_array($status, ['active', 'verified'], true)) {
+        return 'admin-status-pill--available';
+    }
+
+    if (in_array($status, ['pending', 'awaiting_review', 'waiting'], true)) {
+        return 'admin-status-pill--warning';
+    }
+
+    if (in_array($status, ['disabled', 'inactive', 'banned', 'blocked', 'deleted'], true)) {
+        return 'admin-status-pill--danger';
+    }
+
+    return 'admin-status-pill--muted';
+}
+
+function admin_wallet_status_badge_class(string $status): string
+{
+    $status = strtolower(trim($status));
+
+    if (in_array($status, ['active', 'available', 'assigned'], true)) {
+        return 'admin-status-pill--available';
+    }
+
+    if (in_array($status, ['pending', 'reserved', 'awaiting_confirmation', 'awaiting_review'], true)) {
+        return 'admin-status-pill--warning';
+    }
+
+    if (in_array($status, ['released', 'disabled', 'inactive', 'rejected', 'cancelled'], true)) {
+        return 'admin-status-pill--danger';
+    }
+
+    return 'admin-status-pill--muted';
+}
+
+function admin_search_customer_avatar_visual(array $row): array
+{
+    $avatarUrl = function_exists('app_customer_avatar_url')
+        ? app_customer_avatar_url((string)($row['avatar_url'] ?? ''))
+        : trim((string)($row['avatar_url'] ?? ''));
+    if ($avatarUrl !== '') {
+        return [
+            'type' => 'image',
+            'src' => $avatarUrl,
+            'alt' => (string)($row['email'] ?? 'User'),
+        ];
+    }
+
+    $customerRow = [
+        'public_handle' => (string)($row['public_handle'] ?? ''),
+        'email' => (string)($row['email'] ?? ''),
+    ];
+    $initial = function_exists('app_customer_avatar_initial')
+        ? app_customer_avatar_initial($customerRow)
+        : strtoupper(substr((string)($row['email'] ?? 'U'), 0, 1));
+    $theme = function_exists('app_customer_avatar_theme')
+        ? app_customer_avatar_theme($customerRow)
+        : 'theme-1';
+
+    return [
+        'type' => 'initial',
+        'initial' => $initial !== '' ? $initial : 'U',
+        'theme' => $theme,
+    ];
+}
+
 function admin_render_search_results_html(array $resultSets, array $messages, string $query): string
 {
     $title = admin_e(admin_t($messages, 'search_results_title', 'Search results'));
@@ -10309,33 +12307,53 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
             <?php if ($customers): ?>
                 <section class="admin-search-section">
                     <div class="admin-search-section__label"><?php echo admin_e(admin_t($messages, 'search_section_users', 'Users')); ?></div>
-                    <div class="table-responsive">
-                        <table class="table admin-table admin-search-table align-middle">
-                            <thead>
-                            <tr>
-                                <th><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_registered', 'Registered')); ?></th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            <?php foreach ($customers as $row): ?>
-                                <tr>
-                                    <td>
-                                        <div class="admin-search-table__primary">#<?php echo admin_e((string)$row['id']); ?></div>
-                                        <div class="admin-search-table__muted"><?php echo admin_e((string)($row['email'] ?? '')); ?></div>
-                                    </td>
-                                    <td><div class="admin-search-table__primary"><?php echo admin_e((string)($row['status'] ?? '-')); ?></div></td>
-                                    <td><div class="admin-search-table__primary"><?php echo admin_e((string)($row['locale_code'] ?? '-')); ?></div></td>
-                                    <td>
-                                        <div class="admin-search-table__primary"><?php echo admin_e(substr((string)($row['registered_at'] ?? ''), 0, 16)); ?></div>
-                                        <div class="admin-search-table__muted"><?php echo admin_e(substr((string)($row['last_login_at'] ?? ''), 0, 16)); ?></div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                    <div class="admin-search-user-list">
+                        <?php foreach ($customers as $row): ?>
+                            <?php
+                            $avatarVisual = admin_search_customer_avatar_visual($row);
+                            $presence = admin_chat_customer_presence(
+                                Mysql_ks::get_instance(),
+                                (int)($row['id'] ?? 0),
+                                (string)($row['last_login_at'] ?? ''),
+                                $messages
+                            );
+                            $statusValue = (string)($row['status'] ?? '');
+                            $statusLabel = admin_t($messages, 'enum_' . $statusValue, ucfirst(str_replace('_', ' ', $statusValue)));
+                            $statusClass = admin_customer_status_badge_class($statusValue);
+                            $lastLoginLabel = admin_format_last_login_date((string)($row['last_login_at'] ?? ''));
+                            $profileUrl = '/admin/?page=users&customer_id=' . (int)($row['id'] ?? 0);
+                            $localeFlagUrl = admin_locale_flag_url((string)($row['locale_code'] ?? 'en'));
+                            $localeFlagAlt = strtoupper(trim((string)($row['locale_code'] ?? 'en')));
+                            ?>
+                            <article class="admin-search-user-card">
+                                <div class="admin-search-user-card__avatar-wrap">
+                                    <?php if ((string)($avatarVisual['type'] ?? 'image') === 'image'): ?>
+                                        <span class="admin-search-user-card__avatar">
+                                            <img src="<?php echo admin_e((string)($avatarVisual['src'] ?? '')); ?>" alt="<?php echo admin_e((string)($avatarVisual['alt'] ?? 'User')); ?>" loading="lazy">
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="admin-search-user-card__avatar admin-search-user-card__avatar--initial <?php echo admin_e((string)($avatarVisual['theme'] ?? 'theme-1')); ?>">
+                                            <span><?php echo admin_e((string)($avatarVisual['initial'] ?? 'U')); ?></span>
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php echo admin_chat_presence_dot_html($presence); ?>
+                                </div>
+                                <div class="admin-search-user-card__body">
+                                    <a class="admin-search-user-card__email" href="<?php echo admin_e($profileUrl); ?>">
+                                        <?php echo admin_e((string)($row['email'] ?? '')); ?>
+                                    </a>
+                                    <div class="admin-search-user-card__meta">
+                                        <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($statusClass); ?>">
+                                            <?php echo admin_e($statusLabel); ?>
+                                        </span>
+                                        <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
+                                        <span class="admin-search-user-card__last-login">
+                                            <?php echo admin_e($lastLoginLabel !== '' ? $lastLoginLabel : '—'); ?>
+                                        </span>
+                                    </div>
+                                </div>
+                            </article>
+                        <?php endforeach; ?>
                     </div>
                 </section>
             <?php endif; ?>
@@ -10344,63 +12362,107 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                 <section class="admin-search-section">
                     <div class="admin-search-section__label"><?php echo admin_e(admin_t($messages, 'search_section_orders', 'Orders')); ?></div>
                     <div class="table-responsive">
-                        <table class="table admin-table admin-search-table align-middle">
+                        <table class="table admin-table admin-orders-table align-middle">
                             <thead>
                             <tr>
                                 <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></th>
                                 <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_payment', 'Payment')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></th>
+                                <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                <th class="admin-orders-table__date-col d-none d-xl-table-cell"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
                             </tr>
                             </thead>
                             <tbody>
                             <?php foreach ($orders as $row): ?>
                                 <?php
-                                $providerName = trim((string)($row['provider_name'] ?? ''));
-                                $productName = trim((string)($row['product_name'] ?? ''));
-                                $productLabel = trim($providerName . ' ' . $productName);
-                                $paymentLabel = trim((string)($row['payment_method'] ?? ''));
-                                $paymentStatus = trim((string)($row['payment_status'] ?? ''));
-                                $walletAddress = trim((string)($row['wallet_address'] ?? ''));
-                                $walletAsset = trim((string)($row['wallet_asset_code'] ?? ''));
-                                $currencyCode = trim((string)($row['currency_code'] ?? ''));
+                                $orderId = (int)($row['id'] ?? 0);
+                                $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+                                $orderTitle = trim((string)($row['provider_name'] ?? ''));
+                                if ($durationLabel !== '') {
+                                    $orderTitle = trim($orderTitle . ' ' . $durationLabel);
+                                }
+                                $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
+                                $orderStatusVisual = admin_order_status_visual($row);
+                                $orderProgress = admin_order_progress_data($row);
+                                $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
+                                $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
+                                $orderUrl = '/admin/?page=orders&order_id=' . $orderId;
+                                $orderCreatedAtRaw = trim((string)($row['created_at'] ?? ''));
+                                $orderCreatedAtLabel = admin_format_last_login_date($orderCreatedAtRaw);
+                                $orderCreatedAtIsToday = false;
+                                if ($orderCreatedAtRaw !== '') {
+                                    $orderCreatedAtTimestamp = strtotime($orderCreatedAtRaw);
+                                    if ($orderCreatedAtTimestamp !== false) {
+                                        $orderCreatedAtIsToday = date('Y-m-d', $orderCreatedAtTimestamp) === date('Y-m-d');
+                                    }
+                                }
                                 ?>
                                 <tr>
-                                    <td>
-                                        <div class="admin-search-table__primary">#<?php echo admin_e((string)$row['id']); ?></div>
-                                        <div class="admin-search-table__muted">
-                                            <?php echo admin_e(number_format((float)($row['total_amount'] ?? 0), 2, '.', '')); ?>
-                                            <?php echo admin_e($currencyCode); ?>
-                                        </div>
+                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
+                                        <strong>#<?php echo admin_e((string)$orderId); ?></strong>
                                     </td>
-                                    <td><div class="admin-search-table__primary"><?php echo admin_e((string)($row['customer_email'] ?? '')); ?></div></td>
-                                    <td><div class="admin-search-table__primary"><?php echo admin_e($productLabel !== '' ? $productLabel : '-'); ?></div></td>
-                                    <td>
-                                        <div class="admin-search-table__primary"><?php echo admin_e($paymentLabel !== '' ? $paymentLabel : '-'); ?></div>
-                                        <div class="admin-search-table__muted"><?php echo admin_e($paymentStatus !== '' ? $paymentStatus : '-'); ?></div>
-                                    </td>
-                                    <td>
-                                        <?php if ($walletAddress !== ''): ?>
-                                            <div class="admin-search-table__wallet">
-                                                <code><?php echo admin_e($walletAddress); ?></code>
-                                                <?php if ($walletAsset !== ''): ?>
-                                                    <span><?php echo admin_e($walletAsset); ?></span>
+                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
+                                        <div class="admin-order-summary">
+                                            <div class="admin-order-summary__title-row">
+                                                <strong><?php echo admin_e($orderTitle); ?></strong>
+                                                <?php if ($isAwaitingActivationOrder): ?>
+                                                    <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
+                                                <?php elseif ($isPendingOrder): ?>
+                                                    <span class="admin-order-new-badge">NEW</span>
                                                 <?php endif; ?>
                                             </div>
-                                        <?php else: ?>
-                                            <span class="admin-search-table__muted">-</span>
-                                        <?php endif; ?>
+                                            <?php if ((string)($row['status'] ?? '') === 'expired'): ?>
+                                                <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
+                                            <?php endif; ?>
+                                            <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)($row['customer_id'] ?? 0)); ?>">
+                                                <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                            </a>
+                                            <div class="admin-search-table__muted<?php echo $orderCreatedAtIsToday ? ' text-danger fw-bold' : ''; ?>">
+                                                <?php echo admin_e($orderCreatedAtLabel !== '' ? $orderCreatedAtLabel : '—'); ?>
+                                            </div>
+                                            <?php if ($isAwaitingActivationOrder): ?>
+                                                <div class="admin-order-summary__note admin-order-summary__note--success">
+                                                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
+                                                </div>
+                                            <?php elseif ((string)($row['status'] ?? '') === 'active'): ?>
+                                                <div class="admin-order-progress">
+                                                    <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
+                                                        <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
+                                                    </div>
+                                                    <div class="admin-order-progress__track">
+                                                        <div class="admin-order-progress__meta">
+                                                            <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
+                                                            <?php if (!empty($row['expires_at'])): ?>
+                                                                <span><?php echo admin_e(date('d.m.Y', strtotime((string)$row['expires_at']))); ?></span>
+                                                            <?php else: ?>
+                                                                <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <div class="admin-order-progress__bar">
+                                                            <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
                                     </td>
-                                    <td>
-                                        <div class="admin-search-table__primary"><?php echo admin_e((string)($row['order_status'] ?? '-')); ?></div>
-                                        <div class="admin-search-table__muted"><?php echo admin_e((string)($row['fulfillment_status'] ?? '-')); ?></div>
+                                    <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
+                                        <div class="admin-order-amount">
+                                            <strong class="<?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'text-danger' : ((string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending' ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
+                                            <?php if ((string)($row['delivery_link'] ?? '') !== '' && !empty($row['delivery_link_visible'])): ?>
+                                                <span><?php echo admin_e(admin_t($messages, 'order_delivery_enabled', 'URL enabled')); ?></span>
+                                            <?php endif; ?>
+                                            <i class="<?php echo admin_e((string)($orderStatusVisual['icon'] ?? '')); ?> admin-order-status-icon <?php echo admin_e((string)($orderStatusVisual['class'] ?? '')); ?>" aria-hidden="true" title="<?php echo admin_e((string)($orderStatusVisual['label'] ?? '')); ?>"></i>
+                                        </div>
                                     </td>
-                                    <td>
-                                        <div class="admin-search-table__primary"><?php echo admin_e(substr((string)($row['created_at'] ?? ''), 0, 16)); ?></div>
-                                        <div class="admin-search-table__muted"><?php echo admin_e(substr((string)($row['expires_at'] ?? ''), 0, 16)); ?></div>
+                                    <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                        <?php echo !empty($row['created_at']) ? admin_e(date('d.m.Y', strtotime((string)$row['created_at']))) : '—'; ?>
+                                    </td>
+                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                        <a href="<?php echo admin_e($orderUrl); ?>" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : (in_array((string)($orderStatusVisual['class'] ?? ''), ['admin-order-status-icon--pending', 'admin-order-status-icon--awaiting-activation'], true) ? 'btn-dark' : 'btn-success'); ?>" aria-label="Details" style="width: 50px; height: 50px;">
+                                            <i class="bi bi-search" aria-hidden="true"></i>
+                                        </a>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -10415,11 +12477,20 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                     <div class="admin-search-section__label"><?php echo admin_e(admin_t($messages, 'search_section_wallets', 'Crypto wallets')); ?></div>
                     <div class="admin-search-wallet-grid">
                         <?php foreach ($wallets as $row): ?>
-                            <?php
-                            $assetCode = trim((string)($row['crypto_asset_code'] ?? ''));
-                            $assetName = trim((string)($row['crypto_asset_name'] ?? ''));
-                            $logoUrl = admin_crypto_asset_logo_url($assetCode);
-                            ?>
+                                <?php
+                                $assetCode = trim((string)($row['crypto_asset_code'] ?? ''));
+                                $assetName = trim((string)($row['crypto_asset_name'] ?? ''));
+                                $logoUrl = admin_crypto_asset_logo_url($assetCode);
+                                $walletAddress = trim((string)($row['address'] ?? ''));
+                                $walletAddressCompact = admin_compact_wallet_address($walletAddress, 5, 5);
+                                $walletStatus = trim((string)($row['status'] ?? ''));
+                                $walletStatusLabel = admin_t($messages, 'enum_' . $walletStatus, ucfirst(str_replace('_', ' ', $walletStatus)));
+                                $walletStatusClass = admin_wallet_status_badge_class($walletStatus);
+                                $walletCustomerId = (int)($row['customer_id'] ?? 0);
+                                $walletCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+                                $walletCustomerUrl = '/admin/?page=users&customer_id=' . $walletCustomerId;
+                                $walletPageUrl = '/admin/?page=crypto-wallets&wallet_id=' . (int)($row['wallet_address_id'] ?? 0);
+                                ?>
                             <article class="admin-search-wallet-card">
                                 <div class="admin-search-wallet-card__asset">
                                     <img src="<?php echo admin_e($logoUrl); ?>" alt="<?php echo admin_e($assetName !== '' ? $assetName : $assetCode); ?>">
@@ -10429,10 +12500,12 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     </div>
                                 </div>
                                 <div class="admin-search-wallet-card__body">
-                                    <code><?php echo admin_e((string)($row['address'] ?? '')); ?></code>
+                                    <a class="admin-inline-link" href="<?php echo admin_e($walletPageUrl); ?>" title="<?php echo admin_e($walletAddress); ?>">
+                                        <code><?php echo admin_e($walletAddressCompact !== '' ? $walletAddressCompact : '—'); ?></code>
+                                    </a>
                                     <div class="admin-search-wallet-card__meta">
-                                        <span><?php echo admin_e(admin_t($messages, 'search_wallet_user_label', 'User')); ?>: <?php echo admin_e((string)($row['customer_email'] ?? '')); ?></span>
-                                        <span><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>: <?php echo admin_e((string)($row['status'] ?? '-')); ?></span>
+                                        <span><?php echo admin_e(admin_t($messages, 'search_wallet_user_label', 'User')); ?>: <a class="admin-inline-link" href="<?php echo admin_e($walletCustomerUrl); ?>"><?php echo admin_e($walletCustomerEmail !== '' ? $walletCustomerEmail : '—'); ?></a></span>
+                                        <span><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>: <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($walletStatusClass); ?>"><?php echo admin_e($walletStatusLabel); ?></span></span>
                                     </div>
                                 </div>
                             </article>
@@ -10460,6 +12533,7 @@ function admin_page_cards(string $route, array $messages): array
         'news' => ['title' => admin_t($messages, 'page_news_card_title', 'News'), 'text' => admin_t($messages, 'page_news_card_text', 'Publish announcements visible to customers.')],
         'email-templates' => ['title' => admin_t($messages, 'page_email_templates_card_title', 'Email templates'), 'text' => admin_t($messages, 'page_email_templates_card_text', 'Prepare message templates and transactional content.')],
         'faq' => ['title' => admin_t($messages, 'page_faq_card_title', 'FAQ'), 'text' => admin_t($messages, 'page_faq_card_text', 'Edit quick questions and static help answers.')],
+        'help' => ['title' => admin_t($messages, 'page_help_card_title', 'Help'), 'text' => admin_t($messages, 'page_help_card_text', 'Edit the admin tutorial topics shown in the floating help modal.')],
         'settings' => ['title' => admin_t($messages, 'page_settings_card_title', 'Settings'), 'text' => admin_t($messages, 'page_settings_card_text', 'Configure site data, branding and feature switches.')],
     ];
 

@@ -35,7 +35,7 @@ if (app_uses_v2_schema($db)) {
               END AS status,
               CASE
                 WHEN orders.payment_status = 'paid' THEN 2
-                WHEN orders.payment_status IN ('pending', 'manual_review', 'processing', 'awaiting_confirmation') THEN 1
+                WHEN orders.payment_status IN ('pending', 'manual_review', 'processing', 'awaiting_confirmation', 'awaiting_review') THEN 1
                 ELSE 0
               END AS payment,
               CASE

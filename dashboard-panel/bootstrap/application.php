@@ -376,7 +376,7 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
               {$currentCustomerFilter}
              LEFT JOIN crypto_deposit_requests AS open_request
                ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation')
+              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                AND crypto_wallet_addresses.disabled_at IS NULL
                AND crypto_wallet_addresses.status IN ('available', 'assigned')
@@ -409,7 +409,7 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
               AND crypto_wallet_assignments.status IN ('reserved', 'active')
              LEFT JOIN crypto_deposit_requests AS open_request
                ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation')
+              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                AND crypto_wallet_addresses.status = 'available'
                AND crypto_wallet_addresses.disabled_at IS NULL
@@ -539,7 +539,7 @@ function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, 
             "SELECT id
              FROM crypto_deposit_requests
              WHERE wallet_assignment_id = {$assignmentId}
-               AND status IN ('pending', 'awaiting_confirmation')
+               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              ORDER BY id DESC
              LIMIT 1"
         )
@@ -583,7 +583,7 @@ function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
          FROM crypto_wallet_assignments
          LEFT JOIN crypto_deposit_requests AS open_request
            ON open_request.wallet_assignment_id = crypto_wallet_assignments.id
-          AND open_request.status IN ('pending', 'awaiting_confirmation')
+          AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
          WHERE crypto_wallet_assignments.status = 'reserved'
            AND crypto_wallet_assignments.assignment_reason IN ('topup_hold', 'order_payment_hold')
            AND crypto_wallet_assignments.assigned_at <= DATE_SUB('{$safeNowSql}', INTERVAL 1 HOUR)
@@ -621,7 +621,7 @@ function app_release_stale_auto_crypto_wallet_assignments($db, ?string $now = nu
          FROM crypto_wallet_assignments
          LEFT JOIN crypto_deposit_requests AS open_request
            ON open_request.wallet_assignment_id = crypto_wallet_assignments.id
-          AND open_request.status IN ('pending', 'awaiting_confirmation')
+          AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
          WHERE crypto_wallet_assignments.status = 'active'
            AND crypto_wallet_assignments.assigned_by_admin_user_id IS NULL
            AND crypto_wallet_assignments.assigned_at <= DATE_SUB('{$safeNowSql}', INTERVAL 1 HOUR)
@@ -1718,6 +1718,42 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'payment_test_mode_notice_enabled');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'crypto_daily_backup_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_daily_backup_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER payment_test_mode_notice_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_daily_backup_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'crypto_daily_backup_email')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_daily_backup_email VARCHAR(191) DEFAULT NULL
+             AFTER crypto_daily_backup_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_daily_backup_email');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'crypto_daily_backup_last_processed_date')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_daily_backup_last_processed_date DATE DEFAULT NULL
+             AFTER crypto_daily_backup_email"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_daily_backup_last_processed_date');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'manual_database_backup_last_downloaded_at')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN manual_database_backup_last_downloaded_at DATETIME DEFAULT NULL
+             AFTER crypto_daily_backup_last_processed_date"
+        );
+        schema_forget_column_cache('app_settings', 'manual_database_backup_last_downloaded_at');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'history_cleanup_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
@@ -1822,6 +1858,133 @@ function app_ensure_customer_runtime_columns(Mysql_ks $db): void
     if (schema_column_exists($db, 'customers', 'public_handle')) {
         app_backfill_missing_customer_public_handles($db);
     }
+}
+
+function app_ensure_customer_provider_visibility_runtime_table(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'customers') || !schema_object_exists($db, 'product_providers')) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_object_exists($db, 'customer_provider_visibility')) {
+        @$db->query(
+            "CREATE TABLE IF NOT EXISTS customer_provider_visibility (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                customer_id INT UNSIGNED NOT NULL,
+                provider_id INT UNSIGNED NOT NULL,
+                is_visible TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uniq_customer_provider_visibility_customer_provider (customer_id, provider_id),
+                KEY idx_customer_provider_visibility_customer_visible (customer_id, is_visible),
+                KEY idx_customer_provider_visibility_provider_visible (provider_id, is_visible)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+    }
+}
+
+function app_customer_provider_visibility_sql(Mysql_ks $db, int $customerId, string $providerColumn = 'products.provider_id'): string
+{
+    $customerId = (int)$customerId;
+    $providerColumn = trim($providerColumn) !== '' ? trim($providerColumn) : 'products.provider_id';
+
+    if ($customerId <= 0) {
+        return '';
+    }
+
+    app_ensure_customer_provider_visibility_runtime_table($db);
+    if (!schema_object_exists($db, 'customer_provider_visibility')) {
+        return '';
+    }
+
+    return " AND NOT EXISTS (
+        SELECT 1
+        FROM customer_provider_visibility
+        WHERE customer_provider_visibility.customer_id = {$customerId}
+          AND customer_provider_visibility.provider_id = {$providerColumn}
+          AND customer_provider_visibility.is_visible = 0
+    )";
+}
+
+function app_customer_provider_is_visible(Mysql_ks $db, int $customerId, int $providerId): bool
+{
+    $customerId = (int)$customerId;
+    $providerId = (int)$providerId;
+    if ($customerId <= 0 || $providerId <= 0) {
+        return true;
+    }
+
+    app_ensure_customer_provider_visibility_runtime_table($db);
+    if (!schema_object_exists($db, 'customer_provider_visibility')) {
+        return true;
+    }
+
+    $row = $db->select_user(
+        "SELECT is_visible
+         FROM customer_provider_visibility
+         WHERE customer_id = {$customerId}
+           AND provider_id = {$providerId}
+         LIMIT 1"
+    );
+
+    if (!is_array($row) || !array_key_exists('is_visible', $row)) {
+        return true;
+    }
+
+    return (int)($row['is_visible'] ?? 1) === 1;
+}
+
+function app_save_customer_provider_visibility(Mysql_ks $db, int $customerId, array $visibleProviderIds): bool
+{
+    $customerId = (int)$customerId;
+    if ($customerId <= 0) {
+        return false;
+    }
+
+    app_ensure_customer_provider_visibility_runtime_table($db);
+    if (!schema_object_exists($db, 'customer_provider_visibility') || !schema_object_exists($db, 'product_providers')) {
+        return false;
+    }
+
+    $providerRows = $db->select_full_user("SELECT id FROM product_providers");
+    if (!$providerRows) {
+        return true;
+    }
+
+    $allProviderIds = [];
+    foreach ($providerRows as $providerRow) {
+        $providerId = (int)($providerRow['id'] ?? 0);
+        if ($providerId > 0) {
+            $allProviderIds[] = $providerId;
+        }
+    }
+
+    $visibleMap = [];
+    foreach ($visibleProviderIds as $visibleProviderId) {
+        $visibleProviderId = (int)$visibleProviderId;
+        if ($visibleProviderId > 0) {
+            $visibleMap[$visibleProviderId] = true;
+        }
+    }
+
+    $db->query("DELETE FROM customer_provider_visibility WHERE customer_id = {$customerId}");
+
+    foreach ($allProviderIds as $providerId) {
+        if (!isset($visibleMap[$providerId])) {
+            $db->insert(
+                ['customer_id', 'provider_id', 'is_visible'],
+                [$customerId, $providerId, 0],
+                'customer_provider_visibility'
+            );
+        }
+    }
+
+    return true;
 }
 
 function app_normalize_customer_type($value): string
@@ -2276,6 +2439,10 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
     $settings['page_guidance_enabled'] = (int)($settings['page_guidance_enabled'] ?? 1);
     $settings['payment_test_mode_notice_enabled'] = (int)($settings['payment_test_mode_notice_enabled'] ?? 0);
+    $settings['crypto_daily_backup_enabled'] = (int)($settings['crypto_daily_backup_enabled'] ?? 0);
+    $settings['crypto_daily_backup_email'] = trim((string)($settings['crypto_daily_backup_email'] ?? ''));
+    $settings['crypto_daily_backup_last_processed_date'] = trim((string)($settings['crypto_daily_backup_last_processed_date'] ?? ''));
+    $settings['manual_database_backup_last_downloaded_at'] = trim((string)($settings['manual_database_backup_last_downloaded_at'] ?? ''));
     $settings['history_cleanup_enabled'] = (int)($settings['history_cleanup_enabled'] ?? 0);
     $settings['payments_cleanup_enabled'] = (int)($settings['payments_cleanup_enabled'] ?? 0);
     $settings['expired_orders_cleanup_enabled'] = (int)($settings['expired_orders_cleanup_enabled'] ?? 0);
@@ -2299,6 +2466,163 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['apikey'] = $settings['api_key'] ?? '';
 
     return $settings;
+}
+
+function app_crypto_daily_backup_enabled(array $settings): bool
+{
+    return !empty($settings['crypto_daily_backup_enabled']);
+}
+
+function app_crypto_daily_backup_recipient(array $settings): string
+{
+    $recipient = strtolower(trim((string)($settings['crypto_daily_backup_email'] ?? '')));
+    if ($recipient !== '' && filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+        return $recipient;
+    }
+
+    return app_email_support_recipient($settings);
+}
+
+function app_crypto_daily_backup_filename(string $reportDate): string
+{
+    $normalizedDate = preg_replace('/[^0-9]/', '', $reportDate);
+    if ($normalizedDate === null || $normalizedDate === '') {
+        $normalizedDate = date('Ymd');
+    }
+
+    return 'crypto-payments-backup-' . $normalizedDate . '.csv';
+}
+
+function app_crypto_daily_backup_target_date(array $settings, string $safeNow): string
+{
+    $timestamp = strtotime($safeNow);
+    if ($timestamp === false) {
+        $timestamp = time();
+    }
+
+    $reportDate = date('Y-m-d', strtotime('-1 day', $timestamp));
+    $lastProcessed = trim((string)($settings['crypto_daily_backup_last_processed_date'] ?? ''));
+
+    if ($lastProcessed === $reportDate) {
+        return '';
+    }
+
+    return $reportDate;
+}
+
+function app_crypto_daily_backup_update_last_processed_date(Mysql_ks $db, string $reportDate): void
+{
+    if ($reportDate === '' || !schema_object_exists($db, 'app_settings') || !schema_column_exists($db, 'app_settings', 'crypto_daily_backup_last_processed_date')) {
+        return;
+    }
+
+    $db->update_using_id(
+        ['crypto_daily_backup_last_processed_date'],
+        [$reportDate],
+        'app_settings',
+        1
+    );
+}
+
+function app_crypto_daily_backup_fetch_rows(Mysql_ks $db, string $reportDate): array
+{
+    if ($reportDate === ''
+        || !schema_object_exists($db, 'crypto_deposit_requests')
+        || !schema_object_exists($db, 'customers')
+        || !schema_object_exists($db, 'crypto_assets')
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
+    ) {
+        return [];
+    }
+
+    $safeReportDate = $db->escape($reportDate);
+    $rows = $db->select_full_user(
+        "SELECT
+            crypto_deposit_requests.id AS request_id,
+            crypto_deposit_requests.order_id,
+            crypto_deposit_requests.customer_id,
+            customers.email AS customer_email,
+            crypto_assets.code AS crypto_ticker,
+            COALESCE(tx.total_amount_crypto, crypto_deposit_requests.requested_crypto_amount, 0) AS amount_crypto,
+            crypto_deposit_requests.requested_fiat_amount AS fiat_amount,
+            currencies.code AS fiat_currency_code,
+            crypto_wallet_addresses.address AS wallet_address,
+            COALESCE(tx.transaction_hashes, '') AS transaction_hashes,
+            CASE
+                WHEN crypto_deposit_requests.order_id IS NULL OR crypto_deposit_requests.order_id = 0 THEN 'balance_topup'
+                ELSE 'order'
+            END AS payment_target,
+            COALESCE(crypto_deposit_requests.confirmed_at, crypto_deposit_requests.requested_at) AS completed_at
+         FROM crypto_deposit_requests
+         INNER JOIN customers
+            ON customers.id = crypto_deposit_requests.customer_id
+         INNER JOIN crypto_assets
+            ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+         INNER JOIN crypto_wallet_addresses
+            ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+         LEFT JOIN currencies
+            ON currencies.id = crypto_deposit_requests.fiat_currency_id
+         LEFT JOIN (
+            SELECT
+                deposit_request_id,
+                SUM(amount_crypto) AS total_amount_crypto,
+                GROUP_CONCAT(transaction_hash ORDER BY received_at SEPARATOR ' | ') AS transaction_hashes
+            FROM crypto_deposit_transactions
+            GROUP BY deposit_request_id
+         ) AS tx
+            ON tx.deposit_request_id = crypto_deposit_requests.id
+         WHERE crypto_deposit_requests.status IN ('confirmed', 'approved', 'paid', 'completed')
+           AND DATE(COALESCE(crypto_deposit_requests.confirmed_at, crypto_deposit_requests.requested_at)) = '{$safeReportDate}'
+         ORDER BY COALESCE(crypto_deposit_requests.confirmed_at, crypto_deposit_requests.requested_at) ASC, crypto_deposit_requests.id ASC"
+    );
+
+    return is_array($rows) ? $rows : [];
+}
+
+function app_crypto_daily_backup_csv(array $rows): string
+{
+    $handle = fopen('php://temp', 'r+');
+    if ($handle === false) {
+        return '';
+    }
+
+    fputcsv($handle, [
+        'completed_at',
+        'payment_target',
+        'request_id',
+        'order_id',
+        'user_id',
+        'email',
+        'crypto_ticker',
+        'amount_crypto',
+        'fiat_amount',
+        'fiat_currency',
+        'wallet_address',
+        'transaction_hashes',
+    ]);
+
+    foreach ($rows as $row) {
+        fputcsv($handle, [
+            (string)($row['completed_at'] ?? ''),
+            (string)($row['payment_target'] ?? ''),
+            (string)($row['request_id'] ?? ''),
+            (string)($row['order_id'] ?? ''),
+            (string)($row['customer_id'] ?? ''),
+            (string)($row['customer_email'] ?? ''),
+            strtoupper((string)($row['crypto_ticker'] ?? '')),
+            number_format((float)($row['amount_crypto'] ?? 0), 8, '.', ''),
+            number_format((float)($row['fiat_amount'] ?? 0), 2, '.', ''),
+            strtoupper((string)($row['fiat_currency_code'] ?? '')),
+            (string)($row['wallet_address'] ?? ''),
+            (string)($row['transaction_hashes'] ?? ''),
+        ]);
+    }
+
+    rewind($handle);
+    $csv = (string)stream_get_contents($handle);
+    fclose($handle);
+
+    return $csv;
 }
 
 function app_email_builtin_templates(): array
@@ -2657,6 +2981,274 @@ function app_email_placeholder_map(array $replacements): array
 function app_email_render(string $templateBody, array $replacements): string
 {
     return strtr($templateBody, app_email_placeholder_map($replacements));
+}
+
+function app_email_send_with_attachment(
+    array $settings,
+    string $recipientEmail,
+    string $subject,
+    string $htmlBody,
+    string $attachmentBody,
+    string $attachmentFilename,
+    string $attachmentMime = 'text/csv; charset=UTF-8'
+): array {
+    $recipientEmail = strtolower(trim($recipientEmail));
+    $subject = trim($subject);
+    $htmlBody = trim($htmlBody);
+    $attachmentFilename = trim($attachmentFilename);
+
+    if (!app_email_smtp_is_configured($settings)) {
+        return ['ok' => false, 'message' => 'SMTP is not configured.'];
+    }
+
+    if ($recipientEmail === '' || filter_var($recipientEmail, FILTER_VALIDATE_EMAIL) === false) {
+        return ['ok' => false, 'message' => 'Recipient email is invalid.'];
+    }
+
+    if ($subject === '' || $attachmentBody === '' || $attachmentFilename === '') {
+        return ['ok' => false, 'message' => 'Attachment email payload is incomplete.'];
+    }
+
+    try {
+        $mail = app_email_mailer($settings);
+        $mail->clearAllRecipients();
+        $mail->clearAttachments();
+        $mail->addAddress($recipientEmail);
+        $mail->Subject = $subject;
+        $mail->Body = $htmlBody !== '' ? $htmlBody : nl2br(app_email_plain_text($subject));
+        $mail->AltBody = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $mail->Body)));
+        $mail->addStringAttachment($attachmentBody, $attachmentFilename, 'base64', $attachmentMime);
+        $mail->send();
+
+        return ['ok' => true, 'message' => 'Attachment email sent.'];
+    } catch (Throwable $exception) {
+        return ['ok' => false, 'message' => $exception->getMessage()];
+    }
+}
+
+function app_send_daily_crypto_backup_report(Mysql_ks $db, string $safeNow): array
+{
+    $settings = app_fetch_settings($db);
+    if (!app_crypto_daily_backup_enabled($settings)) {
+        return ['ok' => true, 'sent' => 0, 'rows' => 0, 'message' => 'Daily crypto backup is disabled.'];
+    }
+
+    $reportDate = app_crypto_daily_backup_target_date($settings, $safeNow);
+    if ($reportDate === '') {
+        return ['ok' => true, 'sent' => 0, 'rows' => 0, 'message' => 'Daily crypto backup already processed for the previous day.'];
+    }
+
+    $rows = app_crypto_daily_backup_fetch_rows($db, $reportDate);
+    if ($rows === []) {
+        app_crypto_daily_backup_update_last_processed_date($db, $reportDate);
+        return ['ok' => true, 'sent' => 0, 'rows' => 0, 'date' => $reportDate, 'message' => 'No completed crypto payments found for the previous day.'];
+    }
+
+    $recipient = app_crypto_daily_backup_recipient($settings);
+    if ($recipient === '') {
+        return ['ok' => false, 'sent' => 0, 'rows' => count($rows), 'date' => $reportDate, 'message' => 'Daily crypto backup recipient is not configured.'];
+    }
+
+    $csv = app_crypto_daily_backup_csv($rows);
+    if ($csv === '') {
+        return ['ok' => false, 'sent' => 0, 'rows' => count($rows), 'date' => $reportDate, 'message' => 'Unable to build crypto backup CSV.'];
+    }
+
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $subject = 'Backup crypto payments - ' . $reportDate . ' - ' . $siteName;
+    $body = '<p>W załączniku znajduje się dzienny backup potwierdzonych płatności crypto z dnia <strong>'
+        . htmlspecialchars($reportDate, ENT_QUOTES, 'UTF-8')
+        . '</strong>.</p><p>Liczba rekordów: <strong>'
+        . (int)count($rows)
+        . '</strong>.</p>';
+
+    $sendResult = app_email_send_with_attachment(
+        $settings,
+        $recipient,
+        $subject,
+        $body,
+        $csv,
+        app_crypto_daily_backup_filename($reportDate)
+    );
+
+    if (empty($sendResult['ok'])) {
+        return [
+            'ok' => false,
+            'sent' => 0,
+            'rows' => count($rows),
+            'date' => $reportDate,
+            'message' => 'Crypto backup email failed: ' . trim((string)($sendResult['message'] ?? 'Unknown error')),
+        ];
+    }
+
+    app_crypto_daily_backup_update_last_processed_date($db, $reportDate);
+
+    return [
+        'ok' => true,
+        'sent' => 1,
+        'rows' => count($rows),
+        'date' => $reportDate,
+        'recipient' => $recipient,
+        'message' => 'Crypto backup email sent successfully.',
+    ];
+}
+
+function app_sql_dump_identifier(string $identifier): string
+{
+    return '`' . str_replace('`', '``', $identifier) . '`';
+}
+
+function app_sql_dump_value(Mysql_ks $db, $value): string
+{
+    if ($value === null) {
+        return 'NULL';
+    }
+
+    if (is_bool($value)) {
+        return $value ? '1' : '0';
+    }
+
+    return "'" . $db->escape((string)$value) . "'";
+}
+
+function app_sql_dump_objects(Mysql_ks $db): array
+{
+    $rows = $db->select_full_user('SHOW FULL TABLES');
+    $tables = [];
+    $views = [];
+
+    foreach ($rows as $row) {
+        $values = array_values($row);
+        $name = trim((string)($values[0] ?? ''));
+        $type = strtoupper(trim((string)($values[1] ?? 'BASE TABLE')));
+        if ($name === '') {
+            continue;
+        }
+
+        if ($type === 'VIEW') {
+            $views[] = $name;
+        } else {
+            $tables[] = $name;
+        }
+    }
+
+    sort($tables);
+    sort($views);
+
+    return ['tables' => $tables, 'views' => $views];
+}
+
+function app_sql_dump_insertable_columns(Mysql_ks $db, string $tableName): array
+{
+    $columns = $db->select_full_user('SHOW FULL COLUMNS FROM ' . app_sql_dump_identifier($tableName));
+    $insertable = [];
+
+    foreach ($columns as $column) {
+        $field = trim((string)($column['Field'] ?? ''));
+        $extra = strtoupper(trim((string)($column['Extra'] ?? '')));
+        if ($field === '' || strpos($extra, 'GENERATED') !== false) {
+            continue;
+        }
+        $insertable[] = $field;
+    }
+
+    return $insertable;
+}
+
+function app_stream_database_sql_backup(Mysql_ks $db, string $downloadFilename): void
+{
+    @set_time_limit(0);
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    $objects = app_sql_dump_objects($db);
+    $timestamp = date('Y-m-d H:i:s');
+
+    header('Content-Type: application/sql; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . str_replace('"', '', $downloadFilename) . '"');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+
+    echo "-- Generated by Subme admin backup\n";
+    echo '-- Export time: ' . $timestamp . "\n";
+    echo "SET NAMES utf8mb4;\n";
+    echo "SET FOREIGN_KEY_CHECKS = 0;\n\n";
+
+    foreach ($objects['tables'] as $tableName) {
+        $showCreateRow = $db->select_user('SHOW CREATE TABLE ' . app_sql_dump_identifier($tableName));
+        $createSql = (string)($showCreateRow['Create Table'] ?? '');
+        if ($createSql === '') {
+            continue;
+        }
+
+        echo 'DROP TABLE IF EXISTS ' . app_sql_dump_identifier($tableName) . ";\n";
+        echo $createSql . ";\n\n";
+
+        $columns = app_sql_dump_insertable_columns($db, $tableName);
+        if ($columns === []) {
+            continue;
+        }
+
+        $selectSql = 'SELECT ' . implode(', ', array_map('app_sql_dump_identifier', $columns))
+            . ' FROM ' . app_sql_dump_identifier($tableName);
+        $result = $db->query($selectSql);
+        if (!$result) {
+            echo "\n";
+            continue;
+        }
+
+        $columnSql = implode(', ', array_map('app_sql_dump_identifier', $columns));
+        while ($row = $result->fetch_assoc()) {
+            $values = [];
+            foreach ($columns as $columnName) {
+                $values[] = app_sql_dump_value($db, $row[$columnName] ?? null);
+            }
+
+            echo 'INSERT INTO ' . app_sql_dump_identifier($tableName)
+                . ' (' . $columnSql . ') VALUES (' . implode(', ', $values) . ");\n";
+        }
+
+        $result->free();
+        echo "\n";
+    }
+
+    foreach ($objects['views'] as $viewName) {
+        $showCreateRow = $db->select_user('SHOW CREATE VIEW ' . app_sql_dump_identifier($viewName));
+        $createSql = (string)($showCreateRow['Create View'] ?? '');
+        if ($createSql === '') {
+            continue;
+        }
+
+        $createSql = preg_replace('/\s+DEFINER=`[^`]+`@`[^`]+`\s+/i', ' ', $createSql);
+        $createSql = preg_replace('/\s+SQL SECURITY DEFINER\s+/i', ' SQL SECURITY INVOKER ', (string)$createSql);
+
+        echo 'DROP VIEW IF EXISTS ' . app_sql_dump_identifier($viewName) . ";\n";
+        echo trim((string)$createSql) . ";\n\n";
+    }
+
+    echo "SET FOREIGN_KEY_CHECKS = 1;\n";
+    exit;
+}
+
+function app_update_manual_database_backup_timestamp(Mysql_ks $db, ?string $timestamp = null): void
+{
+    if (!schema_object_exists($db, 'app_settings') || !schema_column_exists($db, 'app_settings', 'manual_database_backup_last_downloaded_at')) {
+        return;
+    }
+
+    $timestamp = trim((string)$timestamp);
+    if ($timestamp === '') {
+        $timestamp = date('Y-m-d H:i:s');
+    }
+
+    $db->update_using_id(
+        ['manual_database_backup_last_downloaded_at'],
+        [$timestamp],
+        'app_settings',
+        1
+    );
 }
 
 function app_ensure_email_template_runtime_rows(Mysql_ks $db): void
@@ -4507,7 +5099,7 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
                      WHEN cancelled_at IS NULL THEN '{$safeNowSql}'
                      ELSE cancelled_at
                  END
-             WHERE status IN ('pending', 'awaiting_confirmation')
+             WHERE status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                AND expires_at IS NOT NULL
                AND expires_at <= '{$safeNowSql}'"
         );
@@ -4622,7 +5214,7 @@ function app_prune_retained_data(Mysql_ks $db, ?string $now = null): array
             $result = $db->query(
                 "DELETE FROM crypto_deposit_requests
                  WHERE requested_at < '{$safeCutoff}'
-                   AND status NOT IN ('pending', 'awaiting_confirmation')"
+                   AND status NOT IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
             );
             if ($result) {
                 $deletedCryptoRequests = (int)$db->affected_rows;
@@ -4843,6 +5435,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     }
 
     $email = app_email_process_queue($db, $emailLimit);
+    $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
     $archive = app_archive_expired_payment_requests($db, $safeNow);
     $expire = app_expire_overdue_orders($db, $safeNow);
     $chat = app_prune_support_chat_messages($db, $safeNow);
@@ -4853,6 +5446,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
 
     $steps = [
         'email_queue' => $email,
+        'crypto_daily_backup' => $cryptoBackup,
         'archive_requests' => $archive,
         'expire_orders' => $expire,
         'live_chat_cleanup' => $chat,
@@ -4876,6 +5470,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'emails_processed' => (int)($email['processed'] ?? 0),
             'emails_sent' => (int)($email['sent'] ?? 0),
             'emails_failed' => (int)($email['failed'] ?? 0),
+            'crypto_backup_sent' => (int)($cryptoBackup['sent'] ?? 0),
+            'crypto_backup_rows' => (int)($cryptoBackup['rows'] ?? 0),
             'archived_crypto_requests' => (int)($archive['archived_crypto_requests'] ?? 0),
             'archived_bank_requests' => (int)($archive['archived_bank_requests'] ?? 0),
             'reset_order_payment_method' => (int)($archive['reset_order_payment_method'] ?? 0),

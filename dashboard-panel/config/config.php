@@ -314,7 +314,7 @@ if (!empty($user['logged']) && app_uses_v2_schema($db) && isset($user['id'])) {
             crypto_deposit_requests.expires_at
          FROM crypto_deposit_requests
          WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
-           AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation')
+           AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
            AND crypto_deposit_requests.expires_at IS NOT NULL
            AND crypto_deposit_requests.expires_at > '{$safeNow}'
          ORDER BY crypto_deposit_requests.id DESC

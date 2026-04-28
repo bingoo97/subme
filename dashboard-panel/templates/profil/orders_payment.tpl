@@ -75,6 +75,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <form action="" method="post">
                             <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
                             <input type="hidden" name="id" value="{$selected.id}" />
+                            <input type="hidden" name="payment" value="{$selected.id}" />
                             <input type="hidden" name="payment_method" value="crypto" />
 
                             <div class="payment-step">
@@ -83,7 +84,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                     <h4>{$t.payment_choose_crypto|default:'Choose cryptocurrency'}</h4>
                                 </div>
                                 {if $payment_has_crypto_assignments}
-                                    <div class="crypto-choice-grid">
+                                    <div class="crypto-choice-grid{if $payment_crypto_assets|@count == 1} crypto-choice-grid--single{/if}">
                                         {section name=i loop=$payment_crypto_assets}
                                             <label class="crypto-choice-card">
                                                 <input type="radio" name="crypto_wallet_assignment_id" value="{$payment_crypto_assets[i].id}" {if $smarty.section.i.first}checked{/if}>
@@ -152,6 +153,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <form action="" method="post">
                             <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
                             <input type="hidden" name="id" value="{$selected.id}" />
+                            <input type="hidden" name="payment" value="{$selected.id}" />
                             <input type="hidden" name="payment_method" value="bank_transfer" />
 
                             <div class="payment-step">
@@ -240,7 +242,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
     {if $payment_active_request_method eq 'crypto' && $payment_crypto_request}
         <div class="payment-wizard__section">
             <div class="payment-wizard__header payment-wizard__header--inline-title">
-                <h1><a href="orders"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.payment_crypto_details_title|default:'Pending payment'} <i class="fa fa-spinner spin pull-right" aria-hidden="true"></i></h1>
+                <h1><a href="orders"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.payment_crypto_details_title|default:'Pending payment'} <i class="fa fa-circle-o-notch fa-spin pull-right" style="margin-top: 5px;" aria-hidden="true"></i></h1>
                 <p>{$t.payment_crypto_details_intro|default:'Use the assigned wallet details below to complete your payment.'}</p>
             </div>
             <div class="payment-request-card">
@@ -262,6 +264,12 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             </div>
                         </div>
                         <div class="payment-request-grid">
+                            {if $payment_crypto_request.wallet_network_label}
+                            <div>
+                                <span class="payment-request-label">{$t.payment_wallet_network|default:'Network'}</span>
+                                <span class="payment-request-value">{$payment_crypto_request.wallet_network_label}</span>
+                            </div>
+                            {/if}
                             <div>
                                 <span class="payment-request-label">{$t.payment_summary_amount|default:'Amount'}</span>
                                 <span class="payment-request-value">
@@ -300,12 +308,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                 <span class="payment-request-value">{$payment_crypto_request.wallet_owner_full_name}</span>
                             </div>
                             {/if}
-                            {if $payment_crypto_request.wallet_network_label}
-                            <div>
-                                <span class="payment-request-label">{$t.payment_wallet_network|default:'Network'}</span>
-                                <span class="payment-request-value">{$payment_crypto_request.wallet_network_label}</span>
-                            </div>
-                            {/if}
+                            
                             {if $payment_crypto_request.wallet_memo_tag}
                             <div>
                                 <span class="payment-request-label">{$t.payment_wallet_memo|default:'Memo / Tag'}</span>

@@ -75,6 +75,10 @@ CREATE TABLE `app_settings` (
   `application_instructions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `page_guidance_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `payment_test_mode_notice_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+  `crypto_daily_backup_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+  `crypto_daily_backup_email` VARCHAR(191) DEFAULT NULL,
+  `crypto_daily_backup_last_processed_date` DATE DEFAULT NULL,
+  `manual_database_backup_last_downloaded_at` DATETIME DEFAULT NULL,
   `history_cleanup_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `payments_cleanup_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `expired_orders_cleanup_enabled` TINYINT(1) NOT NULL DEFAULT 0,
@@ -215,6 +219,21 @@ CREATE TABLE `product_providers` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_product_providers_slug` (`slug`),
   UNIQUE KEY `uniq_product_providers_legacy_source` (`legacy_source_table`, `legacy_source_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `customer_provider_visibility` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `customer_id` INT UNSIGNED NOT NULL,
+  `provider_id` INT UNSIGNED NOT NULL,
+  `is_visible` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_customer_provider_visibility_customer_provider` (`customer_id`, `provider_id`),
+  KEY `idx_customer_provider_visibility_customer_visible` (`customer_id`, `is_visible`),
+  KEY `idx_customer_provider_visibility_provider_visible` (`provider_id`, `is_visible`),
+  CONSTRAINT `fk_customer_provider_visibility_customer` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_customer_provider_visibility_provider` FOREIGN KEY (`provider_id`) REFERENCES `product_providers` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `products` (
@@ -440,7 +459,7 @@ CREATE TABLE `crypto_deposit_requests` (
   `request_note` TEXT DEFAULT NULL,
   `open_request_lock` TINYINT GENERATED ALWAYS AS (
     CASE
-      WHEN `status` IN ('pending', 'awaiting_confirmation') THEN 1
+      WHEN `status` IN ('pending', 'awaiting_confirmation', 'awaiting_review') THEN 1
       ELSE NULL
     END
   ) STORED,
@@ -677,6 +696,21 @@ CREATE TABLE `static_pages` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_static_pages_slug` (`slug`),
   UNIQUE KEY `uniq_static_pages_legacy_source` (`legacy_source_table`, `legacy_source_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `admin_help_topics` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `question` VARCHAR(191) NOT NULL,
+  `answer_html` LONGTEXT NOT NULL,
+  `audience_code` VARCHAR(20) NOT NULL DEFAULT 'all',
+  `keywords` VARCHAR(500) DEFAULT NULL,
+  `sort_order` INT NOT NULL DEFAULT 100,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_admin_help_topics_active_sort` (`is_active`, `sort_order`, `id`),
+  KEY `idx_admin_help_topics_audience` (`audience_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `email_templates` (

@@ -1,9 +1,9 @@
 document.addEventListener('DOMContentLoaded', function () {
     'use strict';
 
-    if (typeof window.bootstrap === 'undefined') {
+    var hasBootstrap = typeof window.bootstrap !== 'undefined';
+    if (!hasBootstrap) {
         console.warn('Bootstrap not loaded');
-        return;
     }
 
     var doc = document;
@@ -63,6 +63,442 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initRichTextEditors() {
+        var allowedTags = {
+            P: true,
+            BR: true,
+            STRONG: true,
+            B: true,
+            EM: true,
+            I: true,
+            U: true,
+            H1: true,
+            H2: true,
+            H3: true,
+            H4: true,
+            H5: true,
+            H6: true,
+            UL: true,
+            OL: true,
+            LI: true,
+            BLOCKQUOTE: true,
+            A: true,
+            IMG: true,
+            DIV: true,
+            SPAN: true
+        };
+
+        function isSafeUrl(value, allowDataImages) {
+            var url = String(value || '').trim();
+            if (!url) {
+                return false;
+            }
+
+            var lower = url.toLowerCase();
+            if (allowDataImages && lower.indexOf('data:image/') === 0) {
+                return true;
+            }
+
+            return lower.indexOf('http://') === 0
+                || lower.indexOf('https://') === 0
+                || lower.indexOf('mailto:') === 0
+                || lower.indexOf('tel:') === 0
+                || lower.indexOf('/') === 0
+                || lower.indexOf('#') === 0;
+        }
+
+        function sanitizeStyle(value) {
+            var style = String(value || '');
+            var match = style.match(/text-align\s*:\s*(left|center|right|justify)/i);
+            return match ? 'text-align:' + match[1].toLowerCase() + ';' : '';
+        }
+
+        function sanitizeHtml(html) {
+            var template = doc.createElement('template');
+            template.innerHTML = String(html || '');
+
+            function walk(node) {
+                var children = Array.prototype.slice.call(node.childNodes || []);
+                children.forEach(function (child) {
+                    if (child.nodeType === 1) {
+                        var tag = child.tagName ? child.tagName.toUpperCase() : '';
+                        if (!allowedTags[tag]) {
+                            if (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|FORM|INPUT|BUTTON|TEXTAREA|SELECT|OPTION)$/i.test(tag)) {
+                                child.remove();
+                                return;
+                            }
+
+                            while (child.firstChild) {
+                                node.insertBefore(child.firstChild, child);
+                            }
+                            child.remove();
+                            return;
+                        }
+
+                        Array.prototype.slice.call(child.attributes || []).forEach(function (attribute) {
+                            var attrName = String(attribute.name || '').toLowerCase();
+                            var attrValue = String(attribute.value || '');
+                            if (attrName.indexOf('on') === 0) {
+                                child.removeAttribute(attribute.name);
+                                return;
+                            }
+
+                            if (tag === 'A' && attrName === 'href') {
+                                if (!isSafeUrl(attrValue, false)) {
+                                    child.removeAttribute(attribute.name);
+                                }
+                                return;
+                            }
+
+                            if (tag === 'IMG' && attrName === 'src') {
+                                if (!isSafeUrl(attrValue, true)) {
+                                    child.remove();
+                                }
+                                return;
+                            }
+
+                            if (attrName === 'style') {
+                                var safeStyle = sanitizeStyle(attrValue);
+                                if (safeStyle) {
+                                    child.setAttribute('style', safeStyle);
+                                } else {
+                                    child.removeAttribute('style');
+                                }
+                                return;
+                            }
+
+                            if (tag === 'A' && (attrName === 'target' || attrName === 'rel' || attrName === 'title')) {
+                                return;
+                            }
+
+                            if (tag === 'IMG' && (attrName === 'alt' || attrName === 'title' || attrName === 'width' || attrName === 'height')) {
+                                return;
+                            }
+
+                            child.removeAttribute(attribute.name);
+                        });
+
+                        if (tag === 'A' && child.getAttribute('href')) {
+                            child.setAttribute('target', '_blank');
+                            child.setAttribute('rel', 'noopener noreferrer');
+                        }
+
+                        walk(child);
+                        return;
+                    }
+
+                    if (child.nodeType === 8) {
+                        child.remove();
+                    }
+                });
+            }
+
+            walk(template.content);
+
+            var sanitized = template.innerHTML
+                .replace(/<(p|div|h1|h2|h3|h4|h5|h6|blockquote)>\s*<\/\1>/gi, '')
+                .replace(/<p><br><\/p>/gi, '')
+                .trim();
+
+            var preview = doc.createElement('div');
+            preview.innerHTML = sanitized;
+            var plain = (preview.textContent || preview.innerText || '').replace(/\s+/g, ' ').trim();
+            if (!plain && !preview.querySelector('img')) {
+                return '';
+            }
+
+            return sanitized;
+        }
+
+        function renderToolbarButton(config) {
+            var button = doc.createElement('button');
+            button.type = 'button';
+            button.className = 'admin-rich-editor__tool';
+            button.setAttribute('data-rich-editor-action', config.action || '');
+            button.setAttribute('title', config.label);
+            button.setAttribute('aria-label', config.label);
+            button.innerHTML = config.html;
+            return button;
+        }
+
+        qa('textarea[data-admin-rich-editor]').forEach(function (textarea) {
+            if (!textarea || textarea.getAttribute('data-admin-rich-editor-ready') === '1') {
+                return;
+            }
+
+            textarea.setAttribute('data-admin-rich-editor-ready', '1');
+
+            var allowImages = textarea.getAttribute('data-admin-rich-editor-images') !== '0';
+            var wrapper = doc.createElement('div');
+            wrapper.className = 'admin-rich-editor';
+
+            var toolbar = doc.createElement('div');
+            toolbar.className = 'admin-rich-editor__toolbar';
+
+            var tools = [
+                { action: 'paragraph', label: 'Paragraph', html: '<strong>P</strong>' },
+                { action: 'h2', label: 'Heading 2', html: '<strong>H2</strong>' },
+                { action: 'h3', label: 'Heading 3', html: '<strong>H3</strong>' },
+                { action: 'separator', label: '', html: '' },
+                { action: 'bold', label: 'Bold', html: '<i class="bi bi-type-bold"></i>' },
+                { action: 'italic', label: 'Italic', html: '<i class="bi bi-type-italic"></i>' },
+                { action: 'underline', label: 'Underline', html: '<i class="bi bi-type-underline"></i>' },
+                { action: 'separator', label: '', html: '' },
+                { action: 'unorderedList', label: 'Bullet list', html: '<i class="bi bi-list-ul"></i>' },
+                { action: 'orderedList', label: 'Numbered list', html: '<i class="bi bi-list-ol"></i>' },
+                { action: 'quote', label: 'Quote', html: '<strong>&ldquo;</strong>' },
+                { action: 'link', label: 'Insert link', html: '<i class="bi bi-link-45deg"></i>' },
+                { action: 'separator', label: '', html: '' },
+                { action: 'alignLeft', label: 'Align left', html: '<strong>L</strong>' },
+                { action: 'alignCenter', label: 'Align center', html: '<strong>C</strong>' },
+                { action: 'alignRight', label: 'Align right', html: '<strong>R</strong>' },
+                { action: 'clear', label: 'Clear formatting', html: '<i class="bi bi-eraser"></i>' }
+            ];
+
+            if (allowImages) {
+                tools.push({ action: 'image', label: 'Insert image from disk', html: '<i class="bi bi-image"></i>' });
+            }
+
+            tools.push({ action: 'source', label: 'Toggle HTML mode', html: '<i class="bi bi-code-slash"></i>' });
+
+            tools.forEach(function (tool) {
+                if (tool.action === 'separator') {
+                    var separator = doc.createElement('span');
+                    separator.className = 'admin-rich-editor__toolbar-separator';
+                    separator.setAttribute('aria-hidden', 'true');
+                    toolbar.appendChild(separator);
+                    return;
+                }
+                toolbar.appendChild(renderToolbarButton(tool));
+            });
+
+            var surface = doc.createElement('div');
+            surface.className = 'admin-rich-editor__surface';
+            surface.contentEditable = 'true';
+            surface.setAttribute('data-placeholder', 'Write content here...');
+
+            var source = doc.createElement('textarea');
+            source.className = 'admin-rich-editor__source form-control';
+            source.setAttribute('hidden', 'hidden');
+
+            var fileInput = doc.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = 'image/*';
+            fileInput.hidden = true;
+
+            wrapper.appendChild(toolbar);
+            wrapper.appendChild(surface);
+            wrapper.appendChild(source);
+            wrapper.appendChild(fileInput);
+            textarea.insertAdjacentElement('afterend', wrapper);
+            textarea.hidden = true;
+
+            function isSourceMode() {
+                return !source.hasAttribute('hidden');
+            }
+
+            function syncTextareaFromSurface() {
+                textarea.value = sanitizeHtml(surface.innerHTML);
+            }
+
+            function syncSourceFromSurface() {
+                syncTextareaFromSurface();
+                source.value = textarea.value;
+            }
+
+            function syncSurfaceFromSource() {
+                surface.innerHTML = sanitizeHtml(source.value);
+                syncTextareaFromSurface();
+            }
+
+            function updateToggleButton() {
+                qa('[data-rich-editor-action="source"]', toolbar).forEach(function (button) {
+                    button.classList.toggle('is-active', isSourceMode());
+                });
+            }
+
+            function runCommand(command, value) {
+                if (isSourceMode()) {
+                    return;
+                }
+
+                surface.focus();
+                doc.execCommand('styleWithCSS', false, true);
+                if (command === 'formatBlock') {
+                    doc.execCommand(command, false, value);
+                } else if (command === 'insertHTML') {
+                    doc.execCommand(command, false, value);
+                } else {
+                    doc.execCommand(command, false, value || null);
+                }
+                syncTextareaFromSurface();
+            }
+
+            function toggleSourceMode() {
+                if (isSourceMode()) {
+                    syncSurfaceFromSource();
+                    source.setAttribute('hidden', 'hidden');
+                    surface.removeAttribute('hidden');
+                    surface.focus();
+                } else {
+                    syncSourceFromSurface();
+                    surface.setAttribute('hidden', 'hidden');
+                    source.removeAttribute('hidden');
+                    source.focus();
+                }
+                updateToggleButton();
+            }
+
+            function promptForLink() {
+                var url = window.prompt('Paste the link URL:', 'https://');
+                if (!url) {
+                    return;
+                }
+
+                if (!isSafeUrl(url, false)) {
+                    window.alert('This link address is not allowed.');
+                    return;
+                }
+
+                runCommand('createLink', url);
+            }
+
+            function insertImageFromFile(file) {
+                if (!file) {
+                    return;
+                }
+
+                var reader = new window.FileReader();
+                reader.onload = function (event) {
+                    var result = event && event.target ? String(event.target.result || '') : '';
+                    if (!result) {
+                        return;
+                    }
+
+                    var imageHtml = '<p><img src="' + escapeHtml(result) + '" alt="' + escapeHtml(file.name || 'image') + '"></p>';
+                    if (isSourceMode()) {
+                        source.value += (source.value ? '\n' : '') + imageHtml;
+                        syncSurfaceFromSource();
+                    } else {
+                        runCommand('insertHTML', imageHtml);
+                    }
+                };
+                reader.readAsDataURL(file);
+            }
+
+            surface.innerHTML = sanitizeHtml(textarea.value);
+            syncTextareaFromSurface();
+            updateToggleButton();
+
+            toolbar.addEventListener('click', function (event) {
+                var button = closest(event.target, '[data-rich-editor-action]');
+                if (!button) {
+                    return;
+                }
+
+                var action = button.getAttribute('data-rich-editor-action') || '';
+                if (!action) {
+                    return;
+                }
+
+                event.preventDefault();
+
+                if (action === 'paragraph') {
+                    runCommand('formatBlock', '<p>');
+                    return;
+                }
+                if (action === 'h2') {
+                    runCommand('formatBlock', '<h2>');
+                    return;
+                }
+                if (action === 'h3') {
+                    runCommand('formatBlock', '<h3>');
+                    return;
+                }
+                if (action === 'bold') {
+                    runCommand('bold');
+                    return;
+                }
+                if (action === 'italic') {
+                    runCommand('italic');
+                    return;
+                }
+                if (action === 'underline') {
+                    runCommand('underline');
+                    return;
+                }
+                if (action === 'unorderedList') {
+                    runCommand('insertUnorderedList');
+                    return;
+                }
+                if (action === 'orderedList') {
+                    runCommand('insertOrderedList');
+                    return;
+                }
+                if (action === 'quote') {
+                    runCommand('formatBlock', '<blockquote>');
+                    return;
+                }
+                if (action === 'link') {
+                    promptForLink();
+                    return;
+                }
+                if (action === 'alignLeft') {
+                    runCommand('justifyLeft');
+                    return;
+                }
+                if (action === 'alignCenter') {
+                    runCommand('justifyCenter');
+                    return;
+                }
+                if (action === 'alignRight') {
+                    runCommand('justifyRight');
+                    return;
+                }
+                if (action === 'clear') {
+                    runCommand('removeFormat');
+                    return;
+                }
+                if (action === 'image') {
+                    fileInput.click();
+                    return;
+                }
+                if (action === 'source') {
+                    toggleSourceMode();
+                }
+            });
+
+            fileInput.addEventListener('change', function () {
+                var file = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+                if (file) {
+                    insertImageFromFile(file);
+                }
+                fileInput.value = '';
+            });
+
+            surface.addEventListener('input', syncTextareaFromSurface);
+            surface.addEventListener('blur', syncTextareaFromSurface);
+            surface.addEventListener('paste', function () {
+                window.setTimeout(syncTextareaFromSurface, 0);
+            });
+
+            source.addEventListener('input', function () {
+                textarea.value = source.value;
+            });
+
+            var form = closest(textarea, 'form');
+            if (form) {
+                form.addEventListener('submit', function () {
+                    if (isSourceMode()) {
+                        syncSurfaceFromSource();
+                    } else {
+                        syncTextareaFromSurface();
+                    }
+                });
+            }
+        });
+    }
+
     function toQuery(params) {
         var search = new URLSearchParams();
         Object.keys(params || {}).forEach(function (key) {
@@ -71,6 +507,86 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
         return search.toString();
+    }
+
+    function unlockSensitiveRoute(routeLabel) {
+        var body = doc.body;
+        if (!body) {
+            return Promise.resolve(false);
+        }
+
+        if (body.getAttribute('data-admin-sensitive-unlocked') === '1') {
+            return Promise.resolve(true);
+        }
+
+        var promptText = body.getAttribute('data-admin-sensitive-prompt') || 'Enter the password to open this section:';
+        var errorText = body.getAttribute('data-admin-sensitive-error') || 'Incorrect password.';
+        var csrfToken = body.getAttribute('data-admin-sensitive-csrf') || '';
+        var password = window.prompt(promptText + (routeLabel ? '\n\n' + routeLabel : ''), '');
+
+        if (password === null) {
+            return Promise.resolve(false);
+        }
+
+        var formData = new window.FormData();
+        formData.append('admin_sensitive_unlock_ajax', '1');
+        formData.append('_csrf', csrfToken);
+        formData.append('sensitive_password', password);
+
+        return jsonFetch(window.location.href, {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin'
+        }).then(function (payload) {
+            if (!payload || !payload.ok) {
+                window.alert((payload && payload.message) ? payload.message : errorText);
+                return false;
+            }
+
+            body.setAttribute('data-admin-sensitive-unlocked', '1');
+            return true;
+        }).catch(function () {
+            window.alert(errorText);
+            return false;
+        });
+    }
+
+    function initSensitiveRouteProtection() {
+        var body = doc.body;
+        if (!body) {
+            return;
+        }
+
+        var gateMode = body.getAttribute('data-admin-sensitive-gate') === '1';
+        var cancelText = body.getAttribute('data-admin-sensitive-cancel') || 'Access to this section was cancelled.';
+
+        if (gateMode) {
+            unlockSensitiveRoute(body.getAttribute('data-admin-sensitive-label') || '').then(function (ok) {
+                if (ok) {
+                    window.location.reload();
+                    return;
+                }
+
+                window.alert(cancelText);
+                window.location.href = '/admin/';
+            });
+            return;
+        }
+
+        qa('[data-admin-sensitive-link]').forEach(function (link) {
+            link.addEventListener('click', function (event) {
+                if (body.getAttribute('data-admin-sensitive-unlocked') === '1') {
+                    return;
+                }
+
+                event.preventDefault();
+                unlockSensitiveRoute(link.getAttribute('data-admin-sensitive-label') || '').then(function (ok) {
+                    if (ok) {
+                        window.location.href = link.href;
+                    }
+                });
+            });
+        });
     }
 
     function renderPresenceDot(presence) {
@@ -413,6 +929,90 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function initAdminHelpModal() {
+        var modal = q('#adminHelpModal');
+        var input = q('[data-admin-help-search]', modal);
+        var results = q('[data-admin-help-results]', modal);
+        var dataNode = q('#adminHelpTopicsData');
+        if (!modal || !input || !results || !dataNode) {
+            return;
+        }
+
+        var topics = [];
+        try {
+            topics = JSON.parse(dataNode.textContent || '[]');
+        } catch (error) {
+            topics = [];
+        }
+
+        function normalizeText(value) {
+            return String(value || '').toLowerCase().trim();
+        }
+
+        function audienceClass(code) {
+            if (code === 'admin') {
+                return 'admin-help-modal__badge admin-help-modal__badge--admin';
+            }
+            if (code === 'client') {
+                return 'admin-help-modal__badge admin-help-modal__badge--client';
+            }
+            if (code === 'reseller') {
+                return 'admin-help-modal__badge admin-help-modal__badge--reseller';
+            }
+            return 'admin-help-modal__badge admin-help-modal__badge--all';
+        }
+
+        function render(items) {
+            if (!items.length) {
+                results.innerHTML = '<div class="admin-help-modal__empty"><strong>'
+                    + escapeHtml(modal.getAttribute('data-empty-title') || 'Brak wyników')
+                    + '</strong><span>'
+                    + escapeHtml(modal.getAttribute('data-empty-text') || 'Spróbuj wpisać inne słowa kluczowe.')
+                    + '</span></div>';
+                return;
+            }
+
+            results.innerHTML = items.map(function (topic) {
+                return '<article class="admin-help-modal__topic">'
+                    + '<div class="admin-help-modal__topic-meta">'
+                    + '<span class="' + audienceClass(String(topic.audience_code || 'all')) + '">'
+                    + escapeHtml(String(topic.audience_label || 'All'))
+                    + '</span>'
+                    + '</div>'
+                    + '<h3 class="admin-help-modal__question">' + escapeHtml(String(topic.question || '')) + '</h3>'
+                    + '<div class="admin-help-modal__answer">' + String(topic.answer_html || '') + '</div>'
+                    + '</article>';
+            }).join('');
+        }
+
+        function applySearch() {
+            var query = normalizeText(input.value);
+            if (!query) {
+                render(topics);
+                return;
+            }
+
+            render(topics.filter(function (topic) {
+                return normalizeText(topic.search_text || '').indexOf(query) !== -1;
+            }));
+        }
+
+        modal.addEventListener('shown.bs.modal', function () {
+            applySearch();
+            window.setTimeout(function () {
+                input.focus();
+                input.select();
+            }, 80);
+        });
+
+        modal.addEventListener('hidden.bs.modal', function () {
+            input.value = '';
+        });
+
+        input.addEventListener('input', debounce(applySearch, 90));
+        render(topics);
+    }
+
     function initWalletCustomerPickers() {
         qa('[data-admin-wallet-customer-picker]').forEach(function (picker) {
             var form = closest(picker, 'form');
@@ -515,6 +1115,496 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 event.preventDefault();
                 submitAssignment(parseInt(resultButton.getAttribute('data-customer-id') || '0', 10) || 0);
+            });
+        });
+    }
+
+    function initTopbarTools() {
+        var activeFlyout = null;
+
+        function ensureOrdersCountBadge(section) {
+            var head = section ? q('.admin-topbar-notifications__section-head', section) : null;
+            var badge = section ? q('[data-admin-topbar-orders-count]', section) : null;
+            if (badge || !head) {
+                return badge;
+            }
+
+            badge = document.createElement('span');
+            badge.className = 'admin-status-pill admin-status-pill--warning';
+            badge.setAttribute('data-admin-topbar-orders-count', '1');
+            head.appendChild(badge);
+            return badge;
+        }
+
+        function updateOrdersCount(section, delta) {
+            var badge = ensureOrdersCountBadge(section);
+            var count = badge ? parseInt(badge.textContent || '0', 10) || 0 : 0;
+            count = Math.max(0, count + delta);
+            if (!badge) {
+                return;
+            }
+            if (count <= 0) {
+                badge.remove();
+                return;
+            }
+            badge.textContent = String(count);
+        }
+
+        function renderTopbarOrderItem(order) {
+            var article = document.createElement('article');
+            article.className = 'admin-topbar-notifications__item admin-topbar-notifications__item--compact';
+            var inlineText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-order-created-text') || 'paid and is waiting for approval. Click to open') : 'paid and is waiting for approval. Click to open';
+            var openOrderText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-order-inline-text') || 'order') : 'order';
+            var openPaymentText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-inline-text') || 'payment') : 'payment';
+            var paymentJoinerText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-joiner-text') || 'or') : 'or';
+            var customerLabel = String(order.customer_email || '').trim();
+            var paymentLink = String(order.payment_url || '').trim();
+            article.innerHTML =
+                '<div class="admin-topbar-notifications__item-main">'
+                + '<p>'
+                + '<a class="admin-inline-link admin-payment-summary__email" href="/admin/?page=users&amp;customer_id=' + encodeURIComponent(String(order.customer_id || 0)) + '">'
+                + escapeHtml(customerLabel)
+                + '</a>'
+                + ' ' + escapeHtml(inlineText) + ' '
+                + '<a href="' + escapeHtml(String(order.order_url || '/admin/?page=orders')) + '">' + escapeHtml(openOrderText) + '</a>'
+                + (paymentLink !== '' ? ' <span>' + escapeHtml(paymentJoinerText) + '</span> <a href="' + escapeHtml(paymentLink) + '">' + escapeHtml(openPaymentText) + '</a>' : '')
+                + '</p>'
+                + '</div>';
+            return article;
+        }
+
+        function moveAcceptedPaymentToOrders(flyout, button, payload) {
+            var order = payload && payload.order ? payload.order : null;
+            var paymentItem = closest(button, '[data-admin-topbar-payment-item]');
+            var paymentsSection = q('[data-admin-topbar-payments-section]', flyout);
+            var ordersSection = q('[data-admin-topbar-orders-section]', flyout);
+            var paymentsList = q('[data-admin-topbar-payments-list]', paymentsSection);
+            var paymentsEmpty = q('[data-admin-topbar-payments-empty]', paymentsSection);
+            var ordersList = q('[data-admin-topbar-orders-list]', ordersSection);
+            var ordersEmpty = q('[data-admin-topbar-orders-empty]', ordersSection);
+
+            if (paymentItem) {
+                paymentItem.remove();
+            }
+
+            if (paymentsList && !q('[data-admin-topbar-payment-item]', paymentsList)) {
+                paymentsList.remove();
+                if (!paymentsEmpty && paymentsSection) {
+                    paymentsEmpty = document.createElement('div');
+                    paymentsEmpty.className = 'admin-topbar-notifications__empty';
+                    paymentsEmpty.setAttribute('data-admin-topbar-payments-empty', '1');
+                    paymentsEmpty.textContent = flyout.getAttribute('data-topbar-no-payments-text') || 'No pending payments right now.';
+                    paymentsSection.appendChild(paymentsEmpty);
+                } else if (paymentsEmpty) {
+                    paymentsEmpty.removeAttribute('hidden');
+                }
+            }
+
+            if (order && ordersSection) {
+                if (ordersEmpty) {
+                    ordersEmpty.remove();
+                }
+                if (!ordersList) {
+                    ordersList = document.createElement('div');
+                    ordersList.className = 'admin-topbar-notifications__list';
+                    ordersList.setAttribute('data-admin-topbar-orders-list', '1');
+                    ordersSection.appendChild(ordersList);
+                }
+                ordersList.insertBefore(renderTopbarOrderItem(order), ordersList.firstChild || null);
+                updateOrdersCount(ordersSection, 1);
+            }
+        }
+
+        function closeFlyout(flyout) {
+            if (!flyout) {
+                return;
+            }
+            var root = closest(flyout, '[data-admin-topbar-flyout-root]');
+            var toggle = root ? q('[data-admin-topbar-flyout-toggle]', root) : null;
+            setHidden(flyout, true);
+            if (toggle) {
+                toggle.classList.remove('is-open');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+            if (activeFlyout === flyout) {
+                activeFlyout = null;
+            }
+        }
+
+        function openFlyout(flyout) {
+            var root = closest(flyout, '[data-admin-topbar-flyout-root]');
+            var toggle = root ? q('[data-admin-topbar-flyout-toggle]', root) : null;
+            if (activeFlyout && activeFlyout !== flyout) {
+                closeFlyout(activeFlyout);
+            }
+            setHidden(flyout, false);
+            if (toggle) {
+                toggle.classList.add('is-open');
+                toggle.setAttribute('aria-expanded', 'true');
+            }
+            activeFlyout = flyout;
+        }
+
+        qa('[data-admin-topbar-flyout-root]').forEach(function (root) {
+            var toggle = q('[data-admin-topbar-flyout-toggle]', root);
+            var flyout = q('[data-admin-topbar-flyout]', root);
+            if (!toggle || !flyout) {
+                return;
+            }
+
+            toggle.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (flyout.hasAttribute('hidden')) {
+                    openFlyout(flyout);
+                } else {
+                    closeFlyout(flyout);
+                }
+            });
+
+            qa('[data-admin-topbar-flyout-close]', flyout).forEach(function (button) {
+                button.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    closeFlyout(flyout);
+                });
+            });
+
+            qa('[data-admin-topbar-expand]', flyout).forEach(function (button) {
+                button.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    var targetName = button.getAttribute('data-admin-topbar-expand') || '';
+                    var target = targetName ? q('[data-admin-topbar-expand-target="' + targetName + '"]', flyout) : null;
+                    var expanded = button.getAttribute('aria-expanded') === 'true';
+                    if (!target) {
+                        return;
+                    }
+
+                    setHidden(target, expanded);
+                    button.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+                });
+            });
+
+            qa('[data-admin-topbar-payment-submit]', flyout).forEach(function (button) {
+                button.addEventListener('click', function (event) {
+                    var form = closest(button, 'form');
+                    var confirmMessage = button.getAttribute('data-admin-confirm') || '';
+                    var hiddenButtonField = null;
+                    if (!form) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (confirmMessage && !window.confirm(confirmMessage)) {
+                        return;
+                    }
+
+                    if (button.hasAttribute('data-admin-topbar-payment-accept-ajax')) {
+                        var actionUrl = form.getAttribute('action') || window.location.href;
+                        var submitData = new URLSearchParams(new FormData(form));
+                        submitData.set('admin_payment_quick_action_ajax', '1');
+                        button.disabled = true;
+
+                        fetch(actionUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                            credentials: 'same-origin',
+                            body: submitData.toString()
+                        }).then(function (response) {
+                            return response.json().catch(function () {
+                                return { ok: false, message: 'Invalid JSON response.' };
+                            });
+                        }).then(function (payload) {
+                            button.disabled = false;
+                            if (!payload || !payload.ok) {
+                                window.alert((payload && payload.message) ? payload.message : (flyout.getAttribute('data-topbar-accept-error-text') || 'Unable to accept payment.'));
+                                return;
+                            }
+                            moveAcceptedPaymentToOrders(flyout, button, payload);
+                        }).catch(function () {
+                            button.disabled = false;
+                            window.alert(flyout.getAttribute('data-topbar-accept-error-text') || 'Unable to accept payment.');
+                        });
+                        return;
+                    }
+
+                    if (typeof form.requestSubmit === 'function') {
+                        form.requestSubmit(button);
+                        return;
+                    }
+
+                    if (button.name) {
+                        hiddenButtonField = document.createElement('input');
+                        hiddenButtonField.type = 'hidden';
+                        hiddenButtonField.name = button.name;
+                        hiddenButtonField.value = button.value;
+                        form.appendChild(hiddenButtonField);
+                    }
+
+                    form.submit();
+                });
+            });
+        });
+
+        qa('[data-admin-converter-root]').forEach(function (root) {
+            var openButton = q('[data-admin-converter-open]', root);
+            var modal = q('[data-admin-converter-modal]', root);
+            var fiatInput = q('[data-admin-converter-fiat-input]', root);
+            var assetSelect = q('[data-admin-converter-asset-select]', root);
+            var result = q('[data-admin-converter-crypto-result]', root);
+            var copyFeedback = q('[data-admin-converter-copy-feedback]', root);
+            var rateHint = q('[data-admin-converter-rate-hint]', root);
+            var assetLogo = q('[data-admin-converter-asset-logo]', root);
+            var updatedLine = q('[data-admin-converter-updated-line]', root);
+            var refreshButton = q('[data-admin-converter-refresh]', root);
+            var assets = [];
+            var assetsRaw = root.getAttribute('data-assets') || '[]';
+            var currencyCode = root.getAttribute('data-currency-code') || 'USD';
+            var csrfNode = q('input[name="_csrf"]');
+            var csrfToken = csrfNode ? String(csrfNode.value || '') : '';
+            var refreshBusy = false;
+            var copyFeedbackTimer = 0;
+            var copyValue = '';
+
+            if (!openButton || !modal || !fiatInput || !assetSelect || !result || !copyFeedback || !rateHint || !assetLogo || !updatedLine || !refreshButton) {
+                return;
+            }
+
+            try {
+                assets = JSON.parse(assetsRaw);
+            } catch (error) {
+                assets = [];
+            }
+
+            assetSelect.innerHTML = assets.map(function (item) {
+                return '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(item.code || item.name || 'Crypto') + '</option>';
+            }).join('');
+
+            function closeConverter() {
+                setHidden(modal, true);
+                hideCopyFeedback();
+            }
+
+            function openConverter() {
+                if (activeFlyout) {
+                    closeFlyout(activeFlyout);
+                }
+                setHidden(modal, false);
+                updateConverter();
+                window.setTimeout(function () {
+                    fiatInput.focus();
+                    fiatInput.select();
+                }, 20);
+            }
+
+            function renderAssetLogo(item) {
+                var text = item && item.code ? String(item.code).slice(0, 1) : 'C';
+                if (item && item.logo_url) {
+                    return '<img src="' + escapeHtml(String(item.logo_url)) + '" alt="' + escapeHtml(text) + '">';
+                }
+                return '<span>' + escapeHtml(text) + '</span>';
+            }
+
+            function renderUpdatedLine(item) {
+                if (!item || !item.code) {
+                    updatedLine.textContent = root.getAttribute('data-empty-text') || 'Choose a crypto asset to calculate the amount.';
+                    setHidden(refreshButton, true);
+                    return;
+                }
+
+                updatedLine.textContent = String(item.code) + ' rate updated: ' + String(item.rate_updated_label || '-');
+                setHidden(refreshButton, !item.is_stale);
+            }
+
+            function formatCryptoDisplay(value) {
+                var numeric = parseFloat(value || '0');
+                var label = '';
+
+                if (!isFinite(numeric) || numeric <= 0) {
+                    return '0';
+                }
+
+                label = numeric.toFixed(6).replace(/\.?0+$/, '');
+                if (label === '0') {
+                    label = numeric.toFixed(8).replace(/\.?0+$/, '');
+                }
+                return label;
+            }
+
+            function hideCopyFeedback() {
+                window.clearTimeout(copyFeedbackTimer);
+                setHidden(copyFeedback, true);
+            }
+
+            function showCopyFeedback() {
+                setHidden(copyFeedback, false);
+                window.clearTimeout(copyFeedbackTimer);
+                copyFeedbackTimer = window.setTimeout(function () {
+                    setHidden(copyFeedback, true);
+                }, 1400);
+            }
+
+            function fallbackCopyText(text) {
+                var helper = document.createElement('textarea');
+                helper.value = text;
+                helper.setAttribute('readonly', 'readonly');
+                helper.style.position = 'fixed';
+                helper.style.opacity = '0';
+                helper.style.pointerEvents = 'none';
+                document.body.appendChild(helper);
+                helper.focus();
+                helper.select();
+                try {
+                    document.execCommand('copy');
+                } catch (error) {
+                    // noop
+                }
+                document.body.removeChild(helper);
+            }
+
+            function replaceAssets(items) {
+                var previousValue = String(assetSelect.value || '');
+                assets = Array.isArray(items) ? items : [];
+                assetSelect.innerHTML = assets.map(function (item) {
+                    return '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(item.code || item.name || 'Crypto') + '</option>';
+                }).join('');
+                if (previousValue) {
+                    assetSelect.value = previousValue;
+                }
+                if (!assetSelect.value && assets.length) {
+                    assetSelect.value = String(assets[0].id);
+                }
+            }
+
+            function updateConverter() {
+                var amount = parseFloat(fiatInput.value || '0');
+                var selectedId = String(assetSelect.value || '');
+                var selectedAsset = null;
+
+                assets.forEach(function (item) {
+                    if (String(item.id) === selectedId) {
+                        selectedAsset = item;
+                    }
+                });
+
+                if (!selectedAsset) {
+                    result.textContent = '0.00000000';
+                    copyValue = '';
+                    hideCopyFeedback();
+                    rateHint.textContent = root.getAttribute('data-empty-text') || 'Choose a crypto asset to calculate the amount.';
+                    assetLogo.innerHTML = '<span>C</span>';
+                    renderUpdatedLine(null);
+                    return;
+                }
+
+                assetLogo.innerHTML = renderAssetLogo(selectedAsset);
+                renderUpdatedLine(selectedAsset);
+
+                if (!isFinite(amount) || amount <= 0 || !selectedAsset.rate || parseFloat(selectedAsset.rate) <= 0) {
+                    result.textContent = '0 ' + String(selectedAsset.code || '');
+                    copyValue = '';
+                    hideCopyFeedback();
+                    rateHint.textContent = (selectedAsset.rate_label || '') ? (selectedAsset.rate_label + ' / 1 ' + currencyCode) : '';
+                    return;
+                }
+
+                copyValue = formatCryptoDisplay(amount / parseFloat(selectedAsset.rate));
+                result.textContent = copyValue + ' ' + String(selectedAsset.code || '');
+                hideCopyFeedback();
+                rateHint.textContent = '1 ' + String(selectedAsset.code || '') + ' ≈ ' + String(selectedAsset.rate_label || '') + ' · ' + currencyCode;
+            }
+
+            openButton.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                openConverter();
+            });
+
+            qa('[data-admin-converter-close]', modal).forEach(function (button) {
+                button.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    closeConverter();
+                });
+            });
+
+            fiatInput.addEventListener('input', updateConverter);
+            assetSelect.addEventListener('change', updateConverter);
+            result.addEventListener('click', function () {
+                if (!copyValue) {
+                    return;
+                }
+
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    navigator.clipboard.writeText(copyValue).then(function () {
+                        showCopyFeedback();
+                    }).catch(function () {
+                        fallbackCopyText(copyValue);
+                        showCopyFeedback();
+                    });
+                    return;
+                }
+
+                fallbackCopyText(copyValue);
+                showCopyFeedback();
+            });
+            result.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    result.click();
+                }
+            });
+            refreshButton.addEventListener('click', function (event) {
+                event.preventDefault();
+                if (refreshBusy || refreshButton.hasAttribute('hidden')) {
+                    return;
+                }
+
+                refreshBusy = true;
+                refreshButton.disabled = true;
+                refreshButton.innerHTML = '<i class="bi bi-arrow-repeat" aria-hidden="true"></i>';
+
+                jsonFetch(window.location.href, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        admin_refresh_converter_rates_ajax: '1',
+                        currency_code: currencyCode,
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    refreshBusy = false;
+                    refreshButton.disabled = false;
+                    refreshButton.innerHTML = '<i class="bi bi-arrow-clockwise" aria-hidden="true"></i>';
+                    if (!payload || !payload.ok) {
+                        return;
+                    }
+                    replaceAssets(payload.items || []);
+                    updateConverter();
+                }).catch(function () {
+                    refreshBusy = false;
+                    refreshButton.disabled = false;
+                    refreshButton.innerHTML = '<i class="bi bi-arrow-clockwise" aria-hidden="true"></i>';
+                });
+            });
+            updateConverter();
+
+            doc.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape' && !modal.hasAttribute('hidden')) {
+                    closeConverter();
+                }
+            });
+        });
+
+        doc.addEventListener('click', function (event) {
+            if (activeFlyout && !closest(event.target, '[data-admin-topbar-flyout-root]')) {
+                closeFlyout(activeFlyout);
+            }
+
+            qa('[data-admin-converter-modal]').forEach(function (modal) {
+                if (!modal.hasAttribute('hidden') && closest(event.target, '[data-admin-topbar-converter__backdrop]')) {
+                    setHidden(modal, true);
+                }
             });
         });
     }
@@ -1188,24 +2278,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function addGroupEmail() {
             var email = groupEmailInput ? normalizeInviteIdentifier(groupEmailInput.value) : '';
+            var invalidInviteText = root.getAttribute('data-chat-group-invalid-invite') || 'Enter a valid email address or handle starting with @.';
+            var duplicateInviteText = root.getAttribute('data-chat-group-duplicate-invite') || 'This invitation is already added.';
+            var checkingUserText = root.getAttribute('data-chat-group-checking-user') || 'Checking user...';
+            var userNotFoundText = root.getAttribute('data-chat-group-user-not-found') || 'No reseller or admin account was found for this email.';
+            var invitePreparedText = root.getAttribute('data-chat-group-invite-prepared') || 'Invitation prepared. It will expire after 24 hours if not accepted.';
             if (!email) {
                 return;
             }
             if (!isValidInviteIdentifier(email)) {
-                showGroupAlert('Enter a valid email address or handle starting with @.', true);
+                showGroupAlert(invalidInviteText, true);
                 return;
             }
             if (groupEmails.indexOf(email) !== -1) {
-                showGroupAlert('This invitation is already added.', true);
+                showGroupAlert(duplicateInviteText, true);
                 return;
             }
 
             if (groupEmailRequests[email]) {
-                showGroupAlert('Checking user...', false);
+                showGroupAlert(checkingUserText, false);
                 return;
             }
 
-            showGroupAlert('Checking user...', false);
+            showGroupAlert(checkingUserText, false);
             groupEmailRequests[email] = true;
             var clearPendingGroupEmail = function () {
                 delete groupEmailRequests[email];
@@ -1221,13 +2316,13 @@ document.addEventListener('DOMContentLoaded', function () {
             }).then(function (payload) {
                 if (!payload.ok) {
                     clearPendingGroupEmail();
-                    showGroupAlert(payload.message || 'No reseller or admin account was found for this email.', true);
+                    showGroupAlert(payload.message || userNotFoundText, true);
                     return;
                 }
 
                 if (groupEmails.indexOf(String(payload.email || email).toLowerCase()) !== -1) {
                     clearPendingGroupEmail();
-                    showGroupAlert('This invitation is already added.', true);
+                    showGroupAlert(duplicateInviteText, true);
                     return;
                 }
 
@@ -1237,10 +2332,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     groupEmailInput.focus();
                 }
                 renderGroupMembers();
-                showGroupAlert('Invitation prepared. It will expire after 24 hours if not accepted.', false);
+                showGroupAlert(invitePreparedText, false);
                 clearPendingGroupEmail();
             }).catch(function () {
-                showGroupAlert('No reseller or admin account was found for this email.', true);
+                showGroupAlert(userNotFoundText, true);
                 clearPendingGroupEmail();
             });
         }
@@ -1895,6 +2990,47 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         doc.addEventListener('click', function (event) {
+            var openCustomerChat = closest(event.target, '[data-admin-chat-start-customer]');
+            if (openCustomerChat) {
+                event.preventDefault();
+                event.stopPropagation();
+                var targetCustomerId = parseInt(openCustomerChat.getAttribute('data-customer-id') || '0', 10) || 0;
+                if (!targetCustomerId) {
+                    return;
+                }
+
+                var flyout = closest(openCustomerChat, '[data-admin-topbar-flyout]');
+                if (flyout) {
+                    setHidden(flyout, true);
+                    var flyoutRoot = closest(flyout, '[data-admin-topbar-flyout-root]');
+                    var flyoutToggle = flyoutRoot ? q('[data-admin-topbar-flyout-toggle]', flyoutRoot) : null;
+                    if (flyoutToggle) {
+                        flyoutToggle.classList.remove('is-open');
+                        flyoutToggle.setAttribute('aria-expanded', 'false');
+                    }
+                }
+
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'start_conversation',
+                        participant_type: 'customer',
+                        customer_id: targetCustomerId,
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    if (!payload.ok) {
+                        showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
+                        return;
+                    }
+                    renderConversation(payload);
+                }).catch(function () {
+                    showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
+                });
+                return;
+            }
+
             var removeConversation = closest(event.target, '[data-admin-chat-remove]');
             if (removeConversation) {
                 event.preventDefault();
@@ -2150,6 +3286,13 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    initSensitiveRouteProtection();
+    initTopbarTools();
+
+    if (!hasBootstrap) {
+        return;
+    }
+
     qa('[data-bs-toggle="tooltip"]').forEach(function (element) {
         if (window.bootstrap.Tooltip) {
             new window.bootstrap.Tooltip(element);
@@ -2168,6 +3311,8 @@ document.addEventListener('DOMContentLoaded', function () {
     initProductTypeForms();
     initOrderStatusForms();
     initWalletCustomerPickers();
+    initRichTextEditors();
     initSearch();
+    initAdminHelpModal();
     initChat();
 });

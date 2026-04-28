@@ -390,7 +390,7 @@ if (!function_exists('orders_payment_available_crypto_wallet_for_asset')) {
                   {$currentCustomerFilter}
                  LEFT JOIN crypto_deposit_requests AS open_request
                    ON open_request.wallet_address_id = crypto_wallet_addresses.id
-                  AND open_request.status IN ('pending', 'awaiting_confirmation')
+                  AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                  WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                    AND crypto_wallet_addresses.disabled_at IS NULL
                    AND crypto_wallet_addresses.status IN ('available', 'assigned')
@@ -423,7 +423,7 @@ if (!function_exists('orders_payment_available_crypto_wallet_for_asset')) {
                   AND crypto_wallet_assignments.status IN ('reserved', 'active')
                  LEFT JOIN crypto_deposit_requests AS open_request
                    ON open_request.wallet_address_id = crypto_wallet_addresses.id
-                  AND open_request.status IN ('pending', 'awaiting_confirmation')
+                  AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                  WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                    AND crypto_wallet_addresses.status = 'available'
                    AND crypto_wallet_addresses.disabled_at IS NULL
@@ -598,7 +598,7 @@ if (!function_exists('orders_payment_cancel_open_crypto_requests')) {
                  cancelled_at = '{$safeNow}'
              WHERE customer_id = {$customerId}
                AND order_id = {$orderId}
-               AND status IN ('pending', 'awaiting_confirmation')"
+               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
         );
     }
 }
@@ -629,7 +629,7 @@ if (!function_exists('orders_payment_archive_expired_crypto_requests')) {
                  END
              WHERE customer_id = {$customerId}
                AND order_id = {$orderId}
-               AND status IN ('pending', 'awaiting_confirmation')
+               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                AND expires_at IS NOT NULL
                AND expires_at <= '{$safeNow}'"
         );
@@ -844,7 +844,7 @@ if (app_uses_v2_schema($db)) {
                  FROM crypto_deposit_requests
                  WHERE customer_id = " . (int)$user['id'] . "
                    AND order_id = " . (int)$selected['id'] . "
-                   AND status IN ('pending', 'awaiting_confirmation')
+                   AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                  ORDER BY id DESC
                  LIMIT 1"
             );
@@ -968,7 +968,7 @@ if (app_uses_v2_schema($db)) {
                          WHERE customer_id = " . (int)$user['id'] . "
                            AND order_id = " . (int)$selected['id'] . "
                            AND {$existingCryptoRequestWhere}
-                           AND status IN ('pending', 'awaiting_confirmation')
+                           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                          ORDER BY id DESC
                          LIMIT 1"
                     );
@@ -1207,7 +1207,7 @@ if (app_uses_v2_schema($db)) {
             $bankRequest = null;
         }
 
-        $hasActiveCryptoRequest = $cryptoRequest && in_array((string)($cryptoRequest['status'] ?? ''), ['pending', 'awaiting_confirmation'], true);
+        $hasActiveCryptoRequest = $cryptoRequest && in_array((string)($cryptoRequest['status'] ?? ''), ['pending', 'awaiting_confirmation', 'awaiting_review'], true);
         $hasActiveBankRequest = $bankRequest && in_array((string)($bankRequest['status'] ?? ''), ['pending_payment', 'awaiting_review'], true);
         $activeRequestMethod = '';
 

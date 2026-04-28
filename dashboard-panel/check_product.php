@@ -63,6 +63,7 @@ if (app_uses_v2_schema($db)) {
          WHERE products.provider_id = {$providerId}
            AND products.is_active = 1
            AND products.product_type = {$productTypeSql}
+           " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
            " . ($trialsEnabled ? '' : "AND products.is_trial = 0") . "
          ORDER BY products.duration_hours ASC, products.price_amount ASC, products.id ASC"
     );

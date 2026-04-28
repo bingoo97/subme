@@ -3,7 +3,7 @@
 	{if $news}
 	<div id="news">
 		{section name=i loop=$news}
-		<div class="news_inner col-md-12">
+		<div class="news_inner {if ($news[i].date_s > ($smarty.now - 3600*24))}active{/if} col-md-12">
 			<div class="news_title">
 				<h2>
 					<a href="/news-{$news[i].id}" title="Preview">

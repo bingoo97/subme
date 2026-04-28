@@ -119,14 +119,13 @@
                             </td>
                             <td data-label="{$t.orders_actions|default:'Actions'}" class="orders-user-table__actions-col">
                                 {if $wygrane[i].status != 1}
-                                <a href="/order-payment-{$wygrane[i].id}" class="btn btn-danger" aria-label="Pay" style="width: 40px; height: 40px;">
+                                <a href="/order-payment-{$wygrane[i].id}" class="btn btn-danger" aria-label="Pay" style="width: 40px;">
                                     <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
                                 </a>
-                                {else}
-                                <button type="button" class="btn {if $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 40px; height: 40px;">
+                                {/if}
+                                <button type="button" class="btn {if $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 40px;">
                                     <i class="fa fa-search" aria-hidden="true"></i>
                                 </button>
-                                {/if}
                             </td>
                         </tr>
                     {/section}
@@ -265,10 +264,11 @@
                                 <div role="tabpanel" class="tab-pane fade" id="orderActions{$wygrane[i].id}">
                                     <div class="user-order-modal__actions-stack">
                                         {if $can_pending_payment_actions}
+                                            <p>{$t.orders_action_payment_info|default:'Payment actions:'}</p>
                                             <a href="order-payment-{$wygrane[i].id}" class="btn btn-dark btn-lg btn-block">
                                                 <i class="fa fa-credit-card" aria-hidden="true"></i> {$t.orders_action_payment|default:'Payment'}
                                             </a>
-                                            <a href="del-order-{$wygrane[i].id}" class="btn btn-default btn-lg btn-block remove">
+                                            <a href="del-order-{$wygrane[i].id}" class="btn btn-danger btn-lg btn-block remove">
                                                 <i class="fa fa-trash" aria-hidden="true"></i> {$t.orders_action_remove|default:'Remove'}
                                             </a>
                                         {/if}

@@ -17,6 +17,7 @@ switch ($site) {
 					 WHERE products.is_active = 1
 					   AND product_providers.is_active = 1
 					   AND products.product_type = {$productTypeSql}
+					   " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
 					   " . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0")
 				);
 				$orderCatalogHasProducts = (int)($productCountRow['total'] ?? 0) > 0;
@@ -128,7 +129,12 @@ switch ($site) {
 			 
 			include('pages/profil/orders_add.php');
 			if (!empty($ordersPaymentRedirectId)) {
-				$_GET['payment'] = (int)$ordersPaymentRedirectId;
+				$ordersPaymentRedirectId = (int)$ordersPaymentRedirectId;
+				if ($ordersPaymentRedirectId > 0 && !headers_sent()) {
+					header('Location: /order-payment-' . $ordersPaymentRedirectId);
+					exit;
+				}
+				$_GET['payment'] = $ordersPaymentRedirectId;
 				unset($_POST['add_product']);
 			}
 			
@@ -158,6 +164,7 @@ switch ($site) {
 								  WHERE product_providers.is_active = 1
 									AND products.is_active = 1
 									AND products.product_type = {$productTypeSql}
+									" . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
 									" . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0") . "
 								  ORDER BY product_providers.id";
 					} else {

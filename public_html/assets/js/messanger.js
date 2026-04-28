@@ -1537,6 +1537,30 @@
 			return this.isOpen() ? this.close() : this.open();
 		},
 
+		handlePaymentCardRedirect: function (url) {
+			var targetUrl = $.trim(String(url || ''));
+			var self = this;
+
+			if (!targetUrl) {
+				return false;
+			}
+
+			this.closeGroupMenu();
+			this.closeGroupSettingsMenu();
+			this.closeGroupMembersPopover();
+			this.close();
+
+			window.setTimeout(function () {
+				window.location.assign(targetUrl);
+			}, 190);
+
+			window.setTimeout(function () {
+				self.close();
+			}, 20);
+
+			return false;
+		},
+
 		renderPayload: function (payload, options) {
 			var previousMetrics = this.getScrollMetrics();
 			var keepBottom = false;
@@ -2366,6 +2390,19 @@
 				event.preventDefault();
 				event.stopPropagation();
 				self.deleteMessage(parseInt($(this).data('messageId') || 0, 10));
+			});
+
+			$(document).on('click.messengerUi', '.chat-payment-card__button', function (event) {
+				var href = $(this).attr('href') || '';
+
+				event.preventDefault();
+				event.stopPropagation();
+
+				if (!href) {
+					return false;
+				}
+
+				return self.handlePaymentCardRedirect(href);
 			});
 
 			$(document).on('click.messengerUi', '[data-chat-conversation-tab]', function (event) {

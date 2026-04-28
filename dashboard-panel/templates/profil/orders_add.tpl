@@ -8,7 +8,7 @@
 
 					<div class="row g-3">
 									 <div class="col-auto">
-										 <img src="/img/offer.png" alt="Offer" width="50" height="50">
+										 <img src="/img/offer.png" alt="Offer" width="45" height="45">
 									 </div>
 									 <div class="col">
 										 <p class="text-muted mb-0" style="max-width: 400px;">
@@ -38,7 +38,7 @@
 							 <div class="col-lg-6">
 								 <p class="mt-4">{$t.orders_note_label|default:'Provide additional information below'}</p>
 								 <textarea class="form-control" name="note" rows="5" placeholder="{$t.orders_note_placeholder|default:'e.g. provide MAC or application name ...'}"></textarea>
-								 <p class="text-muted mt-2" id="selected_product_price_note" style="display:none;"></p>
+								 <p class="fs-2 border-red text-center strong mt-3" id="selected_product_price_note" style="display:none;"></p>
 							 </div>
 					 </div>
                      <hr />

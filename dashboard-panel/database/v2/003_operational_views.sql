@@ -140,7 +140,7 @@ INNER JOIN `crypto_assets` AS asset
   ON asset.id = request.crypto_asset_id
 INNER JOIN `crypto_wallet_addresses` AS wallet
   ON wallet.id = request.wallet_address_id
-WHERE request.status IN ('pending', 'awaiting_confirmation');
+WHERE request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review');
 
 CREATE VIEW `open_bank_transfer_requests` AS
 SELECT

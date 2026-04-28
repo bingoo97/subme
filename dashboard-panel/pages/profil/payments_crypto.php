@@ -64,7 +64,7 @@ switch ($site) {
                      END
                  WHERE customer_id = " . (int)$user['id'] . "
                    AND order_id IS NULL
-                   AND status IN ('pending', 'awaiting_confirmation')
+                   AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                    AND expires_at IS NOT NULL
                    AND expires_at <= '{$safeNow}'"
             );
@@ -96,7 +96,7 @@ switch ($site) {
                  LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
                  WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
                    AND crypto_deposit_requests.order_id IS NULL
-                   AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation')
+                   AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                    AND (crypto_deposit_requests.expires_at IS NULL OR crypto_deposit_requests.expires_at > '{$safeNow}')
                  ORDER BY crypto_deposit_requests.id DESC
                  LIMIT 1"
@@ -162,7 +162,7 @@ switch ($site) {
                  FROM crypto_deposit_requests
                  WHERE customer_id = " . (int)$user['id'] . "
                    AND order_id IS NULL
-                   AND status IN ('pending', 'awaiting_confirmation')
+                   AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                    AND (expires_at IS NULL OR expires_at > '{$safeNow}')"
             );
             $activePayment += (int)($v2ActiveRow['total'] ?? 0);
@@ -423,7 +423,7 @@ switch ($site) {
                     $expiresTimestamp = !empty($cryptoPayment['expires_at']) ? strtotime((string)$cryptoPayment['expires_at']) : 0;
                     $statusRaw = strtolower(trim((string)($cryptoPayment['status'] ?? '')));
                     $statusValue = 1;
-                    if (in_array($statusRaw, ['pending', 'awaiting_confirmation'], true) && $expiresTimestamp > $time_s) {
+                    if (in_array($statusRaw, ['pending', 'awaiting_confirmation', 'awaiting_review'], true) && $expiresTimestamp > $time_s) {
                         $statusValue = 0;
                     } elseif (in_array($statusRaw, ['confirmed', 'paid', 'completed'], true)) {
                         $statusValue = 2;

@@ -163,9 +163,12 @@
 						products.currency_id,
 						products.product_type
 					 FROM products
+					 INNER JOIN product_providers ON product_providers.id = products.provider_id
 					 WHERE products.id = {$product_id}
 					   AND products.is_active = 1
+					   AND product_providers.is_active = 1
 					   AND products.product_type = {$productTypeSql}
+					   " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
 					 LIMIT 1"
 				);
 			} else {
