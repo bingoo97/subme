@@ -8,6 +8,7 @@ admin_send_security_headers();
 admin_start_session();
 
 $db = Mysql_ks::get_instance();
+app_ensure_customer_runtime_columns($db);
 app_ensure_product_provider_runtime_columns($db);
 admin_ensure_help_topics_runtime_table($db);
 $appSettings = admin_app_settings($db);
