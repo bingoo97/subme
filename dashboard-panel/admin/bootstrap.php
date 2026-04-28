@@ -9241,6 +9241,8 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
         return [];
     }
 
+    app_ensure_customer_runtime_columns($db);
+
     $limit = max(1, min(20, $limit));
 
     $rows = $db->select_full_user(
@@ -9811,6 +9813,8 @@ function admin_chat_search_customers(Mysql_ks $db, string $query, int $limit = 8
         return [];
     }
 
+    app_ensure_customer_runtime_columns($db);
+
     $limit = max(1, min(15, $limit));
     $isHandleSearch = strpos($query, '@') === 0;
     $needle = $isHandleSearch ? chat_normalize_public_handle((string)substr($query, 1)) : strtolower($query);
@@ -10061,6 +10065,8 @@ function admin_chat_conversation_row(Mysql_ks $db, int $conversationId): ?array
     if ($conversationId <= 0 || !schema_object_exists($db, 'support_conversations')) {
         return null;
     }
+
+    app_ensure_customer_runtime_columns($db);
 
     $row = $db->select_user(
         "SELECT
@@ -12634,6 +12640,8 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
     if ($query === '' || !schema_object_exists($db, 'customers')) {
         return [];
     }
+
+    app_ensure_customer_runtime_columns($db);
 
     $limit = max(1, min(50, $limit));
     $isHandleSearch = strpos($query, '@') === 0;
