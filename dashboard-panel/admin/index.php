@@ -5836,6 +5836,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <?php echo admin_e(!empty($providerRow['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_disabled', 'Disabled')); ?>
                                                                             </span>
                                                                         </div>
+                                                                        <?php if ($providerDashboardUrl !== ''): ?>
+                                                                            <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="admin-inline-link small" target="_blank" rel="noopener noreferrer">
+                                                                                <?php echo admin_e($providerDashboardUrl); ?>
+                                                                            </a>
+                                                                        <?php endif; ?>
                                                                         <?php if ($providerDescriptionPreview !== ''): ?>
                                                                             <span class="text-body-secondary small"><?php echo admin_e($providerDescriptionPreview); ?></span>
                                                                         <?php endif; ?>
