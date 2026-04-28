@@ -604,13 +604,16 @@ if ($action === 'create_group') {
     $emailsJson = (string)($_POST['participant_emails_json'] ?? '[]');
     $emails = json_decode($emailsJson, true);
     $emails = is_array($emails) ? $emails : [];
+    $requestedRetention = trim((string)($_POST['retention_hours'] ?? ''));
+    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : (int)$requestedRetention;
     $result = chat_create_group_conversation(
         $db,
         ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
         trim((string)($_POST['group_name'] ?? '')),
         $emails,
         false,
-        is_array($settings ?? null) ? $settings : []
+        is_array($settings ?? null) ? $settings : [],
+        $retentionHours
     );
 
     if (empty($result['ok'])) {

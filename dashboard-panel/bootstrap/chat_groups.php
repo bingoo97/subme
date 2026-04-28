@@ -1060,6 +1060,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 support_conversation_members.participant_type,
                 support_conversation_members.customer_id,
                 support_conversation_members.admin_user_id,
+                support_conversation_members.email_notifications_enabled,
                 customers.email AS customer_email,
                 customers.public_handle AS customer_public_handle,
                 customers.avatar_url AS customer_avatar_url,
@@ -1095,9 +1096,12 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     'customer_id' => 0,
                     'admin_user_id' => (int)($row['admin_user_id'] ?? 0),
                     'label' => chat_admin_display_label($adminRow),
+                    'email' => (string)($row['admin_email'] ?? ''),
+                    'public_handle' => (string)($row['admin_public_handle'] ?? ''),
                     'avatar_url' => $avatar['avatar_url'],
                     'avatar_text' => $avatar['avatar_text'],
                     'avatar_theme' => $avatar['avatar_theme'],
+                    'email_notifications_enabled' => (int)($row['email_notifications_enabled'] ?? 1) !== 0,
                     'presence_key' => (string)(chat_admin_presence_payload((string)($row['admin_last_login_at'] ?? ''))['key'] ?? 'offline'),
                 ];
                 continue;
@@ -1114,9 +1118,12 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 'customer_id' => (int)($row['customer_id'] ?? 0),
                 'admin_user_id' => 0,
                 'label' => chat_customer_display_label_from_row($customerRow),
+                'email' => (string)($row['customer_email'] ?? ''),
+                'public_handle' => (string)($row['customer_public_handle'] ?? ''),
                 'avatar_url' => $avatar['avatar_url'],
                 'avatar_text' => $avatar['avatar_text'],
                 'avatar_theme' => $avatar['avatar_theme'],
+                'email_notifications_enabled' => (int)($row['email_notifications_enabled'] ?? 1) !== 0,
                 'presence_key' => (string)(chat_customer_presence_payload($db, (int)($row['customer_id'] ?? 0), (string)($row['customer_last_login_at'] ?? ''))['key'] ?? 'offline'),
             ];
         }
@@ -1276,7 +1283,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         string $groupName,
         array $inviteEmails,
         bool $readOnly = false,
-        array $settings = []
+        array $settings = [],
+        ?int $retentionHours = null
     ): array {
         chat_ensure_group_chat_runtime($db);
         chat_expire_stale_group_invites($db);
@@ -1358,9 +1366,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return ['ok' => false, 'message' => 'Group name can be up to 20 characters.'];
         }
 
+        $normalizedRetentionHours = chat_group_normalize_retention_hours($retentionHours);
+        if ($retentionHours !== null && $retentionHours > 0 && $normalizedRetentionHours === null) {
+            return ['ok' => false, 'message' => 'Invalid auto-delete value.'];
+        }
+
         $currentTime = chat_current_datetime();
         $inserted = $db->insert(
-            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'status', 'priority', 'created_at', 'updated_at'],
+            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'message_retention_hours', 'status', 'priority', 'created_at', 'updated_at'],
             [
                 'group_chat',
                 $creatorCustomerId > 0 ? $creatorCustomerId : null,
@@ -1370,6 +1383,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 $readOnly ? 1 : 0,
                 $creatorCustomerId > 0 ? $creatorCustomerId : null,
                 $creatorAdminUserId > 0 ? $creatorAdminUserId : null,
+                $normalizedRetentionHours,
                 'open',
                 'normal',
                 $currentTime,
@@ -1447,6 +1461,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             'ok' => true,
             'conversation_id' => $conversationId,
             'title' => $groupName,
+            'retention_hours' => $normalizedRetentionHours,
         ];
     }
 

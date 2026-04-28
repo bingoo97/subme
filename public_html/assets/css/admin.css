@@ -1380,7 +1380,7 @@ body.admin-login-page{
     font-weight:800;
 }
 
-.admin-chat-inbox__search-item span{
+.admin-chat-inbox__search-copy span{
     display:block;
     color:#7c8496;
     font-size:.78rem;
@@ -1505,6 +1505,40 @@ body.admin-login-page{
     min-width:0;
 }
 
+.admin-chat-inbox__avatar-wrap{
+    position:relative;
+    flex:0 0 auto;
+}
+
+.admin-chat-inbox__avatar-wrap--sm{
+    width:38px;
+    height:38px;
+}
+
+.admin-chat-inbox__avatar-presence{
+    position:absolute;
+    top:-2px;
+    right:-2px;
+    z-index:2;
+    display:inline-flex;
+}
+
+.admin-chat-inbox__avatar-presence .admin-chat-presence{
+    box-shadow:0 0 0 2px rgba(255,255,255,.95);
+}
+
+.admin-chat-inbox__avatar-presence--sm{
+    top:-1px;
+    right:-1px;
+}
+
+.admin-chat-inbox__item-title-copy{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:.12rem;
+}
+
 .admin-chat-inbox__conversation-title-wrap a{
     text-decoration: none;
     color: #000;
@@ -1546,6 +1580,15 @@ body.admin-login-page{
     overflow:hidden;
     text-overflow:ellipsis;
     white-space:nowrap;
+}
+
+.admin-chat-inbox__item-handle,
+.admin-chat-inbox__conversation-handle{
+    display:block;
+    color:#7c8496;
+    font-size:.78rem;
+    font-weight:700;
+    line-height:1.2;
 }
 
 .admin-chat-inbox__item-head > span{
@@ -1662,6 +1705,27 @@ body.admin-login-page{
     color:#16181d;
 }
 
+.admin-chat-inbox__conversation-title-meta{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:.15rem;
+}
+
+.admin-chat-inbox__conversation-title-meta .admin-chat-inbox__conversation-title{
+    max-width:20ch;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.admin-chat-inbox__conversation-badge{
+    font-size:.7rem;
+    font-weight:700;
+    line-height:1.2;
+}
+
 .admin-chat-inbox__header-action{
     width:38px;
     height:38px;
@@ -1715,6 +1779,102 @@ body.admin-login-page{
 
 .admin-chat-inbox__conversation-body::-webkit-scrollbar{
     display:none;
+}
+
+.admin-chat-inbox__conversation-meta{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    padding:.75rem .95rem;
+    border-top:1px solid #eef1f7;
+    border-bottom:1px solid #eef1f7;
+    background:#fff;
+}
+
+.admin-chat-inbox__conversation-meta-main{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:.45rem;
+    position:relative;
+}
+
+.admin-chat-inbox__conversation-meta-count{
+    font-size:.76rem;
+    font-weight:700;
+    color:#6b7280;
+}
+
+.admin-chat-inbox__conversation-members-toggle{
+    display:inline-flex;
+    align-items:center;
+    padding:0;
+    border:0;
+    background:transparent;
+}
+
+.admin-chat-inbox__conversation-members-popover{
+    position:absolute;
+    top:calc(100% + .35rem);
+    left:0;
+    z-index:6;
+    min-width:min(320px, calc(100vw - 2rem));
+    padding:.65rem;
+    border:1px solid #e5e7eb;
+    border-radius:14px;
+    background:#fff;
+    box-shadow:0 18px 44px rgba(15, 23, 42, 0.14);
+}
+
+.admin-chat-inbox__conversation-members{
+    display:flex;
+    flex-wrap:wrap;
+    gap:.4rem;
+}
+
+.admin-chat-inbox__conversation-member{
+    display:inline-flex;
+    align-items:center;
+    padding:.22rem .55rem;
+    border-radius:999px;
+    background:#f3f5fb;
+    color:#0d6efd;
+    font-size:.74rem;
+    font-weight:700;
+    text-decoration:none;
+}
+
+.admin-chat-inbox__conversation-member--static{
+    color:#4b5563;
+}
+
+.admin-chat-inbox__conversation-meta-toggle{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    font-size:.8rem;
+    color:#374151;
+}
+
+.admin-chat-inbox__conversation-meta-field{
+    display:inline-flex;
+    align-items:center;
+    gap:.5rem;
+    font-size:.8rem;
+    color:#374151;
+}
+
+.admin-chat-conversation__retention-hint{
+    display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	padding:0 2px;
+	color:#9aa1ad;
+	font-size:10px;
+	font-weight:500;
+	line-height:1.35;
+	letter-spacing:.01em;
 }
 
 .admin-chat-inbox__composer{
@@ -1952,6 +2112,7 @@ body.admin-login-page{
 
 .admin-chat-conversation__delete{
     margin-left:auto;
+    font-size:11px;
     width:22px;
     height:22px;
     display:inline-flex;
@@ -1960,7 +2121,7 @@ body.admin-login-page{
     border:0;
     border-radius:999px;
     background:transparent;
-    color:#98a2b3;
+    color:#F44336;
 }
 
 .admin-chat-conversation__delete:hover,
@@ -2009,6 +2170,63 @@ body.admin-login-page{
     gap:.65rem;
 }
 
+.admin-chat-group-modal__search-results{
+    margin-top:.55rem;
+    display:flex;
+    flex-direction:column;
+    gap:.35rem;
+    max-height:180px;
+    overflow-y:auto;
+}
+
+.admin-chat-group-modal__search-item{
+    width:100%;
+    display:flex;
+    align-items:center;
+    gap:.7rem;
+    padding:.55rem .7rem;
+    border:1px solid #e3e8f2;
+    border-radius:14px;
+    background:#fff;
+    color:#111317;
+    text-align:left;
+}
+
+.admin-chat-group-modal__search-item:hover,
+.admin-chat-group-modal__search-item:focus{
+    border-color:#111317;
+    background:#f8fafc;
+}
+
+.admin-chat-group-modal__search-copy{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:.12rem;
+}
+
+.admin-chat-group-modal__search-copy strong,
+.admin-chat-group-modal__search-copy span{
+    max-width:100%;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.admin-chat-group-modal__search-copy span{
+    color:#667085;
+    font-size:.74rem;
+}
+
+.admin-chat-group-modal__search-empty{
+    padding:.7rem .8rem;
+    border:1px dashed #d0d7e4;
+    border-radius:14px;
+    color:#667085;
+    font-size:.78rem;
+    background:#f8fafc;
+}
+
 .admin-chat-group-modal__hint{
     display:block;
     margin-top:.45rem;
@@ -2048,6 +2266,13 @@ body.admin-login-page{
     color:#4b5565;
     font-size:.8rem;
     font-weight:700;
+}
+
+@media (max-width: 720px){
+    .admin-chat-inbox__conversation-meta{
+        flex-direction:column;
+        align-items:stretch;
+    }
 }
 
 .admin-chat-inbox__quick-dialog{
@@ -5911,6 +6136,16 @@ body.admin-login-page .alert.alert-danger::before{
     margin:0;
     color:#6b7280;
     font-weight:600;
+}
+
+.admin-search-empty small{
+    display:block;
+    margin-top:.6rem;
+    color:#6b7280;
+}
+
+.admin-search-empty__action{
+    margin-top:.85rem;
 }
 
 .admin-search-section + .admin-search-section{

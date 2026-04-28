@@ -22,7 +22,7 @@ $currentLocale = isset($_SESSION['admin_locale']) ? admin_normalize_locale((stri
 $messages = admin_load_messages($currentLocale);
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
-$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'quick_create_customer'];
+$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $mutatingActions, true) && !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
     http_response_code(419);
@@ -63,7 +63,8 @@ if ($action === 'validate_group_email') {
     $validation = chat_validate_group_invitee_email(
         $db,
         (string)($_POST['email'] ?? $_GET['email'] ?? ''),
-        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => (int)$adminUser['id']]
+        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => (int)$adminUser['id']],
+        $conversationId
     );
     echo json_encode($validation);
     exit;
@@ -72,12 +73,15 @@ if ($action === 'validate_group_email') {
 if ($action === 'create_group') {
     $emails = json_decode((string)($_POST['participant_emails_json'] ?? '[]'), true);
     $emails = is_array($emails) ? $emails : [];
+    $requestedRetention = trim((string)($_POST['retention_hours'] ?? ''));
+    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : (int)$requestedRetention;
     $result = admin_chat_create_group_conversation(
         $db,
         (int)$adminUser['id'],
         trim((string)($_POST['group_name'] ?? '')),
         $emails,
-        !empty($_POST['is_group_read_only'])
+        !empty($_POST['is_group_read_only']),
+        $retentionHours
     );
     if (empty($result['ok'])) {
         http_response_code(422);
@@ -86,6 +90,22 @@ if ($action === 'create_group') {
     }
 
     $conversationId = (int)($result['conversation_id'] ?? 0);
+}
+
+if ($action === 'invite_group_members') {
+    $emails = json_decode((string)($_POST['participant_emails_json'] ?? '[]'), true);
+    $emails = is_array($emails) ? $emails : [];
+    $result = admin_chat_invite_group_members(
+        $db,
+        $conversationId,
+        (int)$adminUser['id'],
+        $emails
+    );
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to invite members to the group.')]);
+        exit;
+    }
 }
 
 if ($action === 'quick_create_customer') {
@@ -319,6 +339,9 @@ $conversationRow = $db->select_user(
         support_conversations.subject,
         support_conversations.group_name,
         support_conversations.is_group_read_only,
+        support_conversations.group_created_by_customer_id,
+        support_conversations.group_created_by_admin_user_id,
+        support_conversations.message_retention_hours,
         support_conversations.created_at,
         support_conversations.updated_at,
         customers.email AS customer_email,
@@ -454,6 +477,17 @@ if ($action === 'toggle_group_read_only') {
     }
 }
 
+if ($action === 'set_group_retention') {
+    $requestedRetention = trim((string)($_POST['retention_hours'] ?? $_GET['retention_hours'] ?? ''));
+    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : (int)$requestedRetention;
+    $result = admin_chat_set_group_retention($db, $conversationId, (int)$adminUser['id'], $retentionHours);
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to update auto-delete settings.')]);
+        exit;
+    }
+}
+
 if ($action === 'send_quick_reply') {
     $quickReplyId = isset($_POST['quick_reply_id']) ? (int)$_POST['quick_reply_id'] : 0;
     $sendReply = admin_chat_quick_reply_find($db, $quickReplyId);
@@ -553,11 +587,29 @@ if ($action === 'create_bank_payment_request') {
     }
 }
 
+if ($action === 'set_group_email_notifications') {
+    $enabled = (string)($_POST['enabled'] ?? $_GET['enabled'] ?? '1') !== '0';
+    $result = admin_chat_set_group_email_notifications($db, $conversationId, (int)$adminUser['id'], $enabled);
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to update email notifications.')]);
+        exit;
+    }
+}
+
 $messageRows = admin_chat_conversation_messages($db, $conversationId);
 $quickReplies = admin_chat_quick_reply_rows_for_locale($db, (string)($conversationRow['customer_locale_code'] ?? ''), true);
 $pendingCryptoPayment = false;
+$groupMemberSettings = null;
+$groupMemberSummaries = [];
+$groupMemberCountLabel = '';
 if (!empty($conversationRow['customer_id'])) {
     $pendingCryptoPayment = admin_customer_has_pending_crypto_payment($db, (int)$conversationRow['customer_id']);
+}
+if ($conversationType === 'group_chat') {
+    $groupMemberSettings = chat_group_member_row($db, $conversationId, chat_participant_key_for_admin((int)$adminUser['id']));
+    $groupMemberSummaries = chat_group_member_summaries($db, $conversationId, ['accepted']);
+    $groupMemberCountLabel = chat_group_member_count_label($db, $conversationId, ['accepted']);
 }
 
 echo json_encode([
@@ -565,7 +617,33 @@ echo json_encode([
     'conversation_id' => $conversationId,
     'customer_id' => (int)($conversationRow['customer_id'] ?? 0),
     'conversation_type' => $conversationType,
+    'customer_public_handle' => (string)($conversationRow['customer_public_handle'] ?? ''),
     'is_group_read_only' => !empty($conversationRow['is_group_read_only']),
+    'retention_hours' => chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null),
+    'email_notifications_enabled' => $conversationType === 'group_chat'
+        ? chat_group_member_email_notifications_enabled(is_array($groupMemberSettings) ? $groupMemberSettings : [])
+        : true,
+    'can_manage_group' => $conversationType === 'group_chat'
+        ? chat_group_can_admin_manage((array)$conversationRow, (int)($adminUser['id'] ?? 0))
+        : false,
+    'member_count_label' => $groupMemberCountLabel,
+    'members' => array_map(static function (array $member): array {
+        $participantType = (string)($member['participant_type'] ?? '');
+        $customerId = (int)($member['customer_id'] ?? 0);
+        $publicHandle = trim((string)($member['public_handle'] ?? ''));
+        $email = trim((string)($member['email'] ?? ''));
+        $displayLabel = $publicHandle !== '' ? '@' . $publicHandle : (trim((string)($member['label'] ?? '')) !== '' ? (string)$member['label'] : $email);
+
+        return [
+            'participant_type' => $participantType,
+            'customer_id' => $customerId,
+            'admin_user_id' => (int)($member['admin_user_id'] ?? 0),
+            'display_label' => $displayLabel,
+            'email' => $email,
+            'public_handle' => $publicHandle,
+            'profile_url' => $participantType === 'customer' && $customerId > 0 ? '/admin/?page=users&customer_id=' . $customerId : '',
+        ];
+    }, $groupMemberSummaries),
     'title' => $conversationTitle,
     'presence' => $presence,
     'avatar_html' => $avatarHtml,

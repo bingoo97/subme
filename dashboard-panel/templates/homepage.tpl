@@ -14,7 +14,6 @@
 	</div>
 </div>
 {include file='alert.tpl'}
-{include file='profil/group_chat_invites.tpl'}
 <div class="home_buttons">
 	<div class="col-md-12">
 		<a href="/news" title="{$t.home_welcome_news}">

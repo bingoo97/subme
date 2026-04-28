@@ -44,7 +44,7 @@
                         window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel = '{$t.group_chat_direct_email_label|default:"Add reseller by email"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel = '{$t.group_chat_add_by_email|default:"Add participant by email"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectHint = '{$t.group_chat_direct_hint|default:"Add one reseller email to start a direct conversation right away."|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupGroupHint = '{$t.group_chat_invite_expiry_note|default:"Each invitation is valid for 24 hours. If nobody accepts it in time, it is removed automatically."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupGroupHint = '{$t.group_chat_invite_expiry_note|default:"You can already see this conversation in your inbox. If you do not want to stay in it, you can reject the invite."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectLimit = '{$t.group_chat_direct_limit|default:"Direct conversation allows only one reseller."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder = '{$t.group_chat_read_only_placeholder|default:"This group is read only."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateError = '{$t.group_chat_create_error|default:"Unable to create the group chat."|escape:'javascript'}';
@@ -113,6 +113,16 @@
                                     </div>
                                     <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email resellera lub wpisz @nick, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
                                 </div>
+                                <label class="messenger-group-field" id="messenger_group_retention_field" style="display:none;">
+                                    <span>{$t.group_chat_retention_label|default:'Auto-usuwanie'}</span>
+                                    <select class="form-control" id="messenger_group_retention_create">
+                                        <option value="0">{$t.group_chat_retention_off|default:'Wyłączone'}</option>
+                                        <option value="1">1h</option>
+                                        <option value="6">6h</option>
+                                        <option value="12">12h</option>
+                                        <option value="24">24h</option>
+                                    </select>
+                                </label>
                                 <div class="messenger-group-members" id="messenger_group_members"></div>
                                 <div class="messenger-group-actions">
                                     <button type="button" class="btn btn-dark btn-block" data-messenger-group-submit id="messenger_group_submit_label">{$t.group_chat_create_submit|default:'Create group'}</button>

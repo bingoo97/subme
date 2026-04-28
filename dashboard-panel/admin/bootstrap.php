@@ -9240,6 +9240,7 @@ function admin_chat_inbox_unread_count(array $rows): int
 function admin_ensure_chat_quick_replies_runtime_table(Mysql_ks $db): void
 {
     static $done = false;
+    $tableCreated = false;
     if ($done) {
         return;
     }
@@ -9261,6 +9262,7 @@ function admin_ensure_chat_quick_replies_runtime_table(Mysql_ks $db): void
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
         unset($GLOBALS['schema_object_exists_cache']['support_quick_replies']);
+        $tableCreated = true;
     }
 
     if (schema_object_exists($db, 'support_quick_replies') && !schema_column_exists($db, 'support_quick_replies', 'locale_code')) {
@@ -9268,7 +9270,7 @@ function admin_ensure_chat_quick_replies_runtime_table(Mysql_ks $db): void
         schema_forget_column_cache('support_quick_replies', 'locale_code');
     }
 
-    if (schema_object_exists($db, 'support_quick_replies')) {
+    if ($tableCreated && schema_object_exists($db, 'support_quick_replies')) {
         $seedRows = [
             ['locale_code' => 'en', 'title' => 'Payment instructions', 'message_body' => "Please open the payment page in your account and follow the instructions shown there.\n\nIf you send a bank transfer or crypto payment from an external wallet or app, make sure the full amount reaches our account or wallet.", 'sort_order' => 10],
             ['locale_code' => 'pl', 'title' => 'Instrukcja płatności', 'message_body' => "Otwórz proszę stronę płatności w swoim koncie i postępuj zgodnie z widoczną instrukcją.\n\nJeśli wysyłasz przelew lub krypto z zewnętrznego portfela albo aplikacji, upewnij się, że pełna kwota dotrze do naszego konta lub portfela.", 'sort_order' => 10],
@@ -9281,19 +9283,6 @@ function admin_ensure_chat_quick_replies_runtime_table(Mysql_ks $db): void
         ];
 
         foreach ($seedRows as $seedRow) {
-            $safeTitle = $db->escape((string)$seedRow['title']);
-            $safeLocaleCode = $db->escape((string)$seedRow['locale_code']);
-            $existing = $db->select_user(
-                "SELECT id
-                 FROM support_quick_replies
-                 WHERE title = '{$safeTitle}'
-                   AND locale_code = '{$safeLocaleCode}'
-                 LIMIT 1"
-            );
-            if (is_array($existing) && !empty($existing['id'])) {
-                continue;
-            }
-
             $db->insert(
                 ['locale_code', 'title', 'message_body', 'is_active', 'sort_order'],
                 [(string)$seedRow['locale_code'], (string)$seedRow['title'], (string)$seedRow['message_body'], 1, (int)$seedRow['sort_order']],
@@ -9982,6 +9971,9 @@ function admin_chat_conversation_row(Mysql_ks $db, int $conversationId): ?array
             support_conversations.subject,
             support_conversations.group_name,
             support_conversations.is_group_read_only,
+            support_conversations.group_created_by_customer_id,
+            support_conversations.group_created_by_admin_user_id,
+            support_conversations.message_retention_hours,
             support_conversations.created_at,
             support_conversations.updated_at,
             customers.email AS customer_email,
@@ -10073,7 +10065,17 @@ function admin_find_or_create_chat_conversation(Mysql_ks $db, int $customerId, i
     );
 
     if (is_array($row) && !empty($row['id'])) {
-        return (int)$row['id'];
+        $conversationId = (int)$row['id'];
+        $assignedAdminIdSql = $adminUserId > 0 ? (string)$adminUserId : 'NULL';
+        @$db->query(
+            "UPDATE support_conversations
+             SET status = 'open',
+                 assigned_admin_id = COALESCE({$assignedAdminIdSql}, assigned_admin_id),
+                 updated_at = '" . $db->escape(date('Y-m-d H:i:s')) . "'
+             WHERE id = {$conversationId}
+             LIMIT 1"
+        );
+        return $conversationId;
     }
 
     $subject = 'Customer live chat #' . $customerId;
@@ -10091,14 +10093,26 @@ function admin_chat_group_pending_invites(Mysql_ks $db, int $adminUserId): array
     return chat_admin_group_pending_invites($db, $adminUserId);
 }
 
-function admin_chat_create_group_conversation(Mysql_ks $db, int $adminUserId, string $groupName, array $emails, bool $readOnly = false): array
+function admin_chat_create_group_conversation(Mysql_ks $db, int $adminUserId, string $groupName, array $emails, bool $readOnly = false, ?int $retentionHours = null): array
 {
     return chat_create_group_conversation(
         $db,
         ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
         $groupName,
         $emails,
-        $readOnly
+        $readOnly,
+        [],
+        $retentionHours
+    );
+}
+
+function admin_chat_invite_group_members(Mysql_ks $db, int $conversationId, int $adminUserId, array $emails): array
+{
+    return chat_invite_members_to_group_conversation(
+        $db,
+        $conversationId,
+        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
+        $emails
     );
 }
 
@@ -10111,6 +10125,36 @@ function admin_chat_toggle_group_read_only(Mysql_ks $db, int $conversationId, in
 
     $db->update_using_id(['is_group_read_only'], [$readOnly ? 1 : 0], 'support_conversations', $conversationId);
     return ['ok' => true];
+}
+
+function admin_chat_set_group_retention(Mysql_ks $db, int $conversationId, int $adminUserId, ?int $retentionHours): array
+{
+    $conversation = chat_group_accessible_for_admin($db, $adminUserId, $conversationId);
+    if (!$conversation) {
+        return ['ok' => false, 'message' => 'Group conversation not found.'];
+    }
+
+    return chat_update_group_retention_hours(
+        $db,
+        $conversationId,
+        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
+        $retentionHours
+    );
+}
+
+function admin_chat_set_group_email_notifications(Mysql_ks $db, int $conversationId, int $adminUserId, bool $enabled): array
+{
+    $conversation = chat_group_accessible_for_admin($db, $adminUserId, $conversationId);
+    if (!$conversation) {
+        return ['ok' => false, 'message' => 'Group conversation not found.'];
+    }
+
+    return chat_update_group_member_email_notifications(
+        $db,
+        $conversationId,
+        chat_participant_key_for_admin($adminUserId),
+        $enabled
+    );
 }
 
 function admin_chat_payment_modal_data(Mysql_ks $db, string $type, int $customerId, array $messages = []): array
@@ -10705,10 +10749,20 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
 function admin_render_chat_conversation_html(array $conversationRow, array $messageRows, array $messages): string
 {
     $isGroupConversation = (string)($conversationRow['conversation_type'] ?? '') === 'group_chat';
+    $retentionHours = $isGroupConversation ? chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null) : null;
     ob_start();
     ?>
     <div class="admin-chat-conversation" data-admin-chat-conversation data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>">
         <div class="admin-chat-conversation__messages">
+            <?php if ($isGroupConversation): ?>
+                <div class="admin-chat-conversation__retention-hint">
+                    <?php if ($retentionHours !== null): ?>
+                        <?php echo admin_e(str_replace('{hours}', (string)$retentionHours, admin_t($messages, 'group_chat_retention_hint_after', 'Auto-delete after {hours}h'))); ?>
+                    <?php else: ?>
+                        <?php echo admin_e(admin_t($messages, 'group_chat_retention_hint_off', 'Auto-delete disabled')); ?>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
             <?php if (!$messageRows): ?>
                 <div class="admin-chat-conversation__empty">
                     <?php echo admin_e(admin_t($messages, 'chat_conversation_empty', 'No messages in this conversation yet.')); ?>
@@ -10735,12 +10789,10 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     $senderBadgeLabel = '';
                     $senderBadgeClass = '';
                     if ($isGroupConversation) {
-                        $senderBadgeLabel = $isCustomer
-                            ? admin_t($messages, 'chat_group_sender_reseller_badge', 'Reseller')
-                            : admin_t($messages, 'chat_group_sender_admin_badge', 'Admin');
-                        $senderBadgeClass = $isCustomer
-                            ? 'admin-chat-conversation__sender-badge--reseller'
-                            : 'admin-chat-conversation__sender-badge--admin';
+                        if (!$isCustomer) {
+                            $senderBadgeLabel = admin_t($messages, 'chat_group_sender_admin_badge', 'Admin');
+                            $senderBadgeClass = 'admin-chat-conversation__sender-badge--admin';
+                        }
                     }
                     $isRead = (int)($messageRow['is_read'] ?? 0) === 1;
                     $receiptClass = $isRead ? 'is-read' : 'is-pending';
@@ -12601,6 +12653,10 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
     $customers = isset($resultSets['customers']) && is_array($resultSets['customers']) ? $resultSets['customers'] : [];
     $wallets = isset($resultSets['wallets']) && is_array($resultSets['wallets']) ? $resultSets['wallets'] : [];
     $hasResults = $orders || $customers || $wallets;
+    $normalizedQuery = strtolower(trim($query));
+    $canQuickCreateCustomer = $normalizedQuery !== '' && filter_var($normalizedQuery, FILTER_VALIDATE_EMAIL);
+    $quickCreateLabel = admin_e(admin_t($messages, 'search_quick_create_customer', 'Add this email as a new user'));
+    $quickCreateHint = admin_e(admin_t($messages, 'search_quick_create_customer_hint', 'The email is valid and does not exist in the database yet.'));
 
     ob_start();
     ?>
@@ -12613,6 +12669,13 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
             <div class="admin-search-empty">
                 <strong><?php echo $emptyTitle; ?></strong>
                 <p><?php echo $emptyText; ?></p>
+                <?php if ($canQuickCreateCustomer): ?>
+                    <button type="button" class="btn btn-dark admin-search-empty__action" data-admin-search-create-user data-email="<?php echo admin_e($normalizedQuery); ?>">
+                        <i class="bi bi-person-plus" aria-hidden="true"></i>
+                        <span><?php echo $quickCreateLabel; ?></span>
+                    </button>
+                    <small><?php echo $quickCreateHint; ?></small>
+                <?php endif; ?>
             </div>
         <?php else: ?>
             <?php if ($customers): ?>

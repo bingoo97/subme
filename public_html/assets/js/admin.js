@@ -868,6 +868,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var loadingText = input.getAttribute('data-loading-text') || 'Loading results...';
         var errorTitle = input.getAttribute('data-error-title') || 'Search error';
         var errorText = input.getAttribute('data-error-text') || 'Unable to load search results right now.';
+        var csrfToken = input.getAttribute('data-csrf-token') || '';
         var requestIndex = 0;
 
         function resetSearch() {
@@ -927,6 +928,45 @@ document.addEventListener('DOMContentLoaded', function () {
                 input.focus();
             });
         }
+
+        results.addEventListener('click', function (event) {
+            var createButton = closest(event.target, '[data-admin-search-create-user]');
+            if (!createButton) {
+                return;
+            }
+
+            var email = String(createButton.getAttribute('data-email') || '').trim();
+            if (!email) {
+                return;
+            }
+
+            createButton.disabled = true;
+
+            jsonFetch(searchUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: toQuery({
+                    action: 'create_customer',
+                    email: email,
+                    _csrf: csrfToken
+                })
+            }).then(function (payload) {
+                if (!payload || !payload.ok) {
+                    createButton.disabled = false;
+                    return;
+                }
+
+                if (payload.customer_id) {
+                    window.location.href = '/admin/?page=users&customer_id=' + encodeURIComponent(String(payload.customer_id));
+                    return;
+                }
+
+                createButton.disabled = false;
+                runSearch();
+            }).catch(function () {
+                createButton.disabled = false;
+            });
+        });
     }
 
     function initAdminHelpModal() {
@@ -2070,9 +2110,19 @@ document.addEventListener('DOMContentLoaded', function () {
         var searchResults = q('[data-admin-chat-search-results]', root);
         var body = q('[data-admin-chat-conversation-body]', root);
         var title = q('[data-admin-chat-conversation-title]', root);
+        var conversationHandle = q('[data-admin-chat-conversation-handle]', root);
         var conversationAvatar = q('[data-admin-chat-conversation-avatar]', root);
         var status = q('[data-admin-chat-conversation-status]', root);
         var conversationBadge = q('[data-admin-chat-conversation-badge]', root);
+        var conversationMeta = q('[data-admin-chat-conversation-meta]', root);
+        var conversationMembersCount = q('[data-admin-chat-members-count]', root);
+        var conversationMembersToggle = q('[data-admin-chat-members-toggle]', root);
+        var conversationMembersPopover = q('[data-admin-chat-members-popover]', root);
+        var conversationMembersList = q('[data-admin-chat-members-list]', root);
+        var emailNotificationsToggle = q('[data-admin-chat-email-notifications-toggle]', root);
+        var retentionInlineSelect = q('[data-admin-chat-retention-select-inline]', root);
+        var retentionInlineLabel = retentionInlineSelect ? closest(retentionInlineSelect, 'label') : null;
+        var groupRetentionSelect = retentionInlineSelect;
         var composerAlert = q('[data-admin-chat-alert]', root);
         var composerInput = q('[data-admin-chat-input]', root);
         var composerPreview = q('[data-admin-chat-link-preview]', root);
@@ -2093,8 +2143,20 @@ document.addEventListener('DOMContentLoaded', function () {
         var groupAlert = q('[data-admin-chat-group-alert]', root);
         var groupNameInput = q('[data-admin-chat-group-name]', root);
         var groupEmailInput = q('[data-admin-chat-group-email]', root);
+        var groupSearchResults = q('[data-admin-chat-group-search-results]', root);
         var groupMembers = q('[data-admin-chat-group-members]', root);
         var groupReadonlyInput = q('[data-admin-chat-group-readonly]', root);
+        var groupRetentionCreateInput = q('[data-admin-chat-group-retention-create]', root);
+        var groupModalTitle = groupModal ? q('.admin-chat-inbox__quick-header strong', groupModal) : null;
+        var groupModalIntro = groupModal ? q('.admin-chat-inbox__quick-header p', groupModal) : null;
+        var groupSubmitButton = q('[data-admin-chat-group-submit]', root);
+        var groupNameLabel = groupNameInput ? closest(groupNameInput, 'label') : null;
+        var groupReadonlyLabel = groupReadonlyInput ? closest(groupReadonlyInput, 'label') : null;
+        var groupRetentionCreateLabel = groupRetentionCreateInput ? closest(groupRetentionCreateInput, 'label') : null;
+        var groupInviteOpenButton = q('[data-admin-chat-group-invite-open]', root);
+        var groupSettingsOpenButton = q('[data-admin-chat-group-settings-open]', root);
+        var groupSettingsModal = q('[data-admin-chat-group-settings-modal]', root);
+        var groupSettingsAlert = q('[data-admin-chat-group-settings-alert]', root);
         var createCustomerModal = q('[data-admin-chat-create-customer-modal]', root);
         var createCustomerAlert = q('[data-admin-chat-create-customer-alert]', root);
         var createCustomerEmailInput = q('[data-admin-chat-create-customer-email]', root);
@@ -2107,7 +2169,11 @@ document.addEventListener('DOMContentLoaded', function () {
         var groupInvitesWrap = q('[data-admin-chat-group-invites]', root);
         var groupEmails = [];
         var groupEmailRequests = {};
+        var groupMode = 'create';
         var groupModalWasOpenBeforeCreate = false;
+        var groupModalDefaultTitle = groupModalTitle ? groupModalTitle.textContent : 'Create group';
+        var groupModalDefaultIntro = groupModalIntro ? groupModalIntro.textContent : 'Add reseller or admin email, or start typing a handle with @, to create a compact group chat.';
+        var groupModalDefaultSubmit = groupSubmitButton ? groupSubmitButton.textContent : 'Create group';
         var linkPreviewUrl = '';
         var linkPreviewData = null;
         var linkPreviewDismissedUrl = '';
@@ -2153,6 +2219,34 @@ document.addEventListener('DOMContentLoaded', function () {
             setHidden(composerAlert, !message);
         }
 
+        function renderConversationMembers(items) {
+            if (!conversationMembersList) {
+                return;
+            }
+            if (!Array.isArray(items) || !items.length) {
+                conversationMembersList.innerHTML = '';
+                return;
+            }
+
+            conversationMembersList.innerHTML = items.map(function (item) {
+                var label = escapeHtml(item.display_label || item.email || '');
+                var titleText = escapeHtml(item.email || item.display_label || '');
+                if (item.profile_url) {
+                    return '<a class="admin-chat-inbox__conversation-member" href="' + escapeHtml(item.profile_url) + '" title="' + titleText + '">' + label + '</a>';
+                }
+                return '<span class="admin-chat-inbox__conversation-member admin-chat-inbox__conversation-member--static" title="' + titleText + '">' + label + '</span>';
+            }).join('');
+        }
+
+        function closeMembersPopover() {
+            if (conversationMembersPopover) {
+                setHidden(conversationMembersPopover, true);
+            }
+            if (conversationMembersToggle) {
+                conversationMembersToggle.setAttribute('aria-expanded', 'false');
+            }
+        }
+
         function showGroupAlert(message, isError) {
             if (!groupAlert) {
                 return;
@@ -2161,6 +2255,18 @@ document.addEventListener('DOMContentLoaded', function () {
             groupAlert.classList.toggle('alert-danger', !!isError);
             groupAlert.classList.toggle('alert-success', !isError && !!message);
             setHidden(groupAlert, !message);
+        }
+
+        function setGroupSearchResultsHtml(html, forceVisible) {
+            if (!groupSearchResults) {
+                return;
+            }
+            groupSearchResults.innerHTML = html || '';
+            setHidden(groupSearchResults, forceVisible ? false : !html);
+        }
+
+        function hideGroupSearchResults() {
+            setGroupSearchResultsHtml('', false);
         }
 
         function showCreateCustomerAlert(message, isError) {
@@ -2758,6 +2864,40 @@ document.addEventListener('DOMContentLoaded', function () {
             }).join('');
         }
 
+        function syncGroupModalMode() {
+            var isInviteMode = groupMode === 'invite';
+
+            if (groupModalTitle) {
+                groupModalTitle.textContent = isInviteMode
+                    ? (root.getAttribute('data-chat-group-invite-members-title') || 'Add members')
+                    : groupModalDefaultTitle;
+            }
+
+            if (groupModalIntro) {
+                groupModalIntro.textContent = isInviteMode
+                    ? (root.getAttribute('data-chat-group-invite-members-intro') || 'Add reseller or admin email, or start typing a handle with @, to invite more people to this group.')
+                    : groupModalDefaultIntro;
+            }
+
+            if (groupSubmitButton) {
+                groupSubmitButton.textContent = isInviteMode
+                    ? (root.getAttribute('data-chat-group-invite-members-submit') || 'Send invitations')
+                    : groupModalDefaultSubmit;
+            }
+
+            if (groupNameLabel) {
+                setHidden(groupNameLabel, isInviteMode);
+            }
+
+            if (groupReadonlyLabel) {
+                setHidden(groupReadonlyLabel, isInviteMode);
+            }
+
+            if (groupRetentionCreateLabel) {
+                setHidden(groupRetentionCreateLabel, isInviteMode);
+            }
+        }
+
         function normalizeInviteIdentifier(value) {
             var normalized = String(value || '').trim().toLowerCase();
 
@@ -2783,6 +2923,7 @@ document.addEventListener('DOMContentLoaded', function () {
         function resetGroupModal() {
             groupEmails = [];
             groupEmailRequests = {};
+            groupMode = 'create';
             if (groupNameInput) {
                 groupNameInput.value = '';
             }
@@ -2792,8 +2933,28 @@ document.addEventListener('DOMContentLoaded', function () {
             if (groupReadonlyInput) {
                 groupReadonlyInput.checked = false;
             }
+            if (groupRetentionCreateInput) {
+                groupRetentionCreateInput.value = '0';
+            }
+            syncGroupModalMode();
+            hideGroupSearchResults();
             renderGroupMembers();
             showGroupAlert('', false);
+        }
+
+        function showGroupSettingsAlert(message, isError) {
+            if (!groupSettingsAlert) {
+                return;
+            }
+            if (!message) {
+                setHidden(groupSettingsAlert, true);
+                groupSettingsAlert.textContent = '';
+                groupSettingsAlert.classList.remove('is-error');
+                return;
+            }
+            groupSettingsAlert.textContent = message;
+            groupSettingsAlert.classList.toggle('is-error', !!isError);
+            setHidden(groupSettingsAlert, false);
         }
 
         function resetCreateCustomerModal() {
@@ -2820,9 +2981,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
             closeCreateCustomerModal();
+            syncGroupModalMode();
             setHidden(groupModal, false);
             window.setTimeout(function () {
-                if (groupNameInput) {
+                if (groupMode === 'invite' && groupEmailInput) {
+                    groupEmailInput.focus();
+                } else if (groupNameInput) {
                     groupNameInput.focus();
                 }
             }, 20);
@@ -2834,6 +2998,27 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             setHidden(groupModal, true);
             resetGroupModal();
+        }
+
+        function openGroupSettingsModal() {
+            if (!groupSettingsModal || activeConversationType !== 'group_chat') {
+                return;
+            }
+            showGroupSettingsAlert('', false);
+            setHidden(groupSettingsModal, false);
+            window.setTimeout(function () {
+                if (groupRetentionSelect) {
+                    groupRetentionSelect.focus();
+                }
+            }, 20);
+        }
+
+        function closeGroupSettingsModal() {
+            if (!groupSettingsModal) {
+                return;
+            }
+            setHidden(groupSettingsModal, true);
+            showGroupSettingsAlert('', false);
         }
 
         function openCreateCustomerModal() {
@@ -2944,8 +3129,8 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        function addGroupEmail() {
-            var email = groupEmailInput ? normalizeInviteIdentifier(groupEmailInput.value) : '';
+        function addGroupEmail(explicitIdentifier) {
+            var email = normalizeInviteIdentifier(typeof explicitIdentifier === 'string' ? explicitIdentifier : (groupEmailInput ? groupEmailInput.value : ''));
             var invalidInviteText = root.getAttribute('data-chat-group-invalid-invite') || 'Enter a valid email address or handle starting with @.';
             var duplicateInviteText = root.getAttribute('data-chat-group-duplicate-invite') || 'This invitation is already added.';
             var checkingUserText = root.getAttribute('data-chat-group-checking-user') || 'Checking user...';
@@ -2956,10 +3141,12 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             if (!isValidInviteIdentifier(email)) {
                 showGroupAlert(invalidInviteText, true);
+                hideGroupSearchResults();
                 return;
             }
             if (groupEmails.indexOf(email) !== -1) {
                 showGroupAlert(duplicateInviteText, true);
+                hideGroupSearchResults();
                 return;
             }
 
@@ -2979,6 +3166,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 body: toQuery({
                     action: 'validate_group_email',
                     email: email,
+                    conversation_id: groupMode === 'invite' ? activeConversationId : 0,
                     _csrf: csrfToken
                 })
             }).then(function (payload) {
@@ -2999,6 +3187,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     groupEmailInput.value = '';
                     groupEmailInput.focus();
                 }
+                hideGroupSearchResults();
                 renderGroupMembers();
                 showGroupAlert(invitePreparedText, false);
                 clearPendingGroupEmail();
@@ -3213,14 +3402,42 @@ document.addEventListener('DOMContentLoaded', function () {
             if (composerInput) {
                 composerInput.value = '';
             }
+            if (conversationHandle) {
+                conversationHandle.textContent = '';
+                setHidden(conversationHandle, true);
+            }
             if (readonlyToggle) {
                 setHidden(readonlyToggle, true);
             }
             if (leaveGroupButton) {
                 setHidden(leaveGroupButton, true);
             }
+            if (groupInviteOpenButton) {
+                setHidden(groupInviteOpenButton, true);
+            }
+            if (groupSettingsOpenButton) {
+                setHidden(groupSettingsOpenButton, true);
+            }
+            if (conversationMeta) {
+                setHidden(conversationMeta, true);
+            }
+            if (conversationMembersCount) {
+                conversationMembersCount.textContent = '';
+            }
+            renderConversationMembers([]);
+            if (emailNotificationsToggle) {
+                emailNotificationsToggle.checked = true;
+            }
+            if (retentionInlineSelect) {
+                retentionInlineSelect.value = '0';
+            }
+            if (retentionInlineLabel) {
+                setHidden(retentionInlineLabel, true);
+            }
+            closeMembersPopover();
             resetLinkPreview();
             closeQuickModal();
+            closeGroupSettingsModal();
             closeAllPaymentModals();
             syncPaymentHeaderActions(null);
         }
@@ -3254,6 +3471,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 title.textContent = payload.title || title.textContent;
                 title.setAttribute('href', activeConversationType === 'live_chat' && activeCustomerId > 0 ? '/admin/?page=live-chat&user_id=' + activeCustomerId : '#');
             }
+            if (conversationHandle) {
+                var handleText = '';
+                if (activeConversationType === 'live_chat' && payload.customer_public_handle) {
+                    handleText = '@' + String(payload.customer_public_handle);
+                }
+                conversationHandle.textContent = handleText;
+                setHidden(conversationHandle, handleText === '');
+            }
             if (conversationAvatar) {
                 conversationAvatar.innerHTML = payload.avatar_html || renderAvatarMarkup({ avatar_text: 'S', avatar_theme: 'theme-6' }, 'admin-chat-inbox__avatar--sm');
             }
@@ -3273,6 +3498,33 @@ document.addEventListener('DOMContentLoaded', function () {
             if (leaveGroupButton) {
                 setHidden(leaveGroupButton, activeConversationType !== 'group_chat');
             }
+            if (groupInviteOpenButton) {
+                setHidden(groupInviteOpenButton, !(activeConversationType === 'group_chat' && !!payload.can_manage_group));
+            }
+            if (groupSettingsOpenButton) {
+                setHidden(groupSettingsOpenButton, activeConversationType !== 'group_chat');
+            }
+            if (groupRetentionSelect) {
+                groupRetentionSelect.value = payload.retention_hours ? String(payload.retention_hours) : '0';
+            }
+            if (conversationMeta) {
+                setHidden(conversationMeta, activeConversationType !== 'group_chat');
+            }
+            if (conversationMembersCount) {
+                conversationMembersCount.textContent = payload.member_count_label || '';
+            }
+            renderConversationMembers(Array.isArray(payload.members) ? payload.members : []);
+            if (emailNotificationsToggle) {
+                emailNotificationsToggle.checked = payload.email_notifications_enabled !== false;
+            }
+            if (retentionInlineSelect) {
+                retentionInlineSelect.value = payload.retention_hours ? String(payload.retention_hours) : '0';
+                retentionInlineSelect.disabled = !(activeConversationType === 'group_chat' && !!payload.can_manage_group);
+            }
+            if (retentionInlineLabel) {
+                setHidden(retentionInlineLabel, !(activeConversationType === 'group_chat' && !!payload.can_manage_group));
+            }
+            closeMembersPopover();
             if (composerInput) {
                 composerInput.value = '';
             }
@@ -3430,7 +3682,32 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (q('[data-admin-chat-group-open]', root)) {
             q('[data-admin-chat-group-open]', root).addEventListener('click', function () {
+                groupMode = 'create';
                 openGroupModal();
+            });
+        }
+
+        if (groupInviteOpenButton) {
+            groupInviteOpenButton.addEventListener('click', function () {
+                groupMode = 'invite';
+                openGroupModal();
+            });
+        }
+
+        if (groupSettingsOpenButton) {
+            groupSettingsOpenButton.addEventListener('click', function () {
+                openGroupSettingsModal();
+            });
+        }
+
+        if (conversationMembersToggle) {
+            conversationMembersToggle.addEventListener('click', function () {
+                if (!conversationMembersPopover || conversationMeta && conversationMeta.hasAttribute('hidden')) {
+                    return;
+                }
+                var isHidden = conversationMembersPopover.hasAttribute('hidden');
+                setHidden(conversationMembersPopover, !isHidden ? true : false);
+                conversationMembersToggle.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
             });
         }
 
@@ -3443,6 +3720,12 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-admin-chat-group-close]', root).forEach(function (button) {
             button.addEventListener('click', function () {
                 closeGroupModal();
+            });
+        });
+
+        qa('[data-admin-chat-group-settings-close]', root).forEach(function (button) {
+            button.addEventListener('click', function () {
+                closeGroupSettingsModal();
             });
         });
 
@@ -3584,11 +3867,60 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         if (groupEmailInput) {
+            var runGroupInviteSearch = debounce(function () {
+                var query = groupEmailInput.value.trim();
+                var searchError = root.getAttribute('data-chat-search-error') || 'Search failed.';
+                var searchEmpty = root.getAttribute('data-chat-search-empty') || 'No users found.';
+
+                if (query.length < 2) {
+                    hideGroupSearchResults();
+                    return;
+                }
+
+                jsonFetch(chatUrl + '?' + toQuery({ action: 'search_users', q: query })).then(function (payload) {
+                    var items;
+
+                    if (!payload || !payload.ok) {
+                        setGroupSearchResultsHtml('<div class="admin-chat-group-modal__search-empty">' + escapeHtml(searchError) + '</div>', true);
+                        return;
+                    }
+
+                    items = (Array.isArray(payload.items) ? payload.items : []).filter(function (item) {
+                        var identifier = String(item && item.email ? item.email : '').toLowerCase();
+                        return identifier && groupEmails.indexOf(identifier) === -1;
+                    });
+
+                    if (!items.length) {
+                        setGroupSearchResultsHtml('<div class="admin-chat-group-modal__search-empty">' + escapeHtml(searchEmpty) + '</div>', true);
+                        return;
+                    }
+
+                    setGroupSearchResultsHtml(items.map(function (item) {
+                        return '' +
+                            '<button type="button" class="admin-chat-group-modal__search-item" data-admin-chat-group-search-item data-invite-email="' + escapeHtml(item.email || '') + '">' +
+                                renderAvatarMarkup(item) +
+                                '<span class="admin-chat-group-modal__search-copy">' +
+                                    '<strong>' + escapeHtml(item.display_name || item.email || '') + '</strong>' +
+                                    '<span>' + escapeHtml(item.meta_label || item.email || '') + '</span>' +
+                                '</span>' +
+                            '</button>';
+                    }).join(''), true);
+                }).catch(function () {
+                    setGroupSearchResultsHtml('<div class="admin-chat-group-modal__search-empty">' + escapeHtml(searchError) + '</div>', true);
+                });
+            }, 220);
+
+            groupEmailInput.addEventListener('input', runGroupInviteSearch);
             groupEmailInput.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') {
                     event.preventDefault();
                     addGroupEmail();
                 }
+            });
+            groupEmailInput.addEventListener('blur', function () {
+                window.setTimeout(function () {
+                    hideGroupSearchResults();
+                }, 160);
             });
         }
 
@@ -3610,21 +3942,35 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
-        if (q('[data-admin-chat-group-submit]', root)) {
-            q('[data-admin-chat-group-submit]', root).addEventListener('click', function () {
+        if (groupSubmitButton) {
+            groupSubmitButton.addEventListener('click', function () {
+                var requestAction = groupMode === 'invite' ? 'invite_group_members' : 'create_group';
                 jsonFetch(chatUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
                     body: toQuery({
-                        action: 'create_group',
+                        action: requestAction,
+                        conversation_id: groupMode === 'invite' ? activeConversationId : 0,
                         group_name: groupNameInput ? groupNameInput.value.trim() : '',
                         participant_emails_json: JSON.stringify(groupEmails),
                         is_group_read_only: groupReadonlyInput && groupReadonlyInput.checked ? 1 : 0,
+                        retention_hours: groupRetentionCreateInput ? groupRetentionCreateInput.value : '0',
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
                     if (!payload.ok) {
-                        showGroupAlert(payload.message || root.getAttribute('data-chat-group-create-error') || 'Unable to create the group chat.', true);
+                        showGroupAlert(payload.message || (groupMode === 'invite'
+                            ? (root.getAttribute('data-chat-group-invite-error') || 'Unable to invite members to the group.')
+                            : (root.getAttribute('data-chat-group-create-error') || 'Unable to create the group chat.')), true);
+                        return;
+                    }
+                    if (groupMode === 'invite') {
+                        var invitedConversationId = activeConversationId;
+                        closeGroupModal();
+                        if (invitedConversationId) {
+                            fetchConversation(invitedConversationId);
+                        }
+                        showComposerAlert(root.getAttribute('data-chat-group-invite-members-success') || 'Invitations were sent successfully.', false);
                         return;
                     }
                     closeGroupModal();
@@ -3632,7 +3978,95 @@ document.addEventListener('DOMContentLoaded', function () {
                         fetchConversation(payload.conversation_id);
                     }
                 }).catch(function () {
-                    showGroupAlert(root.getAttribute('data-chat-group-create-error') || 'Unable to create the group chat.', true);
+                    showGroupAlert(groupMode === 'invite'
+                        ? (root.getAttribute('data-chat-group-invite-error') || 'Unable to invite members to the group.')
+                        : (root.getAttribute('data-chat-group-create-error') || 'Unable to create the group chat.'), true);
+                });
+            });
+        }
+
+        if (groupRetentionSelect) {
+            groupRetentionSelect.addEventListener('change', function () {
+                if (!activeConversationId || activeConversationType !== 'group_chat') {
+                    return;
+                }
+
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'set_group_retention',
+                        conversation_id: activeConversationId,
+                        retention_hours: groupRetentionSelect.value || '0',
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    if (!payload.ok) {
+                        showGroupSettingsAlert(payload.message || (root.getAttribute('data-chat-group-retention-save-error') || 'Unable to update auto-delete settings.'), true);
+                        return;
+                    }
+                    showGroupSettingsAlert(payload.message || '', false);
+                    renderConversation(payload);
+                }).catch(function () {
+                    showGroupSettingsAlert(root.getAttribute('data-chat-group-retention-save-error') || 'Unable to update auto-delete settings.', true);
+                });
+            });
+        }
+
+        if (emailNotificationsToggle) {
+            emailNotificationsToggle.addEventListener('change', function () {
+                if (!activeConversationId || activeConversationType !== 'group_chat') {
+                    return;
+                }
+
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'set_group_email_notifications',
+                        conversation_id: activeConversationId,
+                        enabled: emailNotificationsToggle.checked ? '1' : '0',
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    if (!payload.ok) {
+                        emailNotificationsToggle.checked = !emailNotificationsToggle.checked;
+                        showComposerAlert(payload.message || 'Unable to update email notifications.', true);
+                        return;
+                    }
+                    showComposerAlert('', false);
+                    renderConversation(payload);
+                }).catch(function () {
+                    emailNotificationsToggle.checked = !emailNotificationsToggle.checked;
+                    showComposerAlert('Unable to update email notifications.', true);
+                });
+            });
+        }
+
+        if (retentionInlineSelect) {
+            retentionInlineSelect.addEventListener('change', function () {
+                if (!activeConversationId || activeConversationType !== 'group_chat') {
+                    return;
+                }
+
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'set_group_retention',
+                        conversation_id: activeConversationId,
+                        retention_hours: retentionInlineSelect.value || '0',
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    if (!payload.ok) {
+                        showComposerAlert(payload.message || (root.getAttribute('data-chat-group-retention-save-error') || 'Unable to update auto-delete settings.'), true);
+                        return;
+                    }
+                    showComposerAlert('', false);
+                    renderConversation(payload);
+                }).catch(function () {
+                    showComposerAlert(root.getAttribute('data-chat-group-retention-save-error') || 'Unable to update auto-delete settings.', true);
                 });
             });
         }
@@ -3825,6 +4259,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
                 });
+                return;
+            }
+
+            var groupSearchResult = closest(event.target, '[data-admin-chat-group-search-item]');
+            if (groupSearchResult) {
+                addGroupEmail(groupSearchResult.getAttribute('data-invite-email') || '');
                 return;
             }
 
@@ -4171,6 +4611,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     fetchConversation(itemConversationId);
                 }
                 return;
+            }
+
+            if (conversationMembersPopover && !conversationMembersPopover.hasAttribute('hidden')) {
+                if (!closest(event.target, '[data-admin-chat-members-toggle]') && !closest(event.target, '[data-admin-chat-members-popover]')) {
+                    closeMembersPopover();
+                }
             }
 
             if (panel && !panel.hasAttribute('hidden')) {

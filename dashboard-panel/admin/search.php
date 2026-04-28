@@ -23,6 +23,33 @@ if ($adminUser === null) {
 
 $currentLocale = isset($_SESSION['admin_locale']) ? admin_normalize_locale((string)$_SESSION['admin_locale']) : 'pl';
 $messages = admin_load_messages($currentLocale);
+$action = trim((string)($_GET['action'] ?? $_POST['action'] ?? ''));
+
+if ($action === 'create_customer') {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => 'Invalid request.',
+        ]);
+        exit;
+    }
+
+    $email = trim((string)($_POST['email'] ?? ''));
+    $settings = admin_app_settings($db);
+    $clientIp = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+    $result = admin_create_customer_from_email($db, $email, $settings, $clientIp);
+
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode($result);
+        exit;
+    }
+
+    echo json_encode($result);
+    exit;
+}
+
 $query = trim((string)($_GET['q'] ?? ''));
 
 if ($query === '' || (!ctype_digit($query) && strlen($query) < 2)) {

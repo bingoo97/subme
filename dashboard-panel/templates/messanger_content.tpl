@@ -1,5 +1,8 @@
 {if $user.logged}
 	<div id="content_chat_profil" data-chat-last-id="{$chat_last_message_id|default:0}" data-chat-oldest-id="{$chat_oldest_message_id|default:0}" data-chat-message-limit="{$chat_message_limit|default:10}" data-chat-loaded-message-count="{$chat_loaded_message_count|default:0}" data-chat-total-message-count="{$chat_total_message_count|default:0}" data-chat-has-more-messages="{if $chat_has_more_messages|default:false}1{else}0{/if}" data-chat-active-conversation-id="{$chat_active_conversation_id|default:0}" data-chat-active-conversation-type="{$chat_active_conversation_type|default:'live_chat'}" data-chat-active-conversation-title="{$chat_active_conversation_title|default:''|escape:'html'}" data-chat-can-send="{if $chat_active_conversation_can_send|default:true}1{else}0{/if}" data-chat-can-manage-group="{if $chat_active_conversation_can_manage|default:false}1{else}0{/if}">
+        <div class="messenger-group-invites-slot" data-group-chat-invites-slot>
+            {include file='profil/group_chat_invites.tpl'}
+        </div>
         {if $user.customer_type|default:'client' eq 'reseller' && isset($chat_conversations) && $chat_conversations|@count gt 0}
         <div class="admin-chat-inbox__list-view messenger-inbox__list-view" data-chat-list-view>
             <div class="admin-chat-inbox__list">

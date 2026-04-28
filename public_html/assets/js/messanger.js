@@ -218,6 +218,14 @@
 			return $('#messenger_group_hint');
 		},
 
+		groupRetentionField: function () {
+			return $('#messenger_group_retention_field');
+		},
+
+		groupRetentionCreate: function () {
+			return $('#messenger_group_retention_create');
+		},
+
 		emailNotificationsToggle: function () {
 			return $('[data-chat-email-notifications-toggle]');
 		},
@@ -1139,9 +1147,11 @@
 			this.groupHint().text(isGroupKind
 				? (window.MESSENGER_BOOTSTRAP.groupGroupHint || 'Each invitation is valid for 24 hours. If nobody accepts it in time, it is removed automatically.')
 				: (window.MESSENGER_BOOTSTRAP.groupDirectHint || 'Add one reseller email to start a direct conversation right away.'));
+			this.groupRetentionField().toggle(isGroupKind);
 
 			if (!isGroupKind) {
 				this.groupNameInput().val('');
+				this.groupRetentionCreate().val('0');
 				if (this.groupEmails.length > 1) {
 					this.groupEmails = this.groupEmails.slice(0, 1);
 					this.renderGroupMembers();
@@ -1159,6 +1169,8 @@
 			this.groupEmailInput().val('');
 			this.groupModeSwitch().show();
 			this.groupNameField().show();
+			this.groupRetentionField().hide();
+			this.groupRetentionCreate().val('0');
 			this.groupContextField().hide();
 			this.groupContextTitle().text('');
 			this.renderGroupMembers();
@@ -1180,6 +1192,7 @@
 			if (this.groupModalMode === 'invite') {
 				this.groupModeSwitch().hide();
 				this.groupNameField().hide();
+				this.groupRetentionField().hide();
 				this.groupContextField().show();
 				this.groupContextLabel().text(window.MESSENGER_BOOTSTRAP.groupInviteNameLabel || 'Group');
 				this.groupContextTitle().text(String(targetOptions.title || this.activeConversationTitle || 'Group chat'));
@@ -1329,8 +1342,14 @@
 
 		updateHomeInvites: function (html) {
 			var markup = $.trim(String(html || ''));
+			var $slot = $('[data-group-chat-invites-slot]').first();
 			var $existing = $('#group_chat_invites_home');
 			var $balance = $('.balance').first();
+
+			if ($slot.length) {
+				$slot.html(markup);
+				return;
+			}
 
 			if ($existing.length) {
 				if (markup) {
@@ -2044,6 +2063,7 @@
 					group_name: groupName,
 					conversation_id: this.groupModalMode === 'invite' ? this.groupTargetConversationId : 0,
 					participant_emails_json: JSON.stringify(this.groupEmails),
+					retention_hours: this.groupModalMode === 'invite' ? '0' : (this.groupRetentionCreate().val() || '0'),
 					_csrf: cfg.csrfToken
 				}
 			}).done(function (payload) {
