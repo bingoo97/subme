@@ -88,9 +88,9 @@ if ($adminUser === null) {
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
-        <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
-        <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/css/admin.css'); ?>">
+        <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
+        <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
+        <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo admin_public_asset_version('assets/css/admin.css'); ?>">
     </head>
     <body class="admin-login-page">
         <main class="admin-login-shell">
@@ -369,9 +369,9 @@ if ($sensitiveRouteLocked) {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?php echo admin_e($unlockLabel); ?></title>
-        <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
-        <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
-        <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/css/admin.css'); ?>">
+        <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
+        <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
+        <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo admin_public_asset_version('assets/css/admin.css'); ?>">
     </head>
     <body class="admin-app-page"
         data-admin-sensitive-gate="1"
@@ -392,8 +392,8 @@ if ($sensitiveRouteLocked) {
                 </div>
             </div>
         </div>
-        <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
-        <script src="/assets/js/admin.js?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/js/admin.js'); ?>"></script>
+        <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
+        <script src="/assets/js/admin.js?v=<?php echo admin_public_asset_version('assets/js/admin.js'); ?>"></script>
     </body>
     </html>
     <?php
@@ -2961,8 +2961,8 @@ if ($route === 'payments') {
 }
 
 $navigation = admin_navigation_config($appSettings, $adminUser);
-$assetVersion = admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/css/admin.css');
-$scriptVersion = admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/js/admin.js');
+$assetVersion = admin_public_asset_version('assets/css/admin.css');
+$scriptVersion = admin_public_asset_version('assets/js/admin.js');
 $metrics = admin_dashboard_metrics($db);
 $dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
 $dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
@@ -3185,8 +3185,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
-    <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
+    <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
+    <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
     <link rel="stylesheet" href="/assets/css/font-awesome.min.css">
     <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo $assetVersion; ?>">
 </head>
@@ -10111,7 +10111,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
     <script type="application/json" id="adminHelpTopicsData"><?php echo $adminHelpModalTopicsJson; ?></script>
 
-    <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_asset_version(dirname(__DIR__, 2) . '/public_html/assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
+    <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
 </body>
 </html>

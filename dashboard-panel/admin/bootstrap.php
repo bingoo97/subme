@@ -1078,6 +1078,12 @@ function admin_asset_version(string $absolutePath): int
     return is_file($absolutePath) ? (int)filemtime($absolutePath) : 1;
 }
 
+function admin_public_asset_version(string $relativePath): int
+{
+    $relativePath = ltrim($relativePath, '/');
+    return admin_asset_version(app_public_path($relativePath));
+}
+
 function admin_dashboard_metrics(Mysql_ks $db): array
 {
     $metrics = [
