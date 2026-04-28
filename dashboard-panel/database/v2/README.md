@@ -6,6 +6,7 @@ Important operational rule:
 
 - runtime data lives in MySQL
 - schema source of truth lives here in `dashboard-panel/database/v2/`
+- incremental production migrations live in `dashboard-panel/database/migrations/`
 - admin SQL backups and phpMyAdmin exports are restore snapshots only, not schema authority
 - if PHP runtime code adds a temporary `ALTER TABLE` or `CREATE TABLE` compatibility helper, the same change must also be written here in the same commit
 
@@ -100,6 +101,20 @@ The new core also supports optional manual bank transfer payments:
   - old schema to new schema mapping reference
 - `ADMIN_SQL_SNIPPETS.md`
   - example SQL for manual wallet and bank account insert, assignment, payment creation, approval, and release workflows
+- `../migrations/`
+  - incremental SQL updates for existing deployed databases
+
+## Production update rule
+
+If you change the schema for a running installation:
+
+1. update the canonical definition in `v2/`
+2. add a matching SQL migration in `dashboard-panel/database/migrations/`
+3. deploy PHP code only together with a safe migration plan
+
+See also:
+
+- `dashboard-panel/database/MIGRATIONS.md`
 
 ## Suggested setup
 

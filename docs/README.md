@@ -32,6 +32,10 @@ Najwazniejsze pliki:
 
 Kazda zmiana tabel, kolumn, indeksow lub widokow musi byc zapisana w tym katalogu.
 
+Dodatkowo dla juz istniejacych baz produkcyjnych trzymamy przyrostowe migracje tutaj:
+
+- `dashboard-panel/database/migrations/`
+
 ### 3. Jeden panel, jedna baza, jedna glowna instancja
 
 Aktualny kierunek projektu:
@@ -95,11 +99,20 @@ Backup SQL sluzy tylko do archiwizacji i awaryjnego restore.
 Kazda zmiana DB powinna isc w tej kolejnosci:
 
 1. najpierw zmiana w `dashboard-panel/database/v2/`
-2. potem zmiana w PHP
-3. jesli trzeba, tymczasowy helper zgodnosci runtime
-4. aktualizacja dokumentacji w `docs/`, jesli zmiana jest operacyjnie wazna
+2. potem nowy plik w `dashboard-panel/database/migrations/`, jesli zmiana ma wejsc na istniejacy serwer
+3. potem zmiana w PHP
+4. jesli trzeba, tymczasowy helper zgodnosci runtime
+5. aktualizacja dokumentacji w `docs/`, jesli zmiana jest operacyjnie wazna
 
 ## Aktualny deploy
+
+Najwazniejsze:
+
+- `~/app` w starszych przykladach bylo tylko przykladem
+- prawdziwa sciezka repo na serwerze musi istniec i zawierac `.git`
+- w aktualnym skrypcie domyslny `REPO_DIR` to:
+  - `~/subme`
+- jesli chcesz uzyc innej nazwy katalogu, najpierw sklonuj tam repo i dopiero potem ustaw `REPO_DIR`
 
 ### Lokalnie
 
@@ -112,11 +125,42 @@ git push origin main
 
 ### Na serwerze
 
+Jesli repo jest w domyslnym katalogu:
+
 ```bash
-cd ~/app
+cd ~/subme
 git pull --ff-only origin main
+chmod +x ~/subme/docs/namecheap-*.sh
+SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/subme APP_URL=https://panel.twojadomena.pl ~/subme/docs/namecheap-deploy.sh
+```
+
+Jesli repo ma byc w innym katalogu, np. `~/app`, najpierw musisz je tam sklonowac:
+
+```bash
+cd ~
+git clone <URL-REPO> app
+cd ~/app
+git checkout main
 chmod +x ~/app/docs/namecheap-*.sh
 SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/app APP_URL=https://panel.twojadomena.pl ~/app/docs/namecheap-deploy.sh
+```
+
+Nie zadziala:
+
+- `cd ~/app`, jesli taki katalog nie istnieje
+- `git pull`, jesli nie jestes w katalogu repo
+- `~/app/docs/namecheap-deploy.sh`, jesli repo nie zostalo tam sklonowane
+
+Skrypt deployu wymaga:
+
+- istniejacego katalogu repo z `.git`
+- istniejacego `WEB_DIR`
+- poprawnego `mysql.php` w `~/.subme-secrets/<app-slug>/mysql.php`
+
+Jesli `WEB_DIR` jeszcze nie istnieje, utworz go przed pierwszym deployem:
+
+```bash
+mkdir -p ~/panel-webroot
 ```
 
 Repo nie musi nazywac sie `subme`. W skryptach wazne sa:
@@ -142,6 +186,27 @@ Ten skrypt bierze tylko:
 Backup z panelu admina sluzy tylko do restore konkretnego snapshotu:
 
 - `docs/namecheap-import-db.sh`
+
+Migracje przyrostowe dla istniejacych baz sa opisane tutaj:
+
+- `dashboard-panel/database/MIGRATIONS.md`
+
+## Gdy deploy nie dziala mimo poprawnych komend
+
+Jesli:
+
+- skrypt deployu przechodzi
+- ale domena nadal nie pokazuje panelu
+- albo widzisz redirect do strony hostingu
+
+to sprawdz od razu:
+
+- `docs/NEW_SERVER_CHECKLIST.md`
+
+Szczegolnie sekcje:
+
+- `14. Najczestszy blad przy deployu`
+- `15. Gdy deploy "przeszedl", ale domena nadal nie dziala`
 
 ## Najwazniejsze pliki w tym katalogu
 

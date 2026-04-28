@@ -45,10 +45,18 @@ pwd
 
 ## 2. Przygotowanie katalogow
 
-Przyklad docelowego ukladu:
+Najpierw wybierz jedna prawdziwa sciezke repo na serwerze.
+
+Rekomendacja dla tego projektu:
+
+- `~/subme`
+
+Mozesz uzyc innej, np. `~/app`, ale tylko jesli faktycznie tam sklonujesz repo.
+
+Przyklad docelowego ukladu dla domyslnego wariantu:
 
 ```text
-~/app                               -> repo z kodem
+~/subme                             -> repo z kodem
 ~/public_html                       -> webroot panelu albo webroot landingu
 ~/.subme-secrets/main-panel         -> mysql.php panelu
 ~/.subme-apps/main-panel            -> backend panelu
@@ -66,15 +74,24 @@ Na nowym serwerze:
 
 ```bash
 cd ~
+git clone <URL-REPO> subme
+cd ~/subme
+git checkout main
+```
+
+Jesli chcesz miec repo w `~/app`, zrob to jawnie:
+
+```bash
+cd ~
 git clone <URL-REPO> app
 cd ~/app
 git checkout main
 ```
 
-Jesli repo juz istnieje:
+Jesli repo juz istnieje, wejdz do jego realnej sciezki:
 
 ```bash
-cd ~/app
+cd ~/subme
 git pull --ff-only origin main
 ```
 
@@ -110,9 +127,9 @@ To jest rekomendowana sciezka startowa.
 Uruchom:
 
 ```bash
-cd ~/app
-chmod +x ~/app/docs/namecheap-*.sh
-DB_NAME=twoja_baza DB_USER=twoj_user CONFIRM_RESET=YES ~/app/docs/namecheap-import-canonical-db.sh
+cd ~/subme
+chmod +x ~/subme/docs/namecheap-*.sh
+DB_NAME=twoja_baza DB_USER=twoj_user CONFIRM_RESET=YES ~/subme/docs/namecheap-import-canonical-db.sh
 ```
 
 To zaladuje tylko canonical schema source:
@@ -128,24 +145,51 @@ Tylko gdy swiadomie chcesz odtworzyc snapshot danych.
 Komenda:
 
 ```bash
-DB_NAME=twoja_baza DB_USER=twoj_user ~/app/docs/namecheap-import-db.sh /sciezka/do/backupu.sql
+DB_NAME=twoja_baza DB_USER=twoj_user ~/subme/docs/namecheap-import-db.sh /sciezka/do/backupu.sql
 ```
 
 Nie uzywaj tej drogi jako standardowego deployu schematu.
+
+## 7a. Jak aktualizowac tabele i kolumny na istniejacym serwerze
+
+Jesli serwer juz dziala i chcesz dodac:
+
+- nowa kolumne
+- nowa tabele
+- nowy indeks
+- poprawke widoku
+
+to nie rob pelnego resetu przez canonical import.
+
+Zamiast tego:
+
+1. dopisz zmiane do `dashboard-panel/database/v2/`
+2. utworz nowy plik w `dashboard-panel/database/migrations/`
+3. odpal ta migracje na produkcji
+
+Przyklad:
+
+```bash
+cd ~/subme
+mysql -u DB_USER -p DB_NAME < dashboard-panel/database/migrations/2026_04_28_001_add_example_column.sql
+```
+
+To jest wlasciwa droga dla istniejacej produkcji.
 
 ## 8. Pierwszy deploy panelu
 
 Przyklad dla jednej glownej instancji panelu:
 
 ```bash
-cd ~/app
-chmod +x ~/app/docs/namecheap-*.sh
+cd ~/subme
+mkdir -p ~/panel-webroot
+chmod +x ~/subme/docs/namecheap-*.sh
 SITE_HOST=panel.twojadomena.pl \
 APP_SLUG=main-panel \
 WEB_DIR=~/panel-webroot \
-REPO_DIR=~/app \
+REPO_DIR=~/subme \
 APP_URL=https://panel.twojadomena.pl \
-~/app/docs/namecheap-init-instance.sh panel.twojadomena.pl
+~/subme/docs/namecheap-init-instance.sh panel.twojadomena.pl
 ```
 
 Potem deploy:
@@ -154,20 +198,21 @@ Potem deploy:
 SITE_HOST=panel.twojadomena.pl \
 APP_SLUG=main-panel \
 WEB_DIR=~/panel-webroot \
-REPO_DIR=~/app \
+REPO_DIR=~/subme \
 APP_URL=https://panel.twojadomena.pl \
-~/app/docs/namecheap-deploy.sh
+~/subme/docs/namecheap-deploy.sh
 ```
 
 Jesli panel ma siedziec od razu w glownym webroot:
 
 ```bash
+mkdir -p ~/public_html
 SITE_HOST=twojadomena.pl \
 APP_SLUG=main-panel \
 WEB_DIR=~/public_html \
-REPO_DIR=~/app \
+REPO_DIR=~/subme \
 APP_URL=https://twojadomena.pl \
-~/app/docs/namecheap-deploy.sh
+~/subme/docs/namecheap-deploy.sh
 ```
 
 To jest technicznie mozliwe, ale wtedy landing nie moze byc osobnym statycznym projektem w tym samym miejscu.
@@ -215,11 +260,13 @@ git push origin main
 Na serwerze:
 
 ```bash
-cd ~/app
+cd ~/subme
 git pull --ff-only origin main
-chmod +x ~/app/docs/namecheap-*.sh
-SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/app APP_URL=https://panel.twojadomena.pl ~/app/docs/namecheap-deploy.sh
+chmod +x ~/subme/docs/namecheap-*.sh
+SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/subme APP_URL=https://panel.twojadomena.pl ~/subme/docs/namecheap-deploy.sh
 ```
+
+Jesli uzywasz innego katalogu repo, zamien wszedzie `~/subme` na swoja realna sciezke, ale tylko po tym jak repo zostanie tam sklonowane.
 
 ## 12. Zasada source of truth
 
@@ -258,6 +305,128 @@ Jesli cos wyglada podejrzanie, nie naprawiaj tego recznie przez samo kasowanie r
 ## 13. Minimalna procedura przeniesienia na nowy serwer
 
 Jesli chcesz przeniesc aplikacje jak najprosciej:
+
+## 14. Najczestszy blad przy deployu
+
+Jesli widzisz cos takiego:
+
+- `cd: /home/.../app: No such file or directory`
+- `fatal: not a git repository`
+- `.../docs/namecheap-deploy.sh: No such file or directory`
+
+to znaczy, ze:
+
+- repo nie zostalo jeszcze sklonowane do tej sciezki
+- albo jestes w zlym katalogu
+
+Najpierw sprawdz:
+
+```bash
+cd ~
+ls
+```
+
+Jesli widzisz `subme`, uzywaj:
+
+```bash
+cd ~/subme
+git pull --ff-only origin main
+chmod +x ~/subme/docs/namecheap-*.sh
+```
+
+Jesli chcesz uzywac `~/app`, najpierw zrob:
+
+```bash
+cd ~
+git clone <URL-REPO> app
+cd ~/app
+```
+
+Deploy uruchamiasz zawsze z realnej sciezki do repo i z poprawnym `REPO_DIR`.
+
+## 15. Gdy deploy "przeszedl", ale domena nadal nie dziala
+
+To jest osobny typ problemu. Skrypt moze wykonac sie poprawnie, ale sama domena dalej nie pokazuje panelu.
+
+Najczestszy objaw:
+
+- `curl -I https://panel.twojadomena.pl/`
+- zwraca redirect do strony hostingu, np. Namecheap
+- albo domena pokazuje pusty katalog / domyslna strone hostingu
+
+To zwykle oznacza, ze problem nie jest w PHP ani w Git, tylko w konfiguracji hostingu.
+
+### Co sprawdzic po kolei
+
+1. Czy subdomena jest w ogole utworzona w panelu hostingu.
+2. Czy document root tej subdomeny wskazuje na poprawny katalog, np.:
+   - `~/panel-webroot`
+3. Czy katalog webroot faktycznie istnieje:
+
+```bash
+ls -ld ~/panel-webroot
+```
+
+4. Czy istnieje katalog secrets dla danego `APP_SLUG`, np.:
+
+```bash
+ls -ld ~/.subme-secrets/main-panel
+ls -l ~/.subme-secrets/main-panel/mysql.php
+```
+
+5. Czy backend instancji w ogole zostal utworzony:
+
+```bash
+ls -ld ~/.subme-apps/main-panel
+ls -ld ~/.subme-apps/main-panel/dashboard-panel
+```
+
+### Typowy przypadek awarii
+
+Jesli:
+
+- nie ma `~/panel-webroot`
+- nie ma `~/.subme-apps/main-panel`
+- nie ma `~/.subme-secrets/main-panel/mysql.php`
+
+to znaczy, ze nowa instancja nie zostala jeszcze przygotowana i sam deploy nie mial gdzie sie wdrozyc.
+
+### Co wtedy zrobic
+
+Utworz brakujace katalogi:
+
+```bash
+mkdir -p ~/panel-webroot
+mkdir -p ~/.subme-secrets/main-panel
+```
+
+Wgraj prawidlowy plik:
+
+```text
+~/.subme-secrets/main-panel/mysql.php
+```
+
+Potem uruchom init i deploy:
+
+```bash
+cd ~/subme
+chmod +x ~/subme/docs/namecheap-*.sh
+SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/subme APP_URL=https://panel.twojadomena.pl ~/subme/docs/namecheap-init-instance.sh panel.twojadomena.pl
+SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/subme APP_URL=https://panel.twojadomena.pl ~/subme/docs/namecheap-deploy.sh
+```
+
+### Szybki test po deployu
+
+```bash
+curl -kIs https://panel.twojadomena.pl/ | head
+```
+
+Jesli nadal widzisz redirect do hostingu zamiast swojej strony, to:
+
+- subdomena nadal nie jest poprawnie podlaczona do webrootu
+- albo DNS / konfiguracja hostingu jeszcze nie wskazuje na ta instancje
+
+W takim przypadku najpierw popraw konfiguracje subdomeny w panelu hostingu, a dopiero potem powtarzaj deploy.
 
 1. postaw nowy serwer
 2. sklonuj repo do `~/app`
