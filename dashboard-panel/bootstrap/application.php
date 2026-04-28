@@ -2025,14 +2025,27 @@ function app_customer_avatar_url(string $value): string
         $value = substr($value, 0, 255);
     }
 
-    return trim($value);
+    if (strpos($value, 'http://') === 0 || strpos($value, 'https://') === 0) {
+        return $value;
+    }
+
+    $normalized = ltrim($value, '/');
+    if ($normalized === '') {
+        return '';
+    }
+
+    if (is_file(app_public_path($normalized))) {
+        return '/' . $normalized;
+    }
+
+    return '';
 }
 
 function app_admin_avatar_url(string $value): string
 {
     $value = trim($value);
     if ($value === '') {
-        return '';
+        return '/img/admin_avatar.png';
     }
 
     if (function_exists('mb_strlen') && mb_strlen($value) > 255) {
@@ -2041,7 +2054,7 @@ function app_admin_avatar_url(string $value): string
         $value = substr($value, 0, 255);
     }
 
-    if (strpos($value, 'http://') === 0 || strpos($value, 'https://') === 0 || strpos($value, '/') === 0) {
+    if (strpos($value, 'http://') === 0 || strpos($value, 'https://') === 0) {
         return $value;
     }
 
@@ -2057,7 +2070,11 @@ function app_admin_avatar_url(string $value): string
         }
     }
 
-    return '/' . $normalized;
+    if (is_file(app_public_path($normalized))) {
+        return '/' . $normalized;
+    }
+
+    return '/img/admin_avatar.png';
 }
 
 function app_customer_avatar_upload_directory(): string

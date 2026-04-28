@@ -3011,7 +3011,9 @@ foreach ($chatInboxRows as $chatRow) {
 $pageCard = admin_page_cards($route, $messages);
 
 if ($route === 'orders' && $orderFilterCustomer && is_array($pageCard)) {
-    $pageCard['text'] = admin_t($messages, 'orders_filtered_for', 'Showing orders for: ') . '<a href="?page=users&customer_id=' . $orderFilterCustomerId . '" class="admin-customer-email-link">' . (string)($orderFilterCustomer['email'] ?? '') . '</a>';
+    $pageCard['text'] = admin_t($messages, 'orders_filtered_for', 'Showing orders for: ')
+        . '<a href="?page=users&customer_id=' . $orderFilterCustomerId . '" class="admin-customer-email-link">' . (string)($orderFilterCustomer['email'] ?? '') . '</a>'
+        . ' <a href="/admin/?page=orders" class="admin-filter-clear-link" title="' . admin_e(admin_t($messages, 'payment_clear_customer_filter', 'Clear filter')) . '" aria-label="' . admin_e(admin_t($messages, 'payment_clear_customer_filter', 'Clear filter')) . '"><i class="bi bi-x-lg" aria-hidden="true"></i></a>';
 }
 
 if ($route === 'orders' && $orderFilterOrderId > 0 && is_array($pageCard)) {
@@ -3124,6 +3126,9 @@ $adminTopbarNewCustomers = admin_topbar_notification_new_customer_rows($db, 5);
 $adminTopbarExpiringSubscriptions = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
 $adminTopbarBackupNotice = admin_topbar_manual_backup_notice($appSettings, 168);
 $adminTopbarNotificationsCount = admin_topbar_notification_count($db, $appSettings);
+if ($cryptoWalletPoolDepleted) {
+    $adminTopbarNotificationsCount++;
+}
 $adminTopbarConverterAssets = [];
 foreach (admin_refresh_crypto_asset_rates($db, $adminDefaultCurrencyCode) as $assetRow) {
     $assetRate = isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0;
@@ -3221,6 +3226,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             <a href="/admin/?page=<?php echo admin_e($item['route']); ?>" class="admin-sidebar__link<?php echo $route === $item['route'] ? ' is-active' : ''; ?>"<?php if ($itemRequiresSensitiveUnlock): ?> data-admin-sensitive-link="1" data-admin-sensitive-label="<?php echo admin_e(admin_route_label($messages, (string)$item['route'])); ?>"<?php endif; ?>>
                                 <i class="bi <?php echo admin_e($item['icon']); ?>"></i>
                                 <span><?php echo admin_e(admin_t($messages, $item['label_key'], $item['route'])); ?></span>
+                                <?php if ((string)($item['route'] ?? '') === 'users' && (int)($metrics['active_customers'] ?? 0) > 0): ?>
+                                    <span class="admin-sidebar__count-badge" aria-label="<?php echo admin_e(admin_t($messages, 'users_active_badge', 'Active users')); ?>"><?php echo admin_e((string)((int)($metrics['active_customers'] ?? 0))); ?></span>
+                                <?php endif; ?>
                                 <?php if ((string)($item['route'] ?? '') === 'crypto-wallets' && $cryptoWalletPoolDepleted): ?>
                                     <span class="admin-sidebar__alert-badge" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_pool_empty_badge', 'No free crypto wallets available')); ?>">!</span>
                                 <?php endif; ?>
@@ -3302,6 +3310,29 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             </div>
 
                             <div class="admin-topbar-notifications__body">
+                                <?php if ($cryptoWalletPoolDepleted): ?>
+                                    <section class="admin-topbar-notifications__section">
+                                        <div class="admin-topbar-notifications__section-head">
+                                            <span><?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_title', 'Crypto wallet pool')); ?></span>
+                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'important', 'Important')); ?></span>
+                                        </div>
+
+                                        <article class="admin-topbar-notifications__item admin-topbar-notifications__item--warning">
+                                            <div class="admin-topbar-notifications__item-main">
+                                                <div class="admin-topbar-notifications__item-head">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_heading', 'There are no free crypto wallets available right now.')); ?></strong>
+                                                </div>
+                                                <p><?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_text', 'New users will not be able to generate a crypto payment request until you add a new wallet address or release an existing assignment.')); ?></p>
+                                            </div>
+                                            <div class="admin-topbar-notifications__actions">
+                                                <a href="/admin/?page=crypto-wallets" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_open', 'Open crypto wallets')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_open', 'Open crypto wallets')); ?>">
+                                                    <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                </a>
+                                            </div>
+                                        </article>
+                                    </section>
+                                <?php endif; ?>
+
                                 <section class="admin-topbar-notifications__section" data-admin-topbar-payments-section>
                                     <div class="admin-topbar-notifications__section-head">
                                         <span><?php echo admin_e(admin_t($messages, 'topbar_pending_payments', 'Pending payments')); ?></span>
@@ -4511,10 +4542,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <div class="admin-order-picker">
                                                                 <div class="admin-order-picker__search">
                                                                     <i class="bi bi-search" aria-hidden="true"></i>
-                                                                    <input type="search" class="form-control" value="<?php echo admin_e((string)($orderSelectedCustomer['email'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'order_customer_search_placeholder', 'Search by email or user ID')); ?>" data-admin-order-customer-search autocomplete="off">
+                                                                    <input type="search" class="form-control" value="<?php echo admin_e((string)($orderSelectedCustomer['email'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'order_customer_search_placeholder', 'Search by email, @handle or user ID')); ?>" data-admin-order-customer-search autocomplete="off">
                                                                 </div>
                                                                 <div class="admin-order-picker__results" data-admin-order-customer-results hidden></div>
-                                                                <div class="admin-order-picker__selected<?php echo $orderSelectedCustomer ? ' is-selected' : ''; ?>" data-admin-order-customer-selected>
+                                                                <div class="admin-order-picker__selected<?php echo $orderSelectedCustomer ? ' is-selected' : ''; ?>" data-admin-order-customer-selected data-empty-label="<?php echo admin_e(admin_t($messages, 'wallet_no_customer', 'No customer assigned')); ?>">
                                                                     <span><?php echo admin_e(admin_t($messages, 'order_selected_customer', 'Selected customer')); ?></span>
                                                                     <a href="<?php echo $orderSelectedCustomer ? admin_e('/admin/?page=users&customer_id=' . (int)($orderSelectedCustomer['id'] ?? 0)) : '#'; ?>" class="admin-order-picker__selected-link<?php echo $orderSelectedCustomer ? '' : ' is-disabled'; ?>" data-admin-order-customer-link<?php echo $orderSelectedCustomer ? '' : ' aria-disabled="true"'; ?>>
                                                                         <strong data-admin-order-customer-email><?php echo admin_e((string)($orderSelectedCustomer['email'] ?? admin_t($messages, 'wallet_no_customer', 'No customer assigned'))); ?></strong>

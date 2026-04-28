@@ -177,6 +177,23 @@ body.admin-login-page{
     box-shadow:0 0 0 2px rgba(255,255,255,.06);
 }
 
+.admin-sidebar__count-badge{
+    margin-left:auto;
+    min-width:22px;
+    height:22px;
+    padding:0 7px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:999px;
+    background:rgba(52,211,153,.18);
+    border:1px solid rgba(110,231,183,.32);
+    color:#d1fae5;
+    font-size:.72rem;
+    font-weight:800;
+    line-height:1;
+}
+
 .admin-sidebar__link:hover,
 .admin-sidebar__link:focus{
     color:#fff;
@@ -1061,7 +1078,14 @@ body.admin-login-page{
 }
 
 .admin-wallet-editor__address-input{
-    font-weight:700;
+    font-weight: 400;
+    font-size: 16px;
+    border-width: 3px;
+    line-height: 50px;
+    height: 50px;
+    letter-spacing: 1px;
+    font-family: Courier New, sans-serif;
+    color: #0073ce;
 }
 
 .admin-wallet-editor__divider{
@@ -4085,6 +4109,25 @@ body.admin-login-page{
     text-decoration:underline;
 }
 
+.admin-filter-clear-link{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:28px;
+    height:28px;
+    margin-left:.45rem;
+    border-radius:999px;
+    color:#6b7280;
+    text-decoration:none;
+    transition:background .16s ease,color .16s ease;
+}
+
+.admin-filter-clear-link:hover,
+.admin-filter-clear-link:focus{
+    background:rgba(15, 23, 42, 0.08);
+    color:#111827;
+}
+
 .admin-table{
     --bs-table-bg: transparent;
     margin-bottom:0;
@@ -6132,6 +6175,12 @@ body.admin-login-page .alert.alert-danger::before{
     overflow-x:auto;
     overflow-y:hidden;
     -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+    -ms-overflow-style:none;
+}
+
+.admin-settings-tabs-scroller::-webkit-scrollbar{
+    display:none;
 }
 
 .admin-settings-tabs{
@@ -6149,12 +6198,12 @@ body.admin-login-page .alert.alert-danger::before{
 .admin-settings-tabs .nav-link{
     flex:0 0 auto;
     border:1px solid rgba(15, 23, 42, 0.08);
-    border-radius:999px;
+    border-radius: 4px;
     background:#f4f6fb;
     color:#4b5563;
+    font-size: 12px;
     font-weight:800;
-    padding:.7rem 1rem;
-    line-height:1.2;
+    padding: 5px;
 }
 
 .admin-settings-tabs .nav-link:hover,

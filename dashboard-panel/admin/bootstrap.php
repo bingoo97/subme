@@ -1088,6 +1088,7 @@ function admin_dashboard_metrics(Mysql_ks $db): array
 {
     $metrics = [
         'customers' => 0,
+        'active_customers' => 0,
         'orders' => 0,
         'crypto_open' => 0,
         'bank_open' => 0,
@@ -1100,6 +1101,9 @@ function admin_dashboard_metrics(Mysql_ks $db): array
     if (schema_object_exists($db, 'customers')) {
         $row = $db->select_user("SELECT COUNT(*) AS total FROM customers");
         $metrics['customers'] = (int)($row['total'] ?? 0);
+
+        $row = $db->select_user("SELECT COUNT(*) AS total FROM customers WHERE status = 'active'");
+        $metrics['active_customers'] = (int)($row['total'] ?? 0);
     }
 
     if (schema_object_exists($db, 'orders')) {
@@ -12410,31 +12414,42 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
     $limit = max(1, min(50, $limit));
     $isHandleSearch = strpos($query, '@') === 0;
     $needle = $isHandleSearch ? ltrim($query, '@') : $query;
+    $needleLower = strtolower($needle);
     $safeLike = $db->escape('%' . $needle . '%');
+    $safeNeedleLower = $db->escape($needleLower);
     $whereParts = [
         "customers.email LIKE '{$safeLike}'",
+    ];
+    $rankParts = [
+        "CASE WHEN LOWER(customers.email) = '{$safeNeedleLower}' THEN 0 ELSE 100 END",
     ];
 
     if (schema_column_exists($db, 'customers', 'public_handle')) {
         $whereParts[] = "customers.public_handle LIKE '{$safeLike}'";
+        $rankParts[] = "CASE WHEN LOWER(customers.public_handle) = '{$safeNeedleLower}' THEN 1 ELSE 100 END";
     }
 
     if (ctype_digit($query)) {
         $whereParts[] = 'customers.id = ' . (int)$query;
+        $rankParts[] = 'CASE WHEN customers.id = ' . (int)$query . ' THEN 0 ELSE 100 END';
     }
+
+    $rankExpression = implode(' + ', $rankParts);
 
     return $db->select_full_user(
         "SELECT
             customers.id,
             customers.email,
+            customers.public_handle,
             customers.status,
             customers.locale_code,
             customers.avatar_url,
             customers.registered_at,
-            customers.last_login_at
+            customers.last_login_at,
+            ({$rankExpression}) AS search_rank
          FROM customers
          WHERE (" . implode(' OR ', $whereParts) . ")
-         ORDER BY customers.id DESC
+         ORDER BY search_rank ASC, customers.id DESC
          LIMIT {$limit}"
     );
 }

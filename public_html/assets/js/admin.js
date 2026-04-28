@@ -1240,6 +1240,240 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initOrderCreateForms() {
+        qa('[data-admin-order-create]').forEach(function (form) {
+            var searchInput = q('[data-admin-order-customer-search]', form);
+            var results = q('[data-admin-order-customer-results]', form);
+            var customerIdInput = q('[data-admin-order-customer-id]', form);
+            var selectedWrap = q('[data-admin-order-customer-selected]', form);
+            var selectedLink = q('[data-admin-order-customer-link]', form);
+            var selectedEmail = q('[data-admin-order-customer-email]', form);
+            var searchUrl = form.getAttribute('data-search-url') || '';
+            var createUrl = form.getAttribute('data-create-url') || '';
+            var csrfInput = q('input[name="_csrf"]', form);
+            var requestIndex = 0;
+            var createIndex = 0;
+            var selectedCustomerEmail = String(searchInput && searchInput.value ? searchInput.value : '').trim();
+
+            if (!searchInput || !results || !customerIdInput || !selectedWrap || !selectedLink || !selectedEmail || searchUrl === '') {
+                return;
+            }
+
+            function isValidEmail(value) {
+                return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+            }
+
+            function normalizeHandle(value) {
+                var normalized = String(value || '').trim().toLowerCase();
+                if (normalized.charAt(0) === '@') {
+                    normalized = normalized.slice(1);
+                }
+                return normalized;
+            }
+
+            function resetSelectedState() {
+                customerIdInput.value = '0';
+                selectedCustomerEmail = '';
+                selectedWrap.classList.remove('is-selected');
+                selectedLink.classList.add('is-disabled');
+                selectedLink.setAttribute('href', '#');
+                selectedLink.setAttribute('aria-disabled', 'true');
+                selectedEmail.textContent = selectedWrap.getAttribute('data-empty-label') || 'No customer assigned';
+            }
+
+            function setSelectedState(customer) {
+                var email = String(customer && customer.email ? customer.email : '').trim();
+                var customerId = parseInt(customer && customer.id ? customer.id : 0, 10) || 0;
+
+                customerIdInput.value = String(customerId);
+                selectedCustomerEmail = email;
+                searchInput.value = email;
+                selectedWrap.classList.toggle('is-selected', customerId > 0);
+                selectedLink.classList.toggle('is-disabled', customerId <= 0);
+                selectedLink.setAttribute('href', customerId > 0 ? '/admin/?page=users&customer_id=' + customerId : '#');
+                if (customerId > 0) {
+                    selectedLink.removeAttribute('aria-disabled');
+                } else {
+                    selectedLink.setAttribute('aria-disabled', 'true');
+                }
+                selectedEmail.textContent = email || (selectedWrap.getAttribute('data-empty-label') || 'No customer assigned');
+                results.innerHTML = '';
+                setHidden(results, true);
+            }
+
+            function renderEmpty(message) {
+                results.innerHTML = '<div class="admin-order-picker__empty">' + escapeHtml(message) + '</div>';
+                setHidden(results, false);
+            }
+
+            function renderResults(customers, query) {
+                var normalizedEmail = String(query || '').trim().toLowerCase();
+                var canCreate = createUrl !== '' && isValidEmail(normalizedEmail);
+                var hasExactEmail = false;
+                var itemsHtml = '';
+
+                (customers || []).forEach(function (customer) {
+                    var email = String(customer.email || '').trim();
+                    var handle = String(customer.public_handle || '').trim();
+                    var parts = [];
+
+                    if (email.toLowerCase() === normalizedEmail) {
+                        hasExactEmail = true;
+                    }
+                    if (handle !== '') {
+                        parts.push('@' + handle);
+                    }
+                    if (customer.status) {
+                        parts.push(String(customer.status));
+                    }
+                    if (customer.id) {
+                        parts.push('ID ' + String(customer.id));
+                    }
+
+                    itemsHtml += '' +
+                        '<button type="button" class="admin-order-picker__result" data-admin-order-customer-result data-customer-id="' + escapeHtml(customer.id) + '">' +
+                            '<strong>' + escapeHtml(email) + '</strong>' +
+                            '<span>' + escapeHtml(parts.join(' • ')) + '</span>' +
+                        '</button>';
+                });
+
+                if (canCreate && !hasExactEmail) {
+                    itemsHtml += '' +
+                        '<button type="button" class="admin-order-picker__result admin-order-picker__result--create" data-admin-order-create-customer data-customer-email="' + escapeHtml(query) + '">' +
+                            '<strong>' + escapeHtml(form.getAttribute('data-create-label') || 'Add user') + '</strong>' +
+                            '<span>' + escapeHtml(form.getAttribute('data-create-help') || 'This email is not in the service yet. Create the user and select them for this order.') + '</span>' +
+                        '</button>';
+                }
+
+                if (itemsHtml === '') {
+                    renderEmpty(form.getAttribute('data-search-empty') || 'No users found.');
+                    return;
+                }
+
+                results.innerHTML = itemsHtml;
+                setHidden(results, false);
+            }
+
+            function searchCustomers(query) {
+                requestIndex += 1;
+                var activeRequest = requestIndex;
+
+                renderEmpty('Loading...');
+                jsonFetch(searchUrl + '&' + toQuery({ q: query })).then(function (payload) {
+                    if (activeRequest !== requestIndex) {
+                        return;
+                    }
+                    if (!payload.ok) {
+                        renderEmpty(form.getAttribute('data-search-error') || 'Unable to search users.');
+                        return;
+                    }
+                    renderResults(Array.isArray(payload.customers) ? payload.customers : [], query);
+                }).catch(function () {
+                    if (activeRequest !== requestIndex) {
+                        return;
+                    }
+                    renderEmpty(form.getAttribute('data-search-error') || 'Unable to search users.');
+                });
+            }
+
+            function createCustomer(email, button) {
+                var csrfToken = csrfInput ? String(csrfInput.value || '') : '';
+                var formData;
+                createIndex += 1;
+                var activeCreate = createIndex;
+
+                if (!createUrl || email === '' || !isValidEmail(email) || csrfToken === '') {
+                    return;
+                }
+
+                if (button) {
+                    button.disabled = true;
+                    q('span', button).textContent = form.getAttribute('data-create-loading') || 'Creating user...';
+                }
+
+                formData = new window.FormData();
+                formData.append('_csrf', csrfToken);
+                formData.append('email', email);
+
+                jsonFetch(createUrl, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                }).then(function (payload) {
+                    var customer = payload && payload.customer ? payload.customer : null;
+
+                    if (activeCreate !== createIndex) {
+                        return;
+                    }
+                    if (!payload || !payload.ok || !customer) {
+                        renderEmpty((payload && payload.message) ? payload.message : (form.getAttribute('data-create-error') || 'Unable to create the user.'));
+                        return;
+                    }
+
+                    setSelectedState(customer);
+                }).catch(function () {
+                    if (activeCreate !== createIndex) {
+                        return;
+                    }
+                    renderEmpty(form.getAttribute('data-create-error') || 'Unable to create the user.');
+                });
+            }
+
+            searchInput.addEventListener('input', debounce(function () {
+                var query = String(searchInput.value || '').trim();
+                var selectedEmailLower = selectedCustomerEmail.toLowerCase();
+
+                if (selectedEmailLower !== '' && query.toLowerCase() !== selectedEmailLower) {
+                    resetSelectedState();
+                }
+
+                if (query === '' || (!isValidEmail(query) && !/^@?[a-z0-9._-]{2,}$/i.test(query) && !ctypeDigit(query))) {
+                    results.innerHTML = '';
+                    setHidden(results, true);
+                    return;
+                }
+
+                searchCustomers(query);
+            }, 200));
+
+            results.addEventListener('click', function (event) {
+                var customerButton = closest(event.target, '[data-admin-order-customer-result]');
+                var createButton = closest(event.target, '[data-admin-order-create-customer]');
+
+                if (customerButton) {
+                    event.preventDefault();
+                    setSelectedState({
+                        id: customerButton.getAttribute('data-customer-id') || '0',
+                        email: q('strong', customerButton) ? q('strong', customerButton).textContent : ''
+                    });
+                    return;
+                }
+
+                if (createButton) {
+                    event.preventDefault();
+                    createCustomer(String(createButton.getAttribute('data-customer-email') || '').trim(), createButton);
+                }
+            });
+
+            searchInput.addEventListener('focus', function () {
+                var query = String(searchInput.value || '').trim();
+                if (query !== '' && !results.hasAttribute('hidden')) {
+                    setHidden(results, false);
+                }
+            });
+
+            doc.addEventListener('click', function (event) {
+                if (!closest(event.target, '[data-admin-order-create]')) {
+                    setHidden(results, true);
+                }
+            });
+        });
+
+        function ctypeDigit(value) {
+            return /^[0-9]+$/.test(String(value || '').trim());
+        }
+    }
+
     function initTopbarTools() {
         var activeFlyout = null;
 
@@ -3971,6 +4205,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initProviderUrlReplacement();
     initProductTypeForms();
     initOrderStatusForms();
+    initOrderCreateForms();
     initWalletCustomerPickers();
     initRichTextEditors();
     initSearch();
