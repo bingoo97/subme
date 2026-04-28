@@ -211,6 +211,8 @@ $adminStatusOptions = admin_admin_status_options();
 $adminRoleOptions = admin_role_rows($db);
 $adminUserRows = admin_user_rows($db);
 $adminActiveFullAdminCount = admin_active_full_admin_count($db);
+$adminHelpModalCanEdit = admin_user_can_access_route($adminUser, 'settings') && admin_sensitive_routes_unlocked();
+$adminCanManageUsers = admin_user_can_access_route($adminUser, 'users');
 
 if (!admin_user_can_access_route($adminUser, $route)) {
     $blockedRoute = $route;
@@ -249,6 +251,82 @@ if (isset($_POST['admin_sensitive_unlock_ajax'])) {
     echo json_encode([
         'ok' => true,
         'message' => admin_t($messages, 'settings_sensitive_unlock_success', 'Access unlocked until logout.'),
+    ]);
+    exit;
+}
+
+if (isset($_POST['admin_update_help_topic_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    if (!$adminHelpModalCanEdit) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'help_modal_edit_locked', 'Unlock Settings access first to edit help content.'),
+        ]);
+        exit;
+    }
+
+    $topicId = (int)($_POST['topic_id'] ?? 0);
+    $answerHtml = (string)($_POST['answer_html'] ?? '');
+    $saveResult = admin_update_help_topic_answer($db, $topicId, $answerHtml);
+
+    if (empty($saveResult['ok']) || !is_array($saveResult['topic'] ?? null)) {
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'help_save_error', (string)($saveResult['message'] ?? 'Unable to save help topic.')),
+        ]);
+        exit;
+    }
+
+    $topicRow = (array)$saveResult['topic'];
+    $audienceOptions = admin_help_topic_audience_options();
+    $audienceCode = admin_help_topic_normalize_audience((string)($topicRow['audience_code'] ?? 'all'));
+    $audienceLabel = (string)($audienceOptions[$audienceCode] ?? $audienceCode);
+    $topicAnswerHtml = (string)($topicRow['answer_html'] ?? '');
+    $searchText = trim(implode(' ', [
+        (string)($topicRow['question'] ?? ''),
+        (string)($topicRow['keywords'] ?? ''),
+        trim(strip_tags($topicAnswerHtml)),
+        $audienceLabel,
+    ]));
+    if (function_exists('mb_strtolower')) {
+        $searchText = mb_strtolower($searchText);
+    } else {
+        $searchText = strtolower($searchText);
+    }
+
+    admin_activity_log(
+        $db,
+        0,
+        (int)($adminUser['id'] ?? 0),
+        'help_topic_inline_update',
+        'Updated help modal topic #' . $topicId . ': ' . (string)($topicRow['question'] ?? ''),
+        $requestIp
+    );
+
+    echo json_encode([
+        'ok' => true,
+        'message' => admin_t($messages, 'help_save_success', 'Help topic saved successfully.'),
+        'topic' => [
+            'id' => (int)($topicRow['id'] ?? 0),
+            'question' => (string)($topicRow['question'] ?? ''),
+            'answer_html' => $topicAnswerHtml,
+            'audience_code' => $audienceCode,
+            'audience_label' => $audienceLabel,
+            'keywords' => (string)($topicRow['keywords'] ?? ''),
+            'search_text' => $searchText,
+        ],
     ]);
     exit;
 }
@@ -1048,6 +1126,7 @@ $faqListPerPage = 20;
 $faqListTotal = 0;
 $faqListTotalPages = 1;
 $faqFormState = [
+    'locale_code' => 'pl',
     'title' => '',
     'slug' => '',
     'body' => '',
@@ -1797,6 +1876,7 @@ if ($route === 'faq') {
         $faqShowCreate = true;
         $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
         $faqFormState = [
+            'locale_code' => admin_faq_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
             'title' => trim((string)($_POST['title'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
             'body' => trim((string)($_POST['body'] ?? '')),
@@ -1822,6 +1902,7 @@ if ($route === 'faq') {
         $faqEditorId = (int)($_POST['faq_id'] ?? 0);
         $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
         $faqFormState = [
+            'locale_code' => admin_faq_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
             'title' => trim((string)($_POST['title'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
             'body' => trim((string)($_POST['body'] ?? '')),
@@ -3042,11 +3123,7 @@ $adminTopbarOrders = admin_topbar_notification_order_rows($db, 8);
 $adminTopbarNewCustomers = admin_topbar_notification_new_customer_rows($db, 5);
 $adminTopbarExpiringSubscriptions = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
 $adminTopbarBackupNotice = admin_topbar_manual_backup_notice($appSettings, 168);
-$adminTopbarNotificationsCount =
-    count($adminTopbarPayments)
-    + count($adminTopbarOrders)
-    + (int)($adminTopbarExpiringSubscriptions['total'] ?? 0)
-    + (!empty($adminTopbarBackupNotice['show']) ? 1 : 0);
+$adminTopbarNotificationsCount = admin_topbar_notification_count($db, $appSettings);
 $adminTopbarConverterAssets = [];
 foreach (admin_refresh_crypto_asset_rates($db, $adminDefaultCurrencyCode) as $assetRow) {
     $assetRate = isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0;
@@ -3115,6 +3192,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 </head>
 <body class="admin-app-page"
     data-admin-sensitive-unlocked="<?php echo admin_sensitive_routes_unlocked() ? '1' : '0'; ?>"
+    data-admin-help-edit-allowed="<?php echo admin_user_can_access_route($adminUser, 'settings') ? '1' : '0'; ?>"
     data-admin-sensitive-prompt="<?php echo admin_e(admin_t($messages, 'settings_sensitive_prompt', 'Enter the password to open this section:')); ?>"
     data-admin-sensitive-error="<?php echo admin_e(admin_t($messages, 'settings_sensitive_unlock_error', 'Incorrect password.')); ?>"
     data-admin-sensitive-cancel="<?php echo admin_e(admin_t($messages, 'settings_sensitive_unlock_cancel', 'Access to this section was cancelled.')); ?>"
@@ -3186,7 +3264,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 </div>
 
                 <div class="admin-topbar__right">
-                    <div class="admin-topbar-tool" data-admin-topbar-flyout-root>
+                    <div class="admin-topbar-tool" data-admin-topbar-flyout-root data-admin-topbar-state-url="topbar_state.php">
                         <button
                             type="button"
                             class="admin-chat-inbox__toggle"
@@ -3621,32 +3699,59 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     <div class="modal fade admin-topbar-help-modal" id="adminHowToPayModal" tabindex="-1" aria-hidden="true">
                         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-                            <div class="modal-content">
-                                <div class="modal-header">
+                            <div class="modal-content admin-topbar-help-modal__content">
+                                <div class="modal-header admin-topbar-help-modal__header">
                                     <div class="admin-topbar-help-modal__title-wrap">
+                                        <span class="admin-topbar-help-modal__eyebrow">
+                                            <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_eyebrow', 'Payment guide')); ?></span>
+                                        </span>
                                         <h5 class="modal-title mb-1"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_title', 'How to pay')); ?></h5>
                                         <p class="text-body-secondary mb-0"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_intro', 'Use the calculator to estimate the crypto amount, then complete the payment request with the correct wallet or bank details.')); ?></p>
                                     </div>
                                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
                                 </div>
                                 <div class="modal-body admin-topbar-help-modal__body">
-                                    <button
-                                        type="button"
-                                        class="admin-topbar-image-lightbox-trigger admin-topbar-image-lightbox-trigger--modal"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#adminHowToPayImageModal"
-                                        aria-label="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom', 'Open payment preview')); ?>">
-                                        <img
-                                            src="/img/faq/how_to_pay.png"
-                                            alt="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_image_alt', 'Preview showing how to complete the payment')); ?>"
-                                            class="admin-topbar-help-modal__image"
-                                            loading="lazy">
-                                    </button>
-                                    <div class="admin-topbar-help-modal__copy">
-                                        <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_1', '1. Open the order or balance top up, choose the payment method and select the crypto asset or bank transfer.')); ?></p>
-                                        <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_2', '2. In the calculator, enter the FIAT amount you want to receive and copy the exact crypto amount shown by the selected asset.')); ?></p>
-                                        <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_3', '3. Send exactly that amount to the wallet or bank details shown in the payment request and keep the correct network if crypto is used.')); ?></p>
-                                        <p class="admin-topbar-help-modal__note mb-0"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_note', 'After the funds arrive, the payment moves to verification and can then be approved in the admin panel.')); ?></p>
+                                    <div class="admin-topbar-help-modal__layout">
+                                        <div class="admin-topbar-help-modal__visual">
+                                            <button
+                                                type="button"
+                                                class="admin-topbar-image-lightbox-trigger admin-topbar-image-lightbox-trigger--modal admin-topbar-help-modal__image-button"
+                                                data-bs-toggle="modal"
+                                                data-bs-target="#adminHowToPayImageModal"
+                                                aria-label="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom', 'Open payment preview')); ?>">
+                                                <img
+                                                    src="/img/faq/how_to_pay.png"
+                                                    alt="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_image_alt', 'Preview showing how to complete the payment')); ?>"
+                                                    class="admin-topbar-help-modal__image"
+                                                    loading="lazy">
+                                                <span class="admin-topbar-help-modal__image-hint">
+                                                    <i class="bi bi-zoom-in" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom_hint', 'Click the image to enlarge it')); ?></span>
+                                                </span>
+                                            </button>
+                                        </div>
+                                        <div class="admin-topbar-help-modal__copy">
+                                            <div class="admin-topbar-help-modal__step-card">
+                                                <span class="admin-topbar-help-modal__step-index">1</span>
+                                                <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_1', '1. Open the order or balance top up, choose the payment method and select the crypto asset or bank transfer.')); ?></p>
+                                            </div>
+                                            <div class="admin-topbar-help-modal__step-card">
+                                                <span class="admin-topbar-help-modal__step-index">2</span>
+                                                <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_2', '2. In the calculator, enter the FIAT amount you want to receive and copy the exact crypto amount shown by the selected asset.')); ?></p>
+                                            </div>
+                                            <div class="admin-topbar-help-modal__step-card">
+                                                <span class="admin-topbar-help-modal__step-index">3</span>
+                                                <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_3', '3. Send exactly that amount to the wallet or bank details shown in the payment request and keep the correct network if crypto is used.')); ?></p>
+                                            </div>
+                                            <div class="admin-topbar-help-modal__note-card">
+                                                <div class="admin-topbar-help-modal__note-title">
+                                                    <i class="bi bi-check2-circle" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_note_title', 'After payment')); ?></span>
+                                                </div>
+                                                <p class="admin-topbar-help-modal__note mb-0"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_note', 'After the funds arrive, the payment moves to verification and can then be approved in the admin panel.')); ?></p>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -3674,6 +3779,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     <div
                         class="admin-chat-inbox"
                         data-admin-chat-inbox
+                        data-admin-chat-state-url="/admin/chat.php?action=inbox_state"
                         data-csrf-token="<?php echo admin_e($csrfToken); ?>"
                         data-loading-conversation="<?php echo admin_e(admin_t($messages, 'chat_loading_conversation', 'Loading conversation...')); ?>"
                         data-chat-load-error="<?php echo admin_e(admin_t($messages, 'chat_load_error', 'Unable to load this conversation.')); ?>"
@@ -3687,12 +3793,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-start-error="<?php echo admin_e(admin_t($messages, 'chat_start_error', 'Unable to start conversation.')); ?>"
                         data-chat-delete-message-confirm="<?php echo admin_e(admin_t($messages, 'chat_delete_message_confirm', 'Delete this message?')); ?>"
                         data-chat-delete-message-error="<?php echo admin_e(admin_t($messages, 'chat_delete_message_error', 'Unable to delete this message.')); ?>"
+                        data-chat-edit-message-error="<?php echo admin_e(admin_t($messages, 'chat_edit_message_error', 'Unable to save this message.')); ?>"
                         data-chat-quick-replies-title="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_title', 'Quick message instructions')); ?>"
                         data-chat-quick-replies-intro="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_intro', 'Choose one instruction and send it to this user.')); ?>"
                         data-chat-quick-replies-empty="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_empty', 'No quick replies available for this user language.')); ?>"
                         data-chat-quick-replies-loading="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_loading', 'Loading quick replies...')); ?>"
                         data-chat-quick-replies-error="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_modal_error', 'Unable to load quick replies.')); ?>"
                         data-chat-quick-replies-send-error="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_send_error', 'Unable to send quick reply.')); ?>"
+                        data-chat-quick-replies-send-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_send_button', 'Send')); ?>"
+                        data-chat-quick-replies-edit-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_edit_button', 'Edit')); ?>"
+                        data-chat-quick-replies-save-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_save_button', 'Save quick reply')); ?>"
+                        data-chat-quick-replies-saved-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_saved_label', 'Saved')); ?>"
+                        data-chat-quick-replies-save-error="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_save_error', 'Unable to save quick reply.')); ?>"
                         data-chat-payment-loading="<?php echo admin_e(admin_t($messages, 'chat_payment_modal_loading', 'Loading payment options...')); ?>"
                         data-chat-payment-preview-empty="<?php echo admin_e(admin_t($messages, 'chat_payment_preview_empty', 'Choose a payment option to see the details.')); ?>"
                         data-chat-payment-preview-error="<?php echo admin_e(admin_t($messages, 'chat_payment_preview_error', 'Unable to prepare payment preview.')); ?>"
@@ -3712,6 +3824,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-group-checking-user="<?php echo admin_e(admin_t($messages, 'group_chat_checking_user', 'Checking user...')); ?>"
                         data-chat-group-user-not-found="<?php echo admin_e(admin_t($messages, 'group_chat_user_not_found', 'No reseller or admin account was found for this email.')); ?>"
                         data-chat-group-invite-prepared="<?php echo admin_e(admin_t($messages, 'group_chat_invite_prepared', 'Invitation prepared. It will expire after 24 hours if not accepted.')); ?>"
+                        data-chat-create-user-success="<?php echo admin_e(admin_t($messages, 'chat_create_user_success', 'User created successfully.')); ?>"
+                        data-chat-create-user-error="<?php echo admin_e(admin_t($messages, 'chat_create_user_error', 'Unable to create the user.')); ?>"
+                        data-chat-create-user-email-queued="<?php echo admin_e(admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')); ?>"
+                        data-chat-create-user-email-failed="<?php echo admin_e(admin_t($messages, 'users_email_password_queue_failed', 'Password email could not be queued.')); ?>"
+                        data-chat-create-user-group-hint="<?php echo admin_e(admin_t($messages, 'chat_create_user_group_hint', 'User created. Click Add to include them in the group.')); ?>"
                         data-group-chat-badge="<?php echo admin_e(admin_t($messages, 'chat_group_header_badge', 'Admin group')); ?>"
                         data-group-chat-status-label="<?php echo admin_e(admin_t($messages, 'group_chat_badge', 'Group chat')); ?>"
                         data-chat-payment-create-label="<?php echo admin_e(admin_t($messages, 'chat_payment_send_button', 'Send to chat')); ?>">
@@ -3729,6 +3846,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <i class="bi bi-search" aria-hidden="true"></i>
                                         <input type="search" data-admin-chat-search-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_search_placeholder', 'Search...')); ?>" autocomplete="off" spellcheck="false">
                                     </div>
+                                    <?php if ($adminCanManageUsers): ?>
+                                        <button type="button" class="admin-chat-inbox__close admin-chat-inbox__close--group" data-admin-chat-create-customer-open aria-label="<?php echo admin_e(admin_t($messages, 'chat_create_user_button', 'Quick add user')); ?>" title="<?php echo admin_e(admin_t($messages, 'chat_create_user_button', 'Quick add user')); ?>">
+                                            <i class="bi bi-person-plus" aria-hidden="true"></i>
+                                        </button>
+                                    <?php endif; ?>
                                     <button type="button" class="admin-chat-inbox__close admin-chat-inbox__close--group" data-admin-chat-group-open aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>" title="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>">
                                         <i class="bi bi-people" aria-hidden="true"></i>
                                     </button>
@@ -3963,8 +4085,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
                                 </div>
                             </div>
-                            <div class="admin-chat-inbox__quick-modal" data-admin-chat-group-modal hidden>
-                                <div class="admin-chat-inbox__quick-dialog admin-chat-inbox__group-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>">
+                                <div class="admin-chat-inbox__quick-modal" data-admin-chat-group-modal hidden>
+                                    <div class="admin-chat-inbox__quick-dialog admin-chat-inbox__group-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?>">
                                     <div class="admin-chat-inbox__quick-header">
                                         <div>
                                             <strong><?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?></strong>
@@ -3997,6 +4119,57 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
                                 </div>
                             </div>
+                            <?php if ($adminCanManageUsers): ?>
+                                <div class="admin-chat-inbox__quick-modal" data-admin-chat-create-customer-modal hidden>
+                                    <div class="admin-chat-inbox__quick-dialog admin-chat-inbox__group-dialog" role="dialog" aria-modal="true" aria-label="<?php echo admin_e(admin_t($messages, 'chat_create_user_button', 'Quick add user')); ?>">
+                                        <div class="admin-chat-inbox__quick-header">
+                                            <div>
+                                                <strong><?php echo admin_e(admin_t($messages, 'chat_create_user_button', 'Quick add user')); ?></strong>
+                                                <p><?php echo admin_e(admin_t($messages, 'chat_create_user_intro', 'Create a new user directly from live chat. If the email already exists in the database, the form will stop and show the reason.')); ?></p>
+                                            </div>
+                                            <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-create-customer-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="admin-chat-group-modal admin-chat-create-user-modal">
+                                            <div class="admin-chat-inbox__composer-alert" data-admin-chat-create-customer-alert hidden></div>
+                                            <div class="row g-3">
+                                                <div class="col-12">
+                                                    <label class="form-label" for="chat_create_customer_email"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
+                                                    <input type="email" class="form-control" id="chat_create_customer_email" data-admin-chat-create-customer-email autocomplete="off" required>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label" for="chat_create_customer_password"><?php echo admin_e(admin_t($messages, 'users_quick_add_password', 'Password')); ?></label>
+                                                    <input type="text" class="form-control" id="chat_create_customer_password" data-admin-chat-create-customer-password placeholder="<?php echo admin_e(admin_t($messages, 'users_quick_add_password_placeholder', 'Leave empty to generate a random password')); ?>">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="chat_create_customer_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                    <select class="form-select" id="chat_create_customer_locale" data-admin-chat-create-customer-locale>
+                                                        <?php foreach (admin_supported_locales() as $supportedLocaleCode => $supportedLocaleMeta): ?>
+                                                            <option value="<?php echo admin_e($supportedLocaleCode); ?>"<?php echo $supportedLocaleCode === 'pl' ? ' selected' : ''; ?>><?php echo admin_e(strtoupper($supportedLocaleCode)); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label" for="chat_create_customer_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                    <select class="form-select" id="chat_create_customer_status" data-admin-chat-create-customer-status>
+                                                        <?php foreach (admin_customer_status_options('active') as $statusOption): ?>
+                                                            <option value="<?php echo admin_e($statusOption); ?>"<?php echo $statusOption === 'active' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_' . $statusOption, ucfirst($statusOption))); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="admin-chat-group-modal__checkbox">
+                                                        <input type="checkbox" data-admin-chat-create-customer-send-email checked>
+                                                        <span><?php echo admin_e(admin_t($messages, 'users_email_password_send', 'Send login email with password')); ?></span>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <button type="button" class="btn btn-dark btn-lg w-100" data-admin-chat-create-customer-submit><?php echo admin_e(admin_t($messages, 'users_quick_add_button', 'Add user')); ?></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
 
@@ -6552,6 +6725,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php endif; ?>
                                                                         <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="admin-inline-link admin-user-row__email"><?php echo admin_e((string)($row['email'] ?? '')); ?></a>
                                                                     </div>
+                                                                    <?php if (trim((string)($row['public_handle'] ?? '')) !== ''): ?>
+                                                                        <div class="admin-user-row__handle">@<?php echo admin_e((string)$row['public_handle']); ?></div>
+                                                                    <?php endif; ?>
                                                                     <div class="admin-user-row__badges">
                                                                         <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($rowStatusClass); ?>">
                                                                             <?php echo admin_e($rowStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : ucfirst($rowStatus)); ?>
@@ -7033,6 +7209,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-payments-note">
                                             <strong><?php echo admin_e(admin_t($messages, 'payment_note_title', 'Recommended workflow')); ?></strong>
                                             <span><?php echo admin_e(admin_t($messages, 'payment_note_text', 'New requests should first move to review. Final payment approval and subscription activation happen in the related order view.')); ?></span>
+                                            <button
+                                                type="button"
+                                                class="btn btn-dark btn-sm mt-2"
+                                                data-bs-toggle="modal"
+                                                data-bs-target="#adminHowToPayModal">
+                                                <i class="bi bi-question-circle" aria-hidden="true"></i>
+                                                <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_open', 'How to pay?')); ?></span>
+                                            </button>
                                         </div>
 
                                         <?php if (!empty($paymentFilterCustomer) && !empty($paymentFilterCustomerId)): ?>
@@ -7631,22 +7815,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </select>
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label" for="wallet_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
-                                                            <select class="form-select" id="wallet_status" name="wallet_status">
-                                                                <option value="available"<?php echo $editorStatus === 'available' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_available', 'Available')); ?></option>
-                                                                <option value="disabled"<?php echo $editorStatus === 'disabled' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></option>
-                                                            </select>
-                                                        </div>
-
-                                                        <div class="col-md-6">
-                                                            <label class="form-label" for="wallet_label"><?php echo admin_e(admin_t($messages, 'wallet_label', 'Wallet name / info')); ?></label>
-                                                            <input type="text" class="form-control" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>">
-                                                        </div>
-                                                        <div class="col-md-6">
-                                                            <label class="form-label" for="wallet_owner_full_name"><?php echo admin_e(admin_t($messages, 'wallet_owner_full_name', 'Owner full name')); ?></label>
-                                                            <input type="text" class="form-control" id="wallet_owner_full_name" name="owner_full_name" value="<?php echo admin_e($editorOwnerFullName); ?>">
-                                                        </div>
-                                                        <div class="col-md-6">
                                                             <label class="form-label" for="wallet_provider"><?php echo admin_e(admin_t($messages, 'wallet_provider', 'Wallet provider')); ?></label>
                                                             <select class="form-select" id="wallet_provider" name="wallet_provider">
                                                                 <?php foreach ($editorWalletProviderOptions as $providerValue => $providerLabel): ?>
@@ -7655,6 +7823,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </option>
                                                                 <?php endforeach; ?>
                                                             </select>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_label"><?php echo admin_e(admin_t($messages, 'wallet_label', 'Wallet name / info')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="wallet_address"><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></label>
+                                                            <input type="text" class="form-control border-red admin-wallet-editor__address-input" id="wallet_address" name="address" value="<?php echo admin_e((string)($walletEditor['address'] ?? '')); ?>" required>
+                                                        </div>
+
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_owner_full_name"><?php echo admin_e(admin_t($messages, 'wallet_owner_full_name', 'Owner full name')); ?></label>
+                                                            <input type="text" class="form-control" id="wallet_owner_full_name" name="owner_full_name" value="<?php echo admin_e($editorOwnerFullName); ?>">
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="wallet_network_code"><?php echo admin_e(admin_t($messages, 'crypto_asset_network', 'Network')); ?></label>
@@ -7674,13 +7855,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
 
                                                         <div class="col-12">
-                                                            <label class="form-label" for="wallet_address"><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></label>
-                                                            <input type="text" class="form-control" id="wallet_address" name="address" value="<?php echo admin_e((string)($walletEditor['address'] ?? '')); ?>" required>
-                                                        </div>
-
-                                                        <div class="col-12">
                                                             <label class="form-label" for="wallet_memo_tag"><?php echo admin_e(admin_t($messages, 'wallet_memo_tag', 'Memo / tag')); ?></label>
                                                             <input type="text" class="form-control" id="wallet_memo_tag" name="memo_tag" value="<?php echo admin_e((string)($walletEditor['memo_tag'] ?? '')); ?>">
+                                                        </div>
+
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="wallet_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                            <select class="form-select" id="wallet_status" name="wallet_status">
+                                                                <option value="available"<?php echo $editorStatus === 'available' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_available', 'Available')); ?></option>
+                                                                <option value="disabled"<?php echo $editorStatus === 'disabled' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></option>
+                                                            </select>
                                                         </div>
 
                                                         <div class="col-12">
@@ -7688,6 +7872,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <textarea class="form-control" id="wallet_notes" name="notes" rows="3"><?php echo admin_e((string)($walletEditor['notes'] ?? '')); ?></textarea>
                                                         </div>
                                                     </div>
+
+                                                    <hr class="admin-wallet-editor__divider">
 
                                                     <?php if (!$walletCreateMode && !empty($walletEditor['id'])): ?>
                                                     <div class="admin-wallet-customer-picker"
@@ -8079,16 +8265,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </thead>
                                                 <tbody>
                                                     <?php foreach ($newsRows as $row): ?>
-                                                        <?php $newsPreview = admin_news_body_preview((string)($row['body'] ?? '')); ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
-                                                                <div class="d-flex flex-column gap-1">
-                                                                    <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
-                                                                    <span class="text-body-secondary small"><?php echo admin_e('/' . (string)($row['slug'] ?? '')); ?></span>
-                                                                    <?php if ($newsPreview !== ''): ?>
-                                                                        <span class="text-body-secondary small"><?php echo admin_e($newsPreview); ?></span>
-                                                                    <?php endif; ?>
-                                                                </div>
+                                                                <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_visibility', 'Visibility')); ?>">
                                                                 <?php echo admin_e(admin_news_visibility_label((string)($row['visibility'] ?? 'customer'), $messages)); ?>
@@ -8594,7 +8773,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <div class="fw-semibold"><?php echo admin_e((string)($row['template_key'] ?? '')); ?></div>
                                                                     </td>
                                                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
-                                                                        <div class="fw-semibold"><?php echo admin_e((string)($row['name'] ?? '')); ?></div>
+                                                                        <div class="fw-semibold"><?php echo admin_e(admin_email_template_polish_title((string)($row['template_key'] ?? ''), (string)($row['name'] ?? ''))); ?></div>
                                                                     </td>
                                                                     <td data-label="<?php echo admin_e(admin_t($messages, 'email_template_languages', 'Languages')); ?>">
                                                                         <div class="admin-detail-inline-list">
@@ -8661,11 +8840,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
 
                                                 <div class="row g-3">
-                                                    <div class="col-md-7">
+                                                    <div class="col-md-3">
+                                                        <label class="form-label" for="faq_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                        <select class="form-select" id="faq_locale" name="locale_code">
+                                                            <?php foreach (admin_faq_locale_options() as $faqLocaleCode => $faqLocaleLabel): ?>
+                                                                <option value="<?php echo admin_e($faqLocaleCode); ?>"<?php echo admin_faq_normalize_locale((string)($faqDraft['locale_code'] ?? 'pl')) === $faqLocaleCode ? ' selected' : ''; ?>><?php echo admin_e($faqLocaleLabel); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-5">
                                                         <label class="form-label" for="faq_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
                                                         <input type="text" class="form-control" id="faq_title" name="title" value="<?php echo admin_e((string)($faqDraft['title'] ?? '')); ?>" required>
                                                     </div>
-                                                    <div class="col-md-5">
+                                                    <div class="col-md-4">
                                                         <label class="form-label" for="faq_slug"><?php echo admin_e(admin_t($messages, 'faq_slug_label', 'Slug')); ?></label>
                                                         <input type="text" class="form-control" id="faq_slug" name="slug" value="<?php echo admin_e((string)($faqDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'faq_slug_placeholder', 'generated-from-title')); ?>">
                                                     </div>
@@ -8718,11 +8905,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
 
                                                 <div class="row g-3">
-                                                    <div class="col-md-7">
+                                                    <div class="col-md-3">
+                                                        <label class="form-label" for="faq_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                        <select class="form-select" id="faq_locale" name="locale_code">
+                                                            <?php foreach (admin_faq_locale_options() as $faqLocaleCode => $faqLocaleLabel): ?>
+                                                                <option value="<?php echo admin_e($faqLocaleCode); ?>"<?php echo admin_faq_normalize_locale((string)($faqEditor['locale_code'] ?? 'pl')) === $faqLocaleCode ? ' selected' : ''; ?>><?php echo admin_e($faqLocaleLabel); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-5">
                                                         <label class="form-label" for="faq_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
                                                         <input type="text" class="form-control" id="faq_title" name="title" value="<?php echo admin_e((string)($faqEditor['title'] ?? '')); ?>" required>
                                                     </div>
-                                                    <div class="col-md-5">
+                                                    <div class="col-md-4">
                                                         <label class="form-label" for="faq_slug"><?php echo admin_e(admin_t($messages, 'faq_slug_label', 'Slug')); ?></label>
                                                         <input type="text" class="form-control" id="faq_slug" name="slug" value="<?php echo admin_e((string)($faqEditor['slug'] ?? '')); ?>">
                                                     </div>
@@ -8790,15 +8985,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </thead>
                                                 <tbody>
                                                     <?php foreach ($faqRows as $row): ?>
-                                                        <?php $faqPreview = admin_news_body_preview((string)($row['body'] ?? '')); ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
-                                                                <div class="d-flex flex-column gap-1">
+                                                                <div class="d-flex align-items-center gap-2 flex-wrap">
                                                                     <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
-                                                                    <span class="text-body-secondary small"><?php echo admin_e('/' . (string)($row['slug'] ?? '')); ?></span>
-                                                                    <?php if ($faqPreview !== ''): ?>
-                                                                        <span class="text-body-secondary small"><?php echo admin_e($faqPreview); ?></span>
-                                                                    <?php endif; ?>
+                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(strtoupper((string)($row['locale_code'] ?? 'pl'))); ?></span>
                                                                 </div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'faq_type_label', 'Type')); ?>">
@@ -9014,21 +9205,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <tbody>
                                                     <?php foreach ($helpRows as $row): ?>
                                                         <?php
-                                                        $helpPreview = admin_news_body_preview((string)($row['answer_html'] ?? ''));
                                                         $audienceCode = admin_help_topic_normalize_audience((string)($row['audience_code'] ?? 'all'));
                                                         $audienceLabel = admin_t($messages, 'help_audience_' . $audienceCode, (string)($adminHelpAudienceOptions[$audienceCode] ?? $audienceCode));
                                                         ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'help_question_label', 'Question')); ?>">
-                                                                <div class="d-flex flex-column gap-1">
-                                                                    <strong><?php echo admin_e((string)($row['question'] ?? '')); ?></strong>
-                                                                    <?php if (trim((string)($row['keywords'] ?? '')) !== ''): ?>
-                                                                        <span class="text-body-secondary small"><?php echo admin_e((string)($row['keywords'] ?? '')); ?></span>
-                                                                    <?php endif; ?>
-                                                                    <?php if ($helpPreview !== ''): ?>
-                                                                        <span class="text-body-secondary small"><?php echo admin_e($helpPreview); ?></span>
-                                                                    <?php endif; ?>
-                                                                </div>
+                                                                <strong><?php echo admin_e((string)($row['question'] ?? '')); ?></strong>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'help_audience_label', 'Audience')); ?>">
                                                                 <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($audienceLabel); ?></span>
@@ -9080,6 +9262,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                 case 'settings':
                                     ?>
+                                    <div class="admin-settings-tabs-wrap">
+                                        <div class="admin-settings-tabs-scroller">
+                                            <ul class="nav nav-tabs admin-settings-tabs" id="adminSettingsTabs" role="tablist">
+                                                <li class="nav-item" role="presentation"><button class="nav-link active" id="admin-settings-site-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-site-pane" type="button" role="tab" aria-controls="admin-settings-site-pane" aria-selected="true"><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-features-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-features-pane" type="button" role="tab" aria-controls="admin-settings-features-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_features_title', 'Payments and assignment rules')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-smtp-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-smtp-pane" type="button" role="tab" aria-controls="admin-settings-smtp-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-runner-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-runner-pane" type="button" role="tab" aria-controls="admin-settings-runner-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-backup-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-backup-pane" type="button" role="tab" aria-controls="admin-settings-backup-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-danger-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-danger-pane" type="button" role="tab" aria-controls="admin-settings-danger-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_danger_zone_title', 'Safety zone')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-language-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-language-pane" type="button" role="tab" aria-controls="admin-settings-language-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_language_title', 'Panel language')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-profile-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-profile-pane" type="button" role="tab" aria-controls="admin-settings-profile-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_profile_title', 'Live chat profile')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-access-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-access-pane" type="button" role="tab" aria-controls="admin-settings-access-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_access_title', 'Administrator access')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-admins-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-admins-pane" type="button" role="tab" aria-controls="admin-settings-admins-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'admin_accounts_title', 'Administrator accounts')); ?></button></li>
+                                            </ul>
+                                        </div>
+                                        <div class="tab-content admin-settings-tab-content" id="adminSettingsTabsContent">
+                                            <div class="tab-pane fade show active" id="admin-settings-site-pane" role="tabpanel" aria-labelledby="admin-settings-site-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></h3>
@@ -9181,6 +9380,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-features-pane" role="tabpanel" aria-labelledby="admin-settings-features-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_features_title', 'Payments and assignment rules')); ?></h3>
@@ -9379,6 +9580,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-smtp-pane" role="tabpanel" aria-labelledby="admin-settings-smtp-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></h3>
@@ -9413,6 +9616,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-runner-pane" role="tabpanel" aria-labelledby="admin-settings-runner-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></h3>
@@ -9434,6 +9639,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-backup-pane" role="tabpanel" aria-labelledby="admin-settings-backup-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></h3>
@@ -9454,6 +9661,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-danger-pane" role="tabpanel" aria-labelledby="admin-settings-danger-tab" tabindex="0">
                                     <div class="admin-settings-access admin-settings-access--danger">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_danger_zone_title', 'Safety zone')); ?></h3>
@@ -9518,6 +9727,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </div>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-language-pane" role="tabpanel" aria-labelledby="admin-settings-language-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_language_title', 'Panel language')); ?></h3>
@@ -9544,6 +9755,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-profile-pane" role="tabpanel" aria-labelledby="admin-settings-profile-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_profile_title', 'Live chat profile')); ?></h3>
@@ -9573,6 +9786,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-access-pane" role="tabpanel" aria-labelledby="admin-settings-access-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_access_title', 'Administrator access')); ?></h3>
@@ -9605,6 +9820,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
                                     </div>
 
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-admins-pane" role="tabpanel" aria-labelledby="admin-settings-admins-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'admin_accounts_title', 'Administrator accounts')); ?></h3>
@@ -9815,6 +10032,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
                                         </form>
                                     </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="admin-settings-table-wrap">
                                     <?php
                                     $rows = [];
                                     foreach (admin_settings_rows($db) as $row) {
@@ -9831,6 +10052,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $rows,
                                         $messages
                                     );
+                                    ?>
+                                        </div>
+                                    <?php
                                     break;
                             }
                             ?>
@@ -9856,6 +10080,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         id="adminHelpModal"
         tabindex="-1"
         aria-hidden="true"
+        data-can-edit="<?php echo $adminHelpModalCanEdit ? '1' : '0'; ?>"
+        data-edit-label="<?php echo admin_e(admin_t($messages, 'help_modal_edit_link', 'Edit')); ?>"
+        data-save-label="<?php echo admin_e(admin_t($messages, 'help_modal_save_button', 'Save')); ?>"
+        data-saved-label="<?php echo admin_e(admin_t($messages, 'help_modal_saved_label', 'Saved')); ?>"
+        data-save-error="<?php echo admin_e(admin_t($messages, 'help_modal_edit_error', 'Unable to save help content.')); ?>"
+        data-locked-error="<?php echo admin_e(admin_t($messages, 'help_modal_edit_locked', 'Unlock Settings access first to edit help content.')); ?>"
         data-empty-title="<?php echo admin_e(admin_t($messages, 'help_modal_empty_title', 'Brak wyników')); ?>"
         data-empty-text="<?php echo admin_e(admin_t($messages, 'help_modal_empty_text', 'Spróbuj wpisać inne słowa kluczowe lub krótsze pytanie.')); ?>">
         <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">

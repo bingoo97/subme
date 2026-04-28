@@ -527,7 +527,10 @@ $responseFormat = isset($_POST['format']) ? (string)$_POST['format'] : (isset($_
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $faqKey = isset($_POST['faq_key']) ? trim((string)$_POST['faq_key']) : (isset($_GET['faq_key']) ? trim((string)$_GET['faq_key']) : '');
 $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : (isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0);
-$chatLocaleCode = isset($currentLocale) ? (string)$currentLocale : (isset($user['lang_code']) ? (string)$user['lang_code'] : 'en');
+$chatLocaleCode = isset($user['locale_code']) && (string)$user['locale_code'] !== ''
+    ? (string)$user['locale_code']
+    : (isset($currentLocale) ? (string)$currentLocale : (isset($user['lang_code']) ? (string)$user['lang_code'] : 'en'));
+$chatLocaleCode = localization_normalize_locale($chatLocaleCode);
 $responseMessage = '';
 
 chat_purge_expired_messages($db, chat_retention_days($settings));

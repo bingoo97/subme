@@ -228,10 +228,15 @@ if ($site === 'logout' && !empty($user['logged']) && isset($_SESSION['id'])) {
 }
 
 $defaultLocale = 'en';
-if (!isset($_SESSION['lang']) || $_SESSION['lang'] === '') {
-    if (!empty($user['logged']) && isset($user['locale_code'])) {
-        $defaultLocale = tenant_normalize_locale_code($user['locale_code']);
-    } elseif (isset($user['lang'])) {
+$preferredUserLocale = '';
+if (!empty($user['logged']) && isset($user['locale_code'])) {
+    $preferredUserLocale = tenant_normalize_locale_code($user['locale_code']);
+}
+
+if ($preferredUserLocale !== '') {
+    $_SESSION['lang'] = localization_normalize_locale($preferredUserLocale);
+} elseif (!isset($_SESSION['lang']) || $_SESSION['lang'] === '') {
+    if (isset($user['lang'])) {
         $defaultLocale = localization_from_legacy_value($user['lang']);
     } elseif (isset($reseller['locale_code'])) {
         $defaultLocale = tenant_normalize_locale_code($reseller['locale_code']);

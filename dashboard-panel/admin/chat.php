@@ -22,7 +22,7 @@ $currentLocale = isset($_SESSION['admin_locale']) ? admin_normalize_locale((stri
 $messages = admin_load_messages($currentLocale);
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
-$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'delete_message', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'respond_group_invite', 'leave_group', 'toggle_group_read_only'];
+$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'quick_create_customer'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $mutatingActions, true) && !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
     http_response_code(419);
@@ -86,6 +86,43 @@ if ($action === 'create_group') {
     }
 
     $conversationId = (int)($result['conversation_id'] ?? 0);
+}
+
+if ($action === 'quick_create_customer') {
+    if (!admin_user_can_access_route($adminUser, 'users')) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Access denied.']);
+        exit;
+    }
+
+    $result = admin_create_customer_account(
+        $db,
+        (string)($_POST['email'] ?? ''),
+        (string)($_POST['password'] ?? ''),
+        [
+            'locale_code' => (string)($_POST['locale_code'] ?? 'pl'),
+            'status' => (string)($_POST['status'] ?? 'active'),
+            'send_password_email' => !empty($_POST['send_password_email']),
+        ],
+        (int)($adminUser['id'] ?? 0),
+        admin_request_ip()
+    );
+
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to create the user.')]);
+        exit;
+    }
+
+    echo json_encode([
+        'ok' => true,
+        'message' => (string)($result['message'] ?? 'Customer created successfully.'),
+        'customer_id' => (int)($result['customer_id'] ?? 0),
+        'email' => (string)($result['email'] ?? ''),
+        'password' => (string)($result['password'] ?? ''),
+        'email_notification' => (array)($result['email_notification'] ?? []),
+    ]);
+    exit;
 }
 
 if ($action === 'respond_group_invite') {
@@ -196,6 +233,37 @@ if ($action === 'quick_replies') {
                 'locale_code' => admin_normalize_locale((string)($row['locale_code'] ?? 'en')),
             ];
         }, $quickReplies),
+    ]);
+    exit;
+}
+
+if ($action === 'update_quick_reply_message') {
+    $quickReplyId = isset($_POST['quick_reply_id']) ? (int)$_POST['quick_reply_id'] : 0;
+    $result = admin_update_chat_quick_reply_message($db, $quickReplyId, (string)($_POST['message_body'] ?? ''));
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to save quick reply.')]);
+        exit;
+    }
+
+    $replyRow = is_array($result['reply'] ?? null) ? (array)$result['reply'] : [];
+    $preview = trim((string)($replyRow['message_body'] ?? ''));
+    if (function_exists('mb_strlen') && mb_strlen($preview) > 180) {
+        $preview = rtrim(mb_substr($preview, 0, 177)) . '...';
+    } elseif (strlen($preview) > 180) {
+        $preview = rtrim(substr($preview, 0, 177)) . '...';
+    }
+
+    echo json_encode([
+        'ok' => true,
+        'message' => (string)($result['message'] ?? 'Quick reply saved successfully.'),
+        'item' => [
+            'id' => (int)($replyRow['id'] ?? $quickReplyId),
+            'title' => (string)($replyRow['title'] ?? ''),
+            'message_body' => (string)($replyRow['message_body'] ?? ''),
+            'preview' => $preview,
+            'locale_code' => admin_normalize_locale((string)($replyRow['locale_code'] ?? 'en')),
+        ],
     ]);
     exit;
 }
@@ -416,6 +484,17 @@ if ($action === 'delete_message') {
     if (!$deleted) {
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => 'Unable to delete message.']);
+        exit;
+    }
+}
+
+if ($action === 'edit_message') {
+    $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : 0;
+    $messageBody = trim((string)($_POST['message'] ?? ''));
+    $updated = admin_update_chat_message($db, $conversationId, $messageId, (int)$adminUser['id'], $messageBody);
+    if (!$updated) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Unable to save message.']);
         exit;
     }
 }

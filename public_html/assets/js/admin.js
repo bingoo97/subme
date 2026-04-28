@@ -962,6 +962,12 @@ document.addEventListener('DOMContentLoaded', function () {
             return 'admin-help-modal__badge admin-help-modal__badge--all';
         }
 
+        function canEditTopics() {
+            return !!doc.body
+                && doc.body.getAttribute('data-admin-help-edit-allowed') === '1'
+                && doc.body.getAttribute('data-admin-sensitive-unlocked') === '1';
+        }
+
         function render(items) {
             if (!items.length) {
                 results.innerHTML = '<div class="admin-help-modal__empty"><strong>'
@@ -973,14 +979,32 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             results.innerHTML = items.map(function (topic) {
+                var showEditor = canEditTopics();
+                var topicId = parseInt(topic.id || '0', 10) || 0;
                 return '<article class="admin-help-modal__topic">'
+                    + '<div class="admin-help-modal__topic-shell" data-admin-help-topic data-topic-id="' + topicId + '">'
                     + '<div class="admin-help-modal__topic-meta">'
                     + '<span class="' + audienceClass(String(topic.audience_code || 'all')) + '">'
                     + escapeHtml(String(topic.audience_label || 'All'))
                     + '</span>'
                     + '</div>'
                     + '<h3 class="admin-help-modal__question">' + escapeHtml(String(topic.question || '')) + '</h3>'
-                    + '<div class="admin-help-modal__answer">' + String(topic.answer_html || '') + '</div>'
+                    + '<div class="admin-help-modal__answer" data-admin-help-answer>' + String(topic.answer_html || '') + '</div>'
+                    + (showEditor
+                        ? '<div class="admin-help-modal__topic-actions">'
+                            + '<a href="#" class="admin-help-modal__edit-link" data-admin-help-edit-topic data-topic-id="' + topicId + '">' + escapeHtml(modal.getAttribute('data-edit-label') || 'Edit') + '</a>'
+                            + '<span class="admin-help-modal__saved" data-admin-help-saved hidden>' + escapeHtml(modal.getAttribute('data-saved-label') || 'Saved') + '</span>'
+                        + '</div>'
+                        : '')
+                    + (showEditor
+                        ? '<div class="admin-help-modal__editor" data-admin-help-editor hidden>'
+                            + '<textarea class="form-control" rows="8" spellcheck="false" data-admin-help-edit-input>' + escapeHtml(String(topic.answer_html || '')) + '</textarea>'
+                            + '<div class="admin-help-modal__editor-actions">'
+                                + '<button type="button" class="btn btn-dark btn-sm" data-admin-help-save-topic data-topic-id="' + topicId + '"><i class="bi bi-save" aria-hidden="true"></i><span>' + escapeHtml(modal.getAttribute('data-save-label') || 'Save') + '</span></button>'
+                            + '</div>'
+                        + '</div>'
+                        : '')
+                    + '</div>'
                     + '</article>';
             }).join('');
         }
@@ -996,6 +1020,103 @@ document.addEventListener('DOMContentLoaded', function () {
                 return normalizeText(topic.search_text || '').indexOf(query) !== -1;
             }));
         }
+
+        modal.addEventListener('click', function (event) {
+            var editLink = closest(event.target, '[data-admin-help-edit-topic]');
+            if (editLink) {
+                var topicNode = closest(editLink, '[data-admin-help-topic]');
+                var editorNode = q('[data-admin-help-editor]', topicNode);
+                var inputNode = q('[data-admin-help-edit-input]', topicNode);
+                var savedNode = q('[data-admin-help-saved]', topicNode);
+
+                event.preventDefault();
+                if (!topicNode || !editorNode || !inputNode) {
+                    return;
+                }
+
+                if (!canEditTopics()) {
+                    window.alert(modal.getAttribute('data-locked-error') || 'Unlock Settings access first to edit help content.');
+                    return;
+                }
+
+                qa('[data-admin-help-topic]', results).forEach(function (otherTopicNode) {
+                    if (otherTopicNode !== topicNode) {
+                        var otherEditorNode = q('[data-admin-help-editor]', otherTopicNode);
+                        var otherSavedNode = q('[data-admin-help-saved]', otherTopicNode);
+                        if (otherEditorNode) {
+                            otherEditorNode.hidden = true;
+                        }
+                        if (otherSavedNode) {
+                            otherSavedNode.hidden = true;
+                        }
+                    }
+                });
+
+                editorNode.hidden = false;
+                if (savedNode) {
+                    savedNode.hidden = true;
+                }
+                inputNode.focus();
+                inputNode.setSelectionRange(inputNode.value.length, inputNode.value.length);
+                return;
+            }
+
+            var saveButton = closest(event.target, '[data-admin-help-save-topic]');
+            if (saveButton) {
+                var saveTopicId = parseInt(saveButton.getAttribute('data-topic-id') || '0', 10) || 0;
+                var saveTopicNode = closest(saveButton, '[data-admin-help-topic]');
+                var saveEditorNode = q('[data-admin-help-editor]', saveTopicNode);
+                var saveInputNode = q('[data-admin-help-edit-input]', saveTopicNode);
+                var saveAnswerNode = q('[data-admin-help-answer]', saveTopicNode);
+                var saveSavedNode = q('[data-admin-help-saved]', saveTopicNode);
+                var formData = new window.FormData();
+
+                event.preventDefault();
+                if (!saveTopicId || !saveTopicNode || !saveEditorNode || !saveInputNode || !saveAnswerNode) {
+                    return;
+                }
+
+                if (!canEditTopics()) {
+                    window.alert(modal.getAttribute('data-locked-error') || 'Unlock Settings access first to edit help content.');
+                    return;
+                }
+
+                saveButton.disabled = true;
+                formData.append('admin_update_help_topic_ajax', '1');
+                formData.append('_csrf', (doc.body && doc.body.getAttribute('data-admin-sensitive-csrf')) || '');
+                formData.append('topic_id', String(saveTopicId));
+                formData.append('answer_html', saveInputNode.value);
+
+                jsonFetch(window.location.href, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                }).then(function (payload) {
+                    var updatedTopic;
+
+                    saveButton.disabled = false;
+                    if (!payload || !payload.ok || !payload.topic) {
+                        window.alert((payload && payload.message) ? payload.message : (modal.getAttribute('data-save-error') || 'Unable to save help content.'));
+                        return;
+                    }
+
+                    updatedTopic = payload.topic;
+                    topics = topics.map(function (topic) {
+                        return (parseInt(topic.id || '0', 10) || 0) === saveTopicId ? updatedTopic : topic;
+                    });
+
+                    saveAnswerNode.innerHTML = String(updatedTopic.answer_html || '');
+                    saveInputNode.value = String(updatedTopic.answer_html || '');
+                    saveEditorNode.hidden = true;
+                    if (saveSavedNode) {
+                        saveSavedNode.hidden = false;
+                    }
+                }).catch(function () {
+                    saveButton.disabled = false;
+                    window.alert(modal.getAttribute('data-save-error') || 'Unable to save help content.');
+                });
+            }
+        });
 
         modal.addEventListener('shown.bs.modal', function () {
             applySearch();
@@ -1121,6 +1242,46 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function initTopbarTools() {
         var activeFlyout = null;
+
+        function ensureToggleBadge(toggle) {
+            var badge;
+            if (!toggle) {
+                return null;
+            }
+
+            badge = q('.admin-chat-inbox__badge', toggle);
+            if (badge) {
+                return badge;
+            }
+
+            badge = document.createElement('span');
+            badge.className = 'admin-chat-inbox__badge';
+            toggle.appendChild(badge);
+            return badge;
+        }
+
+        function updateToggleBadge(toggle, count) {
+            var badge;
+            var safeCount = Math.max(0, parseInt(count, 10) || 0);
+            if (!toggle) {
+                return;
+            }
+
+            badge = q('.admin-chat-inbox__badge', toggle);
+            if (safeCount <= 0) {
+                if (badge) {
+                    badge.remove();
+                }
+                return;
+            }
+
+            badge = badge || ensureToggleBadge(toggle);
+            if (!badge) {
+                return;
+            }
+
+            badge.textContent = String(safeCount);
+        }
 
         function ensureOrdersCountBadge(section) {
             var head = section ? q('.admin-topbar-notifications__section-head', section) : null;
@@ -1248,6 +1409,17 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-admin-topbar-flyout-root]').forEach(function (root) {
             var toggle = q('[data-admin-topbar-flyout-toggle]', root);
             var flyout = q('[data-admin-topbar-flyout]', root);
+            var stateUrl = root.getAttribute('data-admin-topbar-state-url') || '';
+            var fallbackStateUrls = stateUrl ? [
+                stateUrl,
+                'topbar_state.php',
+                '/admin/topbar_state.php'
+            ].filter(function (value, index, array) {
+                return value && array.indexOf(value) === index;
+            }) : [];
+            var stateUrlIndex = 0;
+            var pollTimer = 0;
+            var pollInFlight = false;
             if (!toggle || !flyout) {
                 return;
             }
@@ -1345,6 +1517,47 @@ document.addEventListener('DOMContentLoaded', function () {
                     form.submit();
                 });
             });
+
+            function pollTopbarState(force) {
+                var activeStateUrl = fallbackStateUrls[stateUrlIndex] || stateUrl;
+                if (!stateUrl || pollInFlight) {
+                    return;
+                }
+                if (!force && doc.hidden) {
+                    return;
+                }
+
+                pollInFlight = true;
+                jsonFetch(activeStateUrl, { credentials: 'same-origin' }).then(function (payload) {
+                    if (payload && payload.__status === 404 && stateUrlIndex < fallbackStateUrls.length - 1) {
+                        stateUrlIndex += 1;
+                        return pollTopbarState(force);
+                    }
+                    if (!payload || !payload.ok) {
+                        return;
+                    }
+                    updateToggleBadge(toggle, payload.badge_count);
+                }).catch(function () {
+                    return;
+                }).then(function () {
+                    pollInFlight = false;
+                });
+            }
+
+            if (stateUrl) {
+                pollTopbarState(true);
+                pollTimer = window.setInterval(function () {
+                    pollTopbarState(false);
+                }, 15000);
+
+                if (pollTimer) {
+                    doc.addEventListener('visibilitychange', function () {
+                        if (!doc.hidden) {
+                            pollTopbarState(true);
+                        }
+                    });
+                }
+            }
         });
 
         qa('[data-admin-converter-root]').forEach(function (root) {
@@ -1635,6 +1848,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var cryptoTooltip = q('[data-admin-chat-crypto-tooltip]', root);
         var bankOpenButton = q('[data-admin-chat-bank-open]', root);
         var csrfToken = root.getAttribute('data-csrf-token') || '';
+        var chatStateUrl = root.getAttribute('data-admin-chat-state-url') || '/admin/chat.php?action=inbox_state';
         var activeConversationId = 0;
         var activeCustomerId = 0;
         var activeConversationType = 'live_chat';
@@ -1647,11 +1861,19 @@ document.addEventListener('DOMContentLoaded', function () {
         var groupEmailInput = q('[data-admin-chat-group-email]', root);
         var groupMembers = q('[data-admin-chat-group-members]', root);
         var groupReadonlyInput = q('[data-admin-chat-group-readonly]', root);
+        var createCustomerModal = q('[data-admin-chat-create-customer-modal]', root);
+        var createCustomerAlert = q('[data-admin-chat-create-customer-alert]', root);
+        var createCustomerEmailInput = q('[data-admin-chat-create-customer-email]', root);
+        var createCustomerPasswordInput = q('[data-admin-chat-create-customer-password]', root);
+        var createCustomerLocaleInput = q('[data-admin-chat-create-customer-locale]', root);
+        var createCustomerStatusInput = q('[data-admin-chat-create-customer-status]', root);
+        var createCustomerSendEmailInput = q('[data-admin-chat-create-customer-send-email]', root);
         var readonlyToggle = q('[data-admin-chat-readonly-toggle]', root);
         var leaveGroupButton = q('[data-admin-chat-leave-group]', root);
         var groupInvitesWrap = q('[data-admin-chat-group-invites]', root);
         var groupEmails = [];
         var groupEmailRequests = {};
+        var groupModalWasOpenBeforeCreate = false;
         var linkPreviewUrl = '';
         var linkPreviewData = null;
         var linkPreviewDismissedUrl = '';
@@ -1707,6 +1929,16 @@ document.addEventListener('DOMContentLoaded', function () {
             setHidden(groupAlert, !message);
         }
 
+        function showCreateCustomerAlert(message, isError) {
+            if (!createCustomerAlert) {
+                return;
+            }
+            createCustomerAlert.textContent = message || '';
+            createCustomerAlert.classList.toggle('alert-danger', !!isError);
+            createCustomerAlert.classList.toggle('alert-success', !isError && !!message);
+            setHidden(createCustomerAlert, !message);
+        }
+
         function adminChatStorageAvailable() {
             try {
                 return !!window.localStorage;
@@ -1743,6 +1975,100 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             return '<span class="' + escapeHtml(classes.join(' ')) + '">' + escapeHtml(avatarText || 'U') + '</span>';
+        }
+
+        function ensureChatToggleBadge() {
+            var badge;
+            if (!toggle) {
+                return null;
+            }
+
+            badge = q('.admin-chat-inbox__badge', toggle);
+            if (badge) {
+                return badge;
+            }
+
+            badge = document.createElement('span');
+            badge.className = 'admin-chat-inbox__badge';
+            toggle.appendChild(badge);
+            return badge;
+        }
+
+        function updateChatToggleBadge(count) {
+            var badge;
+            var safeCount = Math.max(0, parseInt(count, 10) || 0);
+            if (!toggle) {
+                return;
+            }
+
+            badge = q('.admin-chat-inbox__badge', toggle);
+            if (safeCount <= 0) {
+                if (badge) {
+                    badge.remove();
+                }
+                return;
+            }
+
+            badge = badge || ensureChatToggleBadge();
+            if (!badge) {
+                return;
+            }
+
+            badge.textContent = String(safeCount);
+        }
+
+        function updateChatInboxItems(items) {
+            var itemMap = {};
+            var unreadLabel = root.getAttribute('data-chat-unread-label') || 'Unread';
+
+            (Array.isArray(items) ? items : []).forEach(function (item) {
+                itemMap[String(parseInt(item.conversation_id || 0, 10) || 0)] = item;
+            });
+
+            qa('[data-admin-chat-item]', root).forEach(function (itemNode) {
+                var conversationId = String(parseInt(itemNode.getAttribute('data-conversation-id') || '0', 10) || 0);
+                var payload = itemMap[conversationId] || null;
+                var unreadCount = payload ? Math.max(0, parseInt(payload.unread_count || 0, 10) || 0) : 0;
+                var meta = q('.admin-chat-inbox__meta', itemNode);
+                var unreadNode = q('.admin-chat-inbox__unread', itemNode);
+                var presenceNode = q('[data-admin-chat-presence-dot]', itemNode);
+
+                itemNode.classList.toggle('is-unread', unreadCount > 0);
+
+                if (presenceNode && payload && payload.presence) {
+                    presenceNode.innerHTML = renderPresenceDot(payload.presence);
+                }
+
+                if (unreadCount > 0) {
+                    if (!unreadNode && meta) {
+                        unreadNode = document.createElement('span');
+                        unreadNode.className = 'admin-chat-inbox__unread';
+                        meta.insertBefore(unreadNode, meta.firstChild || null);
+                    }
+                    if (unreadNode) {
+                        unreadNode.textContent = unreadLabel + ': ' + String(unreadCount);
+                    }
+                } else if (unreadNode) {
+                    unreadNode.remove();
+                }
+            });
+        }
+
+        function pollChatInboxState(force) {
+            if (!chatStateUrl || doc.hidden && !force) {
+                return;
+            }
+
+            jsonFetch(chatStateUrl, { credentials: 'same-origin' }).then(function (payload) {
+                if (!payload || !payload.ok) {
+                    return;
+                }
+
+                updateChatToggleBadge(payload.badge_count);
+                updateChatInboxItems(payload.items);
+            }).catch(function () {
+                return;
+            });
         }
 
         function saveAdminChatPanelState(isOpen) {
@@ -2236,10 +2562,30 @@ document.addEventListener('DOMContentLoaded', function () {
             showGroupAlert('', false);
         }
 
+        function resetCreateCustomerModal() {
+            if (createCustomerEmailInput) {
+                createCustomerEmailInput.value = '';
+            }
+            if (createCustomerPasswordInput) {
+                createCustomerPasswordInput.value = '';
+            }
+            if (createCustomerLocaleInput) {
+                createCustomerLocaleInput.value = 'pl';
+            }
+            if (createCustomerStatusInput) {
+                createCustomerStatusInput.value = 'active';
+            }
+            if (createCustomerSendEmailInput) {
+                createCustomerSendEmailInput.checked = true;
+            }
+            showCreateCustomerAlert('', false);
+        }
+
         function openGroupModal() {
             if (!groupModal) {
                 return;
             }
+            closeCreateCustomerModal();
             setHidden(groupModal, false);
             window.setTimeout(function () {
                 if (groupNameInput) {
@@ -2254,6 +2600,93 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             setHidden(groupModal, true);
             resetGroupModal();
+        }
+
+        function openCreateCustomerModal() {
+            if (!createCustomerModal) {
+                return;
+            }
+            groupModalWasOpenBeforeCreate = !!groupModal && !groupModal.hasAttribute('hidden');
+            if (groupModalWasOpenBeforeCreate && groupModal) {
+                setHidden(groupModal, true);
+            }
+            setHidden(createCustomerModal, false);
+            window.setTimeout(function () {
+                if (createCustomerEmailInput) {
+                    createCustomerEmailInput.focus();
+                }
+            }, 20);
+        }
+
+        function closeCreateCustomerModal() {
+            if (!createCustomerModal) {
+                return;
+            }
+            setHidden(createCustomerModal, true);
+            resetCreateCustomerModal();
+            if (groupModalWasOpenBeforeCreate && groupModal) {
+                setHidden(groupModal, false);
+            }
+            groupModalWasOpenBeforeCreate = false;
+        }
+
+        function submitCreateCustomer() {
+            var submitButton = q('[data-admin-chat-create-customer-submit]', root);
+            var formData = new window.FormData();
+
+            if (!createCustomerModal || !submitButton) {
+                return;
+            }
+
+            submitButton.disabled = true;
+            formData.append('action', 'quick_create_customer');
+            formData.append('_csrf', csrfToken);
+            formData.append('email', createCustomerEmailInput ? createCustomerEmailInput.value.trim() : '');
+            formData.append('password', createCustomerPasswordInput ? createCustomerPasswordInput.value : '');
+            formData.append('locale_code', createCustomerLocaleInput ? createCustomerLocaleInput.value : 'pl');
+            formData.append('status', createCustomerStatusInput ? createCustomerStatusInput.value : 'active');
+            formData.append('send_password_email', createCustomerSendEmailInput && createCustomerSendEmailInput.checked ? '1' : '0');
+
+            jsonFetch(chatUrl, {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            }).then(function (payload) {
+                var successMessage = root.getAttribute('data-chat-create-user-success') || 'User created successfully.';
+
+                submitButton.disabled = false;
+                if (!payload || !payload.ok) {
+                    showCreateCustomerAlert((payload && payload.message) ? payload.message : (root.getAttribute('data-chat-create-user-error') || 'Unable to create the user.'), true);
+                    return;
+                }
+
+                if (createCustomerSendEmailInput && createCustomerSendEmailInput.checked) {
+                    successMessage += ' '
+                        + ((payload.email_notification && (payload.email_notification.ok || payload.email_notification.queued))
+                            ? (root.getAttribute('data-chat-create-user-email-queued') || 'Password email has been queued.')
+                            : (root.getAttribute('data-chat-create-user-email-failed') || 'Password email could not be queued.'));
+                }
+
+                closeCreateCustomerModal();
+
+                if (searchInput && payload.email) {
+                    searchInput.value = String(payload.email);
+                    searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+                }
+
+                if (groupModal && !groupModal.hasAttribute('hidden') && groupEmailInput && payload.email) {
+                    groupEmailInput.value = String(payload.email);
+                    groupEmailInput.focus();
+                    showGroupAlert(root.getAttribute('data-chat-create-user-group-hint') || 'User created. Click Add to include them in the group.', false);
+                } else if (searchInput) {
+                    searchInput.focus();
+                }
+
+                showComposerAlert(successMessage, false);
+            }).catch(function () {
+                submitButton.disabled = false;
+                showCreateCustomerAlert(root.getAttribute('data-chat-create-user-error') || 'Unable to create the user.', true);
+            });
         }
 
         function updateGroupInviteCards(conversationId, removeOnly) {
@@ -2686,6 +3119,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 var items = Array.isArray(payload.items) ? payload.items : [];
+                var sendLabel = root.getAttribute('data-chat-quick-replies-send-label') || 'Send';
+                var editLabel = root.getAttribute('data-chat-quick-replies-edit-label') || 'Edit';
+                var saveLabel = root.getAttribute('data-chat-quick-replies-save-label') || 'Save';
+                var savedLabel = root.getAttribute('data-chat-quick-replies-saved-label') || 'Saved';
                 if (!items.length) {
                     quickList.innerHTML = '<div class="admin-chat-inbox__quick-state">' + escapeHtml(root.getAttribute('data-chat-quick-replies-empty') || 'No quick replies available.') + '</div>';
                     return;
@@ -2697,8 +3134,18 @@ document.addEventListener('DOMContentLoaded', function () {
                             '<div class="admin-chat-inbox__quick-item-main">' +
                                 '<strong>' + escapeHtml(item.title) + '</strong>' +
                                 '<p>' + escapeHtml(item.preview || item.message_body || '') + '</p>' +
+                                '<div class="admin-chat-inbox__quick-edit-row">' +
+                                    '<button type="button" class="admin-chat-inbox__quick-edit-link" data-admin-chat-quick-edit data-quick-reply-id="' + escapeHtml(item.id) + '">' + escapeHtml(editLabel) + '</button>' +
+                                    '<span class="admin-chat-inbox__quick-saved" data-admin-chat-quick-saved hidden>' + escapeHtml(savedLabel) + '</span>' +
+                                '</div>' +
+                                '<div class="admin-chat-inbox__quick-editor" data-admin-chat-quick-editor hidden>' +
+                                    '<textarea class="form-control admin-chat-inbox__quick-editor-input" rows="5" data-admin-chat-quick-input>' + escapeHtml(item.message_body || '') + '</textarea>' +
+                                    '<div class="admin-chat-inbox__quick-editor-actions">' +
+                                        '<button type="button" class="btn btn-dark btn-sm" data-admin-chat-quick-save data-quick-reply-id="' + escapeHtml(item.id) + '"><i class="bi bi-save" aria-hidden="true"></i><span>' + escapeHtml(saveLabel) + '</span></button>' +
+                                    '</div>' +
+                                '</div>' +
                             '</div>' +
-                            '<button type="button" class="btn btn-dark btn-sm admin-chat-inbox__quick-send" data-admin-chat-send-quick-reply data-quick-reply-id="' + escapeHtml(item.id) + '">Send</button>' +
+                            '<button type="button" class="btn btn-dark btn-sm admin-chat-inbox__quick-send" data-admin-chat-send-quick-reply data-quick-reply-id="' + escapeHtml(item.id) + '" title="' + escapeHtml(sendLabel) + '" aria-label="' + escapeHtml(sendLabel) + '"><i class="bi bi-send" aria-hidden="true"></i></button>' +
                         '</div>';
                 }).join('');
             }).catch(function () {
@@ -2723,6 +3170,16 @@ document.addEventListener('DOMContentLoaded', function () {
             showList();
         }
 
+        window.setInterval(function () {
+            pollChatInboxState(false);
+        }, 12000);
+        doc.addEventListener('visibilitychange', function () {
+            if (!doc.hidden) {
+                pollChatInboxState(true);
+            }
+        });
+        pollChatInboxState(true);
+
         refreshAdminChatViewportHeight();
         window.addEventListener('resize', refreshAdminChatViewportHeight);
         if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
@@ -2742,9 +3199,21 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        if (q('[data-admin-chat-create-customer-open]', root)) {
+            q('[data-admin-chat-create-customer-open]', root).addEventListener('click', function () {
+                openCreateCustomerModal();
+            });
+        }
+
         qa('[data-admin-chat-group-close]', root).forEach(function (button) {
             button.addEventListener('click', function () {
                 closeGroupModal();
+            });
+        });
+
+        qa('[data-admin-chat-create-customer-close]', root).forEach(function (button) {
+            button.addEventListener('click', function () {
+                closeCreateCustomerModal();
             });
         });
 
@@ -2888,6 +3357,24 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        if (createCustomerEmailInput) {
+            createCustomerEmailInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submitCreateCustomer();
+                }
+            });
+        }
+
+        if (createCustomerPasswordInput) {
+            createCustomerPasswordInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submitCreateCustomer();
+                }
+            });
+        }
+
         if (q('[data-admin-chat-group-submit]', root)) {
             q('[data-admin-chat-group-submit]', root).addEventListener('click', function () {
                 jsonFetch(chatUrl, {
@@ -2912,6 +3399,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 }).catch(function () {
                     showGroupAlert(root.getAttribute('data-chat-group-create-error') || 'Unable to create the group chat.', true);
                 });
+            });
+        }
+
+        if (q('[data-admin-chat-create-customer-submit]', root)) {
+            q('[data-admin-chat-create-customer-submit]', root).addEventListener('click', function () {
+                submitCreateCustomer();
             });
         }
 
@@ -3104,11 +3597,11 @@ document.addEventListener('DOMContentLoaded', function () {
             if (deleteMessage) {
                 var deleteConversationId = parseInt(deleteMessage.getAttribute('data-conversation-id') || '0', 10) || 0;
                 var deleteMessageId = parseInt(deleteMessage.getAttribute('data-message-id') || '0', 10) || 0;
-                var deleteConfirm = root.getAttribute('data-chat-delete-message-confirm') || 'Delete this message?';
-                if (!deleteConversationId || !deleteMessageId || !window.confirm(deleteConfirm)) {
+                if (!deleteConversationId || !deleteMessageId) {
                     return;
                 }
 
+                deleteMessage.disabled = true;
                 jsonFetch(chatUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
@@ -3119,13 +3612,95 @@ document.addEventListener('DOMContentLoaded', function () {
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
+                    deleteMessage.disabled = false;
                     if (!payload.ok) {
                         showComposerAlert(root.getAttribute('data-chat-delete-message-error') || 'Unable to delete this message.', true);
                         return;
                     }
                     renderConversation(payload);
                 }).catch(function () {
+                    deleteMessage.disabled = false;
                     showComposerAlert(root.getAttribute('data-chat-delete-message-error') || 'Unable to delete this message.', true);
+                });
+                return;
+            }
+
+            var editMessage = closest(event.target, '[data-admin-chat-edit-message]');
+            if (editMessage) {
+                event.preventDefault();
+                var editItem = closest(editMessage, '[data-admin-chat-message]');
+                var editorWrap = q('[data-admin-chat-editor]', editItem);
+                var editorInput = q('[data-admin-chat-edit-input]', editItem);
+                var savedNote = q('[data-admin-chat-edit-saved]', editItem);
+                if (!editItem || !editorWrap || !editorInput) {
+                    return;
+                }
+
+                qa('[data-admin-chat-message]', body).forEach(function (messageNode) {
+                    if (messageNode !== editItem) {
+                        var otherEditor = q('[data-admin-chat-editor]', messageNode);
+                        var otherSaved = q('[data-admin-chat-edit-saved]', messageNode);
+                        if (otherEditor) {
+                            setHidden(otherEditor, true);
+                        }
+                        if (otherSaved) {
+                            setHidden(otherSaved, true);
+                        }
+                    }
+                });
+
+                setHidden(editorWrap, false);
+                if (savedNote) {
+                    setHidden(savedNote, true);
+                }
+                editorInput.focus();
+                editorInput.setSelectionRange(editorInput.value.length, editorInput.value.length);
+                return;
+            }
+
+            var saveMessage = closest(event.target, '[data-admin-chat-save-message]');
+            if (saveMessage) {
+                event.preventDefault();
+                var saveItem = closest(saveMessage, '[data-admin-chat-message]');
+                var saveEditor = q('[data-admin-chat-editor]', saveItem);
+                var saveInput = q('[data-admin-chat-edit-input]', saveItem);
+                var saveSaved = q('[data-admin-chat-edit-saved]', saveItem);
+                var saveMessageId = parseInt(saveMessage.getAttribute('data-message-id') || '0', 10) || 0;
+                var saveText = saveInput ? saveInput.value.trim() : '';
+                if (!saveItem || !saveEditor || !saveInput || !saveMessageId || !activeConversationId || !saveText) {
+                    return;
+                }
+
+                saveMessage.disabled = true;
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'edit_message',
+                        conversation_id: activeConversationId,
+                        message_id: saveMessageId,
+                        message: saveText,
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    saveMessage.disabled = false;
+                    if (!payload.ok) {
+                        showComposerAlert(root.getAttribute('data-chat-edit-message-error') || 'Unable to save this message.', true);
+                        return;
+                    }
+                    renderConversation(payload);
+                    var refreshedMessage = q('[data-admin-chat-message][data-message-id="' + String(saveMessageId) + '"]', body);
+                    var refreshedSaved = refreshedMessage ? q('[data-admin-chat-edit-saved]', refreshedMessage) : null;
+                    if (refreshedSaved) {
+                        setHidden(refreshedSaved, false);
+                        window.setTimeout(function () {
+                            setHidden(refreshedSaved, true);
+                        }, 2200);
+                    }
+                    showComposerAlert('', false);
+                }).catch(function () {
+                    saveMessage.disabled = false;
+                    showComposerAlert(root.getAttribute('data-chat-edit-message-error') || 'Unable to save this message.', true);
                 });
                 return;
             }
@@ -3145,10 +3720,11 @@ document.addEventListener('DOMContentLoaded', function () {
             var quickSend = closest(event.target, '[data-admin-chat-send-quick-reply]');
             if (quickSend) {
                 var quickReplyId = parseInt(quickSend.getAttribute('data-quick-reply-id') || '0', 10) || 0;
-                if (!quickReplyId || !activeConversationId) {
+                if (!quickReplyId || !activeConversationId || quickSend.disabled) {
                     return;
                 }
 
+                quickSend.disabled = true;
                 jsonFetch(chatUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
@@ -3159,6 +3735,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
+                    quickSend.disabled = false;
                     if (!payload.ok) {
                         showComposerAlert(root.getAttribute('data-chat-quick-replies-send-error') || 'Unable to send quick reply.', true);
                         return;
@@ -3166,7 +3743,90 @@ document.addEventListener('DOMContentLoaded', function () {
                     closeQuickModal();
                     renderConversation(payload);
                 }).catch(function () {
+                    quickSend.disabled = false;
                     showComposerAlert(root.getAttribute('data-chat-quick-replies-send-error') || 'Unable to send quick reply.', true);
+                });
+                return;
+            }
+
+            var quickEdit = closest(event.target, '[data-admin-chat-quick-edit]');
+            if (quickEdit) {
+                event.preventDefault();
+                var quickItem = closest(quickEdit, '.admin-chat-inbox__quick-item');
+                var quickEditor = q('[data-admin-chat-quick-editor]', quickItem);
+                var quickInput = q('[data-admin-chat-quick-input]', quickItem);
+                var quickSaved = q('[data-admin-chat-quick-saved]', quickItem);
+                if (!quickItem || !quickEditor || !quickInput) {
+                    return;
+                }
+
+                qa('[data-quick-reply-id]', quickList).forEach(function (replyNode) {
+                    if (replyNode !== quickItem) {
+                        var otherEditor = q('[data-admin-chat-quick-editor]', replyNode);
+                        var otherSaved = q('[data-admin-chat-quick-saved]', replyNode);
+                        if (otherEditor) {
+                            setHidden(otherEditor, true);
+                        }
+                        if (otherSaved) {
+                            setHidden(otherSaved, true);
+                        }
+                    }
+                });
+
+                setHidden(quickEditor, false);
+                if (quickSaved) {
+                    setHidden(quickSaved, true);
+                }
+                quickInput.focus();
+                quickInput.setSelectionRange(quickInput.value.length, quickInput.value.length);
+                return;
+            }
+
+            var quickSave = closest(event.target, '[data-admin-chat-quick-save]');
+            if (quickSave) {
+                event.preventDefault();
+                var quickSaveId = parseInt(quickSave.getAttribute('data-quick-reply-id') || '0', 10) || 0;
+                var quickSaveItem = closest(quickSave, '.admin-chat-inbox__quick-item');
+                var quickSaveInput = q('[data-admin-chat-quick-input]', quickSaveItem);
+                var quickSaveEditor = q('[data-admin-chat-quick-editor]', quickSaveItem);
+                var quickSaveSaved = q('[data-admin-chat-quick-saved]', quickSaveItem);
+                var quickSavePreview = q('.admin-chat-inbox__quick-item-main p', quickSaveItem);
+                var quickSaveText = quickSaveInput ? quickSaveInput.value.trim() : '';
+                if (!quickSaveId || !quickSaveItem || !quickSaveInput || !quickSaveEditor || !quickSaveText) {
+                    return;
+                }
+
+                quickSave.disabled = true;
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'update_quick_reply_message',
+                        quick_reply_id: quickSaveId,
+                        message_body: quickSaveText,
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    quickSave.disabled = false;
+                    if (!payload.ok) {
+                        showComposerAlert(root.getAttribute('data-chat-quick-replies-save-error') || 'Unable to save quick reply.', true);
+                        return;
+                    }
+
+                    if (quickSavePreview && payload.item) {
+                        quickSavePreview.textContent = payload.item.preview || payload.item.message_body || '';
+                    }
+                    setHidden(quickSaveEditor, true);
+                    if (quickSaveSaved) {
+                        setHidden(quickSaveSaved, false);
+                        window.setTimeout(function () {
+                            setHidden(quickSaveSaved, true);
+                        }, 2200);
+                    }
+                    showComposerAlert('', false);
+                }).catch(function () {
+                    quickSave.disabled = false;
+                    showComposerAlert(root.getAttribute('data-chat-quick-replies-save-error') || 'Unable to save quick reply.', true);
                 });
                 return;
             }

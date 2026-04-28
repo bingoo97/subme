@@ -6,7 +6,7 @@
 		<div class="news_inner {if ($news[i].date_s > ($smarty.now - 3600*24))}active{/if} col-md-12">
 			<div class="news_title">
 				<h2>
-					<a href="/news-{$news[i].id}" title="Preview">
+					<a href="{if $news[i].url}{$news[i].url}{else}/news-{$news[i].id}{/if}" title="Preview">
 						{if ($news[i].date_s > ($smarty.now - 3600*24))}
 						<span class="news-new-badge">{$t.home_new_badge}</span>
 						{/if}

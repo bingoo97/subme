@@ -880,21 +880,103 @@ if (!function_exists('chat_faq_slug_candidates')) {
     }
 }
 
+if (!function_exists('chat_system_faq_seed_rows')) {
+    function chat_system_faq_seed_rows(): array
+    {
+        return [
+            ['slug' => 'faq-1-en', 'locale_code' => 'en', 'title' => 'How do I pay with crypto?', 'body' => '<p>1. Open your unpaid order and choose <strong>Pay with crypto</strong>.</p><p>2. Select one of your assigned active wallets.</p><p>3. Send the exact amount shown in the panel.</p><p>4. Wait for manual confirmation from support.</p>'],
+            ['slug' => 'faq-2-en', 'locale_code' => 'en', 'title' => 'How long does activation take?', 'body' => '<p>Most activations are completed shortly after payment confirmation.</p><p>If the order needs manual verification, support will update you in live chat.</p>'],
+            ['slug' => 'faq-3-en', 'locale_code' => 'en', 'title' => 'How do I extend an active subscription?', 'body' => '<p>Open the order list and choose <strong>Extend</strong> for the active subscription.</p><p>You can then select another package period from the same provider if more options are available.</p>'],
+            ['slug' => 'faq-4-en', 'locale_code' => 'en', 'title' => 'What should I send after a bank transfer?', 'body' => '<p>Please send your transfer confirmation to the support email address shown in the payment instructions.</p><p>You can also use live chat if you need faster help.</p>'],
+            ['slug' => 'faq-5-en', 'locale_code' => 'en', 'title' => 'My stream is not working. What should I do?', 'body' => '<p>Restart the app or device first.</p><p>Then check whether your subscription is active and fully paid.</p><p>If the issue remains, contact support in live chat and include the device or app name.</p>'],
+            ['slug' => 'faq-1-pl', 'locale_code' => 'pl', 'title' => 'Jak zapłacić kryptowalutą?', 'body' => '<p>1. Otwórz nieopłacone zamówienie i wybierz <strong>Pay with crypto</strong>.</p><p>2. Wybierz jeden z przypisanych aktywnych portfeli.</p><p>3. Wyślij dokładnie taką kwotę, jaka jest pokazana w panelu.</p><p>4. Poczekaj na ręczne potwierdzenie płatności przez support.</p>'],
+            ['slug' => 'faq-2-pl', 'locale_code' => 'pl', 'title' => 'Jak długo trwa aktywacja?', 'body' => '<p>Większość aktywacji jest realizowana krótko po potwierdzeniu płatności.</p><p>Jeśli zamówienie wymaga ręcznej weryfikacji, support zaktualizuje status na live chacie.</p>'],
+            ['slug' => 'faq-3-pl', 'locale_code' => 'pl', 'title' => 'Jak przedłużyć aktywną subskrypcję?', 'body' => '<p>Otwórz listę zamówień i wybierz <strong>Extend</strong> przy aktywnej subskrypcji.</p><p>Następnie możesz wybrać inny okres pakietu od tego samego providera, jeśli są dostępne inne opcje.</p>'],
+            ['slug' => 'faq-4-pl', 'locale_code' => 'pl', 'title' => 'Co wysłać po przelewie bankowym?', 'body' => '<p>Wyślij potwierdzenie przelewu na adres supportu pokazany w instrukcjach płatności.</p><p>Jeśli potrzebujesz szybszej pomocy, możesz też użyć live chatu.</p>'],
+            ['slug' => 'faq-5-pl', 'locale_code' => 'pl', 'title' => 'Stream nie działa. Co zrobić?', 'body' => '<p>Najpierw uruchom ponownie aplikację lub urządzenie.</p><p>Następnie sprawdź, czy subskrypcja jest aktywna i opłacona.</p><p>Jeśli problem nadal występuje, napisz do supportu na live chacie i podaj nazwę urządzenia lub aplikacji.</p>'],
+        ];
+    }
+}
+
+if (!function_exists('chat_ensure_system_faq_pages_runtime')) {
+    function chat_ensure_system_faq_pages_runtime(Mysql_ks $db): void
+    {
+        static $done = false;
+        if ($done || !schema_object_exists($db, 'static_pages')) {
+            return;
+        }
+
+        $hasLocaleColumn = schema_column_exists($db, 'static_pages', 'locale_code');
+        foreach (chat_system_faq_seed_rows() as $seedRow) {
+            $safeSlug = $db->escape((string)$seedRow['slug']);
+            $existing = $db->select_user(
+                "SELECT id
+                 FROM static_pages
+                 WHERE slug = '{$safeSlug}'
+                 LIMIT 1"
+            );
+
+            if (is_array($existing) && !empty($existing['id'])) {
+                if ($hasLocaleColumn) {
+                    $db->update_using_id(
+                        ['locale_code'],
+                        [(string)$seedRow['locale_code']],
+                        'static_pages',
+                        (int)$existing['id']
+                    );
+                }
+                continue;
+            }
+
+            $columns = ['slug', 'title', 'body', 'page_type', 'is_system', 'is_active'];
+            $values = [
+                (string)$seedRow['slug'],
+                (string)$seedRow['title'],
+                (string)$seedRow['body'],
+                'system',
+                1,
+                1,
+            ];
+
+            if ($hasLocaleColumn) {
+                array_splice($columns, 3, 0, ['locale_code']);
+                array_splice($values, 3, 0, [(string)$seedRow['locale_code']]);
+            }
+
+            $db->insert($columns, $values, 'static_pages');
+        }
+
+        $done = true;
+    }
+}
+
 if (!function_exists('chat_load_faq_prompts')) {
     function chat_load_faq_prompts(Mysql_ks $db, string $localeCode, int $limit = 5): array
     {
+        chat_ensure_system_faq_pages_runtime($db);
         $prompts = [];
         $safeLimit = max(1, min(5, $limit));
+        $localeCode = strtolower(trim($localeCode));
+        $hasLocaleColumn = schema_column_exists($db, 'static_pages', 'locale_code');
 
         for ($number = 1; $number <= $safeLimit; $number++) {
             $page = null;
             foreach (chat_faq_slug_candidates($number, $localeCode) as $slug) {
                 $safeSlug = $db->escape($slug);
+                $genericSlugFilter = '';
+                if (
+                    $hasLocaleColumn
+                    && $localeCode !== ''
+                    && preg_match('/^faq-\d+$/', $slug) === 1
+                ) {
+                    $safeLocaleCode = $db->escape($localeCode);
+                    $genericSlugFilter = " AND locale_code = '{$safeLocaleCode}'";
+                }
                 $page = $db->select_user(
                     "SELECT id, slug, title, body
                      FROM static_pages
                      WHERE slug = '{$safeSlug}'
-                       AND is_active = 1
+                       AND is_active = 1{$genericSlugFilter}
                      LIMIT 1"
                 );
                 if (is_array($page) && !empty($page['id'])) {

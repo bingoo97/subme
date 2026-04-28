@@ -687,6 +687,7 @@ CREATE TABLE `static_pages` (
   `title` VARCHAR(191) NOT NULL,
   `body` LONGTEXT NOT NULL,
   `page_type` VARCHAR(30) NOT NULL DEFAULT 'custom',
+  `locale_code` VARCHAR(8) NOT NULL DEFAULT 'pl',
   `is_system` TINYINT(1) NOT NULL DEFAULT 0,
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
   `legacy_source_table` VARCHAR(64) DEFAULT NULL,

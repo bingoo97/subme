@@ -13,13 +13,14 @@ if (empty($settings['support_chat_enabled']) || !isset($user['logged']) || !$use
 chat_purge_expired_messages($db, chat_retention_days($settings));
 
 $chatLocaleCode = 'en';
-if (isset($currentLocale)) {
+if (isset($user['locale_code']) && (string)$user['locale_code'] !== '') {
+    $chatLocaleCode = (string)$user['locale_code'];
+} elseif (isset($currentLocale)) {
     $chatLocaleCode = (string)$currentLocale;
 } elseif (isset($user['lang_code'])) {
     $chatLocaleCode = (string)$user['lang_code'];
-} elseif (isset($user['locale_code'])) {
-    $chatLocaleCode = (string)$user['locale_code'];
 }
+$chatLocaleCode = localization_normalize_locale($chatLocaleCode);
 
 $chatFaqPrompts = chat_load_faq_prompts($db, $chatLocaleCode, 5);
 $smarty->assign('chat_faq_prompts', $chatFaqPrompts);

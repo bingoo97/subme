@@ -20,12 +20,20 @@ switch ($site) {
 				"published_at <= '{$visibleNow}'",
 			];
 
-			if(isset($_GET["news_id"])){
+			$requestedNewsSlug = trim((string)($_GET['news_slug'] ?? ''));
+			if ($requestedNewsSlug !== '') {
+				$safeRequestedNewsSlug = $db->escape($requestedNewsSlug);
+				if (ctype_digit($requestedNewsSlug)) {
+					$newsConditions[] = "(news_posts.slug = '{$safeRequestedNewsSlug}' OR news_posts.id = " . (int)$requestedNewsSlug . ")";
+				} else {
+					$newsConditions[] = "news_posts.slug = '{$safeRequestedNewsSlug}'";
+				}
+			} elseif(isset($_GET["news_id"])){
 				$news_id = (int)$_GET["news_id"];
 				$newsConditions[] = "news_posts.id = '{$news_id}'";
 			}
 
-			$ask = "SELECT news_posts.id, news_posts.title, news_posts.body AS text, news_posts.published_at AS news_created_at, {$authorSelect}
+			$ask = "SELECT news_posts.id, news_posts.slug, news_posts.title, news_posts.body AS text, news_posts.published_at AS news_created_at, {$authorSelect}
 					FROM news_posts{$authorJoin}
 					WHERE " . implode(" AND ", $newsConditions) . "
 					ORDER BY news_posts.published_at DESC, news_posts.id DESC";
@@ -69,6 +77,8 @@ switch ($site) {
 				$news[$i]["author_label"] = trim((string)($news[$i]["author_handle"] ?? '')) !== ''
 					? trim((string)$news[$i]["author_handle"])
 					: trim((string)($reseller["name"] ?? ''));
+				$newsSlug = trim((string)($news[$i]['slug'] ?? ''));
+				$news[$i]['url'] = $newsSlug !== '' ? '/news-' . $newsSlug : '/news-' . (int)($news[$i]['id'] ?? 0);
 			}		
 			$smarty->assign("news", $news);
 		}

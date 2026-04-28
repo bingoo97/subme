@@ -2874,6 +2874,37 @@ function app_email_primary_from(array $settings): string
     return 'no-reply@' . app_email_site_host($settings);
 }
 
+function app_email_domain_from_address(string $email): string
+{
+    $email = strtolower(trim($email));
+    if ($email === '' || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        return '';
+    }
+
+    $parts = explode('@', $email);
+    $domain = strtolower(trim((string)end($parts)));
+    if ($domain === '' || !preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $domain)) {
+        return '';
+    }
+
+    return $domain;
+}
+
+function app_email_message_host(array $settings): string
+{
+    $fromDomain = app_email_domain_from_address(app_email_primary_from($settings));
+    if ($fromDomain !== '') {
+        return $fromDomain;
+    }
+
+    $siteHost = strtolower(trim(app_email_site_host($settings)));
+    if ($siteHost !== '' && preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $siteHost)) {
+        return $siteHost;
+    }
+
+    return 'localhost';
+}
+
 function app_email_support_recipient(array $settings): string
 {
     $supportEmail = trim((string)($settings['support_email'] ?? ''));
@@ -2928,7 +2959,7 @@ function app_email_mailer(array $settings): \PHPMailer\PHPMailer\PHPMailer
     $mail->Password = trim((string)($settings['smtp_password'] ?? $settings['smtp_haslo'] ?? ''));
     $mail->Timeout = 20;
     $mail->CharSet = 'UTF-8';
-    $mail->Encoding = 'base64';
+    $mail->Encoding = 'quoted-printable';
     $mail->isHTML(true);
     $mail->ContentType = 'text/html; charset=UTF-8';
     $mail->SMTPAutoTLS = true;
@@ -2943,10 +2974,15 @@ function app_email_mailer(array $settings): \PHPMailer\PHPMailer\PHPMailer
 
     $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
     $fromEmail = app_email_primary_from($settings);
-    $mail->Hostname = app_email_site_host($settings);
+    $messageHost = app_email_message_host($settings);
+    $mail->Hostname = $messageHost;
+    $mail->Helo = $messageHost;
     $mail->setFrom($fromEmail, $siteName);
     $mail->Sender = $fromEmail;
     $mail->addReplyTo(app_email_support_recipient($settings) ?: $fromEmail, $siteName);
+    if ($messageHost !== 'localhost') {
+        $mail->MessageID = sprintf('<%s@%s>', bin2hex(random_bytes(16)), $messageHost);
+    }
     $mail->addCustomHeader('Auto-Submitted', 'auto-generated');
     $mail->addCustomHeader('X-Auto-Response-Suppress', 'All');
     $mail->addCustomHeader('X-Entity-Ref-ID', bin2hex(random_bytes(10)));
@@ -4424,6 +4460,7 @@ function app_order_email_context(Mysql_ks $db, int $orderId): ?array
             orders.expires_at,
             orders.paid_at,
             customers.email AS customer_email,
+            customers.locale_code AS customer_locale_code,
             products.name AS product_name,
             product_providers.name AS provider_name,
             currencies.code AS currency_code,
@@ -4471,7 +4508,9 @@ function app_queue_order_email(Mysql_ks $db, string $templateKey, int $orderId, 
         $replacements,
         (int)($order['customer_id'] ?? 0),
         $orderId,
-        $dedupeWindowSeconds
+        $dedupeWindowSeconds,
+        true,
+        (string)($order['customer_locale_code'] ?? '')
     );
 }
 
@@ -4580,7 +4619,9 @@ function app_queue_live_chat_customer_notification_if_offline(
         ],
         $customerId,
         null,
-        app_live_chat_email_cooldown_seconds()
+        app_live_chat_email_cooldown_seconds(),
+        true,
+        (string)($customer['locale_code'] ?? '')
     );
 }
 
@@ -4807,7 +4848,9 @@ function app_queue_account_created_notification(Mysql_ks $db, int $customerId): 
         ],
         $customerId,
         null,
-        300
+        300,
+        true,
+        (string)($customer['locale_code'] ?? '')
     );
 }
 
@@ -4827,7 +4870,9 @@ function app_queue_account_blocked_notification(Mysql_ks $db, int $customerId): 
         ],
         $customerId,
         null,
-        900
+        900,
+        true,
+        (string)($customer['locale_code'] ?? '')
     );
 }
 
@@ -4849,7 +4894,9 @@ function app_queue_payment_request_notification(Mysql_ks $db, int $orderId, int 
         ],
         $customerId,
         $orderId,
-        300
+        300,
+        true,
+        (string)($customer['locale_code'] ?? '')
     );
 }
 

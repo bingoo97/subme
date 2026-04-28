@@ -2012,11 +2012,15 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
     $openBankPaymentsSelect = schema_object_exists($db, 'bank_transfer_requests')
         ? "(SELECT COUNT(*) FROM bank_transfer_requests WHERE bank_transfer_requests.customer_id = customers.id AND bank_transfer_requests.status IN ('pending_payment', 'awaiting_review'))"
         : '0';
+    $publicHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
 
     return $db->select_full_user(
         "SELECT
             customers.id,
             customers.email,
+            {$publicHandleSelect},
             customers.locale_code,
             customers.country_code,
             customers.status,
@@ -2033,6 +2037,44 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
          ORDER BY customers.id DESC
          LIMIT {$limit}"
     );
+}
+
+function admin_import_email_header_aliases(): array
+{
+    return [
+        'email',
+        'e_mail',
+        'mail',
+        'email_address',
+        'emailaddress',
+        'e_mail_address',
+        'adres_email',
+        'adres_mail',
+        'user_email',
+        'customer_email',
+        'client_email',
+        'reseller_email',
+        'buyer_email',
+        'account_email',
+        'contact_email',
+        'login_email',
+    ];
+}
+
+function admin_import_header_is_email(string $value): bool
+{
+    $normalized = admin_import_normalize_header_cell($value);
+    if ($normalized === '') {
+        return false;
+    }
+
+    if (in_array($normalized, admin_import_email_header_aliases(), true)) {
+        return true;
+    }
+
+    return strpos($normalized, 'email') !== false
+        || $normalized === 'mail'
+        || substr($normalized, -5) === '_mail';
 }
 
 function admin_customer_management_summary(Mysql_ks $db, int $customerId): array
@@ -2398,7 +2440,6 @@ function admin_crypto_wallet_delete_summary(Mysql_ks $db, int $walletId): array
     }
 
     $summary['can_delete'] = $summary['active_assignments_total'] === 0
-        && $summary['assignments_total'] === 0
         && $summary['payments_total'] === 0
         && $summary['transactions_total'] === 0;
 
@@ -3703,6 +3744,19 @@ function admin_topbar_manual_backup_notice(array $settings, int $intervalHours =
         'last_backup_compact_label' => $lastBackupTimestamp !== false ? admin_compact_datetime_label($lastBackupAt) : '',
         'interval_hours' => $intervalHours,
     ];
+}
+
+function admin_topbar_notification_count(Mysql_ks $db, array $settings): int
+{
+    $payments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($settings), 8);
+    $orders = admin_topbar_notification_order_rows($db, 8);
+    $expiring = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
+    $backup = admin_topbar_manual_backup_notice($settings, 168);
+
+    return count($payments)
+        + count($orders)
+        + (int)($expiring['total'] ?? 0)
+        + (!empty($backup['show']) ? 1 : 0);
 }
 
 function admin_topbar_apply_order_action(
@@ -7072,7 +7126,7 @@ function admin_parse_customer_import_source(string $rawInput): array
     foreach ($firstRowCells as $cellIndex => $cellValue) {
         $normalized = admin_import_normalize_header_cell((string)$cellValue);
         $headerMap[$cellIndex] = $normalized;
-        if (in_array($normalized, ['email', 'e_mail', 'mail', 'email_address', 'adres_email'], true)) {
+        if (admin_import_header_is_email((string)$cellValue)) {
             $emailColumn = $cellIndex;
             $hasHeader = true;
         }
@@ -7115,8 +7169,11 @@ function admin_parse_customer_import_source(string $rawInput): array
         $emailCell = isset($cells[$emailColumn]) ? (string)$cells[$emailColumn] : '';
         $email = admin_import_extract_email_from_cell($emailCell);
         if ($email === '') {
-            if (count($cells) === 1) {
-                $email = admin_import_extract_email_from_cell((string)$cells[0]);
+            foreach ($cells as $fallbackCell) {
+                $email = admin_import_extract_email_from_cell((string)$fallbackCell);
+                if ($email !== '') {
+                    break;
+                }
             }
             if ($email === '') {
                 continue;
@@ -8334,13 +8391,28 @@ function admin_delete_crypto_wallet(Mysql_ks $db, int $walletId, int $adminUserI
 
     $summary = admin_crypto_wallet_delete_summary($db, $walletId);
     if (empty($summary['can_delete'])) {
-        return ['ok' => false, 'message' => 'This wallet has assignment or payment history and cannot be deleted.'];
+        return ['ok' => false, 'message' => 'This wallet still has active assignments, payment history or transaction history and cannot be deleted.'];
+    }
+
+    $deletedAssignmentHistory = 0;
+    $db->query('START TRANSACTION');
+
+    if (schema_object_exists($db, 'crypto_wallet_assignments')) {
+        $deletedAssignmentHistory = (int)($summary['assignments_total'] ?? 0);
+        $deletedAssignmentsOk = $db->query("DELETE FROM crypto_wallet_assignments WHERE wallet_address_id = {$walletId}");
+        if ($deletedAssignmentsOk === false) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to clean wallet assignment history.'];
+        }
     }
 
     $deleted = $db->delete_using_id('crypto_wallet_addresses', $walletId);
     if (!$deleted) {
+        $db->query('ROLLBACK');
         return ['ok' => false, 'message' => 'Unable to delete wallet.'];
     }
+
+    $db->query('COMMIT');
 
     $walletLabel = trim((string)($wallet['label'] ?? ''));
     $walletAddress = trim((string)($wallet['address'] ?? ''));
@@ -8349,7 +8421,7 @@ function admin_delete_crypto_wallet(Mysql_ks $db, int $walletId, int $adminUserI
         0,
         $adminUserId,
         'crypto_wallet_deleted',
-        'Crypto wallet #' . $walletId . ' deleted: ' . ($walletLabel !== '' ? $walletLabel : $walletAddress) . '.',
+        'Crypto wallet #' . $walletId . ' deleted: ' . ($walletLabel !== '' ? $walletLabel : $walletAddress) . '. Removed assignment history rows: ' . $deletedAssignmentHistory . '.',
         $ipAddress
     );
 
@@ -9359,6 +9431,37 @@ function admin_save_chat_quick_reply(Mysql_ks $db, int $replyId, array $input): 
     return [
         'ok' => (bool)$updated,
         'message' => $updated ? 'Quick reply saved successfully.' : 'Unable to save quick reply.',
+    ];
+}
+
+function admin_update_chat_quick_reply_message(Mysql_ks $db, int $replyId, string $messageBody): array
+{
+    $reply = admin_chat_quick_reply_find($db, $replyId);
+    if (!is_array($reply) || empty($reply['id'])) {
+        return ['ok' => false, 'message' => 'Quick reply not found.'];
+    }
+
+    $messageBody = trim($messageBody);
+    if ($messageBody === '') {
+        return ['ok' => false, 'message' => 'Quick reply message is required.'];
+    }
+
+    $updated = $db->update_using_id(
+        ['message_body'],
+        [$messageBody],
+        'support_quick_replies',
+        $replyId
+    );
+
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to save quick reply.'];
+    }
+
+    $freshReply = admin_chat_quick_reply_find($db, $replyId);
+    return [
+        'ok' => true,
+        'message' => 'Quick reply saved successfully.',
+        'reply' => is_array($freshReply) ? $freshReply : null,
     ];
 }
 
@@ -10609,7 +10712,9 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     $isCustomer = (string)($messageRow['sender_type'] ?? '') === 'customer';
                     $bubbleClass = $isCustomer ? 'is-customer' : 'is-admin';
                     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
+                    $messageBodyRaw = (string)($messageRow['message_body'] ?? '');
                     $messageHtml = chat_format_message_html((string)($messageRow['message_body'] ?? ''));
+                    $canEdit = !$isCustomer && trim($messageBodyRaw) !== '';
                     $senderLabel = chat_sender_display_name(
                         [
                             'sender_type' => (string)($messageRow['sender_type'] ?? ''),
@@ -10637,6 +10742,9 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                         ? admin_t($messages, 'chat_read_receipt_read', 'Read by customer')
                         : admin_t($messages, 'chat_read_receipt_pending', 'Waiting for customer to read');
                     $deleteLabel = admin_t($messages, 'chat_message_delete_button', 'Delete message');
+                    $editLabel = admin_t($messages, 'chat_message_edit_button', 'Edit');
+                    $saveLabel = admin_t($messages, 'chat_message_save_button', 'Save');
+                    $savedLabel = admin_t($messages, 'chat_message_saved_label', 'Saved');
                     ?>
                     <div class="admin-chat-conversation__message <?php echo admin_e($bubbleClass); ?>" data-admin-chat-message data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
                         <div class="admin-chat-conversation__bubble">
@@ -10653,6 +10761,36 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                             <?php endif; ?>
                             <?php if ($messageHtml !== ''): ?>
                                 <div class="admin-chat-conversation__text"><?php echo $messageHtml; ?></div>
+                            <?php endif; ?>
+                            <?php if ($canEdit): ?>
+                                <div class="admin-chat-conversation__edit-row">
+                                    <button
+                                        type="button"
+                                        class="admin-chat-conversation__edit-link"
+                                        data-admin-chat-edit-message
+                                        data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                        <?php echo admin_e($editLabel); ?>
+                                    </button>
+                                    <span class="admin-chat-conversation__edit-saved" data-admin-chat-edit-saved hidden><?php echo admin_e($savedLabel); ?></span>
+                                </div>
+                                <div class="admin-chat-conversation__editor" data-admin-chat-editor hidden>
+                                    <label class="visually-hidden" for="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"><?php echo admin_e($editLabel); ?></label>
+                                    <textarea
+                                        class="form-control admin-chat-conversation__editor-input"
+                                        id="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
+                                        rows="4"
+                                        data-admin-chat-edit-input><?php echo admin_e($messageBodyRaw); ?></textarea>
+                                    <div class="admin-chat-conversation__editor-actions">
+                                        <button
+                                            type="button"
+                                            class="btn btn-dark btn-sm"
+                                            data-admin-chat-save-message
+                                            data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                            <i class="bi bi-save" aria-hidden="true"></i>
+                                            <span><?php echo admin_e($saveLabel); ?></span>
+                                        </button>
+                                    </div>
+                                </div>
                             <?php endif; ?>
                         </div>
                         <div class="admin-chat-conversation__meta">
@@ -10681,6 +10819,49 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
     <?php
 
     return trim((string)ob_get_clean());
+}
+
+function admin_update_chat_message(Mysql_ks $db, int $conversationId, int $messageId, int $adminUserId, string $messageBody): bool
+{
+    $messageBody = trim($messageBody);
+    if (
+        $conversationId <= 0
+        || $messageId <= 0
+        || $adminUserId <= 0
+        || $messageBody === ''
+        || !schema_object_exists($db, 'support_messages')
+    ) {
+        return false;
+    }
+
+    $messageRow = $db->select_user(
+        "SELECT id, sender_type, admin_user_id
+         FROM support_messages
+         WHERE id = {$messageId}
+           AND conversation_id = {$conversationId}
+         LIMIT 1"
+    );
+    if (
+        !is_array($messageRow)
+        || empty($messageRow['id'])
+        || (string)($messageRow['sender_type'] ?? '') !== 'admin'
+        || (int)($messageRow['admin_user_id'] ?? 0) !== $adminUserId
+    ) {
+        return false;
+    }
+
+    $updated = $db->update_using_id(
+        ['message_body'],
+        [$messageBody],
+        'support_messages',
+        $messageId
+    );
+    if (!$updated) {
+        return false;
+    }
+
+    admin_chat_refresh_conversation_timestamps($db, $conversationId);
+    return true;
 }
 
 function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $adminUserId, string $messageBody, ?string $attachmentPath = null): bool
@@ -10981,6 +11162,32 @@ function admin_email_template_rows_paginated(Mysql_ks $db, int $limit = 20, int 
     );
 }
 
+function admin_email_template_polish_title(string $templateKey, string $fallbackTitle = ''): string
+{
+    $labels = [
+        'account-activation' => 'Powiadomienie o utworzeniu konta',
+        'password-reset' => 'Reset hasła',
+        'payment-request-created' => 'Powiadomienie o oczekującej płatności',
+        'order-paid' => 'Powiadomienie o potwierdzeniu płatności',
+        'order-activated' => 'Powiadomienie o aktywacji zamówienia',
+        'order-expired' => 'Powiadomienie o wygaśnięciu zamówienia',
+        'live-chat-admin-notify' => 'Powiadomienie admina o nowej wiadomości',
+        'live-chat-customer-notify' => 'Powiadomienie klienta o nowej wiadomości',
+        'news-broadcast' => 'Powiadomienie o aktualności',
+        'account-blocked' => 'Powiadomienie o blokadzie konta',
+        'support-payment-request-notify' => 'Powiadomienie supportu o rozpoczętej płatności',
+        'reseller-chat-customer-notify' => 'Powiadomienie o wiadomości w messengerze',
+    ];
+
+    $templateKey = trim($templateKey);
+    if ($templateKey !== '' && isset($labels[$templateKey])) {
+        return $labels[$templateKey];
+    }
+
+    $fallbackTitle = trim($fallbackTitle);
+    return $fallbackTitle !== '' ? $fallbackTitle : $templateKey;
+}
+
 function admin_email_template_translation_map(Mysql_ks $db, int $templateId): array
 {
     if ($templateId <= 0) {
@@ -11117,12 +11324,61 @@ function admin_email_template_placeholder_badges(string $templateKey): array
     return $badges;
 }
 
+function admin_faq_locale_options(): array
+{
+    return [
+        'pl' => 'PL',
+        'en' => 'EN',
+    ];
+}
+
+function admin_faq_normalize_locale(?string $locale): string
+{
+    $locale = strtolower(trim((string)$locale));
+    return array_key_exists($locale, admin_faq_locale_options()) ? $locale : 'pl';
+}
+
+function admin_ensure_static_pages_locale_runtime(Mysql_ks $db): void
+{
+    static $done = false;
+    if ($done || !schema_object_exists($db, 'static_pages')) {
+        return;
+    }
+
+    if (!schema_column_exists($db, 'static_pages', 'locale_code')) {
+        $db->query("ALTER TABLE static_pages ADD COLUMN locale_code VARCHAR(8) NOT NULL DEFAULT 'pl' AFTER page_type");
+        schema_forget_column_cache('static_pages', 'locale_code');
+    }
+
+    if (schema_column_exists($db, 'static_pages', 'locale_code')) {
+        $db->query("UPDATE static_pages SET locale_code = 'pl' WHERE locale_code IS NULL OR locale_code = ''");
+        $db->query("UPDATE static_pages SET locale_code = 'en' WHERE slug REGEXP '-en$'");
+        $db->query("UPDATE static_pages SET locale_code = 'pl' WHERE slug REGEXP '-pl$'");
+    }
+
+    $done = true;
+}
+
+function admin_faq_locale_aware_slug(Mysql_ks $db, string $title, string $requestedSlug, string $localeCode, int $excludeId = 0): string
+{
+    $localeCode = admin_faq_normalize_locale($localeCode);
+    $baseSlug = $requestedSlug !== '' ? $requestedSlug : $title;
+    $baseSlug = admin_faq_slugify($baseSlug);
+
+    if (preg_match('/^faq-(\d+)(?:-[a-z]{2})?$/', $baseSlug, $matches)) {
+        $baseSlug = 'faq-' . $matches[1] . '-' . $localeCode;
+    }
+
+    return admin_faq_unique_slug($db, $title, $baseSlug, $excludeId);
+}
+
 function admin_faq_count(Mysql_ks $db): int
 {
     if (!schema_object_exists($db, 'static_pages')) {
         return 0;
     }
 
+    admin_ensure_static_pages_locale_runtime($db);
     $row = $db->select_user("SELECT COUNT(*) AS total FROM static_pages WHERE page_type = 'faq' OR slug LIKE 'faq-%'");
     return (int)($row['total'] ?? 0);
 }
@@ -11133,13 +11389,14 @@ function admin_faq_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
         return [];
     }
 
+    admin_ensure_static_pages_locale_runtime($db);
     $limit = max(1, min(100, $limit));
     $offset = max(0, $offset);
     return $db->select_full_user(
-        "SELECT id, slug, title, body, page_type, is_system, is_active, created_at, updated_at
+        "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE page_type = 'faq' OR slug LIKE 'faq-%'
-         ORDER BY slug ASC, id ASC
+         ORDER BY locale_code ASC, slug ASC, id ASC
          LIMIT {$offset}, {$limit}"
     );
 }
@@ -11150,8 +11407,9 @@ function admin_faq_find(Mysql_ks $db, int $faqId): ?array
         return null;
     }
 
+    admin_ensure_static_pages_locale_runtime($db);
     $row = $db->select_user(
-        "SELECT id, slug, title, body, page_type, is_system, is_active, created_at, updated_at
+        "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE id = {$faqId}
            AND (page_type = 'faq' OR slug LIKE 'faq-%')
@@ -11213,9 +11471,11 @@ function admin_create_faq(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'FAQ storage is not available.'];
     }
 
+    admin_ensure_static_pages_locale_runtime($db);
     $title = trim((string)($input['title'] ?? ''));
     $slugInput = trim((string)($input['slug'] ?? ''));
     $body = trim((string)($input['body'] ?? ''));
+    $localeCode = admin_faq_normalize_locale((string)($input['locale_code'] ?? 'pl'));
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
 
     if ($title === '') {
@@ -11226,10 +11486,10 @@ function admin_create_faq(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'FAQ content is required.'];
     }
 
-    $slug = admin_faq_unique_slug($db, $title, $slugInput);
+    $slug = admin_faq_locale_aware_slug($db, $title, $slugInput, $localeCode);
     $inserted = $db->insert(
-        ['slug', 'title', 'body', 'page_type', 'is_system', 'is_active'],
-        [$slug, $title, $body, 'faq', 0, $isActive],
+        ['slug', 'title', 'body', 'locale_code', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, 'faq', 0, $isActive],
         'static_pages'
     );
 
@@ -11254,6 +11514,7 @@ function admin_save_faq(Mysql_ks $db, int $faqId, array $input): array
     $title = trim((string)($input['title'] ?? ''));
     $slugInput = trim((string)($input['slug'] ?? ''));
     $body = trim((string)($input['body'] ?? ''));
+    $localeCode = admin_faq_normalize_locale((string)($input['locale_code'] ?? (string)($faq['locale_code'] ?? 'pl')));
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
 
     if ($title === '') {
@@ -11264,10 +11525,10 @@ function admin_save_faq(Mysql_ks $db, int $faqId, array $input): array
         return ['ok' => false, 'message' => 'FAQ content is required.'];
     }
 
-    $slug = admin_faq_unique_slug($db, $title, $slugInput, $faqId);
+    $slug = admin_faq_locale_aware_slug($db, $title, $slugInput, $localeCode, $faqId);
     $updated = $db->update_using_id(
-        ['slug', 'title', 'body', 'page_type', 'is_system', 'is_active'],
-        [$slug, $title, $body, 'faq', (int)($faq['is_system'] ?? 0), $isActive],
+        ['slug', 'title', 'body', 'locale_code', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, 'faq', (int)($faq['is_system'] ?? 0), $isActive],
         'static_pages',
         $faqId
     );
@@ -11908,6 +12169,38 @@ function admin_save_help_topic(Mysql_ks $db, int $topicId, array $input): array
     return [
         'ok' => (bool)$updated,
         'message' => $updated ? 'Help topic saved successfully.' : 'Unable to save help topic.',
+    ];
+}
+
+function admin_update_help_topic_answer(Mysql_ks $db, int $topicId, string $answerHtml): array
+{
+    $topic = admin_help_topic_find($db, $topicId);
+    if (!is_array($topic) || empty($topic['id'])) {
+        return ['ok' => false, 'message' => 'Help topic not found.'];
+    }
+
+    $answerHtml = trim($answerHtml);
+    if ($answerHtml === '') {
+        return ['ok' => false, 'message' => 'Help answer is required.'];
+    }
+
+    $updated = $db->update_using_id(
+        ['answer_html'],
+        [$answerHtml],
+        'admin_help_topics',
+        $topicId
+    );
+
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to save help topic.'];
+    }
+
+    $freshTopic = admin_help_topic_find($db, $topicId);
+
+    return [
+        'ok' => true,
+        'message' => 'Help topic saved successfully.',
+        'topic' => is_array($freshTopic) ? $freshTopic : $topic,
     ];
 }
 

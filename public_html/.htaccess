@@ -42,7 +42,7 @@ RewriteRule ^order-extend-([^-]+)$ index.php?site=orders&order_extend=$1 [L,QSA]
 RewriteRule ^order-payment-([^-]+)$ index.php?site=orders&payment=$1 [L,QSA]
 RewriteRule ^del-order-([^-]+)$ index.php?site=orders&del_order=$1 [L,QSA]
 RewriteRule ^orders-site_([^-]+)$ index.php?site=orders&strona=$1 [L,QSA]
-RewriteRule ^news-([^-]+)$ index.php?site=news&news_id=$1 [L,QSA]
+RewriteRule ^news-(.+)$ index.php?site=news&news_slug=$1 [L,QSA]
 RewriteRule ^vpn_true$ index.php?vpn_pl=1 [L,QSA]
 
 # Generic site routes, e.g. /contact, /register, /login.
