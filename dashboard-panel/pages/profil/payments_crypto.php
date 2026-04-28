@@ -126,7 +126,7 @@ switch ($site) {
                 $requestKind = trim((string)($_POST['del_crypto_kind'] ?? 'legacy'));
                 if ($requestKind === 'v2' && $v2CryptoRequestsEnabled) {
                     $cryptoPayment = $db->select_user(
-                        "SELECT id
+                        "SELECT id, wallet_assignment_id
                          FROM crypto_deposit_requests
                          WHERE id = {$cryptoPaymentId}
                            AND customer_id = " . (int)$user['id'] . "
@@ -135,6 +135,13 @@ switch ($site) {
                     );
                     if ($cryptoPayment) {
                         $db->delete_using_id('crypto_deposit_requests', $cryptoPaymentId);
+                        if (!empty($cryptoPayment['wallet_assignment_id'])) {
+                            app_release_crypto_wallet_assignment_if_unused(
+                                $db,
+                                (int)$cryptoPayment['wallet_assignment_id'],
+                                'Released after customer deleted crypto top-up payment request'
+                            );
+                        }
                         $smarty->assign('alert', 'Crypto payment removed.');
                         $smarty->display('alert.tpl');
                     }

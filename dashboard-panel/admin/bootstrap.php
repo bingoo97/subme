@@ -3823,7 +3823,7 @@ function admin_delete_cancelled_payments(
                 $whereSql .= ' AND customer_id = ' . $customerId;
             }
             $rows = $db->select_full_user(
-                "SELECT id, customer_id, order_id
+                "SELECT id, customer_id, order_id, wallet_assignment_id
                  FROM crypto_deposit_requests
                  WHERE {$whereSql}"
             );
@@ -3831,6 +3831,13 @@ function admin_delete_cancelled_payments(
             foreach ($rows as $row) {
                 $deleted = $db->delete_using_id('crypto_deposit_requests', (int)($row['id'] ?? 0));
                 if ($deleted) {
+                    if (!empty($row['wallet_assignment_id'])) {
+                        app_release_crypto_wallet_assignment_if_unused(
+                            $db,
+                            (int)$row['wallet_assignment_id'],
+                            'Released after cancelled crypto payment request deletion by admin'
+                        );
+                    }
                     $deletedTotal++;
                     $description = 'Bulk deleted cancelled crypto payment request #' . (int)($row['id'] ?? 0);
                     if (!empty($row['order_id'])) {
@@ -3924,6 +3931,7 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 crypto_deposit_requests.order_id,
                 crypto_deposit_requests.customer_id,
                 crypto_deposit_requests.status,
+                crypto_deposit_requests.wallet_assignment_id,
                 crypto_deposit_requests.requested_fiat_amount AS amount_value,
                 crypto_deposit_requests.requested_crypto_amount AS amount_crypto,
                 COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS requested_at,
@@ -4191,6 +4199,14 @@ function admin_delete_payment(
     $deleted = $db->delete_using_id($tableName, $paymentId);
 
     if ($deleted) {
+        if ($paymentType === 'crypto' && !empty($payment['wallet_assignment_id'])) {
+            app_release_crypto_wallet_assignment_if_unused(
+                $db,
+                (int)$payment['wallet_assignment_id'],
+                'Released after crypto payment request deletion by admin'
+            );
+        }
+
         $description = ucfirst(str_replace('_', ' ', $paymentType)) . ' payment request #' . $paymentId . ' deleted';
         if (!empty($payment['order_id'])) {
             $description .= ' for order #' . (int)$payment['order_id'];

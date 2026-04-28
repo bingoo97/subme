@@ -200,6 +200,52 @@ Nie sluzy do:
 - synchronizacji schematu miedzy localhost a serwerem
 - ustalania, co jest aktualna wersja bazy
 
+## Auto-przypisanie portfeli krypto
+
+To jest teraz czesc docelowej logiki systemu i trzeba to traktowac jako stala zasade przy deployu i migracjach.
+
+Jesli klient inicjuje platnosc krypto i:
+
+- nie ma jeszcze przypisanego portfela dla wybranego assetu
+- ale w puli istnieje wolny adres tej kryptowaluty
+
+to aplikacja automatycznie:
+
+- pokazuje te kryptowalute w UI usera
+- wybiera wolny adres z puli
+- tworzy `crypto_wallet_assignments`
+- tworzy request platnosci powiazany z `wallet_assignment_id`
+
+To oznacza:
+
+- admin nie musi recznie przypisywac portfela kazdemu nowemu userowi
+- kluczowe tabele dla tego flow to:
+  - `crypto_wallet_addresses`
+  - `crypto_wallet_assignments`
+  - `crypto_deposit_requests`
+
+## Zwolnienie portfela po anulowaniu lub usunieciu requestu
+
+Jesli request krypto zostanie:
+
+- anulowany i potem skasowany przez admina z `Payments`
+- usuniety zbiorczo przez `Usuń anulowane`
+- usuniety przez klienta w top-up krypto
+
+to aplikacja ma zwolnic powiazany `wallet_assignment_id`, a status adresu powinien wrocic na:
+
+- `available`
+
+To jest wazne przy przenoszeniu aplikacji na inny serwer, bo po imporcie bazy:
+
+- assignmenty i requesty musza pozostac spojne
+- nie wolno recznie kasowac tylko samych requestow bez uwzglednienia assignmentow
+
+Jesli odtwarzasz snapshot bazy i cos wyglada zle w puli portfeli, najpierw sprawdz:
+
+- czy `crypto_deposit_requests.wallet_assignment_id` zgadza sie z `crypto_wallet_assignments.id`
+- czy adresy w `crypto_wallet_addresses` nie zostaly na stale w statusie `assigned` bez aktywnego assignmentu
+
 ## Szybka odpowiedz na Twoje pytanie
 
 Jesli pytanie brzmi:
@@ -228,6 +274,7 @@ to odpowiedz brzmi:
 
 ## Powiazane pliki
 
+- `docs/NEW_SERVER_CHECKLIST.md`
 - `docs/namecheap-import-canonical-db.sh`
 - `docs/namecheap-import-db.sh`
 - `docs/namecheap-multi-instance.md`
