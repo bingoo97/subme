@@ -2530,7 +2530,9 @@ if ($route === 'users') {
         }
     }
 
-    $selectedCustomerId = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : 0;
+    $selectedCustomerId = isset($_GET['customer_id'])
+        ? (int)$_GET['customer_id']
+        : (isset($_POST['customer_id']) ? (int)$_POST['customer_id'] : 0);
     if ($selectedCustomerId > 0 && isset($_POST['admin_save_customer_profile'])) {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
@@ -3471,6 +3473,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $paymentCryptoAmountLabel .= ' ' . strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
                                                     }
                                                 }
+                                                $paymentWalletAddressRaw = trim((string)($paymentRow['wallet_address'] ?? ''));
+                                                $paymentWalletAddressCompact = $paymentWalletAddressRaw !== ''
+                                                    ? admin_compact_wallet_address($paymentWalletAddressRaw, 7, 7)
+                                                    : '';
                                                 $paymentCanAcceptAll = in_array($paymentType, ['crypto', 'bank'], true)
                                                     && in_array(strtolower(trim((string)($paymentRow['status'] ?? ''))), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
                                                 ?>
@@ -3498,6 +3504,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <span><?php echo admin_e($paymentRequestedLabel); ?></span>
                                                             <?php endif; ?>
                                                         </p>
+                                                        <?php if ($paymentWalletAddressCompact !== ''): ?>
+                                                            <div class="admin-topbar-notifications__wallet-row">
+                                                                <?php if ($paymentExplorerUrl !== ''): ?>
+                                                                    <a href="<?php echo admin_e($paymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="admin-topbar-notifications__wallet-link" title="<?php echo admin_e($paymentWalletAddressRaw); ?>">
+                                                                        <code><?php echo admin_e($paymentWalletAddressCompact); ?></code>
+                                                                    </a>
+                                                                <?php else: ?>
+                                                                    <span class="admin-topbar-notifications__wallet-link" title="<?php echo admin_e($paymentWalletAddressRaw); ?>">
+                                                                        <code><?php echo admin_e($paymentWalletAddressCompact); ?></code>
+                                                                    </span>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endif; ?>
                                                         <div class="admin-topbar-notifications__steps-label"><?php echo admin_e(admin_t($messages, 'topbar_payment_steps', 'Steps to verify')); ?></div>
                                                         <div class="admin-topbar-notifications__task-list">
                                                             <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_explorer', 'Check whether the payment has arrived.')); ?></span>
@@ -7079,45 +7098,56 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $rowCustomerId = (int)($row['id'] ?? 0);
                                                         $rowLocaleCode = strtoupper((string)($row['locale_code'] ?? 'EN'));
                                                         $rowLocaleFlagUrl = admin_locale_flag_url((string)($row['locale_code'] ?? 'en'));
-                                                        $rowCountryCode = strtoupper(trim((string)($row['country_code'] ?? '')));
-                                                        $rowCountryFlagUrl = admin_country_flag_url($rowCountryCode);
                                                         $rowStatus = strtolower(trim((string)($row['status'] ?? 'inactive')));
                                                         $rowStatusClass = $rowStatus === 'active'
                                                             ? 'admin-status-pill--available'
                                                             : ($rowStatus === 'blocked' ? 'admin-status-pill--danger' : 'admin-status-pill--muted');
-                                                        $rowVerified = !empty($row['email_verified_at']);
-                                                        $rowBalanceLabel = number_format((float)($row['balance_amount'] ?? 0), 2, '.', '') . ' ' . $adminDefaultCurrencyCode;
+                                                        $rowAvatarVisual = admin_search_customer_avatar_visual($row);
+                                                        $rowPresence = admin_chat_customer_presence(
+                                                            $db,
+                                                            $rowCustomerId,
+                                                            (string)($row['last_login_at'] ?? ''),
+                                                            $messages
+                                                        );
+                                                        $rowCustomerTypeValue = app_normalize_customer_type((string)($row['customer_type'] ?? 'client'));
+                                                        $rowCustomerTypeLabel = admin_t($messages, 'customer_type_' . $rowCustomerTypeValue, ucfirst($rowCustomerTypeValue));
                                                         $rowLastLoginLabel = trim((string)($row['last_login_at'] ?? '')) !== ''
                                                             ? admin_format_last_login_date((string)$row['last_login_at'])
                                                             : admin_t($messages, 'user_never_logged_in', 'No login yet');
                                                         ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?>">
-                                                                <div class="admin-user-row__identity">
-                                                                    <div class="admin-user-row__email-line">
-                                                                        <?php if ($rowLocaleFlagUrl !== ''): ?>
-                                                                            <img src="<?php echo admin_e($rowLocaleFlagUrl); ?>" alt="<?php echo admin_e($rowLocaleCode); ?>" class="admin-inline-flag" loading="lazy">
+                                                                <article class="admin-search-user-card admin-search-user-card--directory">
+                                                                    <div class="admin-search-user-card__avatar-wrap">
+                                                                        <?php if ((string)($rowAvatarVisual['type'] ?? 'image') === 'image'): ?>
+                                                                            <span class="admin-search-user-card__avatar">
+                                                                                <img src="<?php echo admin_e((string)($rowAvatarVisual['src'] ?? '')); ?>" alt="<?php echo admin_e((string)($rowAvatarVisual['alt'] ?? 'User')); ?>" loading="lazy">
+                                                                            </span>
+                                                                        <?php else: ?>
+                                                                            <span class="admin-search-user-card__avatar admin-search-user-card__avatar--initial <?php echo admin_e((string)($rowAvatarVisual['theme'] ?? 'theme-1')); ?>">
+                                                                                <span><?php echo admin_e((string)($rowAvatarVisual['initial'] ?? 'U')); ?></span>
+                                                                            </span>
                                                                         <?php endif; ?>
-                                                                        <?php if ($rowCountryFlagUrl !== ''): ?>
-                                                                            <img src="<?php echo admin_e($rowCountryFlagUrl); ?>" alt="<?php echo admin_e($rowCountryCode); ?>" class="admin-inline-flag" loading="lazy">
+                                                                        <?php echo admin_chat_presence_dot_html($rowPresence); ?>
+                                                                    </div>
+                                                                    <div class="admin-search-user-card__body">
+                                                                        <a class="admin-search-user-card__email" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>">
+                                                                            <?php echo admin_e((string)($row['email'] ?? '')); ?>
+                                                                        </a>
+                                                                        <?php if (trim((string)($row['public_handle'] ?? '')) !== ''): ?>
+                                                                            <div class="admin-search-user-card__handle">@<?php echo admin_e((string)$row['public_handle']); ?></div>
                                                                         <?php endif; ?>
-                                                                        <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="admin-inline-link admin-user-row__email"><?php echo admin_e((string)($row['email'] ?? '')); ?></a>
+                                                                        <div class="admin-search-user-card__meta">
+                                                                            <img src="<?php echo admin_e($rowLocaleFlagUrl); ?>" alt="<?php echo admin_e($rowLocaleCode); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
+                                                                            <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($rowStatusClass); ?>">
+                                                                                <?php echo admin_e($rowStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : ucfirst($rowStatus)); ?>
+                                                                            </span>
+                                                                            <span class="admin-status-pill admin-status-pill--xs admin-status-pill--info">
+                                                                                <?php echo admin_e($rowCustomerTypeLabel); ?>
+                                                                            </span>
+                                                                        </div>
                                                                     </div>
-                                                                    <?php if (trim((string)($row['public_handle'] ?? '')) !== ''): ?>
-                                                                        <div class="admin-user-row__handle">@<?php echo admin_e((string)$row['public_handle']); ?></div>
-                                                                    <?php endif; ?>
-                                                                    <div class="admin-user-row__badges">
-                                                                        <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($rowStatusClass); ?>">
-                                                                            <?php echo admin_e($rowStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : ucfirst($rowStatus)); ?>
-                                                                        </span>
-                                                                        <span class="admin-status-pill admin-status-pill--xs admin-status-pill--neutral">
-                                                                            <?php echo admin_e(admin_t($messages, 'customer_type_' . (string)($row['customer_type'] ?? 'client'), ucfirst((string)($row['customer_type'] ?? 'client')))); ?>
-                                                                        </span>
-                                                                        <span class="admin-status-pill admin-status-pill--xs <?php echo $rowVerified ? 'admin-status-pill--available' : 'admin-status-pill--neutral'; ?>">
-                                                                            <?php echo admin_e($rowVerified ? admin_t($messages, 'user_verified', 'Verified') : admin_t($messages, 'user_unverified', 'Unverified')); ?>
-                                                                        </span>
-                                                                    </div>
-                                                                </div>
+                                                                </article>
                                                             </td>
                                                             <td data-label="Orders" class="text-center">
                                                                 <div class="admin-user-row__summary">
@@ -7143,6 +7173,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <a href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
                                                                         <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
                                                                     </a>
+                                                                    <form method="post" class="admin-user-row__inline-form">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$rowCustomerId); ?>">
+                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer" title="<?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_delete_confirm', 'Delete this user account with related orders, payments, chat and assignments? This cannot be undone.')); ?>');">
+                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </form>
                                                                 </div>
                                                             </td>
                                                         </tr>
@@ -8204,7 +8241,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="wallet_label"><?php echo admin_e(admin_t($messages, 'wallet_label', 'Wallet name / info')); ?></label>
-                                                            <input type="text" class="form-control" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>">
+                                                            <input type="text" class="form-control" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'wallet_label_placeholder', 'TrustWallet 1-99')); ?>" required>
                                                         </div>
                                                         <div class="col-12">
                                                             <label class="form-label" for="wallet_address"><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></label>
@@ -8424,8 +8461,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php else: ?>
                                                                             <strong><?php echo admin_e($walletAddressShort); ?></strong>
                                                                         <?php endif; ?>
-                                                                        <?php if (!empty($row['wallet_provider'])): ?>
-                                                                            <span><?php echo admin_e((string)$row['wallet_provider']); ?></span>
+                                                                        <?php if (!empty($row['label'])): ?>
+                                                                            <span><?php echo admin_e((string)$row['label']); ?></span>
                                                                         <?php endif; ?>
                                                                     </div>
                                                                 </td>

@@ -512,6 +512,32 @@ body.admin-login-page{
     color:#b42318;
 }
 
+.admin-topbar-notifications__wallet-row{
+    margin-top:.45rem;
+    width:100%;
+}
+
+.admin-topbar-notifications__wallet-link{
+    display:block;
+    width:100%;
+    text-decoration:none;
+}
+
+.admin-topbar-notifications__wallet-link code{
+    display:block;
+    width:100%;
+    padding:.42rem .55rem;
+    border-radius:10px;
+    background:#fff1f2;
+    color:#b42318;
+    font-size:.74rem;
+    font-weight:800;
+    line-height:1.35;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
 .admin-topbar-notifications__steps-label{
     margin-top:.6rem;
     margin-bottom:.3rem;
@@ -4436,6 +4462,11 @@ body.admin-login-page{
     background:#e5e7eb;
 }
 
+.admin-status-pill--info{
+    color:#075985;
+    background:#e0f2fe;
+}
+
 .admin-status-pill--xs{
     padding:.15rem .35rem;
     font-size:.65rem;
@@ -6177,7 +6208,7 @@ body.admin-login-page .alert.alert-danger::before{
     display:flex;
     align-items:center;
     gap: 15px;
-    padding:0;
+    padding:1rem 5px;
     border-bottom: 1px solid #f8f9fa;
     border-radius:0;
 }
@@ -6272,6 +6303,13 @@ body.admin-login-page .alert.alert-danger::before{
     color:#0f62fe;
 }
 
+.admin-search-user-card__handle{
+    color:#8b93a6;
+    font-size:9px;
+    font-weight:700;
+    line-height:1.2;
+}
+
 .admin-search-user-card__meta{
     display:flex;
     align-items:center;
@@ -6283,6 +6321,11 @@ body.admin-login-page .alert.alert-danger::before{
     color:#7c8496;
     font-size:.78rem;
     font-weight:700;
+}
+
+.admin-search-user-card--directory{
+    padding:0;
+    border-bottom:none;
 }
 
 .admin-search-user-card__locale-flag{

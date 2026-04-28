@@ -2025,12 +2025,16 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
     $publicHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
         ? 'customers.public_handle'
         : "'' AS public_handle";
+    $avatarSelect = schema_column_exists($db, 'customers', 'avatar_url')
+        ? 'customers.avatar_url'
+        : "'' AS avatar_url";
 
     return $db->select_full_user(
         "SELECT
             customers.id,
             customers.email,
             {$publicHandleSelect},
+            {$avatarSelect},
             customers.locale_code,
             customers.country_code,
             customers.status,
@@ -2180,12 +2184,16 @@ function admin_customer_detail_row(Mysql_ks $db, int $customerId): ?array
     $balanceSelect = schema_column_exists($db, 'customers', 'balance_amount')
         ? 'customers.balance_amount'
         : '0.00 AS balance_amount';
+    $publicHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
     $notificationSelect = app_customer_notification_select_sql($db, 'customers');
 
     $row = $db->select_user(
         "SELECT
             customers.id,
             customers.email,
+            {$publicHandleSelect},
             customers.locale_code,
             customers.country_code,
             customers.ip_address,
@@ -5099,11 +5107,28 @@ function admin_product_provider_logo_reference_is_valid(string $value): bool
         return true;
     }
 
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'];
+
     if (filter_var($value, FILTER_VALIDATE_URL) !== false) {
-        return true;
+        $urlPath = (string)(parse_url($value, PHP_URL_PATH) ?? '');
+        $extension = strtolower(pathinfo($urlPath, PATHINFO_EXTENSION));
+        return $extension !== '' && in_array($extension, $allowedExtensions, true);
     }
 
-    return strpos($value, '/') === 0;
+    $normalizedPath = $value;
+    if (strpos($normalizedPath, '/') !== 0) {
+        $normalizedPath = '/' . ltrim($normalizedPath, '/');
+    }
+
+    $pathOnly = (string)(parse_url($normalizedPath, PHP_URL_PATH) ?? '');
+    $extension = strtolower(pathinfo($pathOnly, PATHINFO_EXTENSION));
+    if ($extension === '' || !in_array($extension, $allowedExtensions, true)) {
+        return false;
+    }
+
+    return strpos($normalizedPath, '/uploads/providers/') === 0
+        || strpos($normalizedPath, '/img/') === 0
+        || strpos($normalizedPath, '/uploads/') === 0;
 }
 
 function admin_create_product_provider(Mysql_ks $db, array $input): array
@@ -5203,7 +5228,9 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
         return ['ok' => false, 'message' => 'Dashboard URL must be a valid link.'];
     }
 
-    if (!admin_product_provider_logo_reference_is_valid($logoUrl)) {
+    $previousLogoUrl = trim((string)($provider['logo_url'] ?? ''));
+
+    if ($logoUrl !== $previousLogoUrl && !admin_product_provider_logo_reference_is_valid($logoUrl)) {
         return ['ok' => false, 'message' => 'Provider logo must be a valid image URL or uploaded file.'];
     }
 
@@ -5220,7 +5247,6 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
     }
 
     $slug = admin_product_provider_unique_slug($db, $name, $slugInput, $providerId);
-    $previousLogoUrl = trim((string)($provider['logo_url'] ?? ''));
     $updateFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
     $updateValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
 
@@ -8238,6 +8264,10 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
         return ['ok' => false, 'message' => 'Wallet address is required.'];
     }
 
+    if ($label === '') {
+        return ['ok' => false, 'message' => 'Wallet name / info is required.'];
+    }
+
     $existingAddress = $db->select_user(
         "SELECT id
          FROM crypto_wallet_addresses
@@ -8271,7 +8301,7 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
     if ($isCreate) {
         $insertOk = $db->insert(
             ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at', 'created_by_admin_user_id'],
-            [$cryptoAssetId, $label !== '' ? $label : null, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue, $adminUserId],
+            [$cryptoAssetId, $label, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue, $adminUserId],
             'crypto_wallet_addresses'
         );
 
@@ -8284,7 +8314,7 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
     } else {
         $updateOk = $db->update_using_id(
             ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at'],
-            [$cryptoAssetId, $label !== '' ? $label : null, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue],
+            [$cryptoAssetId, $label, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $finalWalletStatus, $notes !== '' ? $notes : null, $disabledAtValue],
             'crypto_wallet_addresses',
             $walletId
         );
@@ -12636,6 +12666,7 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
             customers.email,
             customers.public_handle,
             customers.status,
+            customers.customer_type,
             customers.locale_code,
             customers.avatar_url,
             customers.registered_at,
@@ -12836,10 +12867,13 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                             $statusValue = (string)($row['status'] ?? '');
                             $statusLabel = admin_t($messages, 'enum_' . $statusValue, ucfirst(str_replace('_', ' ', $statusValue)));
                             $statusClass = admin_customer_status_badge_class($statusValue);
+                            $customerTypeValue = app_normalize_customer_type((string)($row['customer_type'] ?? 'client'));
+                            $customerTypeLabel = admin_t($messages, 'customer_type_' . $customerTypeValue, ucfirst($customerTypeValue));
                             $lastLoginLabel = admin_format_last_login_date((string)($row['last_login_at'] ?? ''));
                             $profileUrl = '/admin/?page=users&customer_id=' . (int)($row['id'] ?? 0);
                             $localeFlagUrl = admin_locale_flag_url((string)($row['locale_code'] ?? 'en'));
                             $localeFlagAlt = strtoupper(trim((string)($row['locale_code'] ?? 'en')));
+                            $publicHandle = trim((string)($row['public_handle'] ?? ''));
                             ?>
                             <article class="admin-search-user-card">
                                 <div class="admin-search-user-card__avatar-wrap">
@@ -12858,11 +12892,17 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     <a class="admin-search-user-card__email" href="<?php echo admin_e($profileUrl); ?>">
                                         <?php echo admin_e((string)($row['email'] ?? '')); ?>
                                     </a>
+                                    <?php if ($publicHandle !== ''): ?>
+                                        <div class="admin-search-user-card__handle">@<?php echo admin_e($publicHandle); ?></div>
+                                    <?php endif; ?>
                                     <div class="admin-search-user-card__meta">
+                                        <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
                                         <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($statusClass); ?>">
                                             <?php echo admin_e($statusLabel); ?>
                                         </span>
-                                        <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
+                                        <span class="admin-status-pill admin-status-pill--xs admin-status-pill--info">
+                                            <?php echo admin_e($customerTypeLabel); ?>
+                                        </span>
                                         <span class="admin-search-user-card__last-login">
                                             <?php echo admin_e($lastLoginLabel !== '' ? $lastLoginLabel : '—'); ?>
                                         </span>
