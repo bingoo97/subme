@@ -44,9 +44,22 @@ SUBDOMAIN=panel.subme.pro APP_SLUG=panel-subme-pro ~/subme/docs/namecheap-rollba
 
 ## Import bazy danych
 
+Canonical bootstrap z repo:
+
+```bash
+DB_NAME=twoja_baza DB_USER=twoj_user CONFIRM_RESET=YES ~/subme/docs/namecheap-import-canonical-db.sh
+```
+
+Import snapshotu / backupu SQL:
+
 ```bash
 DB_NAME=twoja_baza DB_USER=twoj_user ~/subme/docs/namecheap-import-db.sh /home/submtosl/RESELLER/reseller_v2_namecheap.sql
 ```
+
+Zasada:
+
+- `namecheap-import-canonical-db.sh` jest droga do odbudowy bazy z repo
+- `namecheap-import-db.sh` jest droga do odtworzenia konkretnego snapshotu / backupu
 
 ## Lista instancji
 

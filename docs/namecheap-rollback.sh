@@ -2,9 +2,9 @@
 set -euo pipefail
 
 APP_HOME="${HOME}"
-SUBDOMAIN="${SUBDOMAIN:-dashboard.subme.pro}"
-APP_SLUG="${APP_SLUG:-$(printf '%s' "${SUBDOMAIN}" | tr '.:/' '---')}"
-WEB_DIR="${APP_HOME}/${SUBDOMAIN}"
+SITE_HOST="${SITE_HOST:-${SUBDOMAIN:-dashboard.subme.pro}}"
+APP_SLUG="${APP_SLUG:-$(printf '%s' "${SITE_HOST}" | tr '.:/' '---')}"
+WEB_DIR="${WEB_DIR:-${APP_HOME}/${SITE_HOST}}"
 APP_DIR="${APP_HOME}/.subme-apps/${APP_SLUG}/dashboard-panel"
 SECRETS_DIR="${APP_HOME}/.subme-secrets/${APP_SLUG}"
 MYSQL_CONFIG_FILE="${SECRETS_DIR}/mysql.php"

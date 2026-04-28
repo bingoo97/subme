@@ -2,16 +2,17 @@
 set -euo pipefail
 
 APP_HOME="${HOME}"
-REPO_DIR="${APP_HOME}/subme"
-SUBDOMAIN="${SUBDOMAIN:-dashboard.subme.pro}"
-APP_SLUG="${APP_SLUG:-$(printf '%s' "${SUBDOMAIN}" | tr '.:/' '---')}"
-WEB_DIR="${APP_HOME}/${SUBDOMAIN}"
+SITE_HOST="${SITE_HOST:-${SUBDOMAIN:-dashboard.subme.pro}}"
+REPO_DIR="${REPO_DIR:-${APP_HOME}/subme}"
+APP_SLUG="${APP_SLUG:-$(printf '%s' "${SITE_HOST}" | tr '.:/' '---')}"
+WEB_DIR="${WEB_DIR:-${APP_HOME}/${SITE_HOST}}"
 APP_BASE_DIR="${APP_HOME}/.subme-apps/${APP_SLUG}"
 APP_DIR="${APP_BASE_DIR}/dashboard-panel"
 SECRETS_DIR="${APP_HOME}/.subme-secrets/${APP_SLUG}"
 MYSQL_CONFIG_FILE="${SECRETS_DIR}/mysql.php"
 RELEASES_DIR="${APP_HOME}/.subme-releases/${APP_SLUG}"
 BACKEND_POINTER_FILE="${WEB_DIR}/.backend-path"
+APP_URL="${APP_URL:-https://${SITE_HOST}}"
 
 log() {
   printf '[deploy] %s\n' "$1"
@@ -59,7 +60,7 @@ if [ ! -d "${REPO_DIR}/.git" ]; then
 fi
 
 if [ ! -d "${WEB_DIR}" ]; then
-  fail "Missing subdomain directory at ${WEB_DIR}"
+  fail "Missing web directory at ${WEB_DIR}"
 fi
 
 mkdir -p "${SECRETS_DIR}"
@@ -105,5 +106,5 @@ chmod -R 775 "${APP_DIR}/templates_c"
 chmod -R 775 "${WEB_DIR}/uploads"
 
 log "Deployment finished"
-log "Open: https://${SUBDOMAIN}"
+log "Open: ${APP_URL}"
 log "Rollback snapshot: ${SNAPSHOT_NAME}"

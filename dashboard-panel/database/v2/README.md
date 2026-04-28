@@ -1,6 +1,13 @@
 # New Core Database
 
-This is the new canonical database schema for the product.
+This directory is the canonical database schema source for the product.
+
+Important operational rule:
+
+- runtime data lives in MySQL
+- schema source of truth lives here in `dashboard-panel/database/v2/`
+- admin SQL backups and phpMyAdmin exports are restore snapshots only, not schema authority
+- if PHP runtime code adds a temporary `ALTER TABLE` or `CREATE TABLE` compatibility helper, the same change must also be written here in the same commit
 
 ## Design goals
 

@@ -25,6 +25,12 @@ Optional:
 
 Example:
   DB_NAME=submtosl_dashboard DB_USER=submtosl_submepro ./namecheap-import-db.sh ~/RESELLER/reseller_v2_namecheap.sql
+
+Important:
+  This script restores an arbitrary SQL snapshot file.
+  It is NOT the canonical source-of-truth bootstrap for the project schema.
+  For rebuilding the database from the repository SQL, use:
+    ./namecheap-import-canonical-db.sh
 EOF
 }
 
@@ -42,6 +48,6 @@ if [ -z "${DB_NAME}" ] || [ -z "${DB_USER}" ]; then
   fail "Set DB_NAME and DB_USER before running the import."
 fi
 
-log "Importing ${SQL_FILE} into ${DB_NAME} on ${DB_HOST}"
+log "Importing snapshot ${SQL_FILE} into ${DB_NAME} on ${DB_HOST}"
 mysql -h "${DB_HOST}" -u "${DB_USER}" -p "${DB_NAME}" < "${SQL_FILE}"
-log "Import finished"
+log "Snapshot import finished"

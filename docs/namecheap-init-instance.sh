@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-SUBDOMAIN="${1:-${SUBDOMAIN:-}}"
+SITE_HOST="${1:-${SITE_HOST:-${SUBDOMAIN:-}}}"
 APP_HOME="${HOME}"
-REPO_DIR="${APP_HOME}/subme"
+REPO_DIR="${REPO_DIR:-${APP_HOME}/subme}"
 
 log() {
   printf '[instance-init] %s\n' "$1"
@@ -17,21 +17,21 @@ fail() {
 usage() {
   cat <<'EOF'
 Usage:
-  ./namecheap-init-instance.sh subdomain.example.com
+  ./namecheap-init-instance.sh site.example.com
 
 Example:
   ./namecheap-init-instance.sh dashboard.subme.pro
-  ./namecheap-init-instance.sh panel.subme.pro
+  SITE_HOST=subme.pro WEB_DIR=~/public_html REPO_DIR=~/app ./namecheap-init-instance.sh
 EOF
 }
 
-if [ -z "${SUBDOMAIN}" ]; then
+if [ -z "${SITE_HOST}" ]; then
   usage
-  fail "Missing subdomain."
+  fail "Missing site host."
 fi
 
-APP_SLUG="$(printf '%s' "${SUBDOMAIN}" | tr '.:/' '---')"
-WEB_DIR="${APP_HOME}/${SUBDOMAIN}"
+APP_SLUG="${APP_SLUG:-$(printf '%s' "${SITE_HOST}" | tr '.:/' '---')}"
+WEB_DIR="${WEB_DIR:-${APP_HOME}/${SITE_HOST}}"
 APP_BASE_DIR="${APP_HOME}/.subme-apps/${APP_SLUG}"
 APP_DIR="${APP_BASE_DIR}/dashboard-panel"
 SECRETS_DIR="${APP_HOME}/.subme-secrets/${APP_SLUG}"
@@ -73,10 +73,10 @@ printf '%s\n' "${APP_DIR}" > "${BACKEND_POINTER_FILE}"
 chmod -R 775 "${APP_DIR}/templates_c"
 chmod -R 775 "${WEB_DIR}/uploads"
 
-log "Instance prepared for ${SUBDOMAIN}"
+log "Instance prepared for ${SITE_HOST}"
 log "Web dir: ${WEB_DIR}"
 log "Backend dir: ${APP_DIR}"
 log "Secrets dir: ${SECRETS_DIR}"
 log "Edit DB config: ${MYSQL_CONFIG_FILE}"
 log "Deploy with:"
-printf 'SUBDOMAIN=%s APP_SLUG=%s %s/docs/namecheap-deploy.sh\n' "${SUBDOMAIN}" "${APP_SLUG}" "${REPO_DIR}"
+printf 'SITE_HOST=%s APP_SLUG=%s WEB_DIR=%s REPO_DIR=%s %s/docs/namecheap-deploy.sh\n' "${SITE_HOST}" "${APP_SLUG}" "${WEB_DIR}" "${REPO_DIR}" "${REPO_DIR}"
