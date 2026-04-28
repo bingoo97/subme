@@ -114,10 +114,14 @@ if ($action === 'quick_create_customer') {
         exit;
     }
 
+    $customerId = (int)($result['customer_id'] ?? 0);
+    $conversationId = $customerId > 0 ? admin_find_or_create_chat_conversation($db, $customerId, (int)($adminUser['id'] ?? 0)) : 0;
+
     echo json_encode([
         'ok' => true,
         'message' => (string)($result['message'] ?? 'Customer created successfully.'),
-        'customer_id' => (int)($result['customer_id'] ?? 0),
+        'customer_id' => $customerId,
+        'conversation_id' => $conversationId,
         'email' => (string)($result['email'] ?? ''),
         'password' => (string)($result['password'] ?? ''),
         'email_notification' => (array)($result['email_notification'] ?? []),

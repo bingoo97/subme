@@ -9817,27 +9817,8 @@ function admin_string_truncate(string $value, int $maxLength = 20): string
 
     if (function_exists('mb_strlen') && function_exists('mb_substr')) {
         if (mb_strlen($value) <= $maxLength) {
-    return $value;
-}
-
-function admin_compact_wallet_address(string $address, int $prefixLength = 5, int $suffixLength = 5): string
-{
-    $address = trim($address);
-    if ($address === '') {
-        return '';
-    }
-
-    $length = function_exists('mb_strlen') ? mb_strlen($address) : strlen($address);
-    if ($length <= ($prefixLength + $suffixLength + 3)) {
-        return $address;
-    }
-
-    $prefix = function_exists('mb_substr') ? mb_substr($address, 0, $prefixLength) : substr($address, 0, $prefixLength);
-    $suffix = function_exists('mb_substr') ? mb_substr($address, -$suffixLength) : substr($address, -$suffixLength);
-
-    return $prefix . '...' . $suffix;
-}
-
+            return $value;
+        }
         return rtrim(mb_substr($value, 0, max(5, $maxLength - 4))) . '...';
     }
 

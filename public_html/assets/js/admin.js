@@ -2668,16 +2668,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 closeCreateCustomerModal();
-
-                if (searchInput && payload.email) {
-                    searchInput.value = String(payload.email);
-                    searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-                }
-
                 if (groupModal && !groupModal.hasAttribute('hidden') && groupEmailInput && payload.email) {
                     groupEmailInput.value = String(payload.email);
                     groupEmailInput.focus();
                     showGroupAlert(root.getAttribute('data-chat-create-user-group-hint') || 'User created. Click Add to include them in the group.', false);
+                } else if (payload.conversation_id) {
+                    fetchConversation(payload.conversation_id);
+                    openPanel(false);
+                } else if (searchInput && payload.email) {
+                    searchInput.value = String(payload.email);
+                    searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+                    searchInput.focus();
                 } else if (searchInput) {
                     searchInput.focus();
                 }
