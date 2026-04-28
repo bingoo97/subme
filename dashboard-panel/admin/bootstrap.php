@@ -1973,7 +1973,7 @@ function admin_country_flag_url(string $countryCode): string
         return '';
     }
 
-    $flagPath = dirname(__DIR__, 2) . '/public_html/img/flags/' . $countryCode . '.gif';
+    $flagPath = app_public_path('img/flags/' . $countryCode . '.gif');
     if (!is_file($flagPath)) {
         return '';
     }
