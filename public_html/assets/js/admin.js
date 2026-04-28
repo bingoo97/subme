@@ -2292,11 +2292,58 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function refreshAdminChatViewportHeight() {
+            var viewportOffsetTop = 0;
             var viewportHeight = window.visualViewport && window.visualViewport.height
                 ? window.visualViewport.height
                 : window.innerHeight;
+            if (window.visualViewport && typeof window.visualViewport.offsetTop === 'number') {
+                viewportOffsetTop = window.visualViewport.offsetTop;
+            }
 
             document.documentElement.style.setProperty('--admin-chat-viewport-height', Math.max(320, Math.round(viewportHeight)) + 'px');
+            document.documentElement.style.setProperty('--admin-chat-viewport-offset-top', Math.max(0, Math.round(viewportOffsetTop)) + 'px');
+            syncAdminChatBodyLock();
+        }
+
+        var adminChatBodyLockedScrollY = 0;
+
+        function shouldLockAdminChatBody() {
+            return !!(panel && !panel.hasAttribute('hidden') && window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+        }
+
+        function syncAdminChatBodyLock() {
+            var bodyNode = document.body;
+            var shouldLock;
+
+            if (!bodyNode) {
+                return;
+            }
+
+            shouldLock = shouldLockAdminChatBody();
+            if (shouldLock) {
+                if (!bodyNode.classList.contains('admin-chat-panel-open')) {
+                    adminChatBodyLockedScrollY = window.pageYOffset || window.scrollY || 0;
+                    bodyNode.style.top = (-adminChatBodyLockedScrollY) + 'px';
+                }
+                bodyNode.classList.add('admin-chat-panel-open');
+                return;
+            }
+
+            if (!bodyNode.classList.contains('admin-chat-panel-open')) {
+                bodyNode.style.top = '';
+                return;
+            }
+
+            bodyNode.classList.remove('admin-chat-panel-open');
+            bodyNode.style.top = '';
+            window.scrollTo(0, adminChatBodyLockedScrollY || 0);
+        }
+
+        function scheduleAdminChatViewportRefresh() {
+            refreshAdminChatViewportHeight();
+            window.setTimeout(refreshAdminChatViewportHeight, 60);
+            window.setTimeout(refreshAdminChatViewportHeight, 180);
+            window.setTimeout(refreshAdminChatViewportHeight, 320);
         }
 
         function renderAvatarMarkup(item, extraClass) {
@@ -3368,6 +3415,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 toggle.classList.add('is-open');
                 toggle.setAttribute('aria-expanded', 'true');
             }
+            syncAdminChatBodyLock();
             saveAdminChatPanelState(true);
             if (focusSearch && searchInput) {
                 window.setTimeout(function () {
@@ -3385,6 +3433,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 toggle.setAttribute('aria-expanded', 'false');
             }
             saveAdminChatPanelState(false);
+            syncAdminChatBodyLock();
             closeQuickModal();
             closeAllPaymentModals();
         }
@@ -3671,6 +3720,7 @@ document.addEventListener('DOMContentLoaded', function () {
         window.addEventListener('resize', refreshAdminChatViewportHeight);
         if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
             window.visualViewport.addEventListener('resize', refreshAdminChatViewportHeight);
+            window.visualViewport.addEventListener('scroll', refreshAdminChatViewportHeight);
         }
 
         qa('[data-admin-chat-open]').forEach(function (button) {
@@ -4087,6 +4137,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
             composerInput.addEventListener('input', function () {
                 queueLinkPreview();
+            });
+
+            composerInput.addEventListener('focus', function () {
+                scheduleAdminChatViewportRefresh();
+            });
+
+            composerInput.addEventListener('blur', function () {
+                scheduleAdminChatViewportRefresh();
             });
         }
 

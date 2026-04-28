@@ -226,7 +226,7 @@ if (!function_exists('orders_payment_refresh_crypto_rates')) {
 
             $rate = isset($row['current_rate_fiat']) ? (float)$row['current_rate_fiat'] : 0.0;
             $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
-            $rateUpdatedAt = !empty($row['rate_updated_at']) ? strtotime((string)$row['rate_updated_at']) : 0;
+            $rateUpdatedAt = !empty($row['rate_updated_at']) ? app_timestamp_from_utc_datetime((string)$row['rate_updated_at']) : 0;
 
             if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
                 $needsRefresh = true;
@@ -250,8 +250,8 @@ if (!function_exists('orders_payment_refresh_crypto_rates')) {
 
                     $price = (float)$payload[$coingeckoId][$vsCurrencyLower];
                     $updatedAt = !empty($payload[$coingeckoId]['last_updated_at'])
-                        ? date('Y-m-d H:i:s', (int)$payload[$coingeckoId]['last_updated_at'])
-                        : date('Y-m-d H:i:s', $now);
+                        ? app_datetime_utc_from_unix_timestamp((int)$payload[$coingeckoId]['last_updated_at'])
+                        : app_datetime_utc_from_unix_timestamp($now);
 
                     $db->update_using_id(
                         ['coingecko_id', 'current_rate_fiat', 'rate_currency_code', 'rate_updated_at'],

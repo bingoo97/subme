@@ -45,6 +45,53 @@ if (!function_exists('app_mysql_session_timezone_offset')) {
     }
 }
 
+if (!function_exists('app_datetime_utc_from_unix_timestamp')) {
+    function app_datetime_utc_from_unix_timestamp(int $timestamp): string
+    {
+        return gmdate('Y-m-d H:i:s', $timestamp);
+    }
+}
+
+if (!function_exists('app_timestamp_from_utc_datetime')) {
+    function app_timestamp_from_utc_datetime(?string $value): int
+    {
+        $value = trim((string)$value);
+        if ($value === '') {
+            return 0;
+        }
+
+        try {
+            $date = new DateTimeImmutable($value, new DateTimeZone('UTC'));
+        } catch (Throwable $exception) {
+            return 0;
+        }
+
+        return $date->getTimestamp();
+    }
+}
+
+if (!function_exists('app_format_utc_datetime_local')) {
+    function app_format_utc_datetime_local(?string $value, string $format = 'd.m.Y H:i'): string
+    {
+        $timestamp = app_timestamp_from_utc_datetime($value);
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        app_bootstrap_runtime_timezone();
+
+        try {
+            $timezone = new DateTimeZone(app_runtime_timezone_name());
+        } catch (Throwable $exception) {
+            $timezone = new DateTimeZone(date_default_timezone_get());
+        }
+
+        return (new DateTimeImmutable('@' . $timestamp))
+            ->setTimezone($timezone)
+            ->format($format);
+    }
+}
+
 app_bootstrap_runtime_timezone();
 
 class Mysql_ks {

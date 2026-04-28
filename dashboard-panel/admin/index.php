@@ -157,7 +157,7 @@ if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
         }
 
         $updatedAt = trim((string)($assetRow['rate_updated_at'] ?? ''));
-        $updatedTimestamp = $updatedAt !== '' ? strtotime($updatedAt) : false;
+        $updatedTimestamp = $updatedAt !== '' ? app_timestamp_from_utc_datetime($updatedAt) : false;
         $isStale = !$updatedTimestamp || (time() - (int)$updatedTimestamp) >= 900;
         $refreshedAssets[] = [
             'id' => (int)($assetRow['id'] ?? 0),
@@ -167,7 +167,7 @@ if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
             'rate' => $assetRate,
             'rate_label' => app_format_crypto_rate($assetRow['current_rate_fiat'] ?? null),
             'rate_updated_at' => $updatedAt,
-            'rate_updated_label' => $updatedAt !== '' ? date('d.m.Y H:i', strtotime($updatedAt)) : '',
+            'rate_updated_label' => $updatedAt !== '' ? app_format_utc_datetime_local($updatedAt) : '',
             'is_stale' => $isStale ? 1 : 0,
         ];
     }
@@ -3137,7 +3137,7 @@ foreach (admin_refresh_crypto_asset_rates($db, $adminDefaultCurrencyCode) as $as
     }
 
     $assetUpdatedAt = trim((string)($assetRow['rate_updated_at'] ?? ''));
-    $assetUpdatedTimestamp = $assetUpdatedAt !== '' ? strtotime($assetUpdatedAt) : false;
+    $assetUpdatedTimestamp = $assetUpdatedAt !== '' ? app_timestamp_from_utc_datetime($assetUpdatedAt) : false;
 
     $adminTopbarConverterAssets[] = [
         'id' => (int)($assetRow['id'] ?? 0),
@@ -3147,7 +3147,7 @@ foreach (admin_refresh_crypto_asset_rates($db, $adminDefaultCurrencyCode) as $as
         'rate' => $assetRate,
         'rate_label' => app_format_crypto_rate($assetRow['current_rate_fiat'] ?? null),
         'rate_updated_at' => $assetUpdatedAt,
-        'rate_updated_label' => $assetUpdatedAt !== '' ? date('d.m.Y H:i', strtotime($assetUpdatedAt)) : '',
+        'rate_updated_label' => $assetUpdatedAt !== '' ? app_format_utc_datetime_local($assetUpdatedAt) : '',
         'is_stale' => !$assetUpdatedTimestamp || (time() - (int)$assetUpdatedTimestamp) >= 900 ? 1 : 0,
     ];
 }
@@ -6939,7 +6939,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'crypto_asset_rate_updated_at', 'Rate updated at')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)($cryptoAssetEditor['rate_updated_at'] ?? '')); ?>" readonly>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(app_format_utc_datetime_local((string)($cryptoAssetEditor['rate_updated_at'] ?? ''))); ?>" readonly>
                                                     </div>
                                                 </div>
 

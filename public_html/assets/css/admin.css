@@ -6743,8 +6743,23 @@ body.admin-login-page .alert.alert-danger::before{
         background:#fff;
     }
 
+    body.admin-app-page.admin-chat-panel-open{
+        position:fixed;
+        left:0;
+        right:0;
+        width:100%;
+        overflow:hidden;
+    }
+
     .admin-main{
         background:#fff;
+    }
+
+    body.admin-app-page.admin-chat-panel-open .admin-shell,
+    body.admin-app-page.admin-chat-panel-open .admin-main{
+        height:var(--admin-chat-viewport-height, 100dvh);
+        max-height:var(--admin-chat-viewport-height, 100dvh);
+        overflow:hidden;
     }
 
     .admin-topbar{
@@ -6761,13 +6776,14 @@ body.admin-login-page .alert.alert-danger::before{
     }
 
     .admin-chat-inbox__panel{
-        top:0;
+        top:var(--admin-chat-viewport-offset-top, 0px);
         right:0;
         left:0;
         width:100vw;
         width:100dvw;
         height:var(--admin-chat-viewport-height, 100dvh);
         max-height:var(--admin-chat-viewport-height, 100dvh);
+        overflow:hidden;
         border-radius:0;
         border:none;
         box-shadow:none;
@@ -6836,6 +6852,7 @@ body.admin-login-page .alert.alert-danger::before{
 
     .admin-chat-inbox__conversation-view{
         min-height:0;
+        overflow:hidden;
     }
 
     .admin-chat-inbox__header{
@@ -6845,6 +6862,26 @@ body.admin-login-page .alert.alert-danger::before{
     .admin-chat-inbox__list,
     .admin-chat-inbox__conversation-body{
         padding:.75rem;
+    }
+
+    .admin-chat-inbox__list-view{
+        min-height:0;
+        overflow:hidden;
+    }
+
+    .admin-chat-inbox__header,
+    .admin-chat-inbox__conversation-header,
+    .admin-chat-inbox__conversation-meta,
+    .admin-chat-inbox__composer{
+        flex:0 0 auto;
+    }
+
+    .admin-chat-inbox__list,
+    .admin-chat-inbox__conversation-body{
+        min-height:0;
+        overflow-y:auto;
+        overscroll-behavior:contain;
+        -webkit-overflow-scrolling:touch;
     }
 
     .admin-chat-inbox__composer{

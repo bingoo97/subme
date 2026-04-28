@@ -24,7 +24,7 @@ return [
     'nav_cryptocurrencies' => 'Kryptowaluty',
     'nav_news' => 'Newsy',
     'nav_live_chat' => 'Live chat',
-    'nav_email_templates' => 'Szablony email',
+    'nav_email_templates' => 'Emails',
     'nav_faq' => 'FAQ',
     'nav_help' => 'Pomoc',
     'nav_settings' => 'Ustawienia',
