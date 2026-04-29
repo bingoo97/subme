@@ -664,6 +664,7 @@
 
 .messanger .panel-footer{
 	display:none;
+	flex:0 0 auto;
 	padding:12px 14px;
 	border-top:1px solid #efefef;
 	background:#fff;
@@ -1930,10 +1931,13 @@
 	}
 
 	.messanger.is-open .panel-footer{
-		position:sticky;
-		bottom:0;
+		position:relative;
+		bottom:auto;
+		flex:0 0 auto;
+		margin-top:auto;
 		z-index:2;
 		padding-bottom:calc(12px + var(--messenger-mobile-safe-bottom));
+		box-shadow:0 -8px 18px rgba(15, 23, 42, 0.08);
 	}
 
 	.messenger-bubble{
