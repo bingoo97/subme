@@ -5339,7 +5339,7 @@ img.scan{
 }
 
 .orders-user-table tbody td{
-	padding:18px;
+	padding: 10px;
 	vertical-align:middle;
 	border-top:0 !important;
 	border-left:0 !important;
@@ -5386,7 +5386,7 @@ img.scan{
 
 .orders-user-summary__note{
 	color: #656565;
-	font-size:14px;
+	font-size: 10px;
 	font-weight: 500;
 	line-height:1.45;
 }
@@ -5767,7 +5767,7 @@ img.scan{
 	align-items:center;
 	gap:.45rem;
 	color:#0f766e;
-	font-weight:700;
+	font-weight: 700500;
 }
 
 .orders-user-new-badge--success{
@@ -6544,7 +6544,7 @@ img.scan{
 	}
 
 	.orders-user-summary__note{
-		font-size: 11px;
+		font-size: 10px;
 	}
 
 	.orders-user-progress__meta{
