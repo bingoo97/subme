@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 	<title>{if isset($reseller.name) && $reseller.name}{$reseller.name}{else}{$settings.page_title|default:$t.brand_fallback}{/if}</title>
 	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 	<meta name="description" content="{$settings.page_desc|default:''}" />
 	<meta name="keywords" content="{$settings.page_keywords|default:''}" />
     <meta name="author" content="{$settings.page_name|default:''}">
