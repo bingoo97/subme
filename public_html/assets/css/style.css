@@ -954,8 +954,8 @@ VERIFY PAGE
 }
 
 #page_login .auth-logo-login {
-	max-width: 100px;
-	max-height: 100px;
+	max-width: 150px;
+	max-height: 150px;
 	object-fit: contain;
 }
 
