@@ -6082,6 +6082,23 @@ body.admin-login-page .alert.alert-danger::before{
     width: 100%;
 }
 
+.admin-order-balance-alert{
+    margin: .25rem 0 0;
+}
+
+.admin-order-balance-alert__actions{
+    margin-top: .9rem;
+}
+
+.admin-order-balance-alert__actions .btn{
+    white-space: normal;
+    text-align: left;
+}
+
+.admin-order-balance-alert__links{
+    margin-top: .75rem;
+}
+
 @media (max-width: 767px){
     .admin-order-modal__status-row{
         align-items:flex-start;

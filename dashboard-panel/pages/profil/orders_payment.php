@@ -705,6 +705,24 @@ if (!function_exists('orders_payment_load_v2_order')) {
     }
 }
 
+if (!function_exists('orders_payment_load_customer_balance_amount')) {
+    function orders_payment_load_customer_balance_amount($db, int $customerId): float
+    {
+        if ($customerId <= 0 || !schema_object_exists($db, 'customers') || !schema_column_exists($db, 'customers', 'balance_amount')) {
+            return 0.0;
+        }
+
+        $row = $db->select_user(
+            "SELECT balance_amount
+             FROM customers
+             WHERE id = {$customerId}
+             LIMIT 1"
+        );
+
+        return is_array($row) ? round((float)($row['balance_amount'] ?? 0), 2) : 0.0;
+    }
+}
+
 $tenantId = tenant_current_id($user);
 $orderId = isset($_POST['id']) ? (int)$_POST['id'] : (isset($_GET['payment']) ? (int)$_GET['payment'] : 0);
 $salesEnabled = (int)($settings['active_sale'] ?? 0) === 1;
@@ -823,12 +841,18 @@ if (app_uses_v2_schema($db)) {
         $hasAssignedCryptoWallets = !empty($cryptoAssets);
         $canUseBank = $bankEnabled && !empty($bankAccounts);
         $canUseCrypto = $cryptoEnabled && $hasAssignedCryptoWallets;
+        $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
+        $selectedProductPrice = round((float)($selectedProduct['price'] ?? $selected['price'] ?? 0), 2);
+        $canUseBalance = $selectedProduct && $selectedProductPrice > 0 && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
 
         $selectedMethod = isset($_POST['payment_method']) ? trim((string)$_POST['payment_method']) : '';
-        if ($selectedMethod !== 'crypto' && $selectedMethod !== 'bank_transfer') {
+        if ($selectedMethod !== 'crypto' && $selectedMethod !== 'bank_transfer' && $selectedMethod !== 'balance') {
             $selectedMethod = '';
         }
         if (!$bankEnabled && $selectedMethod === 'bank_transfer') {
+            $selectedMethod = '';
+        }
+        if (!$canUseBalance && $selectedMethod === 'balance') {
             $selectedMethod = '';
         }
 
@@ -1151,6 +1175,101 @@ if (app_uses_v2_schema($db)) {
             }
         }
 
+        if ($canRequestPayment && isset($_POST['create_balance_payment'])) {
+            $selectedMethod = 'balance';
+            if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
+                $smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
+            } elseif (!$selectedProduct) {
+                $smarty->assign('alert_error', localization_translate($t, 'payment_choose_package_error', 'Choose a package first.'));
+            } else {
+                $selectedProductPrice = round((float)($selectedProduct['price'] ?? 0), 2);
+                $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
+                if ($selectedProductPrice <= 0) {
+                    $smarty->assign('alert_error', localization_translate($t, 'payment_balance_unavailable', 'Balance payment is unavailable for this order.'));
+                } elseif ($customerBalanceAmount + 0.00001 < $selectedProductPrice) {
+                    $smarty->assign('alert_error', localization_translate($t, 'payment_balance_too_low', 'Your account balance is too low for this payment.'));
+                } else {
+                    orders_payment_cancel_open_crypto_requests($db, (int)$user['id'], (int)$selected['id']);
+                    orders_payment_cancel_open_bank_requests($db, (int)$user['id'], (int)$selected['id']);
+
+                    $newExpiry = date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])));
+                    $balanceDebitResult = app_apply_customer_balance_runtime_event(
+                        $db,
+                        (int)$user['id'],
+                        $selectedProductPrice,
+                        'debit',
+                        'order_activation',
+                        (string)((int)$selected['id']),
+                        'Paid from customer balance for order #' . (int)$selected['id'],
+                        'customer',
+                        0,
+                        (string)($_SERVER['REMOTE_ADDR'] ?? '')
+                    );
+
+                    if (empty($balanceDebitResult['ok'])) {
+                        $smarty->assign('alert_error', localization_translate($t, 'payment_balance_debit_error', 'Unable to pay from account balance right now.'));
+                    } else {
+                        $updated = $db->update_using_id(
+                            ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
+                            [
+                                (int)$selectedProduct['id'],
+                                $selectedProductPrice,
+                                (int)$selectedProduct['currency_id'],
+                                $newExpiry,
+                                'balance',
+                                'paid',
+                                'pending',
+                                date('Y-m-d H:i:s', $time_s),
+                                'pending_payment',
+                            ],
+                            'orders',
+                            (int)$selected['id']
+                        );
+
+                        if (!$updated) {
+                            if (empty($balanceDebitResult['already_applied'])) {
+                                app_apply_customer_balance_runtime_event(
+                                    $db,
+                                    (int)$user['id'],
+                                    $selectedProductPrice,
+                                    'credit',
+                                    'order_balance_payment_rollback',
+                                    (string)((int)$selected['id']) . ':' . $time_s,
+                                    'Rollback after failed balance payment save for order #' . (int)$selected['id'],
+                                    'system',
+                                    0,
+                                    (string)($_SERVER['REMOTE_ADDR'] ?? '')
+                                );
+                            }
+                            $smarty->assign('alert_error', localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.'));
+                        } else {
+                            if (schema_object_exists($db, 'order_status_events')) {
+                                $db->insert(
+                                    ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
+                                    [(int)$selected['id'], null, (string)($selected['status_raw'] ?? 'pending_payment'), 'pending_payment', 'Payment confirmed from customer balance'],
+                                    'order_status_events'
+                                );
+                            }
+                            app_customer_activity_log(
+                                $db,
+                                (int)$user['id'],
+                                'order_payment_approved',
+                                'Order #' . (int)$selected['id'] . ' was paid from account balance.',
+                                'customer',
+                                0,
+                                (string)($_SERVER['REMOTE_ADDR'] ?? '')
+                            );
+                            $paymentRedirectUrl = '/order-payment-' . (int)$selected['id'];
+                        }
+                    }
+                    $selected = orders_payment_load_v2_order($db, (int)$user['id'], $orderId);
+                    if ($selected) {
+                        $selected['date_end_s'] = !empty($selected['date_end']) ? strtotime($selected['date_end']) : 0;
+                    }
+                }
+            }
+        }
+
         $cryptoRequest = $db->select_user(
             "SELECT
                 crypto_deposit_requests.*,
@@ -1246,6 +1365,10 @@ if (app_uses_v2_schema($db)) {
             }
         }
 
+        $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
+        $selectedProductPrice = round((float)($selectedProduct['price'] ?? $selected['price'] ?? 0), 2);
+        $canUseBalance = $selectedProduct && $selectedProductPrice > 0 && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
+
         $smarty->assign('selected', $selected);
         $smarty->assign('payment_can_request', $canRequestPayment);
         $smarty->assign('payment_selected_method', $selectedMethod);
@@ -1258,6 +1381,8 @@ if (app_uses_v2_schema($db)) {
         $smarty->assign('payment_has_crypto_assignments', $hasAssignedCryptoWallets);
         $smarty->assign('payment_can_use_crypto', $canUseCrypto);
         $smarty->assign('payment_can_use_bank', $canUseBank);
+        $smarty->assign('payment_can_use_balance', $canUseBalance);
+        $smarty->assign('payment_customer_balance_amount', number_format($customerBalanceAmount, 2, '.', ''));
         $smarty->assign('payment_bank_accounts', $bankAccounts);
         $smarty->assign('payment_crypto_request', $cryptoRequest ?: null);
         $smarty->assign('payment_bank_request', $bankRequest ?: null);

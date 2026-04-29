@@ -1468,6 +1468,23 @@ if ($route === 'orders') {
         }
     }
 
+    if (isset($_POST['admin_apply_order_balance_suggestion'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $suggestionResult = admin_apply_order_balance_suggestion(
+                $db,
+                (int)($_POST['order_id'] ?? 0),
+                (int)($_POST['suggested_product_id'] ?? 0),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($suggestionResult['message'] ?? 'Unable to apply suggested package.');
+            $pageAlertType = !empty($suggestionResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
     if (isset($_POST['admin_extend_order'])) {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
@@ -5094,6 +5111,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         }
                                         $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
                                         $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+                                        $balanceActivationContext = admin_order_balance_activation_context($db, $row);
+                                        $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
                                         $modalId = 'adminOrderModal' . $orderId;
                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
@@ -5156,6 +5175,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 >
                                                                     <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                     <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
+                                                                    <?php if (!empty($balanceSuggestion['id'])): ?>
+                                                                        <input type="hidden" name="suggested_product_id" value="<?php echo admin_e((string)((int)$balanceSuggestion['id'])); ?>">
+                                                                    <?php endif; ?>
                                                                     <input type="hidden" name="payment_status" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
@@ -5163,7 +5185,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_quick_status', 'Order status')); ?></label>
                                                                             <select class="form-select" name="status" data-admin-order-main-status>
                                                                                 <?php foreach (admin_order_status_options((string)($row['status'] ?? '')) as $statusOption): ?>
-                                                                                    <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)($row['status'] ?? '') === $statusOption ? ' selected' : ''; ?>>
+                                                                                    <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)($row['status'] ?? '') === $statusOption ? ' selected' : ''; ?><?php echo ($statusOption === 'active' && !empty($balanceActivationContext['needs_attention'])) ? ' disabled' : ''; ?>>
                                                                                         <?php echo admin_e(admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)))); ?>
                                                                                     </option>
                                                                                 <?php endforeach; ?>
@@ -5188,6 +5210,35 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php if (!$canExtendOrderFromModal): ?>
                                                                             <div class="admin-order-extend__hint admin-order-extend__hint--warning">
                                                                                 <?php echo admin_e(admin_t($messages, 'order_extend_blocked_pending_help', 'Extension is available only for active or expired paid orders. New unpaid orders must be completed first.')); ?>
+                                                                            </div>
+                                                                        <?php endif; ?>
+                                                                        <?php if (!empty($balanceActivationContext['needs_attention'])): ?>
+                                                                            <div class="alert alert-warning admin-order-balance-alert" role="alert">
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_balance_attention_title', 'Insufficient balance for activation.')); ?></strong><br>
+                                                                                <?php echo admin_e(admin_t($messages, 'order_balance_attention_text', 'This order is already marked as paid, but the customer balance is still too low to activate this package.')); ?><br>
+                                                                                <?php if (!empty($balanceActivationContext['balance_debit_already_applied'])): ?>
+                                                                                    <?php echo admin_e(admin_t($messages, 'order_balance_attention_reserved', 'Already reserved for this order')); ?>:
+                                                                                    <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['covered_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong><br>
+                                                                                <?php else: ?>
+                                                                                    <?php echo admin_e(admin_t($messages, 'order_balance_attention_current', 'Current balance')); ?>:
+                                                                                    <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['current_balance'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong><br>
+                                                                                <?php endif; ?>
+                                                                                <?php echo admin_e(admin_t($messages, 'order_balance_attention_required', 'Required for this package')); ?>:
+                                                                                <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['required_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong><br>
+                                                                                <?php echo admin_e(admin_t($messages, 'order_balance_attention_missing', 'Missing amount')); ?>:
+                                                                                <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['shortfall_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong>
+                                                                                <?php if (!empty($balanceSuggestion['id'])): ?>
+                                                                                    <div class="admin-order-balance-alert__actions">
+                                                                                        <button type="submit" class="btn btn-dark btn-sm" name="admin_apply_order_balance_suggestion">
+                                                                                            <?php echo admin_e(admin_t($messages, 'order_balance_apply_suggestion', 'Use suggested package')); ?>: <?php echo admin_e((string)($balanceSuggestion['name'] ?? '')); ?> · <?php echo admin_e((string)($balanceSuggestion['price_label'] ?? '')); ?>
+                                                                                        </button>
+                                                                                    </div>
+                                                                                <?php endif; ?>
+                                                                                <div class="admin-order-balance-alert__links">
+                                                                                    <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-inline-link">
+                                                                                        <?php echo admin_e(admin_t($messages, 'order_balance_open_customer_profile', 'Open customer profile to adjust balance')); ?>
+                                                                                    </a>
+                                                                                </div>
                                                                             </div>
                                                                         <?php endif; ?>
                                                                         <button
@@ -5286,7 +5337,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </div>
                                                                     </div>
                                                                     <div class="admin-order-modal__actions">
-                                                                        <button type="submit" class="btn btn-dark" name="admin_save_order_info">
+                                                                        <button type="submit" class="btn btn-dark" name="admin_save_order_info"<?php echo !empty($balanceActivationContext['needs_attention']) ? ' disabled' : ''; ?>>
                                                                             <i class="bi bi-floppy" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_save_button', 'Save order')); ?></span>
                                                                         </button>

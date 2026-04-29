@@ -5730,6 +5730,186 @@ function app_clear_user_history(Mysql_ks $db, ?string $now = null): array
     ];
 }
 
+function app_customer_activity_log(
+    Mysql_ks $db,
+    int $customerId,
+    string $actionKey,
+    string $description,
+    string $actorType = 'system',
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): void
+{
+    if ($customerId <= 0 || !schema_object_exists($db, 'customer_activity_logs')) {
+        return;
+    }
+
+    $actorType = strtolower(trim($actorType));
+    if (!in_array($actorType, ['system', 'customer', 'admin'], true)) {
+        $actorType = 'system';
+    }
+
+    $db->insert(
+        ['customer_id', 'admin_user_id', 'actor_type', 'action_key', 'description', 'ip_address'],
+        [$customerId, $adminUserId > 0 ? $adminUserId : null, $actorType, $actionKey, $description, $ipAddress !== '' ? $ipAddress : null],
+        'customer_activity_logs'
+    );
+}
+
+function app_ensure_customer_balance_runtime_table(Mysql_ks $db): void
+{
+    if (schema_object_exists($db, 'customer_balance_runtime_events')) {
+        return;
+    }
+
+    @$db->query(
+        "CREATE TABLE IF NOT EXISTS customer_balance_runtime_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            customer_id INT UNSIGNED NOT NULL,
+            source_type VARCHAR(40) NOT NULL,
+            source_key VARCHAR(120) NOT NULL,
+            direction VARCHAR(10) NOT NULL,
+            amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            note VARCHAR(255) DEFAULT NULL,
+            created_by_admin_user_id INT UNSIGNED DEFAULT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uniq_customer_balance_runtime_event (source_type, source_key, direction),
+            KEY idx_customer_balance_runtime_customer (customer_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+
+function app_apply_customer_balance_runtime_event(
+    Mysql_ks $db,
+    int $customerId,
+    float $amount,
+    string $direction,
+    string $sourceType,
+    string $sourceKey,
+    string $note,
+    string $actorType = 'system',
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    if ($customerId <= 0 || $amount <= 0) {
+        return ['ok' => false, 'message' => 'Customer balance event is invalid.'];
+    }
+
+    if (!schema_object_exists($db, 'customers') || !schema_column_exists($db, 'customers', 'balance_amount')) {
+        return ['ok' => false, 'message' => 'Balance is not available in this database schema yet.'];
+    }
+
+    $direction = strtolower(trim($direction));
+    if (!in_array($direction, ['credit', 'debit'], true)) {
+        return ['ok' => false, 'message' => 'Customer balance event direction is invalid.'];
+    }
+
+    app_ensure_customer_balance_runtime_table($db);
+
+    $sourceType = substr(trim($sourceType), 0, 40);
+    $sourceKey = substr(trim($sourceKey), 0, 120);
+    $note = trim($note);
+    if ($sourceType === '' || $sourceKey === '') {
+        return ['ok' => false, 'message' => 'Customer balance event source is invalid.'];
+    }
+
+    $safeSourceType = $db->escape($sourceType);
+    $safeSourceKey = $db->escape($sourceKey);
+
+    $db->query('START TRANSACTION');
+
+    $existingEvent = $db->select_user(
+        "SELECT id
+         FROM customer_balance_runtime_events
+         WHERE source_type = '" . $safeSourceType . "'
+           AND source_key = '" . $safeSourceKey . "'
+           AND direction = '" . $db->escape($direction) . "'
+         LIMIT 1"
+    );
+
+    if (is_array($existingEvent) && !empty($existingEvent['id'])) {
+        $db->query('COMMIT');
+        return [
+            'ok' => true,
+            'already_applied' => true,
+            'message' => 'Customer balance event was already applied.',
+        ];
+    }
+
+    $customerRow = $db->select_user(
+        "SELECT id, balance_amount
+         FROM customers
+         WHERE id = {$customerId}
+         LIMIT 1"
+    );
+
+    if (!is_array($customerRow) || empty($customerRow['id'])) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
+    $delta = round($amount, 2);
+    if ($direction === 'debit' && $currentBalance + 0.00001 < $delta) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Customer balance is too low for this action.'];
+    }
+
+    $newBalance = $direction === 'credit'
+        ? round($currentBalance + $delta, 2)
+        : round($currentBalance - $delta, 2);
+
+    $updated = $db->update_using_id(
+        ['balance_amount'],
+        [number_format($newBalance, 2, '.', '')],
+        'customers',
+        $customerId
+    );
+
+    if (!$updated) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to update customer balance.'];
+    }
+
+    $inserted = $db->insert(
+        ['customer_id', 'source_type', 'source_key', 'direction', 'amount', 'note', 'created_by_admin_user_id'],
+        [$customerId, $sourceType, $sourceKey, $direction, number_format($delta, 2, '.', ''), $note !== '' ? $note : null, $adminUserId > 0 ? $adminUserId : null],
+        'customer_balance_runtime_events'
+    );
+
+    if (!$inserted) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to save customer balance event.'];
+    }
+
+    $db->query('COMMIT');
+
+    $description = ($direction === 'debit' ? 'Balance debited automatically: ' : 'Balance credited automatically: ')
+        . number_format($delta, 2, '.', '');
+    if ($note !== '') {
+        $description .= ' (' . $note . ')';
+    }
+
+    app_customer_activity_log(
+        $db,
+        $customerId,
+        $direction === 'debit' ? 'balance_debit' : 'balance_credit',
+        $description,
+        $actorType,
+        $adminUserId,
+        $ipAddress
+    );
+
+    return [
+        'ok' => true,
+        'already_applied' => false,
+        'new_balance' => number_format($newBalance, 2, '.', ''),
+        'message' => 'Customer balance updated.',
+    ];
+}
+
 function app_reset_dashboard_sample_data(Mysql_ks $db, ?string $now = null): array
 {
     $safeNow = trim((string)$now);

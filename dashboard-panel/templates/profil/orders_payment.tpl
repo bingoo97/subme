@@ -46,7 +46,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                 <p>{$t.payment_choose_method_intro|default:'Available methods depend on the active payment data configured by the admin.'}</p>
             </div>
 
-            {if $payment_can_use_crypto || $payment_can_use_bank}
+            {if $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance}
                 <div class="payment-method-start{if $payment_selected_method neq ''} is-hidden{/if}" data-payment-start>
                     <div class="payment-method-start__buttons">
                     {if $payment_can_use_crypto}
@@ -57,6 +57,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     {if $payment_can_use_bank}
                         <button type="button" class="payment-method-start__button" data-payment-target="bank">
                             <i class="fa fa-university" aria-hidden="true"></i> {$t.payment_method_bank|default:'Pay by bank transfer'}
+                        </button>
+                    {/if}
+                    {if $payment_can_use_balance}
+                        <button type="button" class="payment-method-start__button payment-method-start__button--balance" data-payment-target="balance">
+                            <i class="fa fa-credit-card" aria-hidden="true"></i> {$t.payment_method_balance|default:'Pay with balance'}
                         </button>
                     {/if}
                     </div>
@@ -197,6 +202,49 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             <div class="payment-step__actions">
                                 <button type="submit" class="btn btn-dark btn-lg" name="create_bank_payment">
                                     {$t.payment_create_bank|default:'Create bank transfer'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                {/if}
+
+                {if $payment_can_use_balance}
+                    <div class="payment-method-panel{if $payment_selected_method eq 'balance'} is-active{/if}" data-payment-panel="balance">
+                        <div class="payment-method-panel__toolbar">
+                            <button type="button" class="btn btn-default payment-method-back" data-payment-back>
+                                <i class="fa fa-angle-double-left" aria-hidden="true"></i> {$t.back|default:'Back'}
+                            </button>
+                        </div>
+                        <form action="" method="post">
+                            <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
+                            <input type="hidden" name="id" value="{$selected.id}" />
+                            <input type="hidden" name="payment" value="{$selected.id}" />
+                            <input type="hidden" name="payment_method" value="balance" />
+
+                            <div class="payment-step">
+                                <div class="payment-step__head">
+                                    <span class="payment-step__label">{$t.payment_step|default:'Step'} 1</span>
+                                    <h4>{$t.payment_choose_package|default:'Choose package'}</h4>
+                                </div>
+                                <div class="package-choice-list">
+                                    {section name=i loop=$payment_products}
+                                        <label class="package-choice-chip">
+                                            <input type="radio" name="payment_product_id" value="{$payment_products[i].id}" {if $payment_products[i].id == $payment_selected_product_id}checked{/if}>
+                                            <span>{$payment_products[i].payment_label}</span>
+                                        </label>
+                                    {/section}
+                                </div>
+                            </div>
+
+                            <div class="payment-step__hint">
+                                <p>{$t.payment_balance_hint_line_1|default:'Your account balance will be used immediately after confirming this payment.'}</p>
+                                <p>{$t.payment_balance_hint_line_2|default:'After payment, the order will wait for activation by the admin.'}</p>
+                                <p class="payment-balance-available">{$t.payment_balance_available|default:'Available balance'}: <strong>{$payment_customer_balance_amount} {$selected.currency_symbol|default:$selected.currency_code|default:$reseller.currency_symbol}</strong></p>
+                            </div>
+
+                            <div class="payment-step__actions">
+                                <button type="submit" class="btn btn-danger btn-lg" name="create_balance_payment">
+                                    {$t.payment_create_balance|default:'Pay from balance'}
                                 </button>
                             </div>
                         </form>

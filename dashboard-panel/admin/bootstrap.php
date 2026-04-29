@@ -1560,6 +1560,8 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
             customers.email AS customer_email,
             products.provider_id,
             products.name AS product_name,
+            products.product_type,
+            products.is_trial,
             products.duration_hours,
             product_providers.name AS provider_name,
             product_providers.dashboard_url,
@@ -1634,6 +1636,8 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
             customers.email AS customer_email,
             products.provider_id,
             products.name AS product_name,
+            products.product_type,
+            products.is_trial,
             products.duration_hours,
             product_providers.name AS provider_name,
             product_providers.dashboard_url,
@@ -1703,6 +1707,8 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
             {$customerHandleSelect},
             products.provider_id,
             products.name AS product_name,
+            products.product_type,
+            products.is_trial,
             products.duration_hours,
             products.currency_id AS product_currency_id,
             product_providers.name AS provider_name,
@@ -1723,6 +1729,176 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
     );
 
     return is_array($row) ? $row : null;
+}
+
+function admin_order_balance_activation_context(Mysql_ks $db, array $order): array
+{
+    $customerId = (int)($order['customer_id'] ?? 0);
+    $providerId = (int)($order['provider_id'] ?? 0);
+    $productId = (int)($order['product_id'] ?? 0);
+    $status = strtolower(trim((string)($order['status'] ?? '')));
+    $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
+    $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+    $requiredAmount = round((float)($order['total_amount'] ?? 0), 2);
+
+    $currentBalance = 0.0;
+    if ($customerId > 0 && schema_object_exists($db, 'customers') && schema_column_exists($db, 'customers', 'balance_amount')) {
+        $customerRow = $db->select_user(
+            "SELECT balance_amount
+             FROM customers
+             WHERE id = {$customerId}
+             LIMIT 1"
+        );
+        if (is_array($customerRow)) {
+            $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
+        }
+    }
+
+    $existingDebitAmount = 0.0;
+    if (schema_object_exists($db, 'customer_balance_runtime_events') && !empty($order['id'])) {
+        $debitEvent = $db->select_user(
+            "SELECT amount
+             FROM customer_balance_runtime_events
+             WHERE customer_id = {$customerId}
+               AND source_type = 'order_activation'
+               AND source_key = '" . $db->escape((string)((int)($order['id'] ?? 0))) . "'
+               AND direction = 'debit'
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        if (is_array($debitEvent)) {
+            $existingDebitAmount = round((float)($debitEvent['amount'] ?? 0), 2);
+        }
+    }
+
+    $isAwaitingActivation = $status === 'pending_payment'
+        && $paymentStatus === 'paid'
+        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true);
+    $activationBudget = $existingDebitAmount > 0 ? $existingDebitAmount : $currentBalance;
+    $canActivate = $activationBudget + 0.00001 >= $requiredAmount;
+    $shortfall = max(0, round($requiredAmount - $activationBudget, 2));
+
+    $suggestedProduct = null;
+    if (
+        $isAwaitingActivation
+        && !$canActivate
+        && $providerId > 0
+        && $productId > 0
+        && strtolower(trim((string)($order['product_type'] ?? 'subscription'))) === 'subscription'
+    ) {
+        $safeProductType = $db->escape((string)($order['product_type'] ?? 'subscription'));
+        $trialFilter = schema_column_exists($db, 'products', 'is_trial')
+            ? ' AND products.is_trial = 0'
+            : '';
+        $candidate = $db->select_user(
+            "SELECT
+                products.id,
+                products.name,
+                products.duration_hours,
+                products.price_amount,
+                products.currency_id,
+                currencies.code AS currency_code
+             FROM products
+             LEFT JOIN currencies ON currencies.id = products.currency_id
+             WHERE products.provider_id = {$providerId}
+               AND products.is_active = 1
+               AND products.product_type = '{$safeProductType}'
+               AND products.id <> {$productId}
+               {$trialFilter}
+               AND products.price_amount > 0
+               AND products.price_amount <= " . number_format($activationBudget, 2, '.', '') . "
+             ORDER BY products.duration_hours DESC, products.price_amount DESC, products.id ASC
+             LIMIT 1"
+        );
+
+        if (is_array($candidate) && !empty($candidate['id'])) {
+            $candidateDuration = admin_duration_label_from_hours((int)($candidate['duration_hours'] ?? 0));
+            $candidateTitle = trim((string)($candidate['name'] ?? ''));
+            if ($candidateDuration !== '' && stripos($candidateTitle, $candidateDuration) === false) {
+                $candidateTitle = trim($candidateTitle . ' ' . $candidateDuration);
+            }
+            $candidatePrice = round((float)($candidate['price_amount'] ?? 0), 2);
+            $candidateCurrencyCode = trim((string)($candidate['currency_code'] ?? (string)($order['currency_code'] ?? '')));
+            $suggestedProduct = [
+                'id' => (int)$candidate['id'],
+                'name' => $candidateTitle,
+                'price_amount' => $candidatePrice,
+                'currency_code' => $candidateCurrencyCode,
+                'duration_label' => $candidateDuration,
+                'price_label' => admin_format_money_value($candidatePrice, $candidateCurrencyCode),
+            ];
+        }
+    }
+
+    return [
+        'is_awaiting_activation' => $isAwaitingActivation,
+        'current_balance' => $currentBalance,
+        'covered_amount' => $activationBudget,
+        'balance_debit_already_applied' => $existingDebitAmount > 0,
+        'required_amount' => $requiredAmount,
+        'shortfall_amount' => $shortfall,
+        'can_activate' => $canActivate,
+        'needs_attention' => $isAwaitingActivation && !$canActivate,
+        'suggested_product' => $suggestedProduct,
+    ];
+}
+
+function admin_apply_order_balance_suggestion(
+    Mysql_ks $db,
+    int $orderId,
+    int $productId,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $order = admin_order_find($db, $orderId);
+    if (!$order) {
+        return ['ok' => false, 'message' => 'Order not found.'];
+    }
+
+    $balanceContext = admin_order_balance_activation_context($db, $order);
+    $suggestedProduct = (array)($balanceContext['suggested_product'] ?? []);
+    if (empty($balanceContext['needs_attention'])) {
+        return ['ok' => false, 'message' => 'This order does not need a balance-based package suggestion.'];
+    }
+    if ($productId <= 0 || $productId !== (int)($suggestedProduct['id'] ?? 0)) {
+        return ['ok' => false, 'message' => 'Suggested package is invalid.'];
+    }
+
+    $product = admin_product_basic_row($db, $productId);
+    if (!$product || empty($product['is_active'])) {
+        return ['ok' => false, 'message' => 'Suggested package is not available.'];
+    }
+
+    $durationHours = (int)($product['duration_hours'] ?? 0);
+    $newExpiry = $durationHours > 0 ? date('Y-m-d H:i:s', time() + ($durationHours * 3600)) : (string)($order['expires_at'] ?? null);
+    $updated = $db->update_using_id(
+        ['product_id', 'total_amount', 'currency_id', 'expires_at'],
+        [
+            $productId,
+            number_format((float)($product['price_amount'] ?? 0), 2, '.', ''),
+            (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
+            $newExpiry,
+        ],
+        'orders',
+        $orderId
+    );
+
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to apply the suggested package.'];
+    }
+
+    $productLabel = trim((string)($product['provider_name'] ?? '') . ' ' . (string)($product['name'] ?? ''));
+    admin_log_customer_and_admin(
+        $db,
+        (int)($order['customer_id'] ?? 0),
+        $adminUserId,
+        'order_updated',
+        'Order #' . $orderId . ' switched to suggested package #' . $productId . ($productLabel !== '' ? ' (' . $productLabel . ')' : '') . '.',
+        $ipAddress
+    );
+
+    return ['ok' => true, 'message' => 'Suggested package was applied to the order.'];
 }
 
 function admin_normalize_datetime_input(?string $value): ?string
@@ -1780,7 +1956,7 @@ function admin_order_fulfillment_status_options(string $current = ''): array
 
 function admin_order_payment_method_options(?string $current = ''): array
 {
-    $options = ['', 'crypto', 'bank_transfer'];
+    $options = ['', 'crypto', 'bank_transfer', 'balance'];
     $current = trim((string)$current);
     if ($current !== '' && !in_array($current, $options, true)) {
         $options[] = $current;
@@ -3144,26 +3320,7 @@ function admin_adjust_customer_balance(Mysql_ks $db, int $customerId, array $pay
 
 function admin_ensure_customer_balance_runtime_table(Mysql_ks $db): void
 {
-    if (schema_object_exists($db, 'customer_balance_runtime_events')) {
-        return;
-    }
-
-    @$db->query(
-        "CREATE TABLE IF NOT EXISTS customer_balance_runtime_events (
-            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-            customer_id INT UNSIGNED NOT NULL,
-            source_type VARCHAR(40) NOT NULL,
-            source_key VARCHAR(120) NOT NULL,
-            direction VARCHAR(10) NOT NULL,
-            amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-            note VARCHAR(255) DEFAULT NULL,
-            created_by_admin_user_id INT UNSIGNED DEFAULT NULL,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            UNIQUE KEY uniq_customer_balance_runtime_event (source_type, source_key, direction),
-            KEY idx_customer_balance_runtime_customer (customer_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
+    app_ensure_customer_balance_runtime_table($db);
 }
 
 function admin_apply_customer_balance_runtime_event(
@@ -3178,137 +3335,35 @@ function admin_apply_customer_balance_runtime_event(
     string $ipAddress = ''
 ): array
 {
-    if ($customerId <= 0 || $amount <= 0) {
-        return ['ok' => false, 'message' => 'Customer balance event is invalid.'];
-    }
-
-    if (!schema_object_exists($db, 'customers') || !schema_column_exists($db, 'customers', 'balance_amount')) {
-        return ['ok' => false, 'message' => 'Balance is not available in this database schema yet.'];
-    }
-
-    $direction = strtolower(trim($direction));
-    if (!in_array($direction, ['credit', 'debit'], true)) {
-        return ['ok' => false, 'message' => 'Customer balance event direction is invalid.'];
-    }
-
-    admin_ensure_customer_balance_runtime_table($db);
-
-    $sourceType = substr(trim($sourceType), 0, 40);
-    $sourceKey = substr(trim($sourceKey), 0, 120);
-    $note = trim($note);
-    if ($sourceType === '' || $sourceKey === '') {
-        return ['ok' => false, 'message' => 'Customer balance event source is invalid.'];
-    }
-
-    $safeSourceType = $db->escape($sourceType);
-    $safeSourceKey = $db->escape($sourceKey);
-
-    $db->query('START TRANSACTION');
-
-    $existingEvent = $db->select_user(
-        "SELECT id
-         FROM customer_balance_runtime_events
-         WHERE source_type = '" . $safeSourceType . "'
-           AND source_key = '" . $safeSourceKey . "'
-           AND direction = '" . $db->escape($direction) . "'
-         LIMIT 1"
-    );
-
-    if (is_array($existingEvent) && !empty($existingEvent['id'])) {
-        $db->query('COMMIT');
-        return [
-            'ok' => true,
-            'already_applied' => true,
-            'message' => 'Customer balance event was already applied.',
-        ];
-    }
-
-    $customerRow = $db->select_user(
-        "SELECT id, balance_amount
-         FROM customers
-         WHERE id = {$customerId}
-         LIMIT 1"
-    );
-
-    if (!is_array($customerRow) || empty($customerRow['id'])) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Customer not found.'];
-    }
-
-    $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
-    $delta = round($amount, 2);
-
-    if ($direction === 'debit' && $currentBalance + 0.00001 < $delta) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Customer balance is too low for this action.'];
-    }
-
-    $newBalance = $direction === 'credit'
-        ? round($currentBalance + $delta, 2)
-        : round($currentBalance - $delta, 2);
-
-    $updated = $db->update_using_id(
-        ['balance_amount'],
-        [number_format($newBalance, 2, '.', '')],
-        'customers',
-        $customerId
-    );
-
-    if (!$updated) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Unable to update customer balance.'];
-    }
-
-    $inserted = $db->insert(
-        [
-            'customer_id',
-            'source_type',
-            'source_key',
-            'direction',
-            'amount',
-            'note',
-            'created_by_admin_user_id',
-        ],
-        [
-            $customerId,
-            $sourceType,
-            $sourceKey,
-            $direction,
-            number_format($delta, 2, '.', ''),
-            $note !== '' ? $note : null,
-            $adminUserId > 0 ? $adminUserId : null,
-        ],
-        'customer_balance_runtime_events'
-    );
-
-    if (!$inserted) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Unable to save customer balance event.'];
-    }
-
-    $db->query('COMMIT');
-
-    $description = ($direction === 'debit' ? 'Balance debited automatically: ' : 'Balance credited automatically: ')
-        . number_format($delta, 2, '.', '');
-    if ($note !== '') {
-        $description .= ' (' . $note . ')';
-    }
-
-    admin_log_customer_and_admin(
+    $result = app_apply_customer_balance_runtime_event(
         $db,
         $customerId,
+        $amount,
+        $direction,
+        $sourceType,
+        $sourceKey,
+        $note,
+        'admin',
         $adminUserId,
-        $direction === 'debit' ? 'balance_debit' : 'balance_credit',
-        $description,
         $ipAddress
     );
 
-    return [
-        'ok' => true,
-        'already_applied' => false,
-        'new_balance' => number_format($newBalance, 2, '.', ''),
-        'message' => 'Customer balance updated.',
-    ];
+    if (!empty($result['ok']) && empty($result['already_applied']) && $adminUserId > 0) {
+        admin_activity_log(
+            $db,
+            0,
+            $adminUserId,
+            strtolower(trim($direction)) === 'debit' ? 'balance_debit' : 'balance_credit',
+            trim((string)(
+                (strtolower(trim($direction)) === 'debit' ? 'Balance debited automatically: ' : 'Balance credited automatically: ')
+                . number_format(round($amount, 2), 2, '.', '')
+                . (trim($note) !== '' ? ' (' . trim($note) . ')' : '')
+            )),
+            $ipAddress
+        );
+    }
+
+    return $result;
 }
 
 function admin_payment_default_status(string $paymentType): string
@@ -6634,20 +6689,26 @@ function admin_save_order_info(
 
     $wasActiveBefore = strtolower(trim((string)($order['status'] ?? ''))) === 'active';
     $becomesActiveNow = $status === 'active';
+    $balanceActivationContext = admin_order_balance_activation_context($db, $order);
     if (!$wasActiveBefore && $becomesActiveNow) {
-        $balanceDebitResult = admin_apply_customer_balance_runtime_event(
-            $db,
-            (int)($order['customer_id'] ?? 0),
-            round((float)$totalAmountRaw, 2),
-            'debit',
-            'order_activation',
-            (string)$orderId,
-            'Activated order #' . $orderId,
-            $adminUserId,
-            $ipAddress
-        );
-        if (empty($balanceDebitResult['ok'])) {
-            return $balanceDebitResult;
+        if (empty($balanceActivationContext['can_activate'])) {
+            return ['ok' => false, 'message' => 'Customer balance is too low to activate this order.'];
+        }
+        if (empty($balanceActivationContext['balance_debit_already_applied'])) {
+            $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+                $db,
+                (int)($order['customer_id'] ?? 0),
+                round((float)$totalAmountRaw, 2),
+                'debit',
+                'order_activation',
+                (string)$orderId,
+                'Activated order #' . $orderId,
+                $adminUserId,
+                $ipAddress
+            );
+            if (empty($balanceDebitResult['ok'])) {
+                return $balanceDebitResult;
+            }
         }
     }
 

@@ -3439,6 +3439,18 @@ CONTENT
 	border-width:2px;
 }
 
+.payment-method-start__button--balance{
+	background:#c81e1e;
+	border-color:#c81e1e;
+	color:#ffffff;
+}
+
+.payment-method-start__button--balance:hover{
+	background:#ffffff;
+	border-color:#c81e1e;
+	color:#c81e1e;
+}
+
 .payment-method-panel{
 	display:none;
 }
@@ -3635,6 +3647,13 @@ CONTENT
 	margin-top:22px;
 }
 
+.payment-balance-available{
+	margin-top:12px !important;
+	color:#b91c1c !important;
+	font-size:14px !important;
+	font-weight:700;
+}
+
 button[name="create_crypto_payment"]{
 	background-color: #FFD700;
 	color: #000000;
@@ -3647,6 +3666,19 @@ button[name="create_crypto_payment"]{
 button[name="create_crypto_payment"]:hover{
 	background-color: #FFC700;
 	color: #000000;
+}
+
+button[name="create_balance_payment"]{
+	background-color:#c81e1e;
+	color:#ffffff;
+	height:70px;
+	border:none;
+	font-weight:700;
+}
+
+button[name="create_balance_payment"]:hover{
+	background-color:#a81818;
+	color:#ffffff;
 }
 
 .payment-step--disabled{
