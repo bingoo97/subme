@@ -1837,15 +1837,15 @@
 
 	.messanger.is-open{
 		top:var(--messenger-mobile-offset-top);
-		bottom:auto;
-		height:var(--messenger-mobile-vh);
+		bottom:0;
+		height:auto;
 	}
 
 	.messanger.is-open .panel{
 		display:flex;
 		flex-direction:column;
-		height:var(--messenger-mobile-vh);
-		min-height:var(--messenger-mobile-vh);
+		height:100%;
+		min-height:0;
 		border:none;
 		border-radius:0;
 	}
