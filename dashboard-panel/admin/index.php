@@ -2173,17 +2173,6 @@ if ($route === 'help') {
 if ($route === 'cryptocurrencies') {
     $cryptoAssetEditorId = isset($_GET['edit_asset']) ? (int)$_GET['edit_asset'] : 0;
 
-    if (isset($_POST['admin_toggle_crypto_asset'])) {
-        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
-            $pageAlertType = 'danger';
-        } else {
-            $toggleResult = admin_toggle_crypto_asset($db, (int)($_POST['admin_toggle_crypto_asset'] ?? 0));
-            $pageAlert = (string)($toggleResult['message'] ?? '');
-            $pageAlertType = !empty($toggleResult['ok']) ? 'success' : 'danger';
-        }
-    }
-
     if (isset($_POST['admin_save_crypto_asset'])) {
         $cryptoAssetEditorId = (int)($_POST['crypto_asset_id'] ?? 0);
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
@@ -2196,7 +2185,7 @@ if ($route === 'cryptocurrencies') {
         }
     }
 
-    $cryptoAssetRows = admin_crypto_asset_rows($db, true);
+    $cryptoAssetRows = admin_crypto_asset_rows($db, false);
     if ($cryptoAssetEditorId > 0) {
         $cryptoAssetEditor = admin_crypto_asset_find($db, $cryptoAssetEditorId);
         if (!$cryptoAssetEditor) {
@@ -2879,6 +2868,7 @@ if ($route === 'payments') {
         if ($acceptedOrderId > 0) {
             $acceptedOrderRow = admin_topbar_notification_order_row_by_id($db, $acceptedOrderId);
             if (is_array($acceptedOrderRow)) {
+                $acceptedOrderStatusVisual = admin_order_status_visual($acceptedOrderRow);
                 $acceptedOrderHandle = trim((string)($acceptedOrderRow['public_handle'] ?? ''));
                 $acceptedOrderPaymentType = (int)($acceptedOrderRow['crypto_payment_id'] ?? 0) > 0
                     ? 'crypto'
@@ -2886,6 +2876,10 @@ if ($route === 'payments') {
                 $acceptedOrderPaymentId = $acceptedOrderPaymentType === 'crypto'
                     ? (int)($acceptedOrderRow['crypto_payment_id'] ?? 0)
                     : (int)($acceptedOrderRow['bank_payment_id'] ?? 0);
+                $acceptedOrderWalletAddress = trim((string)($acceptedOrderRow['wallet_address'] ?? ''));
+                $acceptedOrderWalletLabel = trim((string)($acceptedOrderRow['wallet_label'] ?? ''));
+                $acceptedOrderWalletAssetCode = trim((string)($acceptedOrderRow['wallet_asset_code'] ?? ''));
+                $acceptedOrderWalletNetworkCode = trim((string)($acceptedOrderRow['wallet_network_code'] ?? ''));
                 $orderPayload = [
                     'id' => $acceptedOrderId,
                     'customer_id' => (int)($acceptedOrderRow['customer_id'] ?? 0),
@@ -2895,10 +2889,16 @@ if ($route === 'payments') {
                     'payment_url' => ($acceptedOrderPaymentType !== '' && $acceptedOrderPaymentId > 0)
                         ? '/admin/?page=payments&payment_type=' . rawurlencode($acceptedOrderPaymentType) . '&payment_id=' . $acceptedOrderPaymentId
                         : '',
+                    'status_icon' => (string)($acceptedOrderStatusVisual['icon'] ?? 'bi bi-arrow-repeat'),
+                    'status_class' => (string)($acceptedOrderStatusVisual['class'] ?? 'admin-order-status-icon--awaiting-activation'),
+                    'wallet_address_compact' => $acceptedOrderWalletAddress !== '' ? admin_compact_wallet_address($acceptedOrderWalletAddress, 8, 5) : '',
+                    'wallet_explorer_url' => $acceptedOrderWalletAddress !== '' ? admin_crypto_wallet_explorer_url($acceptedOrderWalletAssetCode, $acceptedOrderWalletNetworkCode, $acceptedOrderWalletAddress) : '',
+                    'wallet_label' => $acceptedOrderWalletLabel,
                 ];
             } else {
                 $fallbackOrderRow = admin_order_find($db, $acceptedOrderId);
                 if (is_array($fallbackOrderRow)) {
+                    $fallbackOrderStatusVisual = admin_order_status_visual($fallbackOrderRow);
                     $acceptedOrderHandle = trim((string)($fallbackOrderRow['public_handle'] ?? ''));
                     $orderPayload = [
                         'id' => $acceptedOrderId,
@@ -2907,6 +2907,11 @@ if ($route === 'payments') {
                         'customer_handle' => $acceptedOrderHandle,
                         'order_url' => '/admin/?page=orders&order_id=' . $acceptedOrderId,
                         'payment_url' => '',
+                        'status_icon' => (string)($fallbackOrderStatusVisual['icon'] ?? 'bi bi-arrow-repeat'),
+                        'status_class' => (string)($fallbackOrderStatusVisual['class'] ?? 'admin-order-status-icon--awaiting-activation'),
+                        'wallet_address_compact' => '',
+                        'wallet_explorer_url' => '',
+                        'wallet_label' => '',
                     ];
                 }
             }
@@ -3354,6 +3359,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     <strong><?php echo admin_e($siteName); ?></strong>
                     <span><?php echo admin_e(admin_t($messages, 'brand', 'Admin Panel')); ?></span>
                 </div>
+                <button type="button" class="admin-sidebar__close" data-admin-sidebar-toggle="#adminSidebar" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                    <i class="bi bi-x-lg"></i>
+                </button>
             </div>
 
             <a href="<?php echo admin_e($sitePreviewUrl !== '' ? $sitePreviewUrl : '/'); ?>" class="admin-sidebar__preview" target="_blank" rel="noopener noreferrer">
@@ -3478,7 +3486,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </section>
                                 <?php endif; ?>
 
-                                <section class="admin-topbar-notifications__section" data-admin-topbar-payments-section>
+                                <section class="admin-topbar-notifications__section" data-admin-topbar-payments-section<?php echo !$adminTopbarPayments ? ' hidden' : ''; ?>>
                                     <div class="admin-topbar-notifications__section-head">
                                         <span><?php echo admin_e(admin_t($messages, 'topbar_pending_payments', 'Pending payments')); ?></span>
                                     </div>
@@ -3538,7 +3546,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 }
                                                 $paymentWalletAddressRaw = trim((string)($paymentRow['wallet_address'] ?? ''));
                                                 $paymentWalletAddressCompact = $paymentWalletAddressRaw !== ''
-                                                    ? admin_compact_wallet_address($paymentWalletAddressRaw, 7, 7)
+                                                    ? admin_compact_wallet_address($paymentWalletAddressRaw, 8, 5)
                                                     : '';
                                                 $paymentCanAcceptAll = in_array($paymentType, ['crypto', 'bank'], true)
                                                     && in_array(strtolower(trim((string)($paymentRow['status'] ?? ''))), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
@@ -3568,9 +3576,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php endif; ?>
                                                         </p>
                                                         <?php if ($paymentWalletAddressCompact !== ''): ?>
+                                                            <?php $paymentWalletPanelUrl = !empty($paymentRow['wallet_address_id']) ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($paymentRow['wallet_address_id'] ?? 0) : ''; ?>
                                                             <div class="admin-topbar-notifications__wallet-row">
-                                                                <?php if ($paymentExplorerUrl !== ''): ?>
-                                                                    <a href="<?php echo admin_e($paymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="admin-topbar-notifications__wallet-link" title="<?php echo admin_e($paymentWalletAddressRaw); ?>">
+                                                                <?php if ($paymentWalletPanelUrl !== ''): ?>
+                                                                    <a href="<?php echo admin_e($paymentWalletPanelUrl); ?>" class="admin-topbar-notifications__wallet-link" title="<?php echo admin_e($paymentWalletAddressRaw); ?>">
                                                                         <code><?php echo admin_e($paymentWalletAddressCompact); ?></code>
                                                                     </a>
                                                                 <?php else: ?>
@@ -3629,12 +3638,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </article>
                                             <?php endforeach; ?>
                                         </div>
-                                    <?php else: ?>
-                                        <div class="admin-topbar-notifications__empty" data-admin-topbar-payments-empty><?php echo admin_e(admin_t($messages, 'topbar_notifications_no_payments', 'No pending payments right now.')); ?></div>
                                     <?php endif; ?>
                                 </section>
 
-                                <section class="admin-topbar-notifications__section" data-admin-topbar-orders-section>
+                                <section class="admin-topbar-notifications__section" data-admin-topbar-orders-section<?php echo !$adminTopbarOrders ? ' hidden' : ''; ?>>
                                     <div class="admin-topbar-notifications__section-head">
                                         <span><?php echo admin_e(admin_t($messages, 'topbar_pending_orders', 'Pending orders')); ?></span>
                                         <?php if (count($adminTopbarOrders) > 0): ?>
@@ -3649,15 +3656,29 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 $orderRowId = (int)($orderRow['id'] ?? 0);
                                                 $orderCustomerId = (int)($orderRow['customer_id'] ?? 0);
                                                 $orderDisplay = (string)($orderRow['customer_email'] ?? '');
+                                                $orderStatusVisual = admin_order_status_visual((array)$orderRow);
                                                 $orderCryptoPaymentId = (int)($orderRow['crypto_payment_id'] ?? 0);
                                                 $orderBankPaymentId = (int)($orderRow['bank_payment_id'] ?? 0);
+                                                $orderWalletAddress = trim((string)($orderRow['wallet_address'] ?? ''));
+                                                $orderWalletLabel = trim((string)($orderRow['wallet_label'] ?? ''));
+                                                $orderWalletAssetCode = trim((string)($orderRow['wallet_asset_code'] ?? ''));
+                                                $orderWalletNetworkCode = trim((string)($orderRow['wallet_network_code'] ?? ''));
+                                                $orderWalletExplorerUrl = $orderWalletAddress !== ''
+                                                    ? admin_crypto_wallet_explorer_url($orderWalletAssetCode, $orderWalletNetworkCode, $orderWalletAddress)
+                                                    : '';
+                                                $orderWalletCompact = $orderWalletAddress !== ''
+                                                    ? admin_compact_wallet_address($orderWalletAddress, 8, 5)
+                                                    : '';
                                                 $orderPaymentUrl = $orderCryptoPaymentId > 0
                                                     ? '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId
                                                     : ($orderBankPaymentId > 0
                                                         ? '/admin/?page=payments&payment_type=bank&payment_id=' . $orderBankPaymentId
                                                         : '');
                                                 ?>
-                                                <article class="admin-topbar-notifications__item admin-topbar-notifications__item--compact">
+                                                <article class="admin-topbar-notifications__item admin-topbar-notifications__item--compact admin-topbar-notifications__item--order">
+                                                    <div class="admin-topbar-notifications__order-visual" aria-hidden="true">
+                                                        <i class="<?php echo admin_e((string)($orderStatusVisual['icon'] ?? 'bi bi-arrow-repeat')); ?> admin-order-status-icon <?php echo admin_e((string)($orderStatusVisual['class'] ?? 'admin-order-status-icon--awaiting-activation')); ?>"></i>
+                                                    </div>
                                                     <div class="admin-topbar-notifications__item-main">
                                                         <p>
                                                             <a class="admin-inline-link admin-payment-summary__email" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>"><?php echo admin_e($orderDisplay); ?></a>
@@ -3668,12 +3689,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <a href="<?php echo admin_e($orderPaymentUrl); ?>"><?php echo admin_e(admin_t($messages, 'topbar_open_payment_inline', 'payment')); ?></a>
                                                             <?php endif; ?>
                                                         </p>
+                                                        <?php if ($orderWalletCompact !== '' && $orderWalletExplorerUrl !== ''): ?>
+                                                            <div class="admin-topbar-notifications__wallet-row">
+                                                                <a class="admin-topbar-notifications__wallet-link" href="<?php echo admin_e($orderWalletExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e($orderWalletAddress); ?>">
+                                                                    <code><?php echo admin_e($orderWalletCompact); ?></code>
+                                                                </a>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <?php if ($orderWalletLabel !== ''): ?>
+                                                            <div class="admin-topbar-notifications__wallet-meta">
+                                                                <span class="admin-status-pill admin-status-pill--assigned"><?php echo admin_e($orderWalletLabel); ?></span>
+                                                            </div>
+                                                        <?php endif; ?>
                                                     </div>
                                                 </article>
                                             <?php endforeach; ?>
                                         </div>
-                                    <?php else: ?>
-                                        <div class="admin-topbar-notifications__empty" data-admin-topbar-orders-empty><?php echo admin_e(admin_t($messages, 'topbar_notifications_no_orders', 'No pending orders right now.')); ?></div>
                                     <?php endif; ?>
                                 </section>
 
@@ -4098,16 +4129,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 ? $displayName
                                                 : (string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'));
                                             $chatHandleLabel = trim((string)($chatRow['customer_public_handle'] ?? ''));
+                                            $chatPrimaryLabel = $chatHandleLabel !== '' && trim((string)($chatRow['conversation_type'] ?? '')) !== 'group_chat'
+                                                ? '@' . $chatHandleLabel
+                                                : $displayName;
+                                            $chatSecondaryLabel = $chatHandleLabel !== '' && trim((string)($chatRow['conversation_type'] ?? '')) !== 'group_chat'
+                                                ? trim((string)($chatRow['customer_email'] ?? ''))
+                                                : '';
                                             ?>
                                             <div
                                                 class="admin-chat-inbox__item<?php echo $isUnread ? ' is-unread' : ''; ?>"
                                                 data-admin-chat-item
                                                 data-conversation-id="<?php echo admin_e((string)$chatRow['id']); ?>"
                                                 data-chat-url="/admin/chat.php"
-                                                data-display-name="<?php echo admin_e($displayName); ?>"
+                                                data-display-name="<?php echo admin_e($chatPrimaryLabel); ?>"
                                                 role="button"
                                                 tabindex="0"
-                                                aria-label="<?php echo admin_e($displayName); ?>">
+                                                aria-label="<?php echo admin_e($chatPrimaryLabel); ?>">
                                                 <div class="admin-chat-inbox__item-content">
                                                     <div class="admin-chat-inbox__item-head">
                                                         <div class="admin-chat-inbox__item-title">
@@ -4116,9 +4153,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <span class="admin-chat-inbox__avatar-presence" data-admin-chat-presence-dot><?php echo admin_chat_presence_dot_html($presence); ?></span>
                                                             </span>
                                                             <span class="admin-chat-inbox__item-title-copy">
-                                                                <strong title="<?php echo admin_e($chatTitleLabel); ?>"><?php echo admin_e($displayName); ?></strong>
-                                                                <?php if ($chatHandleLabel !== '' && trim((string)($chatRow['conversation_type'] ?? '')) !== 'group_chat'): ?>
-                                                                    <span class="admin-chat-inbox__item-handle">@<?php echo admin_e($chatHandleLabel); ?></span>
+                                                                <strong title="<?php echo admin_e($chatPrimaryLabel); ?>"><?php echo admin_e($chatPrimaryLabel); ?></strong>
+                                                                <?php if ($chatSecondaryLabel !== ''): ?>
+                                                                    <span class="admin-chat-inbox__item-handle"><?php echo admin_e($chatSecondaryLabel); ?></span>
                                                                 <?php endif; ?>
                                                             </span>
                                                         </div>
@@ -4136,7 +4173,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 class="admin-chat-inbox__remove"
                                                                 data-admin-chat-remove
                                                                 data-conversation-id="<?php echo admin_e((string)$chatRow['id']); ?>"
-                                                                data-display-name="<?php echo admin_e($displayName); ?>"
+                                                                data-display-name="<?php echo admin_e($chatPrimaryLabel); ?>"
                                                                 aria-label="<?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove conversation')); ?>">
                                                                 <i class="bi bi-trash3" aria-hidden="true"></i>
                                                                 <span><?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove')); ?></span>
@@ -4169,6 +4206,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-group-invite-open title="<?php echo admin_e(admin_t($messages, 'group_chat_invite_members_title', 'Add members')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_invite_members_title', 'Add members')); ?>" hidden>
                                         <i class="bi bi-person-plus" aria-hidden="true"></i>
                                     </button>
+                                    <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
+                                        <button type="button" class="admin-chat-inbox__header-action" data-admin-converter-open title="<?php echo admin_e(admin_t($messages, 'topbar_converter_title', 'Quick crypto converter')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_converter_title', 'Quick crypto converter')); ?>">
+                                            <i class="bi bi-calculator" aria-hidden="true"></i>
+                                        </button>
+                                    <?php endif; ?>
                                     <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
                                         <div class="admin-chat-inbox__header-crypto-wrap" style="position: relative;">
                                             <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-crypto-open title="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_button', 'Create crypto payment request')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_button', 'Create crypto payment request')); ?>" hidden>
@@ -4959,6 +5001,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderCreatedTimestamp = !empty($row['created_at']) ? strtotime((string)$row['created_at']) : 0;
                                                         $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
                                                         $orderCreatedIsToday = $orderCreatedTimestamp > 0 && date('Y-m-d', $orderCreatedTimestamp) === date('Y-m-d');
+                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
+                                                        $orderWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
+                                                        $orderWalletLabel = trim((string)($row['wallet_label'] ?? ''));
+                                                        $orderWalletEditUrl = ($orderPaymentStatusRaw === 'paid' && $orderWalletAddressId > 0 && $orderWalletLabel !== '')
+                                                            ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $orderWalletAddressId
+                                                            : '';
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                                         $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
                                                         $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
@@ -4987,7 +5035,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php echo admin_e((string)$row['customer_email']); ?>
                                                                     </a>
                                                                     <div class="admin-order-summary__created d-xl-none<?php echo $orderCreatedIsToday ? ' admin-order-summary__created--today' : ''; ?>">
-                                                                        <?php echo admin_e($orderCreatedLabel); ?>
+                                                                        <span><?php echo admin_e($orderCreatedLabel); ?></span>
+                                                                        <?php if ($orderWalletEditUrl !== ''): ?>
+                                                                            <a href="<?php echo admin_e($orderWalletEditUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
+                                                                                <?php echo admin_e($orderWalletLabel); ?>
+                                                                            </a>
+                                                                        <?php endif; ?>
                                                                     </div>
                                                                     <?php if ($isAwaitingActivationOrder): ?>
                                                                         <div class="admin-order-summary__note admin-order-summary__note--success">
@@ -5026,7 +5079,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                             </td>
                                                             <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
-                                                                <span class="<?php echo $orderCreatedIsToday ? 'text-danger fw-bold' : ''; ?>"><?php echo admin_e($orderCreatedLabel); ?></span>
+                                                                <div class="admin-order-date-meta">
+                                                                    <span class="<?php echo $orderCreatedIsToday ? 'text-danger fw-bold' : ''; ?>"><?php echo admin_e($orderCreatedLabel); ?></span>
+                                                                    <?php if ($orderWalletEditUrl !== ''): ?>
+                                                                        <a href="<?php echo admin_e($orderWalletEditUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
+                                                                            <?php echo admin_e($orderWalletLabel); ?>
+                                                                        </a>
+                                                                    <?php endif; ?>
+                                                                </div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <button type="button" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : (in_array((string)($orderStatusVisual['class'] ?? ''), ['admin-order-status-icon--pending', 'admin-order-status-icon--awaiting-activation'], true) ? 'btn-dark' : 'btn-success'); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details" style="width: 50px; height: 50px;">
@@ -5113,6 +5173,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
                                         $balanceActivationContext = admin_order_balance_activation_context($db, $row);
                                         $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
+                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
+                                        $orderWalletAddress = trim((string)($row['wallet_address'] ?? ''));
+                                        $orderWalletPaymentUrl = ($orderCryptoPaymentId > 0 && $orderWalletAddress !== '')
+                                            ? '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId
+                                            : '';
+                                        $orderWalletPaymentCompact = $orderWalletAddress !== ''
+                                            ? admin_compact_wallet_address($orderWalletAddress, 8, 5)
+                                            : '';
                                         $modalId = 'adminOrderModal' . $orderId;
                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
@@ -5181,6 +5249,37 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="hidden" name="payment_status" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
+                                                                        <?php if ($paymentStatusRaw === 'paid'): ?>
+                                                                            <div class="admin-order-modal__paid-banner">
+                                                                                <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                                                <div>
+                                                                                    <strong><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></strong>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_paid_steps_intro', 'Complete the steps below to finish this order.')); ?></span>
+                                                                                    <?php if ($orderWalletPaymentUrl !== '' && $orderWalletPaymentCompact !== ''): ?>
+                                                                                        <div class="admin-order-modal__paid-wallet">
+                                                                                            <a class="admin-topbar-notifications__wallet-link" href="<?php echo admin_e($orderWalletPaymentUrl); ?>" title="<?php echo admin_e($orderWalletAddress); ?>">
+                                                                                                <code><?php echo admin_e($orderWalletPaymentCompact); ?></code>
+                                                                                            </a>
+                                                                                        </div>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                            </div>
+                                                                            <div class="admin-order-modal__next-steps">
+                                                                                <div class="admin-order-modal__next-step">
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(admin_t($messages, 'order_next_step_provider_title', '1. Go to the provider dashboard.')); ?></strong>
+                                                                                    <?php if ($providerDashboardUrl !== ''): ?>
+                                                                                        <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="btn btn-outline-dark btn-lg admin-order-modal__provider-btn" target="_blank" rel="noopener noreferrer">
+                                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
+                                                                                        </a>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                                <div class="admin-order-modal__next-step">
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')); ?></strong>
+                                                                                    <span class="admin-order-modal__next-step-copy"><?php echo admin_e(admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.')); ?></span>
+                                                                                </div>
+                                                                            </div>
+                                                                        <?php endif; ?>
                                                                         <div>
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_quick_status', 'Order status')); ?></label>
                                                                             <select class="form-select" name="status" data-admin-order-main-status>
@@ -6625,9 +6724,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         $paymentAssetCode = trim((string)($row['asset_code'] ?? ''));
                                                                         $paymentAssetName = trim((string)($row['asset_name'] ?? ''));
                                                                         $paymentWalletAddress = trim((string)($row['wallet_address'] ?? ''));
+                                                                        $paymentWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
                                                                         $paymentNetworkCode = trim((string)($row['network_code'] ?? ''));
                                                                         $paymentExplorerUrl = $paymentType === 'crypto' && $paymentWalletAddress !== ''
                                                                             ? admin_crypto_wallet_explorer_url($paymentAssetCode, $paymentNetworkCode, $paymentWalletAddress)
+                                                                            : '';
+                                                                        $paymentWalletPreviewUrl = $paymentWalletAddressId > 0
+                                                                            ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $paymentWalletAddressId
                                                                             : '';
                                                                         $paymentAddressLabel = $paymentWalletAddress !== '' ? admin_compact_wallet_address($paymentWalletAddress, 4, 5) : '';
                                                                         $paymentLogoUrl = $paymentType === 'crypto'
@@ -6673,8 +6776,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                                 <?php endif; ?>
                                                                                             </span>
                                                                                             <?php if ($paymentAddressLabel !== ''): ?>
-                                                                                                <?php if ($paymentExplorerUrl !== ''): ?>
-                                                                                                    <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer"><?php echo admin_e($paymentAddressLabel); ?></a>
+                                                                                                <?php if ($paymentWalletPreviewUrl !== ''): ?>
+                                                                                                    <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentWalletPreviewUrl); ?>"><?php echo admin_e($paymentAddressLabel); ?></a>
                                                                                                 <?php else: ?>
                                                                                                     <span class="admin-payment-summary__address"><?php echo admin_e($paymentAddressLabel); ?></span>
                                                                                                 <?php endif; ?>
@@ -7381,10 +7484,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-label" for="crypto_asset_coingecko"><?php echo admin_e(admin_t($messages, 'crypto_asset_coingecko_id', 'CoinGecko ID')); ?></label>
                                                         <input type="text" class="form-control" id="crypto_asset_coingecko" name="coingecko_id" value="<?php echo admin_e((string)($cryptoAssetEditor['coingecko_id'] ?? '')); ?>">
                                                     </div>
-                                                    <div class="col-md-8">
-                                                        <label class="form-label" for="crypto_asset_logo"><?php echo admin_e(admin_t($messages, 'crypto_asset_logo_url', 'Logo URL')); ?></label>
-                                                        <input type="text" class="form-control" id="crypto_asset_logo" name="logo_url" value="<?php echo admin_e((string)($cryptoAssetEditor['logo_url'] ?? '')); ?>">
-                                                    </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label" for="crypto_asset_active"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
                                                         <?php if ($cryptoAssetEditorProtected): ?>
@@ -7450,15 +7549,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </td>
                                                         <td>
                                                             <div class="admin-wallet-actions">
-                                                                <?php if (!$assetIsProtected): ?>
-                                                                    <form method="post" class="d-inline">
-                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                                        <button type="submit" class="btn btn-outline-dark btn-sm" name="admin_toggle_crypto_asset" value="<?php echo admin_e((string)$row['id']); ?>">
-                                                                            <i class="bi <?php echo !empty($row['is_active']) ? 'bi-toggle-on' : 'bi-toggle-off'; ?>" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'crypto_asset_turn_off', 'Turn OFF') : admin_t($messages, 'crypto_asset_turn_on', 'Turn ON')); ?></span>
-                                                                        </button>
-                                                                    </form>
-                                                                <?php endif; ?>
                                                                 <a href="/admin/?page=cryptocurrencies&amp;edit_asset=<?php echo admin_e((string)$row['id']); ?>" class="btn btn-dark btn-sm">
                                                                     <i class="bi bi-pencil-square" aria-hidden="true"></i>
                                                                 </a>
@@ -7523,6 +7613,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $paymentReferenceLabel = trim((string)($paymentEditor['payment_reference'] ?? ($paymentEditor['wallet_address'] ?? '')));
                                         $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
                                         $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
+                                        $paymentWalletPanelUrl = ((int)($paymentEditor['wallet_address_id'] ?? 0) > 0)
+                                            ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($paymentEditor['wallet_address_id'] ?? 0)
+                                            : '';
                                         ?>
                                         <div class="admin-editor-page admin-payments-page">
                                             <div class="admin-editor-page__header">
@@ -7535,6 +7628,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'back_to_payments', 'Back to payments')); ?></span>
                                                     </a>
+                                                    <?php if ($paymentWalletPanelUrl !== ''): ?>
+                                                        <a href="<?php echo admin_e($paymentWalletPanelUrl); ?>" class="btn btn-danger btn-sm">
+                                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_open_wallet', 'Wallet')); ?></span>
+                                                        </a>
+                                                    <?php endif; ?>
                                                     <?php if ((int)($paymentEditor['customer_id'] ?? 0) > 0): ?>
                                                         <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="btn btn-outline-dark btn-sm">
                                                             <i class="bi bi-person" aria-hidden="true"></i>
@@ -7859,12 +7958,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             $paymentAssetCode = trim((string)($row['asset_code'] ?? ''));
                                                             $paymentAssetName = trim((string)($row['asset_name'] ?? ''));
                                                             $paymentWalletAddress = trim((string)($row['wallet_address'] ?? $paymentReference));
+                                                            $paymentWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
                                                             $paymentNetworkCode = trim((string)($row['network_code'] ?? ''));
                                                             $paymentAssetLogo = $paymentAssetCode !== '' || trim((string)($row['asset_logo_url'] ?? '')) !== ''
                                                                 ? admin_payment_asset_logo_url($paymentAssetCode, (string)($row['asset_logo_url'] ?? ''))
                                                                 : '';
                                                             $paymentExplorerUrl = $paymentType === 'crypto' && $paymentWalletAddress !== ''
                                                                 ? admin_crypto_wallet_explorer_url($paymentAssetCode, $paymentNetworkCode, $paymentWalletAddress)
+                                                                : '';
+                                                            $paymentWalletPreviewUrl = $paymentWalletAddressId > 0
+                                                                ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $paymentWalletAddressId
                                                                 : '';
                                                             $paymentAddressLabel = $paymentWalletAddress !== ''
                                                                 ? admin_compact_wallet_address($paymentWalletAddress, 4, 5)
@@ -7932,8 +8035,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
                                                                                 </a>
                                                                                 <?php if ($paymentAddressLabel !== ''): ?>
-                                                                                    <?php if ($paymentExplorerUrl !== ''): ?>
-                                                                                        <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer">
+                                                                                    <?php if ($paymentWalletPreviewUrl !== ''): ?>
+                                                                                        <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentWalletPreviewUrl); ?>">
                                                                                             <?php echo admin_e($paymentAddressLabel); ?>
                                                                                         </a>
                                                                                     <?php else: ?>
@@ -8344,11 +8447,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 $editorStatus = 'available';
                                             }
                                             $editorAssetCode = strtoupper(trim((string)($walletEditor['asset_code'] ?? '')));
+                                            $editorAssetName = trim((string)($walletEditor['asset_name'] ?? ''));
+                                            if ($editorAssetName === '') {
+                                                $editorAssetName = $editorAssetCode !== '' ? $editorAssetCode : admin_t($messages, 'col_wallet', 'Wallet');
+                                            }
+                                            $editorAssetLogoUrl = admin_crypto_asset_logo_url($editorAssetCode);
+                                            $editorWalletAddress = trim((string)($walletEditor['address'] ?? ''));
                                             $editorNetworkOptions = admin_crypto_asset_network_options($editorAssetCode);
                                             $editorNetworkCode = admin_normalize_crypto_wallet_network(
                                                 $editorAssetCode,
                                                 (string)($walletEditor['network_code'] ?? ''),
-                                                (string)($walletEditor['address'] ?? '')
+                                                $editorWalletAddress
                                             );
                                             $editorAllowsNetworkChoice = admin_crypto_asset_allows_network_choice($editorAssetCode);
                                             $editorWalletProvider = trim((string)($walletEditor['wallet_provider'] ?? ''));
@@ -8365,12 +8474,34 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <span><?php echo admin_e(admin_t($messages, 'back_to_wallets', 'Back to wallets')); ?></span>
                                                         </a>
                                                         <?php if ($editorExplorerUrl !== ''): ?>
-                                                            <a href="<?php echo admin_e($editorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark btn-sm">
+                                                            <a href="<?php echo admin_e($editorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger btn-sm">
                                                                 <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'wallet_check_explorer', 'Check Explorer')); ?></span>
                                                             </a>
                                                         <?php endif; ?>
                                                     </div>
                                                 </div>
+
+                                                <?php if (!$walletCreateMode && !empty($walletEditor['id'])): ?>
+                                                    <div class="admin-wallet-editor__hero">
+                                                        <div class="admin-wallet-editor__hero-asset">
+                                                            <img src="<?php echo admin_e($editorAssetLogoUrl); ?>" alt="<?php echo admin_e($editorAssetName); ?>">
+                                                            <div class="admin-wallet-editor__hero-copy">
+                                                                <strong><?php echo admin_e($editorAssetName); ?></strong>
+                                                                <span><?php echo admin_e($editorAssetCode !== '' ? $editorAssetCode : admin_t($messages, 'col_wallet', 'Wallet')); ?></span>
+                                                            </div>
+                                                        </div>
+                                                        <?php if ($editorWalletAddress !== ''): ?>
+                                                            <?php if ($editorExplorerUrl !== ''): ?>
+                                                                <a href="<?php echo admin_e($editorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="admin-wallet-editor__hero-link">
+                                                                    <code class="admin-wallet-editor__hero-address"><?php echo admin_e($editorWalletAddress); ?></code>
+                                                                </a>
+                                                            <?php else: ?>
+                                                                <code class="admin-wallet-editor__hero-address"><?php echo admin_e($editorWalletAddress); ?></code>
+                                                            <?php endif; ?>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
 
                                                 <form method="post" class="admin-wallet-editor__form" autocomplete="off">
                                                     <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">

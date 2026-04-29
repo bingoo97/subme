@@ -84,6 +84,8 @@ return [
         'balance_topup_unavailable' => 'Balance top-up is currently unavailable.',
         'balance_topup_choose_crypto_error' => 'Choose a cryptocurrency first.',
         'balance_topup_amount_error' => 'Enter a valid top-up amount.',
+        'balance_topup_amount_minimum_error' => 'Minimum top-up amount is 10 in the current currency.',
+        'balance_topup_minimum_note' => 'Minimum top-up amount is 10 in the current currency.',
         'balance_topup_rate_error' => 'Exchange rate is unavailable for the selected cryptocurrency.',
         'balance_topup_create_error' => 'Unable to create the payment request.',
         'how_to_pay' => 'How to pay?',

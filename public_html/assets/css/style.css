@@ -4128,6 +4128,19 @@ button[name="create_balance_payment"]:hover{
 	box-shadow:none;
 }
 
+.balance-topup-minimum-note{
+	display:none;
+	margin-top:8px;
+	color:#c81e1e;
+	font-size:12px;
+	font-weight:700;
+	line-height:1.5;
+}
+
+.balance-topup-minimum-note.is-visible{
+	display:block;
+}
+
 .balance-topup-selected{
 	margin:0 0 14px;
 	font-size:14px;

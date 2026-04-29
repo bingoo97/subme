@@ -1511,15 +1511,26 @@ document.addEventListener('DOMContentLoaded', function () {
             var selectedWrap = q('[data-admin-order-customer-selected]', form);
             var selectedLink = q('[data-admin-order-customer-link]', form);
             var selectedEmail = q('[data-admin-order-customer-email]', form);
+            var providerSelect = q('[data-admin-order-provider]', form);
+            var productSelect = q('[data-admin-order-product]', form);
             var searchUrl = form.getAttribute('data-search-url') || '';
             var createUrl = form.getAttribute('data-create-url') || '';
             var csrfInput = q('input[name="_csrf"]', form);
             var requestIndex = 0;
             var createIndex = 0;
             var selectedCustomerEmail = String(searchInput && searchInput.value ? searchInput.value : '').trim();
+            var productOptions = [];
 
             if (!searchInput || !results || !customerIdInput || !selectedWrap || !selectedLink || !selectedEmail || searchUrl === '') {
                 return;
+            }
+
+            if (providerSelect && productSelect) {
+                try {
+                    productOptions = JSON.parse(form.getAttribute('data-products') || '[]');
+                } catch (error) {
+                    productOptions = [];
+                }
             }
 
             function isValidEmail(value) {
@@ -1567,6 +1578,51 @@ document.addEventListener('DOMContentLoaded', function () {
             function renderEmpty(message) {
                 results.innerHTML = '<div class="admin-order-picker__empty">' + escapeHtml(message) + '</div>';
                 setHidden(results, false);
+            }
+
+            function syncProductOptions() {
+                var providerId;
+                var previousProductId;
+                var placeholder;
+                var filtered;
+                var optionsHtml;
+
+                if (!providerSelect || !productSelect) {
+                    return;
+                }
+
+                providerId = parseInt(providerSelect.value || '0', 10) || 0;
+                previousProductId = String(productSelect.value || productSelect.getAttribute('data-selected-product-id') || '').trim();
+                placeholder = providerId > 0
+                    ? (productSelect.getAttribute('data-placeholder-default') || 'Choose subscription time')
+                    : (productSelect.getAttribute('data-placeholder-locked') || 'Choose package first');
+
+                if (providerId <= 0) {
+                    productSelect.innerHTML = '<option value="">' + escapeHtml(placeholder) + '</option>';
+                    productSelect.value = '';
+                    productSelect.disabled = true;
+                    return;
+                }
+
+                filtered = productOptions.filter(function (item) {
+                    return (parseInt(item && item.provider_id ? item.provider_id : 0, 10) || 0) === providerId;
+                });
+
+                optionsHtml = '<option value="">' + escapeHtml(placeholder) + '</option>' + filtered.map(function (item) {
+                    var optionId = String(item && item.id ? item.id : '').trim();
+                    return '<option value="' + escapeHtml(optionId) + '">' + escapeHtml(item && item.label ? item.label : '') + '</option>';
+                }).join('');
+
+                productSelect.innerHTML = optionsHtml;
+                productSelect.disabled = filtered.length === 0;
+
+                if (filtered.some(function (item) { return String(item && item.id ? item.id : '') === previousProductId; })) {
+                    productSelect.value = previousProductId;
+                } else {
+                    productSelect.value = '';
+                }
+
+                productSelect.setAttribute('data-selected-product-id', String(productSelect.value || ''));
             }
 
             function renderResults(customers, query) {
@@ -1730,6 +1786,19 @@ document.addEventListener('DOMContentLoaded', function () {
                     setHidden(results, true);
                 }
             });
+
+            if (providerSelect && productSelect) {
+                providerSelect.addEventListener('change', function () {
+                    productSelect.setAttribute('data-selected-product-id', '');
+                    syncProductOptions();
+                });
+
+                productSelect.addEventListener('change', function () {
+                    productSelect.setAttribute('data-selected-product-id', String(productSelect.value || ''));
+                });
+
+                syncProductOptions();
+            }
         });
 
         function ctypeDigit(value) {
@@ -1810,15 +1879,23 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function renderTopbarOrderItem(order) {
             var article = document.createElement('article');
-            article.className = 'admin-topbar-notifications__item admin-topbar-notifications__item--compact';
+            article.className = 'admin-topbar-notifications__item admin-topbar-notifications__item--compact admin-topbar-notifications__item--order';
             var inlineText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-order-created-text') || 'paid and is waiting for approval. Click to open') : 'paid and is waiting for approval. Click to open';
             var openOrderText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-order-inline-text') || 'order') : 'order';
             var openPaymentText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-inline-text') || 'payment') : 'payment';
             var paymentJoinerText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-joiner-text') || 'or') : 'or';
             var customerLabel = String(order.customer_email || '').trim();
             var paymentLink = String(order.payment_url || '').trim();
+            var statusIcon = String(order.status_icon || 'bi bi-arrow-repeat').trim() || 'bi bi-arrow-repeat';
+            var statusClass = String(order.status_class || 'admin-order-status-icon--awaiting-activation').trim() || 'admin-order-status-icon--awaiting-activation';
+            var walletAddressCompact = String(order.wallet_address_compact || '').trim();
+            var walletExplorerUrl = String(order.wallet_explorer_url || '').trim();
+            var walletLabel = String(order.wallet_label || '').trim();
             article.innerHTML =
-                '<div class="admin-topbar-notifications__item-main">'
+                '<div class="admin-topbar-notifications__order-visual" aria-hidden="true">'
+                + '<i class="' + escapeHtml(statusIcon) + ' admin-order-status-icon ' + escapeHtml(statusClass) + '"></i>'
+                + '</div>'
+                + '<div class="admin-topbar-notifications__item-main">'
                 + '<p>'
                 + '<a class="admin-inline-link admin-payment-summary__email" href="/admin/?page=users&amp;customer_id=' + encodeURIComponent(String(order.customer_id || 0)) + '">'
                 + escapeHtml(customerLabel)
@@ -1827,6 +1904,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 + '<a href="' + escapeHtml(String(order.order_url || '/admin/?page=orders')) + '">' + escapeHtml(openOrderText) + '</a>'
                 + (paymentLink !== '' ? ' <span>' + escapeHtml(paymentJoinerText) + '</span> <a href="' + escapeHtml(paymentLink) + '">' + escapeHtml(openPaymentText) + '</a>' : '')
                 + '</p>'
+                + (walletAddressCompact !== '' && walletExplorerUrl !== ''
+                    ? '<div class="admin-topbar-notifications__wallet-row"><a class="admin-topbar-notifications__wallet-link" href="' + escapeHtml(walletExplorerUrl) + '" target="_blank" rel="noopener noreferrer"><code>' + escapeHtml(walletAddressCompact) + '</code></a></div>'
+                    : '')
+                + (walletLabel !== ''
+                    ? '<div class="admin-topbar-notifications__wallet-meta"><span class="admin-status-pill admin-status-pill--assigned">' + escapeHtml(walletLabel) + '</span></div>'
+                    : '')
                 + '</div>';
             return article;
         }
@@ -1837,9 +1920,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var paymentsSection = q('[data-admin-topbar-payments-section]', flyout);
             var ordersSection = q('[data-admin-topbar-orders-section]', flyout);
             var paymentsList = q('[data-admin-topbar-payments-list]', paymentsSection);
-            var paymentsEmpty = q('[data-admin-topbar-payments-empty]', paymentsSection);
             var ordersList = q('[data-admin-topbar-orders-list]', ordersSection);
-            var ordersEmpty = q('[data-admin-topbar-orders-empty]', ordersSection);
 
             if (paymentItem) {
                 paymentItem.remove();
@@ -1847,21 +1928,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (paymentsList && !q('[data-admin-topbar-payment-item]', paymentsList)) {
                 paymentsList.remove();
-                if (!paymentsEmpty && paymentsSection) {
-                    paymentsEmpty = document.createElement('div');
-                    paymentsEmpty.className = 'admin-topbar-notifications__empty';
-                    paymentsEmpty.setAttribute('data-admin-topbar-payments-empty', '1');
-                    paymentsEmpty.textContent = flyout.getAttribute('data-topbar-no-payments-text') || 'No pending payments right now.';
-                    paymentsSection.appendChild(paymentsEmpty);
-                } else if (paymentsEmpty) {
-                    paymentsEmpty.removeAttribute('hidden');
+                if (paymentsSection) {
+                    setHidden(paymentsSection, true);
                 }
             }
 
             if (order && ordersSection) {
-                if (ordersEmpty) {
-                    ordersEmpty.remove();
-                }
+                setHidden(ordersSection, false);
                 if (!ordersList) {
                     ordersList = document.createElement('div');
                     ordersList.className = 'admin-topbar-notifications__list';
@@ -2058,7 +2131,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         qa('[data-admin-converter-root]').forEach(function (root) {
-            var openButton = q('[data-admin-converter-open]', root);
+            var openButtons = qa('[data-admin-converter-open]');
             var modal = q('[data-admin-converter-modal]', root);
             var fiatInput = q('[data-admin-converter-fiat-input]', root);
             var assetSelect = q('[data-admin-converter-asset-select]', root);
@@ -2077,7 +2150,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var copyFeedbackTimer = 0;
             var copyValue = '';
 
-            if (!openButton || !modal || !fiatInput || !assetSelect || !result || !copyFeedback || !rateHint || !assetLogo || !updatedLine || !refreshButton) {
+            if (!openButtons.length || !modal || !fiatInput || !assetSelect || !result || !copyFeedback || !rateHint || !assetLogo || !updatedLine || !refreshButton) {
                 return;
             }
 
@@ -2225,10 +2298,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 rateHint.textContent = '1 ' + String(selectedAsset.code || '') + ' ≈ ' + String(selectedAsset.rate_label || '') + ' · ' + currencyCode;
             }
 
-            openButton.addEventListener('click', function (event) {
-                event.preventDefault();
-                event.stopPropagation();
-                openConverter();
+            openButtons.forEach(function (openButton) {
+                openButton.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openConverter();
+                });
             });
 
             qa('[data-admin-converter-close]', modal).forEach(function (button) {
@@ -2359,6 +2434,20 @@ document.addEventListener('DOMContentLoaded', function () {
         var activeConversationId = 0;
         var activeCustomerId = 0;
         var activeConversationType = 'live_chat';
+        var activeConversationMessageLimit = 10;
+        var activeConversationLoadedCount = 0;
+        var activeConversationTotalMessages = 0;
+        var activeConversationOldestMessageId = 0;
+        var activeConversationHasMoreMessages = false;
+        var loadingOlderMessages = false;
+        var conversationFetchInFlight = false;
+        var conversationRequestToken = 0;
+        var conversationPollTimer = 0;
+        var userBrowsingHistory = false;
+        var lastKnownConversationScrollTop = 0;
+        var lastRenderedConversationHtml = '';
+        var olderMessagesTimer = 0;
+        var olderMessagesIndicatorTimer = 0;
         var chatUrl = '/admin/chat.php';
         var quickModal = q('[data-admin-chat-quick-modal]', root);
         var quickList = q('[data-admin-chat-quick-list]', root);
@@ -2514,6 +2603,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function adminChatPanelStateKey() {
             return 'admin-chat:panel-open:' + String(window.location.pathname || '/admin/');
+        }
+
+        function adminChatConversationStateKey() {
+            return 'admin-chat:active-conversation:' + String(window.location.pathname || '/admin/');
         }
 
         function refreshAdminChatViewportHeight() {
@@ -2705,6 +2798,165 @@ document.addEventListener('DOMContentLoaded', function () {
             } catch (error) {
                 return false;
             }
+        }
+
+        function saveAdminChatConversationState(conversationId) {
+            if (!adminChatStorageAvailable()) {
+                return;
+            }
+
+            try {
+                if ((parseInt(conversationId, 10) || 0) > 0) {
+                    window.localStorage.setItem(adminChatConversationStateKey(), String(parseInt(conversationId, 10) || 0));
+                } else {
+                    window.localStorage.removeItem(adminChatConversationStateKey());
+                }
+            } catch (error) {
+                return;
+            }
+        }
+
+        function restoreAdminChatConversationState() {
+            if (!adminChatStorageAvailable()) {
+                return 0;
+            }
+
+            try {
+                return parseInt(window.localStorage.getItem(adminChatConversationStateKey()) || '0', 10) || 0;
+            } catch (error) {
+                return 0;
+            }
+        }
+
+        function getConversationScrollMetrics() {
+            if (!body) {
+                return null;
+            }
+
+            return {
+                element: body,
+                scrollTop: body.scrollTop,
+                scrollHeight: body.scrollHeight,
+                clientHeight: body.clientHeight,
+                distanceFromBottom: Math.max(0, body.scrollHeight - body.clientHeight - body.scrollTop)
+            };
+        }
+
+        function restoreConversationScrollPosition(scrollTop) {
+            var metrics = getConversationScrollMetrics();
+            var safeScrollTop = Math.max(0, parseInt(scrollTop || 0, 10) || 0);
+            if (!metrics || !metrics.element) {
+                return;
+            }
+
+            metrics.element.scrollTop = Math.min(safeScrollTop, Math.max(0, metrics.element.scrollHeight - metrics.element.clientHeight));
+            lastKnownConversationScrollTop = metrics.element.scrollTop;
+            userBrowsingHistory = Math.max(0, metrics.element.scrollHeight - metrics.element.clientHeight - metrics.element.scrollTop) > 24;
+        }
+
+        function bindConversationScrollHandler() {
+            if (!body) {
+                return;
+            }
+
+            body.removeEventListener('scroll', handleConversationScroll);
+            body.addEventListener('scroll', handleConversationScroll, { passive: true });
+        }
+
+        function handleConversationScroll() {
+            var metrics = getConversationScrollMetrics();
+            if (!metrics) {
+                return;
+            }
+
+            lastKnownConversationScrollTop = metrics.scrollTop;
+            userBrowsingHistory = metrics.distanceFromBottom > 24;
+            if (metrics.scrollTop > 72 && !loadingOlderMessages) {
+                window.clearTimeout(olderMessagesTimer);
+                window.clearTimeout(olderMessagesIndicatorTimer);
+                if (body) {
+                    body.classList.remove('is-loading-older');
+                }
+            }
+            maybeLoadOlderMessages();
+        }
+
+        function maybeLoadOlderMessages() {
+            var metrics = getConversationScrollMetrics();
+            var nextLimit;
+
+            if (!activeConversationId || activeConversationType === '' || !body || conversationView && conversationView.hasAttribute('hidden')) {
+                return;
+            }
+
+            if (!activeConversationHasMoreMessages || loadingOlderMessages || conversationFetchInFlight) {
+                return;
+            }
+
+            if (!metrics || metrics.scrollTop > 48) {
+                return;
+            }
+
+            window.clearTimeout(olderMessagesTimer);
+            window.clearTimeout(olderMessagesIndicatorTimer);
+            nextLimit = Math.max(activeConversationMessageLimit + 5, 10);
+            olderMessagesIndicatorTimer = window.setTimeout(function () {
+                if (body && !loadingOlderMessages) {
+                    body.classList.add('is-loading-older');
+                }
+            }, 220);
+            olderMessagesTimer = window.setTimeout(function () {
+                loadingOlderMessages = true;
+                fetchConversation(activeConversationId, {
+                    force: true,
+                    messageLimit: nextLimit,
+                    preservePrependOffset: true,
+                    scrollToBottom: false,
+                    preserveScroll: true,
+                    silent: true
+                });
+            }, 760);
+        }
+
+        function playConversationEntryAnimation() {
+            if (!conversationView) {
+                return;
+            }
+
+            conversationView.classList.remove('is-entering');
+            if (conversationView.offsetWidth) {
+                conversationView.offsetWidth;
+            }
+            conversationView.classList.add('is-entering');
+            window.setTimeout(function () {
+                if (conversationView) {
+                    conversationView.classList.remove('is-entering');
+                }
+            }, 260);
+        }
+
+        function pollActiveConversation(force) {
+            if (!activeConversationId || !panel || panel.hasAttribute('hidden')) {
+                return;
+            }
+
+            if (conversationView && conversationView.hasAttribute('hidden')) {
+                return;
+            }
+
+            if (!force && document.hidden) {
+                return;
+            }
+
+            if (loadingOlderMessages || conversationFetchInFlight) {
+                return;
+            }
+
+            fetchConversation(activeConversationId, {
+                silent: true,
+                preserveScroll: true,
+                messageLimit: activeConversationMessageLimit
+            });
         }
 
         function syncPaymentHeaderActions(payload) {
@@ -3078,6 +3330,7 @@ document.addEventListener('DOMContentLoaded', function () {
             errorMessage = root.getAttribute('data-chat-payment-send-error') || 'Unable to create payment request.';
             postBody = {
                 conversation_id: activeConversationId,
+                message_limit: activeConversationMessageLimit,
                 _csrf: csrfToken
             };
 
@@ -3095,8 +3348,8 @@ document.addEventListener('DOMContentLoaded', function () {
             jsonFetch(chatUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-                body: toQuery(postBody)
-            }).then(function (payload) {
+                    body: toQuery(postBody)
+                }).then(function (payload) {
                 var message = payload.message || errorMessage;
                 modalState.sendButton.disabled = false;
                 if (!payload.ok) {
@@ -3106,12 +3359,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     setPaymentPreview(modalState, renderPaymentStateHtml(message, true));
                     showComposerAlert(message, true);
                     return;
-                }
+                    }
 
-                closePaymentModal(type);
-                showComposerAlert('', false);
-                renderConversation(payload);
-            }).catch(function () {
+                    closePaymentModal(type);
+                    showComposerAlert('', false);
+                    renderConversation(payload, { scrollToBottom: true });
+                }).catch(function () {
                 modalState.sendButton.disabled = false;
                 setPaymentPreview(modalState, renderPaymentStateHtml(errorMessage, true));
                 showComposerAlert(errorMessage, true);
@@ -3686,6 +3939,15 @@ document.addEventListener('DOMContentLoaded', function () {
             activeConversationId = 0;
             activeCustomerId = 0;
             activeConversationType = 'live_chat';
+            activeConversationLoadedCount = 0;
+            activeConversationTotalMessages = 0;
+            activeConversationOldestMessageId = 0;
+            activeConversationHasMoreMessages = false;
+            loadingOlderMessages = false;
+            userBrowsingHistory = false;
+            lastKnownConversationScrollTop = 0;
+            lastRenderedConversationHtml = '';
+            saveAdminChatConversationState(0);
             if (composerInput) {
                 composerInput.value = '';
             }
@@ -3727,6 +3989,9 @@ document.addEventListener('DOMContentLoaded', function () {
             closeGroupSettingsModal();
             closeAllPaymentModals();
             syncPaymentHeaderActions(null);
+            if (body) {
+                body.classList.remove('is-loading-older');
+            }
         }
 
         function showConversation() {
@@ -3738,30 +4003,80 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
+        function setConversationPositioningState(isPositioning) {
+            if (!conversationView) {
+                return;
+            }
+
+            conversationView.classList.toggle('is-positioning', !!isPositioning);
+        }
+
         function scrollConversationToBottom() {
             if (!body) {
                 return;
             }
-            window.setTimeout(function () {
-                body.scrollTop = body.scrollHeight;
-            }, 20);
+            body.scrollTop = body.scrollHeight;
+            lastKnownConversationScrollTop = body.scrollTop;
+            userBrowsingHistory = false;
         }
 
-        function renderConversation(payload) {
+        function scheduleConversationScrollToBottom() {
+            scrollConversationToBottom();
+            window.setTimeout(scrollConversationToBottom, 40);
+            window.setTimeout(scrollConversationToBottom, 180);
+            window.setTimeout(scrollConversationToBottom, 360);
+        }
+
+        function renderConversation(payload, options) {
+            var previousMetrics = getConversationScrollMetrics();
+            var previousScrollHeight = previousMetrics ? previousMetrics.scrollHeight : 0;
+            var previousScrollTop = previousMetrics ? previousMetrics.scrollTop : 0;
+            var keepBottom = false;
+            var preservePrependOffset = false;
+            var shouldReplaceBody = false;
+            options = options || {};
+
             activeConversationId = parseInt(payload.conversation_id || 0, 10) || 0;
             activeCustomerId = parseInt(payload.customer_id || 0, 10) || 0;
             activeConversationType = payload.conversation_type || 'live_chat';
-            if (body) {
+            activeConversationMessageLimit = parseInt(payload.message_limit || activeConversationMessageLimit || 10, 10) || 10;
+            activeConversationLoadedCount = parseInt(payload.loaded_message_count || 0, 10) || 0;
+            activeConversationTotalMessages = parseInt(payload.total_message_count || 0, 10) || 0;
+            activeConversationOldestMessageId = parseInt(payload.oldest_message_id || 0, 10) || 0;
+            activeConversationHasMoreMessages = !!payload.has_more_messages;
+            saveAdminChatConversationState(activeConversationId);
+
+            if (previousMetrics) {
+                keepBottom = !!options.scrollToBottom || (!userBrowsingHistory && previousMetrics.distanceFromBottom <= 48);
+            } else {
+                keepBottom = !!options.scrollToBottom;
+            }
+
+            preservePrependOffset = !!options.preservePrependOffset && !!previousMetrics;
+            if (preservePrependOffset) {
+                keepBottom = false;
+            }
+
+            shouldReplaceBody = !!options.force || String(payload.html || '') !== lastRenderedConversationHtml;
+            if (body && shouldReplaceBody) {
                 body.innerHTML = payload.html || '';
+                lastRenderedConversationHtml = String(payload.html || '');
+            }
+            if (body) {
+                body.classList.remove('is-loading-older');
             }
             if (title) {
-                title.textContent = payload.title || title.textContent;
-                title.setAttribute('href', activeConversationType === 'live_chat' && activeCustomerId > 0 ? '/admin/?page=live-chat&user_id=' + activeCustomerId : '#');
+                var primaryTitle = payload.title || title.textContent;
+                if (activeConversationType === 'live_chat' && payload.customer_public_handle) {
+                    primaryTitle = '@' + String(payload.customer_public_handle);
+                }
+                title.textContent = primaryTitle;
+                title.setAttribute('href', activeConversationType === 'live_chat' && activeCustomerId > 0 ? '/admin/?page=users&customer_id=' + activeCustomerId : '#');
             }
             if (conversationHandle) {
                 var handleText = '';
-                if (activeConversationType === 'live_chat' && payload.customer_public_handle) {
-                    handleText = '@' + String(payload.customer_public_handle);
+                if (activeConversationType === 'live_chat') {
+                    handleText = String(payload.customer_email || '').trim();
                 }
                 conversationHandle.textContent = handleText;
                 setHidden(conversationHandle, handleText === '');
@@ -3811,6 +4126,9 @@ document.addEventListener('DOMContentLoaded', function () {
             if (retentionInlineLabel) {
                 setHidden(retentionInlineLabel, !(activeConversationType === 'group_chat' && !!payload.can_manage_group));
             }
+            if (keepBottom && shouldReplaceBody && !preservePrependOffset && !options.preserveScroll) {
+                scrollConversationToBottom();
+            }
             closeMembersPopover();
             if (composerInput) {
                 composerInput.value = '';
@@ -3820,27 +4138,113 @@ document.addEventListener('DOMContentLoaded', function () {
             syncPaymentHeaderActions(payload);
             showConversation();
             openPanel(false);
-            scrollConversationToBottom();
+            if (shouldReplaceBody) {
+                bindConversationScrollHandler();
+            }
+            if (preservePrependOffset) {
+                var currentMetrics = getConversationScrollMetrics();
+                if (currentMetrics && currentMetrics.element) {
+                    currentMetrics.element.scrollTop = Math.max(0, previousScrollTop + (currentMetrics.scrollHeight - previousScrollHeight));
+                    lastKnownConversationScrollTop = currentMetrics.element.scrollTop;
+                }
+            } else if (keepBottom) {
+                scheduleConversationScrollToBottom();
+            } else if (options.preserveScroll && previousMetrics) {
+                restoreConversationScrollPosition(previousScrollTop);
+            } else if (!previousMetrics) {
+                scheduleConversationScrollToBottom();
+            }
+            loadingOlderMessages = false;
+            if (keepBottom && !preservePrependOffset) {
+                window.setTimeout(function () {
+                    setConversationPositioningState(false);
+                }, 220);
+            } else {
+                setConversationPositioningState(false);
+            }
+            if (options.animateConversation) {
+                playConversationEntryAnimation();
+            }
         }
 
-        function fetchConversation(conversationId) {
+        function fetchConversation(conversationId, options) {
+            var requestOptions = options || {};
+            var requestToken;
+            var query;
+
             if (!conversationId) {
                 return;
             }
+
+            if (conversationFetchInFlight && requestOptions.silent) {
+                return;
+            }
+
+            if (!requestOptions.silent && !Object.prototype.hasOwnProperty.call(requestOptions, 'scrollToBottom')) {
+                requestOptions.scrollToBottom = true;
+            }
+
+            conversationFetchInFlight = true;
+            conversationRequestToken += 1;
+            requestToken = conversationRequestToken;
             openPanel(false);
             showComposerAlert('', false);
-            if (body) {
-                body.innerHTML = '<div class="admin-chat-conversation__empty">' + escapeHtml(root.getAttribute('data-loading-conversation') || 'Loading conversation...') + '</div>';
+            if (!requestOptions.silent) {
+                setConversationPositioningState(!!requestOptions.scrollToBottom);
+                if (body) {
+                    body.innerHTML = '<div class="admin-chat-conversation__empty">' + escapeHtml(root.getAttribute('data-loading-conversation') || 'Loading conversation...') + '</div>';
+                    body.classList.remove('is-loading-older');
+                }
+                showConversation();
             }
-            showConversation();
 
-            jsonFetch(chatUrl + '?' + toQuery({ conversation_id: conversationId })).then(function (payload) {
+            query = {
+                conversation_id: conversationId,
+                message_limit: parseInt(requestOptions.messageLimit || activeConversationMessageLimit || 10, 10) || 10
+            };
+
+            jsonFetch(chatUrl + '?' + toQuery(query)).then(function (payload) {
+                if (requestToken !== conversationRequestToken) {
+                    return;
+                }
+
                 if (!payload.ok) {
+                    conversationFetchInFlight = false;
+                    loadingOlderMessages = false;
+                    setConversationPositioningState(false);
+                    if (body) {
+                        body.classList.remove('is-loading-older');
+                    }
+                    if (requestOptions.silent) {
+                        return;
+                    }
+                    saveAdminChatConversationState(0);
+                    showList();
                     showComposerAlert(root.getAttribute('data-chat-load-error') || 'Unable to load this conversation.', true);
                     return;
                 }
-                renderConversation(payload);
+                conversationFetchInFlight = false;
+                renderConversation(payload, {
+                    preservePrependOffset: !!requestOptions.preservePrependOffset,
+                    scrollToBottom: !!requestOptions.scrollToBottom,
+                    preserveScroll: !!requestOptions.preserveScroll,
+                    animateConversation: !requestOptions.silent
+                });
             }).catch(function () {
+                if (requestToken !== conversationRequestToken) {
+                    return;
+                }
+                conversationFetchInFlight = false;
+                loadingOlderMessages = false;
+                setConversationPositioningState(false);
+                if (body) {
+                    body.classList.remove('is-loading-older');
+                }
+                if (requestOptions.silent) {
+                    return;
+                }
+                saveAdminChatConversationState(0);
+                showList();
                 showComposerAlert(root.getAttribute('data-chat-load-error') || 'Unable to load this conversation.', true);
             });
         }
@@ -3855,12 +4259,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 var formData = extra instanceof FormData ? extra : new FormData();
                 formData.append('action', action);
                 formData.append('conversation_id', String(activeConversationId));
+                formData.append('message_limit', String(parseInt(activeConversationMessageLimit || 10, 10) || 10));
                 formData.append('_csrf', csrfToken);
                 options.body = formData;
             } else {
                 var payload = extra || {};
                 payload.action = action;
                 payload.conversation_id = activeConversationId;
+                payload.message_limit = parseInt(activeConversationMessageLimit || 10, 10) || 10;
                 payload._csrf = csrfToken;
                 options.headers = { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' };
                 options.body = toQuery(payload);
@@ -3939,17 +4345,34 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        if (title) {
+            title.addEventListener('click', function () {
+                if (activeConversationType === 'live_chat' && activeCustomerId > 0) {
+                    closePanel();
+                }
+            });
+        }
+
         if (restoreAdminChatPanelState()) {
             openPanel(false);
-            showList();
+            var restoredConversationId = restoreAdminChatConversationState();
+            if (restoredConversationId > 0) {
+                fetchConversation(restoredConversationId, { scrollToBottom: true });
+            } else {
+                showList();
+            }
         }
 
         window.setInterval(function () {
             pollChatInboxState(false);
         }, 12000);
+        conversationPollTimer = window.setInterval(function () {
+            pollActiveConversation(false);
+        }, 6000);
         doc.addEventListener('visibilitychange', function () {
             if (!doc.hidden) {
                 pollChatInboxState(true);
+                pollActiveConversation(true);
             }
         });
         pollChatInboxState(true);
@@ -4286,6 +4709,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         action: 'set_group_retention',
                         conversation_id: activeConversationId,
                         retention_hours: groupRetentionSelect.value || '0',
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4294,7 +4718,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
                     showGroupSettingsAlert(payload.message || '', false);
-                    renderConversation(payload);
+                    renderConversation(payload, { preserveScroll: true });
                 }).catch(function () {
                     showGroupSettingsAlert(root.getAttribute('data-chat-group-retention-save-error') || 'Unable to update auto-delete settings.', true);
                 });
@@ -4314,6 +4738,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         action: 'set_group_email_notifications',
                         conversation_id: activeConversationId,
                         enabled: emailNotificationsToggle.checked ? '1' : '0',
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4323,7 +4748,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
                     showComposerAlert('', false);
-                    renderConversation(payload);
+                    renderConversation(payload, { preserveScroll: true });
                 }).catch(function () {
                     emailNotificationsToggle.checked = !emailNotificationsToggle.checked;
                     showComposerAlert('Unable to update email notifications.', true);
@@ -4344,6 +4769,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         action: 'set_group_retention',
                         conversation_id: activeConversationId,
                         retention_hours: retentionInlineSelect.value || '0',
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4352,7 +4778,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
                     showComposerAlert('', false);
-                    renderConversation(payload);
+                    renderConversation(payload, { preserveScroll: true });
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-group-retention-save-error') || 'Unable to update auto-delete settings.', true);
                 });
@@ -4410,7 +4836,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                     resetLinkPreview();
                     showComposerAlert('', false);
-                    renderConversation(payload);
+                    renderConversation(payload, { scrollToBottom: true });
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-send-error') || 'Unable to send the message.', true);
                 });
@@ -4440,7 +4866,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                     uploadInput.value = '';
                     showComposerAlert('', false);
-                    renderConversation(payload);
+                    renderConversation(payload, { scrollToBottom: true });
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-upload-error') || 'Unable to upload the image.', true);
                 });
@@ -4482,7 +4908,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
                         return;
                     }
-                    renderConversation(payload);
+                    renderConversation(payload, { scrollToBottom: true, animateConversation: true });
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
                 });
@@ -4551,7 +4977,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
                         return;
                     }
-                    renderConversation(payload);
+                    renderConversation(payload, { scrollToBottom: true, animateConversation: true });
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
                 });
@@ -4580,6 +5006,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         action: 'delete_message',
                         conversation_id: deleteConversationId,
                         message_id: deleteMessageId,
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4588,7 +5015,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         showComposerAlert(root.getAttribute('data-chat-delete-message-error') || 'Unable to delete this message.', true);
                         return;
                     }
-                    renderConversation(payload);
+                    renderConversation(payload, { preserveScroll: true });
                 }).catch(function () {
                     deleteMessage.disabled = false;
                     showComposerAlert(root.getAttribute('data-chat-delete-message-error') || 'Unable to delete this message.', true);
@@ -4651,6 +5078,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         conversation_id: activeConversationId,
                         message_id: saveMessageId,
                         message: saveText,
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4659,7 +5087,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         showComposerAlert(root.getAttribute('data-chat-edit-message-error') || 'Unable to save this message.', true);
                         return;
                     }
-                    renderConversation(payload);
+                    renderConversation(payload, { preserveScroll: true });
                     var refreshedMessage = q('[data-admin-chat-message][data-message-id="' + String(saveMessageId) + '"]', body);
                     var refreshedSaved = refreshedMessage ? q('[data-admin-chat-edit-saved]', refreshedMessage) : null;
                     if (refreshedSaved) {
@@ -4703,6 +5131,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         action: 'send_quick_reply',
                         conversation_id: activeConversationId,
                         quick_reply_id: quickReplyId,
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4712,7 +5141,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
                     closeQuickModal();
-                    renderConversation(payload);
+                    renderConversation(payload, { scrollToBottom: true });
                 }).catch(function () {
                     quickSend.disabled = false;
                     showComposerAlert(root.getAttribute('data-chat-quick-replies-send-error') || 'Unable to send quick reply.', true);
@@ -4879,6 +5308,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         action: 'toggle_group_read_only',
                         conversation_id: activeConversationId,
                         is_group_read_only: shouldEnableReadOnly,
+                        message_limit: activeConversationMessageLimit,
                         _csrf: csrfToken
                     })
                 }).then(function (payload) {
@@ -4886,7 +5316,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         showComposerAlert(root.getAttribute('data-chat-group-readonly-error') || 'Unable to update read only mode.', true);
                         return;
                     }
-                    renderConversation(payload);
+                    renderConversation(payload, { preserveScroll: true });
                 }).catch(function () {
                     showComposerAlert(root.getAttribute('data-chat-group-readonly-error') || 'Unable to update read only mode.', true);
                 });

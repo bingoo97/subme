@@ -22,6 +22,7 @@ $currentLocale = isset($_SESSION['admin_locale']) ? admin_normalize_locale((stri
 $messages = admin_load_messages($currentLocale);
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
+$messageLimit = admin_chat_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0);
 $mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $mutatingActions, true) && !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
@@ -600,7 +601,11 @@ if ($action === 'set_group_email_notifications') {
     }
 }
 
-$messageRows = admin_chat_conversation_messages($db, $conversationId);
+$messageRows = admin_chat_conversation_messages($db, $conversationId, $messageLimit);
+$totalMessageCount = admin_chat_conversation_message_count($db, $conversationId);
+$loadedMessageCount = count($messageRows);
+$hasMoreMessages = $totalMessageCount > $loadedMessageCount;
+$oldestMessageId = $loadedMessageCount > 0 ? (int)($messageRows[0]['id'] ?? 0) : 0;
 $quickReplies = admin_chat_quick_reply_rows_for_locale($db, (string)($conversationRow['customer_locale_code'] ?? ''), true);
 $pendingCryptoPayment = false;
 $groupMemberSettings = null;
@@ -619,6 +624,7 @@ echo json_encode([
     'ok' => true,
     'conversation_id' => $conversationId,
     'customer_id' => (int)($conversationRow['customer_id'] ?? 0),
+    'customer_email' => (string)($conversationRow['customer_email'] ?? ''),
     'conversation_type' => $conversationType,
     'customer_public_handle' => (string)($conversationRow['customer_public_handle'] ?? ''),
     'is_group_read_only' => !empty($conversationRow['is_group_read_only']),
@@ -651,6 +657,11 @@ echo json_encode([
     'presence' => $presence,
     'avatar_html' => $avatarHtml,
     'pending_crypto_payment' => $pendingCryptoPayment,
+    'message_limit' => $messageLimit,
+    'loaded_message_count' => $loadedMessageCount,
+    'total_message_count' => $totalMessageCount,
+    'has_more_messages' => $hasMoreMessages,
+    'oldest_message_id' => $oldestMessageId,
     'html' => admin_render_chat_conversation_html($conversationRow, $messageRows, $messages),
     'quick_replies' => array_map(static function (array $row): array {
         $preview = trim((string)($row['message_body'] ?? ''));

@@ -107,12 +107,16 @@
                             class="form-control balance-topup-amount-input"
                             id="balanceTopupAmount"
                             name="topup_amount"
-                            min="0.01"
+                            min="10"
                             step="0.01"
                             inputmode="decimal"
+                            data-balance-topup-min="10"
                             placeholder="{$t.balance_topup_amount_placeholder|default:'Enter amount'}"
                             required
                         />
+                        <div class="balance-topup-minimum-note" data-balance-topup-minimum-note>
+                            {$t.balance_topup_minimum_note|default:'Minimum top-up amount is 10 in your current currency.'}
+                        </div>
 
                         <span class="balance-topup-amount-label" style="margin-top:14px;">{$t.balance_topup_presets_label|default:'Quick amounts'}</span>
                         <div class="balance-topup-presets">
@@ -170,9 +174,33 @@
         });
     }
 
+    function normalizeBalanceTopupAmount($modal, shouldClamp) {
+        var $input = $modal.find('input[name="topup_amount"]');
+        var minimum = parseFloat(String($input.attr('data-balance-topup-min') || '10').replace(',', '.'));
+        var rawValue = String($input.val() || '').replace(',', '.').trim();
+        var currentValue = parseFloat(rawValue);
+
+        if (isNaN(minimum) || minimum <= 0) {
+            minimum = 10;
+        }
+
+        if (!isNaN(currentValue) && currentValue > 0 && currentValue < minimum) {
+            if (shouldClamp) {
+                $input.val(minimum.toFixed(2).replace(/\.00$/, ''));
+                currentValue = minimum;
+            }
+            $modal.find('[data-balance-topup-minimum-note]').addClass('is-visible');
+        } else {
+            $modal.find('[data-balance-topup-minimum-note]').removeClass('is-visible');
+        }
+
+        syncBalanceTopupPresetState($modal);
+    }
+
     function resetBalanceTopupWizard($modal) {
         showBalanceTopupStep($modal, 'method');
         syncBalanceTopupSelection($modal);
+        normalizeBalanceTopupAmount($modal, false);
         syncBalanceTopupPresetState($modal);
     }
 
@@ -199,12 +227,17 @@
         var $modal = $(this).closest('.balance-topup-modal');
         var amount = String($(this).attr('data-balance-topup-amount') || '').trim();
         $modal.find('input[name="topup_amount"]').val(amount);
-        syncBalanceTopupPresetState($modal);
+        normalizeBalanceTopupAmount($modal, true);
     });
 
     $(document).off('input.balanceTopupAmount', '[data-balance-topup-form] input[name="topup_amount"]');
     $(document).on('input.balanceTopupAmount', '[data-balance-topup-form] input[name="topup_amount"]', function () {
-        syncBalanceTopupPresetState($(this).closest('.balance-topup-modal'));
+        normalizeBalanceTopupAmount($(this).closest('.balance-topup-modal'), false);
+    });
+
+    $(document).off('blur.balanceTopupAmount', '[data-balance-topup-form] input[name="topup_amount"]');
+    $(document).on('blur.balanceTopupAmount', '[data-balance-topup-form] input[name="topup_amount"]', function () {
+        normalizeBalanceTopupAmount($(this).closest('.balance-topup-modal'), true);
     });
 
     $('#balanceTopupModal').on('shown.bs.modal show.bs.modal', function () {

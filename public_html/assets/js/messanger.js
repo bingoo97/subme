@@ -54,6 +54,8 @@
 		oldestMessageId: 0,
 		hasMoreMessages: false,
 		loadingOlderMessages: false,
+		olderMessagesIntentTimer: null,
+		olderMessagesRetryTimer: null,
 		initDone: false,
 
 		config: function () {
@@ -142,8 +144,42 @@
 				var distanceFromBottom = Math.max(0, this.scrollHeight - this.clientHeight - this.scrollTop);
 				self.lastKnownScrollTop = this.scrollTop;
 				self.userBrowsingHistory = distanceFromBottom > 24;
-				self.maybeLoadOlderMessages();
+				self.queueOlderMessagesLoad();
 			});
+		},
+
+		clearOlderMessagesTimers: function () {
+			window.clearTimeout(this.olderMessagesIntentTimer);
+			window.clearTimeout(this.olderMessagesRetryTimer);
+			this.olderMessagesIntentTimer = null;
+			this.olderMessagesRetryTimer = null;
+		},
+
+		queueOlderMessagesLoad: function (delay) {
+			var self = this;
+			var metrics = this.getScrollMetrics();
+			var safeDelay = typeof delay === 'number' ? delay : 180;
+
+			if (!this.isOpen() || !this.isConversationHistoryActive()) {
+				this.clearOlderMessagesTimers();
+				return;
+			}
+
+			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages) {
+				this.clearOlderMessagesTimers();
+				return;
+			}
+
+			if (!metrics || metrics.scrollTop > 72) {
+				this.clearOlderMessagesTimers();
+				return;
+			}
+
+			window.clearTimeout(this.olderMessagesIntentTimer);
+			this.olderMessagesIntentTimer = window.setTimeout(function () {
+				self.olderMessagesIntentTimer = null;
+				self.maybeLoadOlderMessages();
+			}, Math.max(0, safeDelay));
 		},
 
 		uploadProgressBox: function () {
@@ -940,15 +976,14 @@
 		},
 
 		ensureScrollableHistory: function () {
-			var self = this;
 			var metrics = this.getScrollMetrics();
 			var shouldPrefetchTop = false;
 
-			if (!this.isOpen() || !this.hasResellerInboxLayout() || this.resellerViewMode !== 'conversation') {
+			if (!this.isOpen() || !this.isConversationHistoryActive()) {
 				return;
 			}
 
-			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages || this.fetchInFlight) {
+			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages) {
 				return;
 			}
 
@@ -961,9 +996,7 @@
 				return;
 			}
 
-			window.setTimeout(function () {
-				self.maybeLoadOlderMessages();
-			}, shouldPrefetchTop ? 20 : 60);
+			this.queueOlderMessagesLoad(shouldPrefetchTop ? 100 : 180);
 		},
 
 		maybeLoadOlderMessages: function () {
@@ -971,19 +1004,29 @@
 			var metrics = this.getScrollMetrics();
 			var nextLimit;
 
-			if (!this.isOpen() || !this.hasResellerInboxLayout() || this.resellerViewMode !== 'conversation') {
+			if (!this.isOpen() || !this.isConversationHistoryActive()) {
 				return;
 			}
 
-			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages || this.fetchInFlight) {
+			if (!this.activeConversationId || !this.hasMoreMessages || this.loadingOlderMessages) {
 				return;
 			}
 
-			if (!metrics || metrics.scrollTop > 48) {
+			if (!metrics || metrics.scrollTop > 72) {
+				return;
+			}
+
+			if (this.fetchInFlight || this.sendInFlight || this.uploadInFlight || this.faqPendingKey) {
+				window.clearTimeout(this.olderMessagesRetryTimer);
+				this.olderMessagesRetryTimer = window.setTimeout(function () {
+					self.olderMessagesRetryTimer = null;
+					self.maybeLoadOlderMessages();
+				}, 220);
 				return;
 			}
 
 			nextLimit = Math.max(this.activeConversationMessageLimit + this.loadOlderBatchSize, this.messagePageSize);
+			this.clearOlderMessagesTimers();
 			this.loadingOlderMessages = true;
 			this.fetch({
 				force: true,
@@ -993,11 +1036,20 @@
 				scrollToBottom: false
 			}).always(function () {
 				self.loadingOlderMessages = false;
+				self.ensureScrollableHistory();
 			});
 		},
 
 		hasResellerInboxLayout: function () {
 			return this.listView().length > 0 && this.conversationView().length > 0;
+		},
+
+		isConversationHistoryActive: function () {
+			if (this.hasResellerInboxLayout()) {
+				return this.resellerViewMode === 'conversation';
+			}
+
+			return true;
 		},
 
 		showConversationList: function () {

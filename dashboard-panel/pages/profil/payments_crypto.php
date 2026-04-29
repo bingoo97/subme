@@ -190,6 +190,7 @@ switch ($site) {
                 $selectedAssetId = isset($_POST['crypto_wallet_assignment_id']) ? (int)$_POST['crypto_wallet_assignment_id'] : 0;
                 $requestedAmountRaw = str_replace(',', '.', trim((string)($_POST['topup_amount'] ?? '')));
                 $requestedAmount = is_numeric($requestedAmountRaw) ? round((float)$requestedAmountRaw, 2) : 0.0;
+                $minimumTopupAmount = 10.0;
                 $selectedAsset = null;
 
                 foreach ($topupCryptoAssets as $asset) {
@@ -205,8 +206,8 @@ switch ($site) {
                 } elseif (!$selectedAsset) {
                     $smarty->assign('alert_error', localization_translate($t, 'balance_topup_choose_crypto_error', 'Choose a cryptocurrency first.'));
                     $smarty->display('alert.tpl');
-                } elseif ($requestedAmount <= 0) {
-                    $smarty->assign('alert_error', localization_translate($t, 'balance_topup_amount_error', 'Enter a valid top-up amount.'));
+                } elseif ($requestedAmount < $minimumTopupAmount) {
+                    $smarty->assign('alert_error', localization_translate($t, 'balance_topup_amount_minimum_error', 'Minimum top-up amount is 10 in your current currency.'));
                     $smarty->display('alert.tpl');
                 } elseif ($topupCurrencyId <= 0) {
                     $smarty->assign('alert_error', localization_translate($t, 'balance_topup_unavailable', 'Balance top-up is currently unavailable.'));

@@ -1570,7 +1570,38 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
             product_providers.supports_url_replacement,
             {$providerUrlReplacementFromSelect} AS url_replacement_from,
             {$providerUrlReplacementToSelect} AS url_replacement_to,
-            currencies.code AS currency_code
+            currencies.code AS currency_code,
+            (
+                SELECT crypto_deposit_requests.id
+                FROM crypto_deposit_requests
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS crypto_payment_id,
+            (
+                SELECT crypto_wallet_addresses.address
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address,
+            (
+                SELECT crypto_wallet_addresses.id
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address_id,
+            (
+                SELECT crypto_wallet_addresses.label
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_label
          FROM orders
          LEFT JOIN customers ON customers.id = orders.customer_id
          LEFT JOIN products ON products.id = orders.product_id
@@ -1646,7 +1677,38 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
             product_providers.supports_url_replacement,
             {$providerUrlReplacementFromSelect} AS url_replacement_from,
             {$providerUrlReplacementToSelect} AS url_replacement_to,
-            currencies.code AS currency_code
+            currencies.code AS currency_code,
+            (
+                SELECT crypto_deposit_requests.id
+                FROM crypto_deposit_requests
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS crypto_payment_id,
+            (
+                SELECT crypto_wallet_addresses.address
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address,
+            (
+                SELECT crypto_wallet_addresses.id
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address_id,
+            (
+                SELECT crypto_wallet_addresses.label
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_label
          FROM orders
          LEFT JOIN customers ON customers.id = orders.customer_id
          LEFT JOIN products ON products.id = orders.product_id
@@ -1718,7 +1780,38 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
             product_providers.supports_url_replacement,
             {$providerUrlReplacementFromSelect} AS url_replacement_from,
             {$providerUrlReplacementToSelect} AS url_replacement_to,
-            currencies.code AS currency_code
+            currencies.code AS currency_code,
+            (
+                SELECT crypto_deposit_requests.id
+                FROM crypto_deposit_requests
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS crypto_payment_id,
+            (
+                SELECT crypto_wallet_addresses.address
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address,
+            (
+                SELECT crypto_wallet_addresses.id
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address_id,
+            (
+                SELECT crypto_wallet_addresses.label
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_label
          FROM orders
          LEFT JOIN customers ON customers.id = orders.customer_id
          LEFT JOIN products ON products.id = orders.product_id
@@ -2456,6 +2549,7 @@ function admin_customer_payment_activity(Mysql_ks $db, int $customerId, int $lim
                 crypto_assets.code AS asset_code,
                 crypto_assets.name AS asset_name,
                 crypto_assets.logo_url AS asset_logo_url,
+                crypto_wallet_addresses.id AS wallet_address_id,
                 crypto_wallet_addresses.address AS wallet_address,
                 crypto_wallet_addresses.network_code AS network_code,
                 currencies.code AS currency_code,
@@ -3501,6 +3595,7 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 crypto_deposit_requests.requested_crypto_amount AS amount_crypto,
                 COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS requested_at,
                 crypto_deposit_requests.expires_at,
+                crypto_wallet_addresses.id AS wallet_address_id,
                 crypto_wallet_addresses.address AS payment_reference,
                 crypto_wallet_addresses.address AS wallet_address,
                 crypto_wallet_addresses.network_code AS network_code,
@@ -3552,6 +3647,7 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 {$legacyTopupsTable}.crypto_amount AS amount_crypto,
                 {$legacyTopupsTable}.{$legacyTopupCreatedAtColumn} AS requested_at,
                 NULL AS expires_at,
+                NULL AS wallet_address_id,
                 cryptocurrency.adress_code AS payment_reference,
                 cryptocurrency.adress_code AS wallet_address,
                 '' AS network_code,
@@ -3585,6 +3681,7 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 NULL AS amount_crypto,
                 COALESCE(bank_transfer_requests.requested_at, bank_transfer_requests.expires_at) AS requested_at,
                 bank_transfer_requests.expires_at,
+                NULL AS wallet_address_id,
                 bank_transfer_requests.payment_reference AS payment_reference,
                 '' AS wallet_address,
                 '' AS network_code,
@@ -3747,7 +3844,47 @@ function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): arr
                 WHERE bank_transfer_requests.order_id = orders.id
                 ORDER BY bank_transfer_requests.id DESC
                 LIMIT 1
-            ) AS bank_payment_id
+            ) AS bank_payment_id,
+            (
+                SELECT crypto_wallet_addresses.id
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address_id,
+            (
+                SELECT crypto_wallet_addresses.address
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address,
+            (
+                SELECT crypto_wallet_addresses.label
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_label,
+            (
+                SELECT crypto_wallet_addresses.network_code
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_network_code,
+            (
+                SELECT crypto_assets.code
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_asset_code
          FROM orders
          LEFT JOIN customers ON customers.id = orders.customer_id
          LEFT JOIN products ON products.id = orders.product_id
@@ -4059,6 +4196,7 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 currencies.symbol AS currency_symbol,
                 crypto_assets.code AS asset_code,
                 crypto_assets.name AS asset_name,
+                crypto_wallet_addresses.id AS wallet_address_id,
                 crypto_wallet_addresses.address AS wallet_address,
                 orders.status AS order_status
              FROM crypto_deposit_requests
@@ -4597,7 +4735,47 @@ function admin_topbar_notification_order_row_by_id(Mysql_ks $db, int $orderId): 
                 WHERE bank_transfer_requests.order_id = orders.id
                 ORDER BY bank_transfer_requests.id DESC
                 LIMIT 1
-            ) AS bank_payment_id
+            ) AS bank_payment_id,
+            (
+                SELECT crypto_wallet_addresses.id
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address_id,
+            (
+                SELECT crypto_wallet_addresses.address
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_address,
+            (
+                SELECT crypto_wallet_addresses.label
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_label,
+            (
+                SELECT crypto_wallet_addresses.network_code
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_network_code,
+            (
+                SELECT crypto_assets.code
+                FROM crypto_deposit_requests
+                INNER JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS wallet_asset_code
          FROM orders
          LEFT JOIN customers ON customers.id = orders.customer_id
          LEFT JOIN products ON products.id = orders.product_id
@@ -6244,7 +6422,9 @@ function admin_save_crypto_asset(Mysql_ks $db, int $assetId, array $input): arra
 
     $name = trim((string)($input['name'] ?? ''));
     $coingeckoId = trim((string)($input['coingecko_id'] ?? ''));
-    $logoUrl = trim((string)($input['logo_url'] ?? ''));
+    $logoUrl = array_key_exists('logo_url', $input)
+        ? trim((string)($input['logo_url'] ?? ''))
+        : trim((string)($asset['logo_url'] ?? ''));
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
     $isProtected = admin_crypto_asset_is_protected($asset);
 
@@ -9744,6 +9924,16 @@ function admin_chat_list_timestamp(?string $timestamp): string
     return date('Y-m-d', $time) === date('Y-m-d') ? date('H:i', $time) : date('d.m', $time);
 }
 
+function admin_chat_message_is_structured_card(string $messageBody): bool
+{
+    $messageBody = trim($messageBody);
+    if ($messageBody === '' || !function_exists('app_chat_card_decode')) {
+        return false;
+    }
+
+    return is_array(app_chat_card_decode($messageBody));
+}
+
 function admin_format_last_login_date(?string $timestamp): string
 {
     $timestamp = trim((string)$timestamp);
@@ -10145,14 +10335,53 @@ function admin_chat_avatar_theme(array $row): string
     return 'theme-' . ($index + 1);
 }
 
-function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId): array
+function admin_chat_message_page_size(): int
+{
+    return 10;
+}
+
+function admin_chat_normalize_message_limit($value): int
+{
+    $defaultLimit = admin_chat_message_page_size();
+    $limit = (int)$value;
+    if ($limit <= 0) {
+        return $defaultLimit;
+    }
+
+    if ($limit < $defaultLimit) {
+        return $defaultLimit;
+    }
+
+    if ($limit > 200) {
+        return 200;
+    }
+
+    return $limit;
+}
+
+function admin_chat_conversation_message_count(Mysql_ks $db, int $conversationId): int
+{
+    if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
+        return 0;
+    }
+
+    $row = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM support_messages
+         WHERE conversation_id = {$conversationId}"
+    );
+
+    return (int)($row['total'] ?? 0);
+}
+
+function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId, int $messageLimit = 0): array
 {
     if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
         return [];
     }
 
-    return $db->select_full_user(
-        "SELECT
+    $safeLimit = admin_chat_normalize_message_limit($messageLimit);
+    $baseQuery = "SELECT
             support_messages.id,
             support_messages.sender_type,
             support_messages.customer_id,
@@ -10167,8 +10396,16 @@ function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId): ar
          FROM support_messages
          LEFT JOIN admin_users ON admin_users.id = support_messages.admin_user_id
          LEFT JOIN customers ON customers.id = support_messages.customer_id
-         WHERE support_messages.conversation_id = {$conversationId}
-         ORDER BY support_messages.id ASC"
+         WHERE support_messages.conversation_id = {$conversationId}";
+
+    return $db->select_full_user(
+        "SELECT *
+         FROM (
+            {$baseQuery}
+            ORDER BY support_messages.id DESC
+            LIMIT {$safeLimit}
+         ) AS recent_messages
+         ORDER BY id ASC"
     );
 }
 
@@ -10968,6 +11205,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
 {
     $isGroupConversation = (string)($conversationRow['conversation_type'] ?? '') === 'group_chat';
     $retentionHours = $isGroupConversation ? chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null) : null;
+    $previousAnchor = null;
     ob_start();
     ?>
     <div class="admin-chat-conversation" data-admin-chat-conversation data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>">
@@ -10993,7 +11231,15 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
                     $messageBodyRaw = (string)($messageRow['message_body'] ?? '');
                     $messageHtml = chat_format_message_html((string)($messageRow['message_body'] ?? ''));
-                    $canEdit = !$isCustomer && trim($messageBodyRaw) !== '';
+                    $isStructuredCard = admin_chat_message_is_structured_card($messageBodyRaw);
+                    $canEdit = !$isCustomer && trim($messageBodyRaw) !== '' && !$isStructuredCard;
+                    $canDelete = true;
+                    $showActionRow = $canEdit || $canDelete;
+                    $anchorLabel = function_exists('chat_time_anchor_label') ? chat_time_anchor_label((string)($messageRow['created_at'] ?? '')) : '';
+                    $showAnchor = $anchorLabel !== '' && $anchorLabel !== $previousAnchor;
+                    if ($showAnchor) {
+                        $previousAnchor = $anchorLabel;
+                    }
                     $senderLabel = chat_sender_display_name(
                         [
                             'sender_type' => (string)($messageRow['sender_type'] ?? ''),
@@ -11023,6 +11269,11 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     $saveLabel = admin_t($messages, 'chat_message_save_button', 'Save');
                     $savedLabel = admin_t($messages, 'chat_message_saved_label', 'Saved');
                     ?>
+                    <?php if ($showAnchor): ?>
+                        <div class="messenger-time-anchor admin-chat-conversation__time-anchor">
+                            <span><?php echo admin_e($anchorLabel); ?></span>
+                        </div>
+                    <?php endif; ?>
                     <div class="admin-chat-conversation__message <?php echo admin_e($bubbleClass); ?>" data-admin-chat-message data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
                         <div class="admin-chat-conversation__bubble">
                             <div class="admin-chat-conversation__sender">
@@ -11040,16 +11291,6 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                                 <div class="admin-chat-conversation__text"><?php echo $messageHtml; ?></div>
                             <?php endif; ?>
                             <?php if ($canEdit): ?>
-                                <div class="admin-chat-conversation__edit-row">
-                                    <button
-                                        type="button"
-                                        class="admin-chat-conversation__edit-link"
-                                        data-admin-chat-edit-message
-                                        data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
-                                        <?php echo admin_e($editLabel); ?>
-                                    </button>
-                                    <span class="admin-chat-conversation__edit-saved" data-admin-chat-edit-saved hidden><?php echo admin_e($savedLabel); ?></span>
-                                </div>
                                 <div class="admin-chat-conversation__editor" data-admin-chat-editor hidden>
                                     <label class="visually-hidden" for="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"><?php echo admin_e($editLabel); ?></label>
                                     <textarea
@@ -11069,24 +11310,35 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                                     </div>
                                 </div>
                             <?php endif; ?>
-                        </div>
-                        <div class="admin-chat-conversation__meta">
-                            <?php if (!$isCustomer): ?>
-                                <span class="admin-chat-read-receipt <?php echo admin_e($receiptClass); ?>" title="<?php echo admin_e($receiptLabel); ?>" aria-label="<?php echo admin_e($receiptLabel); ?>">
-                                    <i class="<?php echo admin_e($receiptIcon); ?>" aria-hidden="true"></i>
-                                </span>
-                            <?php endif; ?>
-                            <div class="admin-chat-conversation__time"><?php echo admin_e(admin_chat_list_timestamp((string)($messageRow['created_at'] ?? ''))); ?></div>
-                            <button
-                                type="button"
-                                class="admin-chat-conversation__delete"
-                                data-admin-chat-delete-message
-                                data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>"
-                                data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
-                                title="<?php echo admin_e($deleteLabel); ?>"
-                                aria-label="<?php echo admin_e($deleteLabel); ?>">
-                                <i class="bi bi-trash3" aria-hidden="true"></i>
-                            </button>
+                            <div class="admin-chat-conversation__footer">
+                                <?php if (!$isCustomer): ?>
+                                    <span class="admin-chat-read-receipt <?php echo admin_e($receiptClass); ?>" title="<?php echo admin_e($receiptLabel); ?>" aria-label="<?php echo admin_e($receiptLabel); ?>">
+                                        <i class="<?php echo admin_e($receiptIcon); ?>" aria-hidden="true"></i>
+                                    </span>
+                                <?php endif; ?>
+                                <?php if ($canEdit): ?>
+                                    <button
+                                        type="button"
+                                        class="admin-chat-conversation__edit-link"
+                                        data-admin-chat-edit-message
+                                        data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                        <?php echo admin_e($editLabel); ?>
+                                    </button>
+                                <?php endif; ?>
+                                <span class="admin-chat-conversation__edit-saved" data-admin-chat-edit-saved hidden><?php echo admin_e($savedLabel); ?></span>
+                                <?php if ($canDelete): ?>
+                                    <button
+                                        type="button"
+                                        class="admin-chat-conversation__delete"
+                                        data-admin-chat-delete-message
+                                        data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>"
+                                        data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
+                                        title="<?php echo admin_e($deleteLabel); ?>"
+                                        aria-label="<?php echo admin_e($deleteLabel); ?>">
+                                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                                    </button>
+                                <?php endif; ?>
+                            </div>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -11112,7 +11364,7 @@ function admin_update_chat_message(Mysql_ks $db, int $conversationId, int $messa
     }
 
     $messageRow = $db->select_user(
-        "SELECT id, sender_type, admin_user_id
+        "SELECT id, sender_type, admin_user_id, message_body
          FROM support_messages
          WHERE id = {$messageId}
            AND conversation_id = {$conversationId}
@@ -11124,6 +11376,10 @@ function admin_update_chat_message(Mysql_ks $db, int $conversationId, int $messa
         || (string)($messageRow['sender_type'] ?? '') !== 'admin'
         || (int)($messageRow['admin_user_id'] ?? 0) !== $adminUserId
     ) {
+        return false;
+    }
+
+    if (admin_chat_message_is_structured_card((string)($messageRow['message_body'] ?? ''))) {
         return false;
     }
 
@@ -12969,6 +13225,8 @@ function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20):
             OR customer_crypto_wallets.customer_email LIKE '{$safeLike}'
             OR customer_crypto_wallets.crypto_asset_code LIKE '{$safeLike}'
             OR customer_crypto_wallets.crypto_asset_name LIKE '{$safeLike}'
+            OR customer_crypto_wallets.label LIKE '{$safeLike}'
+            OR customer_crypto_wallets.wallet_provider LIKE '{$safeLike}'
          ORDER BY customer_crypto_wallets.assigned_at DESC
          LIMIT {$limit}"
     );
@@ -13300,14 +13558,13 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $assetName = trim((string)($row['crypto_asset_name'] ?? ''));
                                 $logoUrl = admin_crypto_asset_logo_url($assetCode);
                                 $walletAddress = trim((string)($row['address'] ?? ''));
-                                $walletAddressCompact = admin_compact_wallet_address($walletAddress, 5, 5);
                                 $walletStatus = trim((string)($row['status'] ?? ''));
                                 $walletStatusLabel = admin_t($messages, 'enum_' . $walletStatus, ucfirst(str_replace('_', ' ', $walletStatus)));
                                 $walletStatusClass = admin_wallet_status_badge_class($walletStatus);
                                 $walletCustomerId = (int)($row['customer_id'] ?? 0);
                                 $walletCustomerEmail = trim((string)($row['customer_email'] ?? ''));
                                 $walletCustomerUrl = '/admin/?page=users&customer_id=' . $walletCustomerId;
-                                $walletPageUrl = '/admin/?page=crypto-wallets&wallet_id=' . (int)($row['wallet_address_id'] ?? 0);
+                                $walletPageUrl = '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($row['wallet_address_id'] ?? 0);
                                 ?>
                             <article class="admin-search-wallet-card">
                                 <div class="admin-search-wallet-card__asset">
@@ -13318,8 +13575,8 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     </div>
                                 </div>
                                 <div class="admin-search-wallet-card__body">
-                                    <a class="admin-inline-link" href="<?php echo admin_e($walletPageUrl); ?>" title="<?php echo admin_e($walletAddress); ?>">
-                                        <code><?php echo admin_e($walletAddressCompact !== '' ? $walletAddressCompact : '—'); ?></code>
+                                    <a class="admin-search-wallet-card__address-link" href="<?php echo admin_e($walletPageUrl); ?>" title="<?php echo admin_e($walletAddress); ?>">
+                                        <code class="admin-search-wallet-card__address-code"><?php echo admin_e($walletAddress !== '' ? $walletAddress : '—'); ?></code>
                                     </a>
                                     <div class="admin-search-wallet-card__meta">
                                         <span><?php echo admin_e(admin_t($messages, 'search_wallet_user_label', 'User')); ?>: <a class="admin-inline-link" href="<?php echo admin_e($walletCustomerUrl); ?>"><?php echo admin_e($walletCustomerEmail !== '' ? $walletCustomerEmail : '—'); ?></a></span>

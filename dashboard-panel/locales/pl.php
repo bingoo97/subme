@@ -83,6 +83,8 @@ return [
         'balance_topup_unavailable' => 'Doładowanie salda jest obecnie niedostępne.',
         'balance_topup_choose_crypto_error' => 'Najpierw wybierz kryptowalutę.',
         'balance_topup_amount_error' => 'Wpisz poprawną kwotę doładowania.',
+        'balance_topup_amount_minimum_error' => 'Minimalna kwota doładowania to 10 w bieżącej walucie.',
+        'balance_topup_minimum_note' => 'Minimalna kwota doładowania to 10 w bieżącej walucie.',
         'balance_topup_rate_error' => 'Kurs wybranej kryptowaluty jest obecnie niedostępny.',
         'balance_topup_create_error' => 'Nie udało się utworzyć żądania płatności.',
         'how_to_pay' => 'Jak zapłacić?',
