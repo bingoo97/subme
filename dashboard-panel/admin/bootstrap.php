@@ -1535,6 +1535,9 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
     $providerUrlReplacementToSelect = schema_column_exists($db, 'product_providers', 'url_replacement_to')
         ? 'product_providers.url_replacement_to'
         : 'NULL';
+    $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
     $where = $customerId > 0 ? 'WHERE orders.customer_id = ' . $customerId : '';
 
     return $db->select_full_user(
@@ -1558,6 +1561,7 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
             orders.expires_at,
             orders.paid_at,
             customers.email AS customer_email,
+            {$customerHandleSelect},
             products.provider_id,
             products.name AS product_name,
             products.product_type,
@@ -1633,6 +1637,9 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
     $providerUrlReplacementToSelect = schema_column_exists($db, 'product_providers', 'url_replacement_to')
         ? 'product_providers.url_replacement_to'
         : 'NULL';
+    $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
 
     $whereParts = [];
     if ($customerId > 0) {
@@ -1665,6 +1672,7 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
             orders.expires_at,
             orders.paid_at,
             customers.email AS customer_email,
+            {$customerHandleSelect},
             products.provider_id,
             products.name AS product_name,
             products.product_type,
@@ -1833,6 +1841,13 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
     $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
     $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
     $requiredAmount = round((float)($order['total_amount'] ?? 0), 2);
+    $isAwaitingActivation = $status === 'pending_payment'
+        && $paymentStatus === 'paid'
+        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true);
+
+    if ($isAwaitingActivation) {
+        admin_ensure_order_payment_balance_credit($db, $order);
+    }
 
     $currentBalance = 0.0;
     if ($customerId > 0 && schema_object_exists($db, 'customers') && schema_column_exists($db, 'customers', 'balance_amount')) {
@@ -1864,9 +1879,6 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
         }
     }
 
-    $isAwaitingActivation = $status === 'pending_payment'
-        && $paymentStatus === 'paid'
-        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true);
     $activationBudget = $existingDebitAmount > 0 ? $existingDebitAmount : $currentBalance;
     $canActivate = $activationBudget + 0.00001 >= $requiredAmount;
     $shortfall = max(0, round($requiredAmount - $activationBudget, 2));
@@ -1933,6 +1945,114 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
         'can_activate' => $canActivate,
         'needs_attention' => $isAwaitingActivation && !$canActivate,
         'suggested_product' => $suggestedProduct,
+    ];
+}
+
+function admin_find_latest_approved_order_payment(Mysql_ks $db, int $orderId): ?array
+{
+    if ($orderId <= 0) {
+        return null;
+    }
+
+    $rows = [];
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoRow = $db->select_user(
+            "SELECT
+                'crypto' AS payment_type,
+                crypto_deposit_requests.id,
+                crypto_deposit_requests.customer_id,
+                crypto_deposit_requests.requested_fiat_amount AS amount_value
+             FROM crypto_deposit_requests
+             WHERE crypto_deposit_requests.order_id = {$orderId}
+               AND crypto_deposit_requests.status IN ('confirmed', 'approved', 'paid', 'completed')
+             ORDER BY crypto_deposit_requests.id DESC
+             LIMIT 1"
+        );
+        if (is_array($cryptoRow) && !empty($cryptoRow['id'])) {
+            $rows[] = $cryptoRow;
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankRow = $db->select_user(
+            "SELECT
+                'bank' AS payment_type,
+                bank_transfer_requests.id,
+                bank_transfer_requests.customer_id,
+                bank_transfer_requests.requested_amount AS amount_value
+             FROM bank_transfer_requests
+             WHERE bank_transfer_requests.order_id = {$orderId}
+               AND bank_transfer_requests.status IN ('confirmed', 'approved', 'paid', 'completed')
+             ORDER BY bank_transfer_requests.id DESC
+             LIMIT 1"
+        );
+        if (is_array($bankRow) && !empty($bankRow['id'])) {
+            $rows[] = $bankRow;
+        }
+    }
+
+    if (!$rows) {
+        return null;
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return ((int)($right['id'] ?? 0)) <=> ((int)($left['id'] ?? 0));
+    });
+
+    return $rows[0] ?? null;
+}
+
+function admin_ensure_order_payment_balance_credit(Mysql_ks $db, array $order): array
+{
+    $orderId = (int)($order['id'] ?? 0);
+    $customerId = (int)($order['customer_id'] ?? 0);
+    $status = strtolower(trim((string)($order['status'] ?? '')));
+    $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
+    $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+
+    if (
+        $orderId <= 0
+        || $customerId <= 0
+        || $status !== 'pending_payment'
+        || $paymentStatus !== 'paid'
+        || in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)
+    ) {
+        return ['ok' => true, 'applied' => false, 'already_applied' => false];
+    }
+
+    $existingEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
+    if (is_array($existingEvent) && !empty($existingEvent['source_key'])) {
+        return ['ok' => true, 'applied' => false, 'already_applied' => true];
+    }
+
+    $payment = admin_find_latest_approved_order_payment($db, $orderId);
+    if (!is_array($payment) || empty($payment['id'])) {
+        return ['ok' => true, 'applied' => false, 'already_applied' => false];
+    }
+
+    $paymentId = (int)($payment['id'] ?? 0);
+    $paymentType = strtolower(trim((string)($payment['payment_type'] ?? '')));
+    $amountValue = round((float)($payment['amount_value'] ?? 0), 2);
+    if ($paymentId <= 0 || $amountValue <= 0 || !in_array($paymentType, ['crypto', 'bank'], true)) {
+        return ['ok' => true, 'applied' => false, 'already_applied' => false];
+    }
+
+    $creditResult = admin_apply_customer_balance_runtime_event(
+        $db,
+        $customerId,
+        $amountValue,
+        'credit',
+        'payment_approval',
+        $paymentType . ':' . $paymentId,
+        'Repair credit for approved ' . ucfirst($paymentType) . ' payment #' . $paymentId
+    );
+
+    return [
+        'ok' => !empty($creditResult['ok']),
+        'applied' => !empty($creditResult['ok']) && empty($creditResult['already_applied']),
+        'already_applied' => !empty($creditResult['already_applied']),
+        'message' => (string)($creditResult['message'] ?? ''),
     ];
 }
 
@@ -2278,7 +2398,18 @@ function admin_locale_flag_url(string $localeCode): string
     return admin_country_flag_url('GB');
 }
 
-function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
+function admin_customer_count(Mysql_ks $db): int
+{
+    if (!schema_object_exists($db, 'customers')) {
+        return 0;
+    }
+
+    $row = $db->select_user("SELECT COUNT(*) AS total FROM customers");
+
+    return (int)($row['total'] ?? 0);
+}
+
+function admin_customer_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
 {
     if (!schema_object_exists($db, 'customers')) {
         return [];
@@ -2287,6 +2418,7 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
     app_ensure_customer_runtime_columns($db);
 
     $limit = max(1, min(50, $limit));
+    $offset = max(0, $offset);
     $balanceSelect = schema_column_exists($db, 'customers', 'balance_amount')
         ? 'customers.balance_amount'
         : '0.00 AS balance_amount';
@@ -2332,7 +2464,7 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20): array
             ({$openCryptoPaymentsSelect} + {$openBankPaymentsSelect}) AS open_payments_total
          FROM customers
          ORDER BY customers.id DESC
-         LIMIT {$limit}"
+         LIMIT {$limit} OFFSET {$offset}"
     );
 }
 
@@ -3899,6 +4031,26 @@ function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): arr
          ORDER BY COALESCE(orders.paid_at, orders.created_at) DESC, orders.id DESC
          LIMIT {$limit}"
     );
+}
+
+function admin_topbar_notification_order_count(Mysql_ks $db): int
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return 0;
+    }
+
+    $row = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM orders
+         WHERE payment_status = 'paid'
+           AND (
+                status <> 'active'
+                OR COALESCE(fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
+           )
+           AND COALESCE(status, '') <> 'cancelled'"
+    );
+
+    return (int)($row['total'] ?? 0);
 }
 
 function admin_topbar_notification_new_customer_rows(Mysql_ks $db, int $limit = 5): array

@@ -1140,6 +1140,10 @@ $selectedCustomerWallets = [];
 $selectedCustomerBankAccounts = [];
 $selectedCustomerActivity = [];
 $selectedCustomerProviderVisibility = [];
+$userListPage = 1;
+$userListPerPage = 50;
+$userListTotal = 0;
+$userListTotalPages = 1;
 $orderListPage = 1;
 $orderListPerPage = 20;
 $orderListTotal = 0;
@@ -1555,6 +1559,15 @@ if ($route === 'orders') {
                 break;
             }
         }
+    }
+}
+
+if ($route === 'users') {
+    $userListPage = max(1, (int)($_GET['user_list_page'] ?? 1));
+    $userListTotal = admin_customer_count($db);
+    $userListTotalPages = max(1, (int)ceil($userListTotal / $userListPerPage));
+    if ($userListPage > $userListTotalPages) {
+        $userListPage = $userListTotalPages;
     }
 }
 
@@ -3271,6 +3284,8 @@ if (!is_string($adminHelpModalTopicsJson)) {
 
 $adminTopbarPayments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($appSettings), 8);
 $adminTopbarOrders = admin_topbar_notification_order_rows($db, 8);
+$adminSidebarPaymentAlertCount = (int)(admin_payment_summary($db, 0, admin_bank_transfers_enabled($appSettings))['open_total'] ?? 0);
+$adminSidebarOrderAlertCount = admin_topbar_notification_order_count($db);
 $adminTopbarNewCustomers = admin_topbar_notification_new_customer_rows($db, 5);
 $adminTopbarExpiringSubscriptions = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
 $adminTopbarBackupNotice = admin_topbar_manual_backup_notice($appSettings, 168);
@@ -3380,6 +3395,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 <span><?php echo admin_e(admin_t($messages, $item['label_key'], $item['route'])); ?></span>
                                 <?php if ((string)($item['route'] ?? '') === 'users' && (int)($metrics['active_customers'] ?? 0) > 0): ?>
                                     <span class="admin-sidebar__count-badge" aria-label="<?php echo admin_e(admin_t($messages, 'users_active_badge', 'Active users')); ?>"><?php echo admin_e((string)((int)($metrics['active_customers'] ?? 0))); ?></span>
+                                <?php endif; ?>
+                                <?php if ((string)($item['route'] ?? '') === 'payments' && $adminSidebarPaymentAlertCount > 0): ?>
+                                    <span class="admin-sidebar__alert-badge" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_pending_payments', 'Pending payments')); ?>"><?php echo admin_e((string)$adminSidebarPaymentAlertCount); ?></span>
+                                <?php endif; ?>
+                                <?php if ((string)($item['route'] ?? '') === 'orders' && $adminSidebarOrderAlertCount > 0): ?>
+                                    <span class="admin-sidebar__alert-badge" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_pending_orders', 'Pending orders')); ?>"><?php echo admin_e((string)$adminSidebarOrderAlertCount); ?></span>
                                 <?php endif; ?>
                                 <?php if ((string)($item['route'] ?? '') === 'crypto-wallets' && $cryptoWalletPoolDepleted): ?>
                                     <span class="admin-sidebar__alert-badge" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_pool_empty_badge', 'No free crypto wallets available')); ?>">!</span>
@@ -5089,9 +5110,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                <button type="button" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : (in_array((string)($orderStatusVisual['class'] ?? ''), ['admin-order-status-icon--pending', 'admin-order-status-icon--awaiting-activation'], true) ? 'btn-dark' : 'btn-success'); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details" style="width: 50px; height: 50px;">
-                                                                    <i class="bi bi-search" aria-hidden="true"></i>
-                                                                </button>
+                                                                <div class="admin-order-row__actions">
+                                                                    <button type="button" class="btn btn-dark btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
+                                                                        <i class="bi bi-search me-1" aria-hidden="true"></i>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'details', 'Details')); ?></span>
+                                                                    </button>
+                                                                    <?php if (trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
+                                                                        <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer">
+                                                                            <i class="bi bi-play-btn me-1" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
+                                                                        </a>
+                                                                    <?php endif; ?>
+                                                                </div>
                                                             </td>
                                                         </tr>
                                                     <?php endforeach; ?>
@@ -5158,30 +5188,41 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $modalFulfillmentStatusDisplayLabel = admin_t($messages, 'order_shipping_sent', 'Sent');
                                         }
                                         $modalFulfillmentStatusClass = 'is-neutral';
-                                        $modalFulfillmentStatusIcon = 'bi bi-dot';
-                                        if (in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)) {
-                                            $modalFulfillmentStatusClass = 'is-success';
-                                            $modalFulfillmentStatusIcon = 'bi bi-check-lg';
+                                                        $modalFulfillmentStatusIcon = 'bi bi-dot';
+                                                        if (in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)) {
+                                                            $modalFulfillmentStatusClass = 'is-success';
+                                                            $modalFulfillmentStatusIcon = 'bi bi-check-lg';
                                         } elseif (in_array($fulfillmentStatusRaw, ['pending', 'processing', 'queued', 'awaiting_review', 'in_progress'], true)) {
                                             $modalFulfillmentStatusClass = 'is-pending';
                                             $modalFulfillmentStatusIcon = 'bi bi-arrow-repeat';
                                         } elseif ($fulfillmentStatusRaw !== '') {
                                             $modalFulfillmentStatusClass = 'is-danger';
                                             $modalFulfillmentStatusIcon = 'bi bi-x-lg';
-                                        }
-                                        $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
-                                        $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
-                                        $balanceActivationContext = admin_order_balance_activation_context($db, $row);
-                                        $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
-                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
+                                                        }
+                                                        $modalHeaderStatusLabel = $modalOrderStatusLabel;
+                                                        $modalHeaderStatusClass = $modalOrderStatusClass;
+                                                        $modalHeaderStatusIcon = $modalOrderStatusIcon;
+                                                        $modalHeaderStatusIconClass = $modalOrderStatusIconClass;
+                                                        if ($orderStatusRaw === 'pending_payment' && $paymentStatusRaw === 'paid') {
+                                                            $modalHeaderStatusLabel = admin_t($messages, 'order_paid_badge', 'PAID');
+                                                            $modalHeaderStatusClass = 'is-success';
+                                                            $modalHeaderStatusIcon = 'bi bi-check-lg';
+                                                            $modalHeaderStatusIconClass = '';
+                                                        }
+                                                        $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
+                                                        $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+                                                        $balanceActivationContext = admin_order_balance_activation_context($db, $row);
+                                                        $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
+                                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
                                         $orderWalletAddress = trim((string)($row['wallet_address'] ?? ''));
-                                        $orderWalletPaymentUrl = ($orderCryptoPaymentId > 0 && $orderWalletAddress !== '')
-                                            ? '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId
-                                            : '';
-                                        $orderWalletPaymentCompact = $orderWalletAddress !== ''
-                                            ? admin_compact_wallet_address($orderWalletAddress, 8, 5)
-                                            : '';
-                                        $modalId = 'adminOrderModal' . $orderId;
+                                                        $orderWalletPaymentUrl = ($orderCryptoPaymentId > 0 && $orderWalletAddress !== '')
+                                                            ? '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId
+                                                            : '';
+                                                        $orderWalletPaymentCompact = $orderWalletAddress !== ''
+                                                            ? admin_compact_wallet_address($orderWalletAddress, 8, 5)
+                                                            : '';
+                                                        $orderCustomerHandle = trim((string)($row['public_handle'] ?? ''));
+                                                        $modalId = 'adminOrderModal' . $orderId;
                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
                                         $canExtendOrderFromModal = !$isPendingOrder && in_array($orderStatusRaw, ['active', 'expired'], true) && $paymentStatusRaw === 'paid';
@@ -5193,6 +5234,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div>
                                                             <h5 class="modal-title">#<?php echo admin_e((string)$orderId); ?> <?php echo admin_e($orderTitle); ?></h5>
                                                             <div class="admin-order-modal__links">
+                                                                <?php if ($orderCustomerHandle !== '' && (int)($row['customer_id'] ?? 0) > 0): ?>
+                                                                    <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-link admin-order-modal__header-link--handle">
+                                                                        @<?php echo admin_e($orderCustomerHandle); ?>
+                                                                    </a>
+                                                                <?php endif; ?>
                                                                 <?php if ((int)($row['customer_id'] ?? 0) > 0): ?>
                                                                     <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-link">
                                                                         <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
@@ -5207,9 +5253,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </div>
                                                             <div class="admin-order-modal__summary">
                                                                 <span class="admin-order-modal__summary-chip"><?php echo admin_e(admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''))); ?></span>
-                                                                <span class="admin-order-modal__summary-chip admin-order-modal__summary-chip--status <?php echo admin_e($modalOrderStatusClass); ?>">
-                                                                    <i class="<?php echo admin_e($modalOrderStatusIcon . $modalOrderStatusIconClass); ?>" aria-hidden="true"></i>
-                                                                    <span><?php echo admin_e($modalOrderStatusLabel); ?></span>
+                                                                <span class="admin-order-modal__summary-chip admin-order-modal__summary-chip--status <?php echo admin_e($modalHeaderStatusClass); ?>">
+                                                                    <i class="<?php echo admin_e($modalHeaderStatusIcon . $modalHeaderStatusIconClass); ?>" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e($modalHeaderStatusLabel); ?></span>
                                                                 </span>
                                                             </div>
                                                         </div>
@@ -5268,7 +5314,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-order-modal__next-step">
                                                                                     <strong class="admin-order-modal__next-step-title"><?php echo admin_e(admin_t($messages, 'order_next_step_provider_title', '1. Go to the provider dashboard.')); ?></strong>
                                                                                     <?php if ($providerDashboardUrl !== ''): ?>
-                                                                                        <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="btn btn-outline-dark btn-lg admin-order-modal__provider-btn" target="_blank" rel="noopener noreferrer">
+                                                                                        <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="btn btn-dark btn-lg admin-order-modal__provider-btn" target="_blank" rel="noopener noreferrer">
                                                                                             <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
                                                                                             <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
                                                                                         </a>
@@ -6320,7 +6366,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     break;
 
                                 case 'users':
-                                    $userDirectoryRows = admin_customer_rows($db, 40);
+                                    $userDirectoryRows = admin_customer_rows($db, $userListPerPage, ($userListPage - 1) * $userListPerPage);
                                     if ($selectedCustomer) {
                                         $selectedCustomerBalance = is_numeric($selectedCustomer['balance_amount'] ?? null)
                                             ? number_format((float)$selectedCustomer['balance_amount'], 2, '.', '')
@@ -7449,6 +7495,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </tbody>
                                             </table>
                                         </div>
+                                        <?php if ($userListTotalPages > 1): ?>
+                                            <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'users_pagination', 'User pages')); ?>">
+                                                <ul class="pagination admin-pagination">
+                                                    <?php for ($pageNumber = 1; $pageNumber <= $userListTotalPages; $pageNumber++): ?>
+                                                        <?php
+                                                        $userPageUrl = '/admin/?page=users&user_list_page=' . $pageNumber;
+                                                        if ($selectedCustomer) {
+                                                            $userPageUrl .= '&customer_id=' . (int)($selectedCustomer['id'] ?? 0);
+                                                        }
+                                                        ?>
+                                                        <li class="page-item<?php echo $pageNumber === $userListPage ? ' active' : ''; ?>">
+                                                            <a class="page-link" href="<?php echo admin_e($userPageUrl); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                        </li>
+                                                    <?php endfor; ?>
+                                                </ul>
+                                            </nav>
+                                        <?php endif; ?>
                                     </div>
                                     <?php
                                     break;

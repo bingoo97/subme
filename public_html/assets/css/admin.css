@@ -381,6 +381,8 @@ body.admin-login-page{
     top:calc(100% + 14px);
     right:0;
     width:min(440px, calc(100vw - 32px));
+    display:flex;
+    flex-direction:column;
     max-height:min(78vh, 720px);
     overflow:hidden;
     border:1px solid rgba(15, 23, 42, 0.08);
@@ -428,8 +430,12 @@ body.admin-login-page{
 }
 
 .admin-topbar-notifications__body{
+    flex:1 1 auto;
+    min-height:0;
     max-height:min(68vh, 620px);
-    overflow:auto;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior:contain;
     padding:.9rem;
     background:#fbfcff;
 }
@@ -5380,6 +5386,19 @@ body.admin-login-page .alert.alert-danger::before{
     flex-wrap:wrap;
 }
 
+.admin-order-row__actions{
+    display:flex;
+    flex-direction:column;
+    gap:.45rem;
+    min-width:160px;
+}
+
+.admin-order-row__actions .btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+}
+
 .admin-order-wallet-badge{
     text-decoration:none;
 }
@@ -6267,7 +6286,11 @@ body.admin-login-page .alert.alert-danger::before{
     align-items:center;
     justify-content:center;
     gap:.55rem;
-    width:100%;
+}
+
+.admin-order-modal__header-link--handle{
+    color:#111827;
+    font-weight:800;
 }
 
 .admin-order-modal__status-row{
@@ -7212,9 +7235,11 @@ body.admin-login-page .alert.alert-danger::before{
     }
 
     .admin-topbar-notifications__body{
-        max-height:calc(var(--admin-chat-viewport-height, 100dvh) - 88px);
+        flex:1 1 auto;
+        min-height:0;
+        max-height:none;
         padding:.75rem;
-        height: 100vh;
+        padding-bottom:max(.9rem, env(safe-area-inset-bottom));
     }
 
     .admin-topbar-notifications__item{
