@@ -47,5 +47,34 @@
 	{/if}
 
     <script src="/assets/js/loader.js"></script>
+    <script>
+        (function () {
+            var lastTouchEndAt = 0;
+
+            function preventZoomGesture(event) {
+                event.preventDefault();
+            }
+
+            function preventMultiTouchZoom(event) {
+                if (event.touches && event.touches.length > 1) {
+                    event.preventDefault();
+                }
+            }
+
+            function preventDoubleTapZoom(event) {
+                var now = Date.now();
+                if (now - lastTouchEndAt <= 300) {
+                    event.preventDefault();
+                }
+                lastTouchEndAt = now;
+            }
+
+            document.addEventListener('gesturestart', preventZoomGesture, { passive: false });
+            document.addEventListener('gesturechange', preventZoomGesture, { passive: false });
+            document.addEventListener('gestureend', preventZoomGesture, { passive: false });
+            document.addEventListener('touchmove', preventMultiTouchZoom, { passive: false });
+            document.addEventListener('touchend', preventDoubleTapZoom, { passive: false });
+        })();
+    </script>
 </head>
 <body>
