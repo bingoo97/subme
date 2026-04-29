@@ -1526,6 +1526,9 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
     $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
         ? 'orders.delivery_link_visible'
         : '0 AS delivery_link_visible';
+    $providerDeliveryLinksEnabledSelect = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1 AS supports_delivery_links';
     $providerUrlReplacementFromSelect = schema_column_exists($db, 'product_providers', 'url_replacement_from')
         ? 'product_providers.url_replacement_from'
         : 'NULL';
@@ -1561,6 +1564,7 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
             product_providers.name AS provider_name,
             product_providers.dashboard_url,
             product_providers.supports_manual_delivery,
+            {$providerDeliveryLinksEnabledSelect},
             product_providers.supports_url_replacement,
             {$providerUrlReplacementFromSelect} AS url_replacement_from,
             {$providerUrlReplacementToSelect} AS url_replacement_to,
@@ -1587,6 +1591,9 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
     $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
         ? 'orders.delivery_link_visible'
         : '0 AS delivery_link_visible';
+    $providerDeliveryLinksEnabledSelect = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1 AS supports_delivery_links';
     $providerUrlReplacementFromSelect = schema_column_exists($db, 'product_providers', 'url_replacement_from')
         ? 'product_providers.url_replacement_from'
         : 'NULL';
@@ -1631,6 +1638,7 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
             product_providers.name AS provider_name,
             product_providers.dashboard_url,
             product_providers.supports_manual_delivery,
+            {$providerDeliveryLinksEnabledSelect},
             product_providers.supports_url_replacement,
             {$providerUrlReplacementFromSelect} AS url_replacement_from,
             {$providerUrlReplacementToSelect} AS url_replacement_to,
@@ -1657,6 +1665,9 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
     $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
         ? 'orders.delivery_link_visible'
         : '0 AS delivery_link_visible';
+    $providerDeliveryLinksEnabledSelect = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1 AS supports_delivery_links';
     $providerUrlReplacementFromSelect = schema_column_exists($db, 'product_providers', 'url_replacement_from')
         ? 'product_providers.url_replacement_from'
         : 'NULL';
@@ -1697,6 +1708,7 @@ function admin_order_find(Mysql_ks $db, int $orderId): ?array
             product_providers.name AS provider_name,
             product_providers.dashboard_url,
             product_providers.supports_manual_delivery,
+            {$providerDeliveryLinksEnabledSelect},
             product_providers.supports_url_replacement,
             {$providerUrlReplacementFromSelect} AS url_replacement_from,
             {$providerUrlReplacementToSelect} AS url_replacement_to,
@@ -4967,6 +4979,9 @@ function admin_product_provider_rows_paginated(Mysql_ks $db, int $limit = 20, in
 
     $limit = max(1, min(100, $limit));
     $offset = max(0, $offset);
+    $providerDeliveryLinksEnabledValue = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1';
     $providerUrlReplacementFromValue = schema_column_exists($db, 'product_providers', 'url_replacement_from')
         ? 'product_providers.url_replacement_from'
         : 'NULL';
@@ -4984,6 +4999,7 @@ function admin_product_provider_rows_paginated(Mysql_ks $db, int $limit = 20, in
                 product_providers.dashboard_url,
                 product_providers.logo_url,
                 product_providers.supports_manual_delivery,
+                {$providerDeliveryLinksEnabledValue} AS supports_delivery_links,
                 product_providers.supports_url_replacement,
                 {$providerUrlReplacementFromValue} AS url_replacement_from,
                 {$providerUrlReplacementToValue} AS url_replacement_to,
@@ -5007,6 +5023,7 @@ function admin_product_provider_rows_paginated(Mysql_ks $db, int $limit = 20, in
             product_providers.dashboard_url,
             product_providers.logo_url,
             product_providers.supports_manual_delivery,
+            MAX({$providerDeliveryLinksEnabledValue}) AS supports_delivery_links,
             product_providers.supports_url_replacement,
             MAX({$providerUrlReplacementFromValue}) AS url_replacement_from,
             MAX({$providerUrlReplacementToValue}) AS url_replacement_to,
@@ -5040,6 +5057,9 @@ function admin_product_provider_find(Mysql_ks $db, int $providerId): ?array
         return null;
     }
 
+    $providerDeliveryLinksEnabledValue = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1';
     $providerUrlReplacementFromValue = schema_column_exists($db, 'product_providers', 'url_replacement_from')
         ? 'product_providers.url_replacement_from'
         : 'NULL';
@@ -5056,6 +5076,7 @@ function admin_product_provider_find(Mysql_ks $db, int $providerId): ?array
             product_providers.dashboard_url,
             product_providers.logo_url,
             product_providers.supports_manual_delivery,
+            MAX({$providerDeliveryLinksEnabledValue}) AS supports_delivery_links,
             product_providers.supports_url_replacement,
             MAX({$providerUrlReplacementFromValue}) AS url_replacement_from,
             MAX({$providerUrlReplacementToValue}) AS url_replacement_to,
@@ -5155,8 +5176,13 @@ function admin_create_product_provider(Mysql_ks $db, array $input): array
     $urlReplacementFrom = trim((string)($input['url_replacement_from'] ?? ''));
     $urlReplacementTo = trim((string)($input['url_replacement_to'] ?? ''));
     $supportsManualDelivery = isset($input['supports_manual_delivery']) && (string)$input['supports_manual_delivery'] === '1' ? 1 : 0;
+    $supportsDeliveryLinks = !isset($input['supports_delivery_links']) || (string)$input['supports_delivery_links'] === '1' ? 1 : 0;
     $supportsUrlReplacement = isset($input['supports_url_replacement']) && (string)$input['supports_url_replacement'] === '1' ? 1 : 0;
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($supportsDeliveryLinks === 0) {
+        $supportsUrlReplacement = 0;
+    }
 
     if ($name === '') {
         return ['ok' => false, 'message' => 'Provider name is required.'];
@@ -5183,8 +5209,8 @@ function admin_create_product_provider(Mysql_ks $db, array $input): array
     }
 
     $slug = admin_product_provider_unique_slug($db, $name, $slugInput);
-    $insertFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
-    $insertValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
+    $insertFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_delivery_links', 'supports_url_replacement'];
+    $insertValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsDeliveryLinks, $supportsUrlReplacement];
 
     if (schema_column_exists($db, 'product_providers', 'url_replacement_from')) {
         $insertFields[] = 'url_replacement_from';
@@ -5227,8 +5253,13 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
     $urlReplacementFrom = trim((string)($input['url_replacement_from'] ?? ''));
     $urlReplacementTo = trim((string)($input['url_replacement_to'] ?? ''));
     $supportsManualDelivery = isset($input['supports_manual_delivery']) && (string)$input['supports_manual_delivery'] === '1' ? 1 : 0;
+    $supportsDeliveryLinks = !isset($input['supports_delivery_links']) || (string)$input['supports_delivery_links'] === '1' ? 1 : 0;
     $supportsUrlReplacement = isset($input['supports_url_replacement']) && (string)$input['supports_url_replacement'] === '1' ? 1 : 0;
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($supportsDeliveryLinks === 0) {
+        $supportsUrlReplacement = 0;
+    }
 
     if ($name === '') {
         return ['ok' => false, 'message' => 'Provider name is required.'];
@@ -5257,8 +5288,8 @@ function admin_save_product_provider(Mysql_ks $db, int $providerId, array $input
     }
 
     $slug = admin_product_provider_unique_slug($db, $name, $slugInput, $providerId);
-    $updateFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_url_replacement'];
-    $updateValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsUrlReplacement];
+    $updateFields = ['name', 'slug', 'description', 'logo_url', 'dashboard_url', 'supports_manual_delivery', 'supports_delivery_links', 'supports_url_replacement'];
+    $updateValues = [$name, $slug, $description !== '' ? $description : null, $logoUrl !== '' ? $logoUrl : null, $dashboardUrl !== '' ? $dashboardUrl : null, $supportsManualDelivery, $supportsDeliveryLinks, $supportsUrlReplacement];
 
     if (schema_column_exists($db, 'product_providers', 'url_replacement_from')) {
         $updateFields[] = 'url_replacement_from';
@@ -6429,6 +6460,7 @@ function admin_product_basic_row(Mysql_ks $db, int $productId): ?array
             products.is_active,
             product_providers.name AS provider_name,
             product_providers.supports_manual_delivery,
+            " . (schema_column_exists($db, 'product_providers', 'supports_delivery_links') ? "product_providers.supports_delivery_links," : "1 AS supports_delivery_links,") . "
             currencies.code AS currency_code
          FROM products
          LEFT JOIN product_providers ON product_providers.id = products.provider_id
@@ -6458,7 +6490,12 @@ function admin_create_order(Mysql_ks $db, array $input): array
     $note = trim((string)($input['customer_note'] ?? ''));
     $hasDeliveryLink = isset($input['has_delivery_link']) && (string)$input['has_delivery_link'] === '1';
     $deliveryLink = $hasDeliveryLink ? trim((string)($input['delivery_link'] ?? '')) : '';
-    $deliveryLinkVisible = $hasDeliveryLink && $deliveryLink !== '' && empty($product['supports_manual_delivery']) ? 1 : 0;
+    $deliveryLinksEnabled = !array_key_exists('supports_delivery_links', $product) || !empty($product['supports_delivery_links']);
+    if (!$deliveryLinksEnabled) {
+        $hasDeliveryLink = false;
+        $deliveryLink = '';
+    }
+    $deliveryLinkVisible = $deliveryLinksEnabled && $hasDeliveryLink && $deliveryLink !== '' && empty($product['supports_manual_delivery']) ? 1 : 0;
 
     if ($hasDeliveryLink && $deliveryLink !== '' && filter_var($deliveryLink, FILTER_VALIDATE_URL) === false) {
         return ['ok' => false, 'message' => 'Delivery URL must be a valid link.'];
@@ -6543,8 +6580,12 @@ function admin_save_order_info(
 
     $deliveryLink = trim((string)($input['delivery_link'] ?? ''));
     $deliveryLinkVisible = isset($input['delivery_link_visible']) && (string)($input['delivery_link_visible']) === '1' ? 1 : 0;
+    $deliveryLinksEnabled = !array_key_exists('supports_delivery_links', $order) || !empty($order['supports_delivery_links']);
     if ($deliveryLink !== '' && filter_var($deliveryLink, FILTER_VALIDATE_URL) === false) {
         return ['ok' => false, 'message' => 'Delivery URL must be a valid link.'];
+    }
+    if (!$deliveryLinksEnabled) {
+        $deliveryLinkVisible = 0;
     }
     if ($deliveryLink === '') {
         $deliveryLinkVisible = 0;

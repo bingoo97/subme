@@ -208,6 +208,7 @@ CREATE TABLE `product_providers` (
   `logo_url` VARCHAR(255) DEFAULT NULL,
   `dashboard_url` VARCHAR(255) DEFAULT NULL,
   `supports_manual_delivery` TINYINT(1) NOT NULL DEFAULT 1,
+  `supports_delivery_links` TINYINT(1) NOT NULL DEFAULT 1,
   `supports_url_replacement` TINYINT(1) NOT NULL DEFAULT 0,
   `url_replacement_from` VARCHAR(255) DEFAULT NULL,
   `url_replacement_to` VARCHAR(255) DEFAULT NULL,

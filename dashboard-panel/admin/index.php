@@ -1140,6 +1140,7 @@ $productProviderFormState = [
     'url_replacement_from' => '',
     'url_replacement_to' => '',
     'supports_manual_delivery' => 1,
+    'supports_delivery_links' => 1,
     'supports_url_replacement' => 0,
     'is_active' => 1,
 ];
@@ -1529,6 +1530,7 @@ if ($route === 'products') {
             'url_replacement_from' => trim((string)($_POST['url_replacement_from'] ?? '')),
             'url_replacement_to' => trim((string)($_POST['url_replacement_to'] ?? '')),
             'supports_manual_delivery' => isset($_POST['supports_manual_delivery']) && (string)$_POST['supports_manual_delivery'] === '1' ? 1 : 0,
+            'supports_delivery_links' => isset($_POST['supports_delivery_links']) && (string)$_POST['supports_delivery_links'] === '0' ? 0 : 1,
             'supports_url_replacement' => isset($_POST['supports_url_replacement']) && (string)$_POST['supports_url_replacement'] === '1' ? 1 : 0,
             'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
         ];
@@ -1560,6 +1562,7 @@ if ($route === 'products') {
             'url_replacement_from' => trim((string)($_POST['url_replacement_from'] ?? '')),
             'url_replacement_to' => trim((string)($_POST['url_replacement_to'] ?? '')),
             'supports_manual_delivery' => isset($_POST['supports_manual_delivery']) && (string)$_POST['supports_manual_delivery'] === '1' ? 1 : 0,
+            'supports_delivery_links' => isset($_POST['supports_delivery_links']) && (string)$_POST['supports_delivery_links'] === '0' ? 0 : 1,
             'supports_url_replacement' => isset($_POST['supports_url_replacement']) && (string)$_POST['supports_url_replacement'] === '1' ? 1 : 0,
             'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
         ];
@@ -5117,6 +5120,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </button>
                                                                         <div class="collapse" id="adminOrderDetails<?php echo admin_e((string)$orderId); ?>">
                                                                             <div class="admin-order-modal__details">
+                                                                                <?php if (!array_key_exists('supports_delivery_links', $row) || !empty($row['supports_delivery_links'])): ?>
                                                                                 <div>
                                                                                     <div class="form-check admin-form-check">
                                                                                         <input class="form-check-input" type="checkbox" value="1" id="delivery_link_visible_<?php echo admin_e((string)$orderId); ?>" name="delivery_link_visible"<?php echo !empty($row['delivery_link_visible']) ? ' checked' : ''; ?> data-admin-order-link-toggle>
@@ -5130,6 +5134,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_delivery_link_label', 'URL link')); ?></label>
                                                                                     <input type="url" class="form-control" name="delivery_link" value="<?php echo admin_e((string)($row['delivery_link'] ?? '')); ?>" placeholder="https://">
                                                                                 </div>
+                                                                                <?php endif; ?>
                                                                                 <div>
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_payment_method_label', 'Payment method')); ?></label>
                                                                                     <select class="form-select" name="payment_method">
@@ -5373,6 +5378,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </label>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery_help', 'Enables manual assignment of access credentials after subscription purchase.')); ?></small>
                                                     </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_provider_supports_delivery_links"><?php echo admin_e(admin_t($messages, 'product_provider_supports_delivery_links', 'URL links available')); ?></label>
+                                                        <select class="form-select" id="product_provider_supports_delivery_links" name="supports_delivery_links" data-provider-delivery-links-select>
+                                                            <option value="1"<?php echo !array_key_exists('supports_delivery_links', $productProviderDraft) || !empty($productProviderDraft['supports_delivery_links']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo array_key_exists('supports_delivery_links', $productProviderDraft) && empty($productProviderDraft['supports_delivery_links']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_disabled', 'Disabled')); ?></option>
+                                                        </select>
+                                                        <small class="alert alert-warning"><?php echo admin_e(admin_t($messages, 'product_provider_supports_delivery_links_help', 'When disabled, users will not see URL links or login details, and admins will not be able to assign an individual delivery URL in orders.')); ?></small>
+                                                    </div>
                                                     <div class="col-md-6">
                                                         <label class="admin-check-field">
                                                             <input type="checkbox" name="supports_url_replacement" value="1" data-provider-url-replacement-toggle<?php echo !empty($productProviderDraft['supports_url_replacement']) ? ' checked' : ''; ?>>
@@ -5513,6 +5526,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <span><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery', 'Supports manual delivery')); ?></span>
                                                         </label>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_provider_supports_manual_delivery_help', 'Enables manual assignment of access credentials after subscription purchase.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="product_provider_supports_delivery_links_edit"><?php echo admin_e(admin_t($messages, 'product_provider_supports_delivery_links', 'URL links available')); ?></label>
+                                                        <select class="form-select" id="product_provider_supports_delivery_links_edit" name="supports_delivery_links" data-provider-delivery-links-select>
+                                                            <option value="1"<?php echo !array_key_exists('supports_delivery_links', $productProviderEditor) || !empty($productProviderEditor['supports_delivery_links']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo array_key_exists('supports_delivery_links', $productProviderEditor) && empty($productProviderEditor['supports_delivery_links']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_disabled', 'Disabled')); ?></option>
+                                                        </select>
+                                                        <small class="alert alert-warning"><?php echo admin_e(admin_t($messages, 'product_provider_supports_delivery_links_help', 'When disabled, users will not see URL links or login details, and admins will not be able to assign an individual delivery URL in orders.')); ?></small>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="admin-check-field">
@@ -5908,6 +5929,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <span class="admin-status-pill <?php echo !empty($providerRow['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
                                                                                 <?php echo admin_e(!empty($providerRow['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_disabled', 'Disabled')); ?>
                                                                             </span>
+                                                                            <span class="admin-status-pill <?php echo !array_key_exists('supports_delivery_links', $providerRow) || !empty($providerRow['supports_delivery_links']) ? 'admin-status-pill--info' : 'admin-status-pill--muted'; ?>">
+                                                                                <?php echo admin_e(!array_key_exists('supports_delivery_links', $providerRow) || !empty($providerRow['supports_delivery_links']) ? admin_t($messages, 'product_provider_supports_delivery_links_short', 'Links') : admin_t($messages, 'product_provider_supports_delivery_links_disabled_short', 'No links')); ?>
+                                                                            </span>
                                                                         </div>
                                                                         <?php if ($providerDashboardUrl !== ''): ?>
                                                                             <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="admin-inline-link small" target="_blank" rel="noopener noreferrer">
@@ -5982,7 +6006,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         if ($productName !== '' && $productTypeLabel !== '') {
                                                             $normalizedProductName = function_exists('mb_strtolower') ? mb_strtolower($productName, 'UTF-8') : strtolower($productName);
                                                             $normalizedProductTypeLabel = function_exists('mb_strtolower') ? mb_strtolower($productTypeLabel, 'UTF-8') : strtolower($productTypeLabel);
-                                                            if (substr($normalizedProductName, -strlen($normalizedProductTypeLabel)) === $normalizedProductTypeLabel) {
+                                                            if (strpos($normalizedProductName, $normalizedProductTypeLabel) !== false) {
                                                                 $showProductTypeLabel = false;
                                                             }
                                                         }

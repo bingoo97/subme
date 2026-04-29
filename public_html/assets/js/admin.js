@@ -674,12 +674,19 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-provider-url-replacement-scope]').forEach(function (scope) {
             var toggle = q('[data-provider-url-replacement-toggle]', scope);
             var section = q('[data-provider-url-replacement-section]', scope);
+            var deliveryLinksSelect = q('[data-provider-delivery-links-select]', scope);
             if (!toggle || !section) {
                 return;
             }
 
             var sync = function () {
-                var visible = !!toggle.checked;
+                var deliveryLinksEnabled = !deliveryLinksSelect || String(deliveryLinksSelect.value || '1') === '1';
+                toggle.disabled = !deliveryLinksEnabled;
+                if (!deliveryLinksEnabled) {
+                    toggle.checked = false;
+                }
+
+                var visible = deliveryLinksEnabled && !!toggle.checked;
                 setHidden(section, !visible);
                 qa('input, textarea, select', section).forEach(function (field) {
                     field.disabled = !visible;
@@ -687,6 +694,9 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             toggle.addEventListener('change', sync);
+            if (deliveryLinksSelect) {
+                deliveryLinksSelect.addEventListener('change', sync);
+            }
             sync();
         });
     }

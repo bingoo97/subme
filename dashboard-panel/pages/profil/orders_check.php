@@ -1,11 +1,15 @@
 <?php
 
 $tenantId = tenant_current_id($user);
+app_ensure_product_provider_runtime_columns($db);
 
 if (app_uses_v2_schema($db)) {
     $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
         ? 'orders.delivery_link_visible'
         : '0';
+    $providerDeliveryLinksEnabledSelect = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1';
     $providerUrlReplacementFromSelect = schema_column_exists($db, 'product_providers', 'url_replacement_from')
         ? 'product_providers.url_replacement_from'
         : 'NULL';
@@ -52,6 +56,7 @@ if (app_uses_v2_schema($db)) {
               products.provider_id AS provider_id,
               product_providers.name AS provider_name,
               product_providers.supports_manual_delivery,
+              {$providerDeliveryLinksEnabledSelect} AS supports_delivery_links,
               product_providers.supports_url_replacement,
               {$providerUrlReplacementFromSelect} AS url_replacement_from,
               {$providerUrlReplacementToSelect} AS url_replacement_to

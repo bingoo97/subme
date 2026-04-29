@@ -1435,6 +1435,15 @@ function app_ensure_product_provider_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('product_providers', 'url_replacement_to');
     }
+
+    if (!schema_column_exists($db, 'product_providers', 'supports_delivery_links')) {
+        @$db->query(
+            "ALTER TABLE product_providers
+             ADD COLUMN supports_delivery_links TINYINT(1) NOT NULL DEFAULT 1
+             AFTER supports_manual_delivery"
+        );
+        schema_forget_column_cache('product_providers', 'supports_delivery_links');
+    }
 }
 
 function app_ensure_news_runtime_columns(Mysql_ks $db): void
@@ -1480,7 +1489,7 @@ function app_url_starts_with(string $value, string $prefix): bool
 function app_apply_provider_url_replacement(string $url, array $providerData): string
 {
     $url = trim($url);
-    if ($url === '' || empty($providerData['supports_url_replacement'])) {
+    if ($url === '' || empty($providerData['supports_url_replacement']) || empty($providerData['supports_delivery_links'])) {
         return $url;
     }
 
@@ -1542,10 +1551,11 @@ function app_order_delivery_payload(array $order): array
 {
     $rawUrl = trim((string)($order['delivery_link_raw'] ?? $order['delivery_link'] ?? ''));
     $manualDelivery = !empty($order['supports_manual_delivery']);
-    $showUrl = $rawUrl !== '' && !empty($order['delivery_link_visible']);
+    $deliveryLinksEnabled = !array_key_exists('supports_delivery_links', $order) || !empty($order['supports_delivery_links']);
+    $showUrl = $deliveryLinksEnabled && $rawUrl !== '' && !empty($order['delivery_link_visible']);
     $effectiveUrl = app_apply_provider_url_replacement($rawUrl, $order);
     $credentials = app_delivery_credentials_from_url($effectiveUrl !== '' ? $effectiveUrl : $rawUrl);
-    $showCredentials = $manualDelivery && ($credentials['login'] !== '' || $credentials['password'] !== '');
+    $showCredentials = $deliveryLinksEnabled && $manualDelivery && ($credentials['login'] !== '' || $credentials['password'] !== '');
 
     return [
         'raw_url' => $rawUrl,
