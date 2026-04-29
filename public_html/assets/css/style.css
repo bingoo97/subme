@@ -4596,8 +4596,9 @@ button[name="create_balance_payment"]:hover{
 }
 
 #news .news_inner.active{
-	background:#fff5f5;
-	 box-shadow: 0 8px 2px rgb(80 0 0 / 5%);
+	/* background:#fff5f5; */
+	border: 2px solid #d7182a;
+	/* box-shadow: 0 8px 2px rgb(80 0 0 / 5%); */
 }
 
 #news .news_title{
