@@ -829,7 +829,7 @@ return [
     'order_extend_error' => 'Nie udało się przedłużyć subskrypcji.',
     'order_extend_no_packages' => 'Brak pakietów, które można użyć do przedłużenia u tego providera. Produkty trial i pakiety do 24h są tutaj ukryte.',
     'order_extend_blocked_pending_help' => 'Przedłużenie jest dostępne tylko dla aktywnych albo wygasłych opłaconych zamówień. Nowe nieopłacone zamówienie trzeba najpierw dokończyć.',
-    'order_provider_dashboard_link' => 'Dashboard providera',
+    'order_provider_dashboard_link' => 'Provider URL',
     'order_waiting_activation' => 'Płatność potwierdzona. Oczekuje na aktywację.',
     'order_paid_steps_intro' => 'Wykonaj poniższe kroki, aby dokończyć to zamówienie.',
     'order_next_step_provider_title' => '1. Przejdź na stronę dostawcy.',
