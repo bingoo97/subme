@@ -12529,6 +12529,148 @@ function admin_settings_rows(Mysql_ks $db): array
     ];
 }
 
+function admin_ensure_dashboard_change_log_runtime_table(Mysql_ks $db): void
+{
+    static $ready = false;
+    if ($ready && schema_object_exists($db, 'admin_dashboard_change_log')) {
+        return;
+    }
+
+    if (!schema_object_exists($db, 'admin_dashboard_change_log')) {
+        $db->query(
+            "CREATE TABLE IF NOT EXISTS admin_dashboard_change_log (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                change_date DATE NOT NULL,
+                change_text TEXT NOT NULL,
+                admin_user_id INT UNSIGNED DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY idx_admin_dashboard_change_log_change_date (change_date, id),
+                KEY idx_admin_dashboard_change_log_admin_user_id (admin_user_id),
+                CONSTRAINT fk_admin_dashboard_change_log_admin_user FOREIGN KEY (admin_user_id) REFERENCES admin_users (id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_dashboard_change_log']);
+    }
+
+    $ready = true;
+}
+
+function admin_dashboard_change_log_rows(Mysql_ks $db, int $limit = 100): array
+{
+    admin_ensure_dashboard_change_log_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_dashboard_change_log')) {
+        return [];
+    }
+
+    $limit = max(1, min(500, $limit));
+
+    return $db->select_full_user(
+        "SELECT
+            admin_dashboard_change_log.id,
+            admin_dashboard_change_log.change_date,
+            admin_dashboard_change_log.change_text,
+            admin_dashboard_change_log.admin_user_id,
+            admin_dashboard_change_log.created_at,
+            admin_dashboard_change_log.updated_at,
+            admin_users.login_name AS admin_login_name
+         FROM admin_dashboard_change_log
+         LEFT JOIN admin_users ON admin_users.id = admin_dashboard_change_log.admin_user_id
+         ORDER BY admin_dashboard_change_log.change_date DESC, admin_dashboard_change_log.id DESC
+         LIMIT {$limit}"
+    );
+}
+
+function admin_dashboard_change_log_grouped_rows(Mysql_ks $db, int $limit = 100): array
+{
+    $rows = admin_dashboard_change_log_rows($db, $limit);
+    if (!$rows) {
+        return [];
+    }
+
+    $grouped = [];
+    foreach ($rows as $row) {
+        $changeDate = trim((string)($row['change_date'] ?? ''));
+        if ($changeDate === '') {
+            continue;
+        }
+
+        if (!isset($grouped[$changeDate])) {
+            $timestamp = strtotime($changeDate . ' 00:00:00');
+            $grouped[$changeDate] = [
+                'date' => $changeDate,
+                'date_label' => $timestamp ? date('d.m.Y', $timestamp) : $changeDate,
+                'items' => [],
+            ];
+        }
+
+        $grouped[$changeDate]['items'][] = [
+            'id' => (int)($row['id'] ?? 0),
+            'text' => trim((string)($row['change_text'] ?? '')),
+            'created_at' => (string)($row['created_at'] ?? ''),
+            'admin_login_name' => trim((string)($row['admin_login_name'] ?? '')),
+        ];
+    }
+
+    return array_values($grouped);
+}
+
+function admin_create_dashboard_change_log_entry(Mysql_ks $db, array $input, int $adminUserId = 0): array
+{
+    admin_ensure_dashboard_change_log_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_dashboard_change_log')) {
+        return ['ok' => false, 'message' => 'Change log storage is not available.'];
+    }
+
+    $changeDate = trim((string)($input['change_date'] ?? ''));
+    $changeText = trim((string)($input['change_text'] ?? ''));
+
+    if ($changeDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $changeDate)) {
+        return ['ok' => false, 'message' => 'Change date is required.'];
+    }
+
+    if ($changeText === '') {
+        return ['ok' => false, 'message' => 'Change description is required.'];
+    }
+
+    $inserted = $db->insert(
+        ['change_date', 'change_text', 'admin_user_id'],
+        [$changeDate, $changeText, $adminUserId > 0 ? $adminUserId : null],
+        'admin_dashboard_change_log'
+    );
+
+    if (!$inserted) {
+        return ['ok' => false, 'message' => 'Unable to create change log entry.'];
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Change log entry created successfully.',
+        'entry_id' => (int)$db->id(),
+    ];
+}
+
+function admin_delete_dashboard_change_log_entry(Mysql_ks $db, int $entryId): array
+{
+    admin_ensure_dashboard_change_log_runtime_table($db);
+    if ($entryId <= 0 || !schema_object_exists($db, 'admin_dashboard_change_log')) {
+        return ['ok' => false, 'message' => 'Change log entry not found.'];
+    }
+
+    $row = $db->select_user("SELECT id FROM admin_dashboard_change_log WHERE id = {$entryId} LIMIT 1");
+    if (!is_array($row) || empty($row['id'])) {
+        return ['ok' => false, 'message' => 'Change log entry not found.'];
+    }
+
+    $deleted = $db->delete_using_id('admin_dashboard_change_log', $entryId);
+
+    return [
+        'ok' => (bool)$deleted,
+        'message' => $deleted ? 'Change log entry deleted successfully.' : 'Unable to delete change log entry.',
+    ];
+}
+
 function admin_search_order_rows(Mysql_ks $db, string $query, int $limit = 20): array
 {
     $query = trim($query);

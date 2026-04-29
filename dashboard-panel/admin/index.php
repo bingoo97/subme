@@ -1027,6 +1027,43 @@ if ($route === 'settings' && isset($_POST['admin_download_database_backup'])) {
     }
 }
 
+if ($route === 'settings' && isset($_POST['admin_create_dashboard_change_log_entry'])) {
+    $dashboardChangeLogFormState = [
+        'change_date' => trim((string)($_POST['change_date'] ?? date('Y-m-d'))),
+        'change_text' => trim((string)($_POST['change_text'] ?? '')),
+    ];
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $createResult = admin_create_dashboard_change_log_entry($db, $_POST, (int)($adminUser['id'] ?? 0));
+        if (!empty($createResult['ok'])) {
+            header('Location: /admin/?page=settings&created_dashboard_change_log=1');
+            exit;
+        }
+
+        $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'dashboard_change_log_create_error', 'Unable to create change log entry.'));
+        $pageAlertType = 'danger';
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_delete_dashboard_change_log_entry'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $deleteResult = admin_delete_dashboard_change_log_entry($db, (int)($_POST['change_log_id'] ?? 0));
+        if (!empty($deleteResult['ok'])) {
+            header('Location: /admin/?page=settings&deleted_dashboard_change_log=1');
+            exit;
+        }
+
+        $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'dashboard_change_log_delete_error', 'Unable to delete change log entry.'));
+        $pageAlertType = 'danger';
+    }
+}
+
 if ($route === 'settings' && isset($_POST['admin_clear_history_now'])) {
     if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
@@ -1208,6 +1245,10 @@ $helpFormState = [
     'keywords' => '',
     'sort_order' => 100,
     'is_active' => 1,
+];
+$dashboardChangeLogFormState = [
+    'change_date' => date('Y-m-d'),
+    'change_text' => '',
 ];
 $emailTemplateEditorId = 0;
 $emailTemplateEditor = null;
@@ -3053,6 +3094,7 @@ $dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
 $dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
 $dashboardSalesSeriesPath = admin_dashboard_chart_path($dashboardSalesSeries);
 $dashboardSalesSeriesPoints = admin_dashboard_chart_points($dashboardSalesSeries);
+$dashboardChangeLogGroups = admin_dashboard_change_log_grouped_rows($db, 120);
 $dashboardProviderBreakdowns = admin_dashboard_provider_breakdowns($db, 6, 4);
 $recentOrders = admin_recent_orders($db);
 $chatInboxRows = admin_chat_inbox_rows($db, 12, (int)($adminUser['id'] ?? 0));
@@ -4618,6 +4660,47 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             <?php endif; ?>
                         </article>
                     </section>
+
+                    <article class="admin-panel-card">
+                        <div class="admin-panel-card__header">
+                            <div>
+                                <h2><?php echo admin_e(admin_t($messages, 'dashboard_change_log_title', 'Wprowadzone zmiany')); ?></h2>
+                                <p><?php echo admin_e(admin_t($messages, 'dashboard_change_log_intro', 'Najważniejsze zmiany i wdrożenia zebrane chronologicznie.')); ?></p>
+                            </div>
+                        </div>
+                        <?php if ($dashboardChangeLogGroups): ?>
+                            <div class="table-responsive">
+                                <table class="table admin-table align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 160px;"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                            <th><?php echo admin_e(admin_t($messages, 'dashboard_change_log_entries_label', 'Zmiany')); ?></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($dashboardChangeLogGroups as $changeGroup): ?>
+                                            <tr>
+                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                    <strong><?php echo admin_e((string)($changeGroup['date_label'] ?? '')); ?></strong>
+                                                </td>
+                                                <td data-label="<?php echo admin_e(admin_t($messages, 'dashboard_change_log_entries_label', 'Zmiany')); ?>">
+                                                    <ul class="mb-0 ps-3">
+                                                        <?php foreach ((array)($changeGroup['items'] ?? []) as $changeItem): ?>
+                                                            <?php if (trim((string)($changeItem['text'] ?? '')) !== ''): ?>
+                                                                <li><?php echo admin_e((string)$changeItem['text']); ?></li>
+                                                            <?php endif; ?>
+                                                        <?php endforeach; ?>
+                                                    </ul>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php else: ?>
+                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'dashboard_change_log_empty', 'Brak wpisów o zmianach.')); ?></div>
+                        <?php endif; ?>
+                    </article>
 
                     <section class="admin-panel-card admin-dashboard-breakdowns d-none">
                         <div class="admin-panel-card__header">
@@ -9710,6 +9793,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-smtp-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-smtp-pane" type="button" role="tab" aria-controls="admin-settings-smtp-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-runner-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-runner-pane" type="button" role="tab" aria-controls="admin-settings-runner-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-backup-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-backup-pane" type="button" role="tab" aria-controls="admin-settings-backup-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-change-log-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-change-log-pane" type="button" role="tab" aria-controls="admin-settings-change-log-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_change_log_title', 'Wprowadzone zmiany')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-danger-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-danger-pane" type="button" role="tab" aria-controls="admin-settings-danger-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_danger_zone_title', 'Safety zone')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-language-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-language-pane" type="button" role="tab" aria-controls="admin-settings-language-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_language_title', 'Panel language')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-profile-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-profile-pane" type="button" role="tab" aria-controls="admin-settings-profile-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_profile_title', 'Live chat profile')); ?></button></li>
@@ -10099,6 +10183,78 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <button type="submit" class="btn btn-outline-dark btn-lg" name="admin_download_database_backup"><?php echo admin_e(admin_t($messages, 'settings_database_backup_button', 'Download SQL backup')); ?></button>
                                             </div>
                                         </form>
+                                    </div>
+
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-change-log-pane" role="tabpanel" aria-labelledby="admin-settings-change-log-tab" tabindex="0">
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_change_log_title', 'Wprowadzone zmiany')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_change_log_intro', 'Dodawaj krótkie wpisy, które potem pojawią się na dashboardzie pod trendem sprzedaży.')); ?></p>
+                                        </div>
+
+                                        <form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-md-4">
+                                                    <label class="form-label" for="dashboard_change_date"><?php echo admin_e(admin_t($messages, 'dashboard_change_log_date_label', 'Data zmiany')); ?></label>
+                                                    <input type="date" class="form-control" id="dashboard_change_date" name="change_date" value="<?php echo admin_e((string)($dashboardChangeLogFormState['change_date'] ?? date('Y-m-d'))); ?>" required>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label" for="dashboard_change_text"><?php echo admin_e(admin_t($messages, 'dashboard_change_log_text_label', 'Treść wpisu')); ?></label>
+                                                    <textarea class="form-control" id="dashboard_change_text" name="change_text" rows="3" placeholder="<?php echo admin_e(admin_t($messages, 'dashboard_change_log_text_placeholder', 'Np. Dodano nowy moduł płatności i poprawiono widok zamówień na mobile.')); ?>" required><?php echo admin_e((string)($dashboardChangeLogFormState['change_text'] ?? '')); ?></textarea>
+                                                </div>
+                                            </div>
+                                            <hr>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_create_dashboard_change_log_entry"><?php echo admin_e(admin_t($messages, 'dashboard_change_log_add_button', 'Dodaj wpis')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                    <div class="admin-settings-table-wrap mt-4">
+                                        <?php if ($dashboardChangeLogGroups): ?>
+                                            <div class="table-responsive">
+                                                <table class="table admin-table align-middle">
+                                                    <thead>
+                                                        <tr>
+                                                            <th style="width: 160px;"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'dashboard_change_log_entries_label', 'Zmiany')); ?></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <?php foreach ($dashboardChangeLogGroups as $changeGroup): ?>
+                                                            <?php $groupItems = (array)($changeGroup['items'] ?? []); ?>
+                                                            <tr>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                                    <strong><?php echo admin_e((string)($changeGroup['date_label'] ?? '')); ?></strong>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'dashboard_change_log_entries_label', 'Zmiany')); ?>">
+                                                                    <ul class="mb-0 ps-3">
+                                                                        <?php foreach ($groupItems as $changeItem): ?>
+                                                                            <?php if (trim((string)($changeItem['text'] ?? '')) !== ''): ?>
+                                                                                <li class="d-flex align-items-start justify-content-between gap-2">
+                                                                                    <span><?php echo admin_e((string)$changeItem['text']); ?></span>
+                                                                                    <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'dashboard_change_log_delete_confirm', 'Usunąć ten wpis?')); ?>');" class="flex-shrink-0">
+                                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                        <input type="hidden" name="change_log_id" value="<?php echo admin_e((string)($changeItem['id'] ?? 0)); ?>">
+                                                                                        <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_dashboard_change_log_entry" title="<?php echo admin_e(admin_t($messages, 'dashboard_change_log_delete_button', 'Usuń wpis')); ?>">
+                                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                                        </button>
+                                                                                    </form>
+                                                                                </li>
+                                                                            <?php endif; ?>
+                                                                        <?php endforeach; ?>
+                                                                    </ul>
+                                                                </td>
+                                                            </tr>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'dashboard_change_log_empty', 'Brak wpisów o zmianach.')); ?></div>
+                                        <?php endif; ?>
                                     </div>
 
                                             </div>

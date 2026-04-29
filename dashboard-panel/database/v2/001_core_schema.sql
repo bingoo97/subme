@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS `outbound_email_queue`;
 DROP TABLE IF EXISTS `email_templates`;
 DROP TABLE IF EXISTS `static_pages`;
 DROP TABLE IF EXISTS `news_posts`;
+DROP TABLE IF EXISTS `admin_dashboard_change_log`;
 DROP TABLE IF EXISTS `support_messages`;
 DROP TABLE IF EXISTS `support_conversations`;
 DROP TABLE IF EXISTS `bank_transfer_requests`;
@@ -153,6 +154,19 @@ CREATE TABLE `admin_navigation_items` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_admin_navigation_items_group_sort` (`group_key`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `admin_dashboard_change_log` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `change_date` DATE NOT NULL,
+  `change_text` TEXT NOT NULL,
+  `admin_user_id` INT UNSIGNED DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_admin_dashboard_change_log_change_date` (`change_date`, `id`),
+  KEY `idx_admin_dashboard_change_log_admin_user_id` (`admin_user_id`),
+  CONSTRAINT `fk_admin_dashboard_change_log_admin_user` FOREIGN KEY (`admin_user_id`) REFERENCES `admin_users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `customers` (
