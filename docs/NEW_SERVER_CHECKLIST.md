@@ -512,20 +512,25 @@ Jesli komenda przejdzie, to znaczy, ze struktura instancji jest gotowa, ale stro
 
 Teraz musisz podac aplikacji prawdziwe dane do MySQL.
 
+Wazne:
+
+- nie podmieniasz calego pliku `mysql.php` na 4 linie
+- edytujesz istniejacy plik wygenerowany przez `namecheap-init-instance.sh`
+- w tym pliku zmieniasz tylko domyslne wartosci dla `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASS`
+
 Otworz plik:
 
 ```bash
 nano ~/.subme-secrets/main-panel/mysql.php
 ```
 
-Wklej tam:
+Znajdz w nim taki fragment:
 
 ```php
-<?php
-$db_host = getenv("DB_HOST") ?: "localhost";
-$db_name = getenv("DB_NAME") ?: "zokiscya_reseller";
-$db_user = getenv("DB_USER") ?: "zokiscya_reseller";
-$db_pass = getenv("DB_PASS") ?: "TUTAJ_WPISZ_HASLO_DO_BAZY";
+		$db_host = getenv("DB_HOST") ?: "localhost";
+		$db_name = getenv("DB_NAME") ?: "zokiscya_reseller";
+		$db_user = getenv("DB_USER") ?: "zokiscya_reseller";
+		$db_pass = getenv("DB_PASS") ?: "TUTAJ_WPISZ_HASLO_DO_BAZY";
 ```
 
 Podmien:
@@ -548,6 +553,12 @@ Po zapisaniu mozesz sprawdzic, czy plik istnieje:
 
 ```bash
 ls -l ~/.subme-secrets/main-panel/mysql.php
+```
+
+Mozesz tez sprawdzic, czy plik ma juz poprawne wartosci:
+
+```bash
+rg -n "db_host|db_name|db_user|db_pass" ~/.subme-secrets/main-panel/mysql.php
 ```
 
 #### 12.5a. Dlaczego ten plik jest taki wazny
@@ -588,7 +599,7 @@ Jesli wszystko jest ok, zobaczysz komunikat o zakonczeniu deployu i adres strony
 Po deployu sprawdz:
 
 ```bash
-cat ~/.subme-secrets/main-panel/mysql.php
+rg -n "db_host|db_name|db_user|db_pass" ~/.subme-secrets/main-panel/mysql.php
 cat ~/.subme-apps/main-panel/dashboard-panel/.public-root-path
 ls -l ~/public_html/index.php
 cat ~/public_html/.backend-path
@@ -599,7 +610,7 @@ curl -I --max-time 15 https://zoki.pro/admin/
 
 Co oznaczaja te komendy:
 
-- `cat ~/.subme-secrets/main-panel/mysql.php` pokazuje, czy config bazy jest na miejscu
+- `rg -n "db_host|db_name|db_user|db_pass" ~/.subme-secrets/main-panel/mysql.php` pokazuje, czy config bazy jest na miejscu i czy ma poprawne wartosci
 - `cat ~/.subme-apps/main-panel/dashboard-panel/.public-root-path` pokazuje, jaki webroot ma aktywna instancja
 - `ls -l ~/public_html/index.php` sprawdza, czy plik startowy strony w ogole zostal wdrozony
 - `cat ~/public_html/.backend-path` pokazuje, na jaki backend wskazuje katalog publiczny
@@ -717,6 +728,7 @@ Na serwerze:
 ```bash
 cd ~/subme
 git pull --ff-only origin main
+chmod +x ~/subme/docs/namecheap-*.sh
 SITE_HOST=zoki.pro APP_SLUG=main-panel WEB_DIR=~/public_html REPO_DIR=~/subme APP_URL=https://zoki.pro ~/subme/docs/namecheap-deploy.sh
 ```
 
@@ -726,6 +738,12 @@ To jest juz normalny cykl aktualizacji:
 2. robisz `git push`
 3. na serwerze robisz `git pull`
 4. odpalasz deploy
+
+Wazne:
+
+- sam `namecheap-deploy.sh` nie wykonuje automatycznie nowych zmian SQL
+- jesli release dodaje nowa tabele, kolumne albo indeks, musisz jeszcze odpalic odpowiedni plik SQL na produkcji
+- ogolna zasada jest opisana wyzej w sekcji `7a. Jak aktualizowac tabele i kolumny na istniejacym serwerze`
 
 ### 12.11. Szybka wersja: wszystkie komendy po kolei
 
@@ -782,18 +800,7 @@ Wdrozenie mozna uznac za zakonczone dopiero wtedy, gdy jednoczesnie:
 
 Jesli choc jeden z tych punktow nie dziala, to znaczy, ze migracja nie jest jeszcze domknieta.
 
-Na serwerze:
-
-```bash
-cd ~/subme
-git pull --ff-only origin main
-chmod +x ~/subme/docs/namecheap-*.sh
-SITE_HOST=panel.twojadomena.pl APP_SLUG=main-panel WEB_DIR=~/panel-webroot REPO_DIR=~/subme APP_URL=https://panel.twojadomena.pl ~/subme/docs/namecheap-deploy.sh
-```
-
-Jesli uzywasz innego katalogu repo, zamien wszedzie `~/subme` na swoja realna sciezke, ale tylko po tym jak repo zostanie tam sklonowane.
-
-## 12. Zasada source of truth
+## 13. Zasada source of truth
 
 Pamietaj:
 
@@ -801,7 +808,7 @@ Pamietaj:
 - source of truth dla danych runtime = prawdziwa baza MySQL
 - backup SQL z panelu admina = tylko snapshot restore
 
-## 12a. Ważne dla portfeli krypto po przeniesieniu
+## 13a. Ważne dla portfeli krypto po przeniesieniu
 
 Po przeniesieniu aplikacji na nowy serwer koniecznie sprawdz spojnosc tych 3 tabel:
 
@@ -826,10 +833,6 @@ Jesli cos wyglada podejrzanie, nie naprawiaj tego recznie przez samo kasowanie r
 - `crypto_deposit_requests.wallet_assignment_id`
 - `crypto_wallet_assignments.wallet_address_id`
 - `crypto_wallet_addresses.status`
-
-## 13. Minimalna procedura przeniesienia na nowy serwer
-
-Jesli chcesz przeniesc aplikacje jak najprosciej:
 
 ## 14. Najczestszy blad przy deployu
 
@@ -953,12 +956,3 @@ Jesli nadal widzisz redirect do hostingu zamiast swojej strony, to:
 - albo DNS / konfiguracja hostingu jeszcze nie wskazuje na ta instancje
 
 W takim przypadku najpierw popraw konfiguracje subdomeny w panelu hostingu, a dopiero potem powtarzaj deploy.
-
-1. postaw nowy serwer
-2. sklonuj repo do `~/app`
-3. przygotuj baze i `mysql.php`
-4. odbuduj DB z `namecheap-import-canonical-db.sh` albo odtworz snapshot
-5. uruchom `namecheap-deploy.sh` z poprawnym `WEB_DIR`
-6. sprawdz panel i admina
-
-To jest docelowy, najprostszy model.

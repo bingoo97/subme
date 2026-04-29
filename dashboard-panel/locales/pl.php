@@ -425,7 +425,7 @@ return [
         'apps_column_action' => 'Akcja',
         'apps_download_button' => 'Otwórz stronę pobierania',
         'apps_open_store_button' => 'Otwórz stronę w sklepie',
-        'apps_vlc_description' => 'Uniwersalny odtwarzacz do linków M3U i bezpośrednich streamów. Dobry wybór, jeśli chcesz jedną prostą aplikację na wielu urządzeniach.',
+        'apps_vlc_description' => 'Uniwersalny odtwarzacz do linków URL i bezpośrednich streamów. Dobry wybór, jeśli chcesz jedną prostą aplikację na wielu urządzeniach.',
         'apps_kodi_description' => 'Elastyczne centrum multimedialne z szerokim wsparciem urządzeń. Dobre, jeśli wolisz większy interfejs w stylu TV.',
         'apps_tivimate_description' => 'Bardzo dobra opcja dla Android TV i TV boxów, jeśli chcesz odtwarzacz nastawiony typowo na telewizję.',
         'apps_smarters_description' => 'Dobry wybór dla urządzeń Apple, jeśli chcesz aplikację przyjmującą playlisty i linki do streamu.',
