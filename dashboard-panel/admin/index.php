@@ -7958,7 +7958,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                     <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                     <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                    <button type="submit" class="btn btn-danger btn-lg" name="admin_delete_cancelled_payments" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_confirm', 'Delete all cancelled payments visible in this view?')); ?>');">
+                                                    <button type="submit" class="btn btn-danger btn-md float-left" name="admin_delete_cancelled_payments" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_confirm', 'Delete all cancelled payments visible in this view?')); ?>');">
                                                         <i class="bi bi-trash" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_button', 'Delete cancelled')); ?></span>
                                                         <span class="admin-payments-filter__count"><?php echo admin_e((string)$visibleCancelledPaymentsCount); ?></span>
@@ -8277,8 +8277,27 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 </div>
                                                                             <?php endif; ?>
                                                                         </div>
+                                                                    <?php elseif ($isArchivedPayment): ?>
+                                                                        <div class="admin-topbar-notifications__payment-actions">
+                                                                            <div class="admin-topbar-notifications__task-list">
+                                                                                <span><i class="bi bi-check-circle-fill text-success me-1" aria-hidden="true"></i>1. <?php echo admin_e(admin_t($messages, 'payment_archived_info_line_1', 'The payment was approved and transferred to the administrator main wallet.')); ?></span>
+                                                                            </div>
+                                                                            <a href="<?php echo admin_e($paymentExplorerUrl !== '' ? $paymentExplorerUrl : $paymentDetailsUrl); ?>"<?php echo $paymentExplorerUrl !== '' ? ' target="_blank" rel="noopener noreferrer"' : ''; ?> class="btn btn-outline-dark btn-sm admin-topbar-notifications__block-btn">
+                                                                                <span><?php echo admin_e($paymentExplorerUrl !== '' ? admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer') : admin_t($messages, 'payment_action_preview', 'Preview')); ?></span>
+                                                                                <?php if ($paymentExplorerUrl !== ''): ?>
+                                                                                    <i class="bi bi-box-arrow-up-right ms-1" aria-hidden="true"></i>
+                                                                                <?php endif; ?>
+                                                                            </a>
+                                                                            <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-primary btn-sm admin-topbar-notifications__block-btn">
+                                                                                <span><?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?></span>
+                                                                            </a>
+                                                                        </div>
                                                                     <?php elseif ($isCancelledPayment): ?>
                                                                         <div class="admin-topbar-notifications__payment-actions">
+                                                                            <div class="admin-topbar-notifications__task-list">
+                                                                                <span>1. <?php echo admin_e(admin_t($messages, 'payment_cancelled_info_line_1', 'The user did not complete the payment within one hour of generating it, or the payment was not approved by the administrator in time.')); ?></span>
+                                                                                <span>2. <?php echo admin_e(admin_t($messages, 'payment_cancelled_info_line_2', 'Check in explorer whether the user paid. If not, delete the payment.')); ?></span>
+                                                                            </div>
                                                                             <a href="<?php echo admin_e($paymentExplorerUrl !== '' ? $paymentExplorerUrl : $paymentDetailsUrl); ?>"<?php echo $paymentExplorerUrl !== '' ? ' target="_blank" rel="noopener noreferrer"' : ''; ?> class="btn btn-outline-dark btn-sm admin-topbar-notifications__block-btn">
                                                                                 <span><?php echo admin_e($paymentExplorerUrl !== '' ? admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer') : admin_t($messages, 'payment_action_preview', 'Preview')); ?></span>
                                                                                 <?php if ($paymentExplorerUrl !== ''): ?>
