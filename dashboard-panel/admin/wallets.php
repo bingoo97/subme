@@ -47,6 +47,7 @@ if ($action === 'search_customers') {
         $customers[] = [
             'id' => (int)($row['id'] ?? 0),
             'email' => (string)($row['email'] ?? ''),
+            'public_handle' => (string)($row['public_handle'] ?? ''),
             'status' => (string)($row['status'] ?? ''),
             'locale_code' => (string)($row['locale_code'] ?? ''),
             'disabled' => !empty($state['disabled']),

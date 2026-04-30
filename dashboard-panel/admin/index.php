@@ -8475,6 +8475,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     </button>
                                                                                 </form>
                                                                             </div>
+                                                                            <div class="admin-topbar-notifications__hint text-danger small mt-2">
+                                                                                <?php echo admin_e(admin_t($messages, 'payment_cancelled_renew_hint', 'Click Renew to recalculate the amount and create a new payment request.')); ?>
+                                                                            </div>
                                                                         </div>
                                                                     <?php else: ?>
                                                                         <form method="post" class="admin-payments-actions">
@@ -8975,7 +8978,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                          data-search-error="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_error', 'Unable to search users.')); ?>">
                                                         <div class="admin-wallet-customer-picker__header">
                                                             <h4><?php echo admin_e(admin_t($messages, 'wallet_assign_customer', 'Assign customer')); ?></h4>
-                                                            <p><?php echo admin_e(admin_t($messages, 'wallet_assign_customer_intro', 'Search a user by email and assign this wallet manually.')); ?></p>
+                                                            <p><?php echo admin_e(admin_t($messages, 'wallet_assign_customer_intro', 'Search a user by email or handle and assign this wallet manually.')); ?></p>
                                                         </div>
 
                                                         <input type="hidden" name="assignment_customer_id" value="0" data-admin-wallet-customer-id>
@@ -8993,9 +8996,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <?php if ($walletAssignments): ?>
                                                             <div class="admin-assignment-chip-list">
                                                                 <?php foreach ($walletAssignments as $assignment): ?>
+                                                                    <?php
+                                                                    $assignmentHandle = trim((string)($assignment['customer_public_handle'] ?? ''));
+                                                                    $assignmentLabel = $assignmentHandle !== '' ? '@' . $assignmentHandle : (string)($assignment['customer_email'] ?? '');
+                                                                    $assignmentLocked = !empty($assignment['has_payment_history']);
+                                                                    ?>
                                                                     <div class="admin-assignment-chip">
-                                                                        <a class="admin-assignment-chip__link" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$assignment['customer_id']); ?>" title="<?php echo admin_e((string)$assignment['customer_email']); ?>"><?php echo admin_e(admin_string_truncate((string)$assignment['customer_email'], 24)); ?></a>
-                                                                        <button type="submit" class="admin-assignment-chip__remove" name="admin_remove_crypto_wallet_assignment" value="<?php echo admin_e((string)$assignment['id']); ?>" formnovalidate aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>">
+                                                                        <a class="admin-assignment-chip__link" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$assignment['customer_id']); ?>" title="<?php echo admin_e((string)($assignment['customer_email'] ?? '')); ?>"><?php echo admin_e(admin_string_truncate($assignmentLabel, 24)); ?></a>
+                                                                        <button type="submit" class="admin-assignment-chip__remove" name="admin_remove_crypto_wallet_assignment" value="<?php echo admin_e((string)$assignment['id']); ?>" formnovalidate aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>"<?php echo $assignmentLocked ? ' disabled title="' . admin_e(admin_t($messages, 'wallet_remove_assignment_locked', 'This user already paid with this wallet, so the assignment cannot be removed.')) . '"' : ''; ?>>
                                                                             <i class="bi bi-x-circle" aria-hidden="true"></i>
                                                                         </button>
                                                                     </div>
@@ -9048,6 +9056,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php
                                                                         $walletPaymentId = (int)($walletPaymentRow['id'] ?? 0);
                                                                         $walletPaymentCustomerId = (int)($walletPaymentRow['customer_id'] ?? 0);
+                                                                        $walletPaymentHandle = trim((string)($walletPaymentRow['customer_public_handle'] ?? ''));
                                                                         $walletPaymentDate = admin_format_datetime((string)($walletPaymentRow['requested_at'] ?? ''));
                                                                         $walletPaymentStatus = strtolower(trim((string)($walletPaymentRow['status'] ?? '')));
                                                                         $walletPaymentAmountLabel = admin_format_money((float)($walletPaymentRow['amount_value'] ?? 0), (string)($walletPaymentRow['currency_symbol'] ?? ''), (string)($walletPaymentRow['currency_code'] ?? ''));
@@ -9070,9 +9079,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </td>
                                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?>">
                                                                                 <?php if ($walletPaymentCustomerUrl !== ''): ?>
-                                                                                    <a href="<?php echo admin_e($walletPaymentCustomerUrl); ?>"><?php echo admin_e((string)($walletPaymentRow['customer_email'] ?? '—')); ?></a>
+                                                                                    <a href="<?php echo admin_e($walletPaymentCustomerUrl); ?>"><?php echo admin_e($walletPaymentHandle !== '' ? '@' . $walletPaymentHandle : (string)($walletPaymentRow['customer_email'] ?? '—')); ?></a>
                                                                                 <?php else: ?>
-                                                                                    <?php echo admin_e((string)($walletPaymentRow['customer_email'] ?? '—')); ?>
+                                                                                    <?php echo admin_e($walletPaymentHandle !== '' ? '@' . $walletPaymentHandle : (string)($walletPaymentRow['customer_email'] ?? '—')); ?>
                                                                                 <?php endif; ?>
                                                                             </td>
                                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">

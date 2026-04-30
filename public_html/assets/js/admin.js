@@ -1734,13 +1734,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 results.innerHTML = customers.map(function (customer) {
                     var disabled = !!customer.disabled;
                     var hint = String(customer.hint || '').trim();
+                    var handle = String(customer.public_handle || '').trim();
+                    var primary = handle !== '' ? ('@' + handle) : String(customer.email || '').trim();
                     var meta = [customer.email || '', customer.status || ''].filter(Boolean).join(' • ');
                     return '' +
                         '<button type="button" class="admin-wallet-customer-picker__result' + (disabled ? ' is-disabled' : '') + '"' +
                             ' data-admin-wallet-customer-result' +
                             ' data-customer-id="' + escapeHtml(customer.id) + '"' +
                             (disabled ? ' disabled' : '') + '>' +
-                            '<strong>' + escapeHtml(customer.email || '') + '</strong>' +
+                            '<strong>' + escapeHtml(primary) + '</strong>' +
                             '<span>' + escapeHtml(hint !== '' ? hint : meta) + '</span>' +
                         '</button>';
                 }).join('');
@@ -1757,6 +1759,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 submitter.type = 'submit';
                 submitter.name = submitName;
                 submitter.value = '1';
+                submitter.formNoValidate = true;
                 submitter.hidden = true;
                 form.appendChild(submitter);
 
