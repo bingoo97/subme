@@ -2984,6 +2984,8 @@ if ($route === 'payments') {
                 $quickAction = strtolower(trim((string)($_POST['quick_action'] ?? '')));
                 if ($quickAction === 'accept' && (int)($quickActionResult['order_id'] ?? 0) > 0) {
                     $redirectUrl = '/admin/?page=orders&order_id=' . (int)$quickActionResult['order_id'];
+                } elseif ($quickAction === 'renew' && !empty($quickActionResult['payment_type']) && (int)($quickActionResult['payment_id'] ?? 0) > 0) {
+                    $redirectUrl = '/admin/?page=payments&payment_type=' . rawurlencode((string)$quickActionResult['payment_type']) . '&payment_id=' . (int)$quickActionResult['payment_id'] . '&renewed_payment=1';
                 } else {
                     $redirectUrl = trim((string)($_POST['redirect_to'] ?? ''));
                     if ($redirectUrl === '') {
@@ -7761,6 +7763,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                             </div>
 
+                                            <?php
+                                            $paymentEditorStatusRaw = strtolower(trim((string)($paymentEditor['status'] ?? '')));
+                                            $paymentEditorStatusSelectClass = 'admin-payment-status-select--warning';
+                                            if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed'], true)) {
+                                                $paymentEditorStatusSelectClass = 'admin-payment-status-select--danger';
+                                            } elseif (in_array($paymentEditorStatusRaw, ['awaiting_confirmation', 'awaiting_review'], true)) {
+                                                $paymentEditorStatusSelectClass = 'admin-payment-status-select--info';
+                                            } elseif (in_array($paymentEditorStatusRaw, ['confirmed', 'approved', 'paid', 'completed'], true)) {
+                                                $paymentEditorStatusSelectClass = 'admin-payment-status-select--success';
+                                            }
+                                            ?>
                                             <form method="post" class="admin-editor-form">
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentEditorType); ?>">
@@ -7768,6 +7781,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
 
                                                 <div class="row g-3">
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="payment_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select admin-payment-status-select <?php echo admin_e($paymentEditorStatusSelectClass); ?>" id="payment_status" name="status">
+                                                            <?php foreach (admin_payment_status_options($paymentEditorType, (string)($paymentEditor['status'] ?? '')) as $paymentStatusOption): ?>
+                                                                <option value="<?php echo admin_e($paymentStatusOption); ?>"<?php echo (string)($paymentEditor['status'] ?? '') === $paymentStatusOption ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e(admin_t($messages, 'enum_' . $paymentStatusOption, ucfirst(str_replace('_', ' ', $paymentStatusOption)))); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?>" readonly>
@@ -7783,16 +7806,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e($paymentAmountLabel); ?>" readonly>
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label" for="payment_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
-                                                        <select class="form-select" id="payment_status" name="status">
-                                                            <?php foreach (admin_payment_status_options($paymentEditorType, (string)($paymentEditor['status'] ?? '')) as $paymentStatusOption): ?>
-                                                                <option value="<?php echo admin_e($paymentStatusOption); ?>"<?php echo (string)($paymentEditor['status'] ?? '') === $paymentStatusOption ? ' selected' : ''; ?>>
-                                                                    <?php echo admin_e(admin_t($messages, 'enum_' . $paymentStatusOption, ucfirst(str_replace('_', ' ', $paymentStatusOption)))); ?>
-                                                                </option>
-                                                            <?php endforeach; ?>
-                                                        </select>
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_reference_summary', 'Reference')); ?></label>
@@ -8033,8 +8046,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $paymentWalletAddressId
                                                                 : '';
                                                             $paymentAddressLabel = $paymentWalletAddress !== ''
-                                                                ? admin_compact_wallet_address($paymentWalletAddress, 4, 5)
+                                                                ? admin_compact_wallet_address($paymentWalletAddress, 7, 5)
                                                                 : '';
+                                                            $paymentWalletLabel = trim((string)($row['wallet_label'] ?? ''));
+                                                            $paymentPublicHandle = trim((string)($row['public_handle'] ?? ''));
+                                                            $paymentHandleLabel = $paymentPublicHandle !== '' ? '@' . ltrim($paymentPublicHandle, '@') : '';
                                                             $paymentCountdownLabel = '';
                                                             if (!$isArchivedPayment && $expiresTimestamp > 0) {
                                                                 if ($expiresTimestamp > time()) {
@@ -8084,19 +8100,27 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'payment_column_payment', 'Payment')); ?>">
                                                                     <div class="admin-payment-summary">
                                                                         <div class="admin-payment-summary__top">
-                                                                            <?php if ($paymentAssetLogo !== ''): ?>
-                                                                                <img src="<?php echo admin_e($paymentAssetLogo); ?>" alt="<?php echo admin_e($paymentAssetName !== '' ? $paymentAssetName : $paymentAssetCode); ?>" class="admin-payment-summary__logo">
-                                                                            <?php endif; ?>
                                                                             <div class="admin-payment-summary__content">
                                                                                 <div class="admin-payment-summary__title-row">
+                                                                                    <?php if ($paymentAssetLogo !== ''): ?>
+                                                                                        <img src="<?php echo admin_e($paymentAssetLogo); ?>" alt="<?php echo admin_e($paymentAssetName !== '' ? $paymentAssetName : $paymentAssetCode); ?>" class="admin-payment-summary__logo admin-payment-summary__logo--inline">
+                                                                                    <?php endif; ?>
                                                                                     <strong><?php echo admin_e($paymentAssetName !== '' ? $paymentAssetName : ($paymentAssetCode !== '' ? strtoupper($paymentAssetCode) : admin_payment_type_label($paymentType, $messages))); ?></strong>
                                                                                     <?php if ($paymentCryptoAmountLabel !== ''): ?>
                                                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($paymentCryptoAmountLabel); ?></span>
                                                                                     <?php endif; ?>
                                                                                 </div>
-                                                                                <a class="admin-inline-link admin-payment-summary__email" href="<?php echo admin_e($paymentCustomerUrl); ?>">
+                                                                                <div class="admin-payment-summary__customer-row">
+                                                                                    <a class="admin-inline-link admin-payment-summary__handle" href="<?php echo admin_e($paymentCustomerUrl); ?>">
+                                                                                        <?php echo admin_e($paymentHandleLabel !== '' ? $paymentHandleLabel : (string)($row['customer_email'] ?? '')); ?>
+                                                                                    </a>
+                                                                                    <?php if ($paymentWalletLabel !== ''): ?>
+                                                                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e($paymentWalletLabel); ?></span>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                                <div class="admin-payment-summary__email">
                                                                                     <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
-                                                                                </a>
+                                                                                </div>
                                                                                 <?php if ($paymentAddressLabel !== ''): ?>
                                                                                     <?php if ($paymentWalletPreviewUrl !== ''): ?>
                                                                                         <a class="admin-payment-summary__address" href="<?php echo admin_e($paymentWalletPreviewUrl); ?>">
@@ -8128,8 +8152,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                     <?php if ($paymentCanAccept || $canArchive): ?>
                                                                         <div class="admin-topbar-notifications__task-list">
-                                                                            <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_explorer', 'Check whether the payment has arrived.')); ?></span>
-                                                                            <span>2. <?php echo admin_e($canReview ? admin_t($messages, 'topbar_payment_step_decide', 'Approve the payment or move it to verification.') : admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                                            <?php if ($paymentCanAccept): ?>
+                                                                                <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_explorer', 'Check whether the payment has arrived.')); ?></span>
+                                                                                <span>2. <?php echo admin_e($canReview ? admin_t($messages, 'topbar_payment_step_decide', 'Approve the payment or move it to verification.') : admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                                            <?php else: ?>
+                                                                                <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_payout', 'Withdraw the payment to your main wallet.')); ?></span>
+                                                                                <span>2. <?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                                            <?php endif; ?>
                                                                         </div>
                                                                         <div class="admin-topbar-notifications__payment-actions">
                                                                             <a href="<?php echo admin_e($paymentExplorerUrl !== '' ? $paymentExplorerUrl : $paymentDetailsUrl); ?>"<?php echo $paymentExplorerUrl !== '' ? ' target="_blank" rel="noopener noreferrer"' : ''; ?> class="btn btn-outline-dark btn-sm admin-topbar-notifications__block-btn">
@@ -8153,6 +8182,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         </button>
                                                                                     </form>
                                                                                 <?php endif; ?>
+                                                                                <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-primary btn-sm admin-topbar-notifications__block-btn">
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
+                                                                                </a>
                                                                                 <?php if ($canReview): ?>
                                                                                     <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
                                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
@@ -8181,6 +8213,43 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         </button>
                                                                                     </form>
                                                                                 <?php endif; ?>
+                                                                            </div>
+                                                                        </div>
+                                                                    <?php elseif ($isCancelledPayment): ?>
+                                                                        <div class="admin-topbar-notifications__payment-actions">
+                                                                            <a href="<?php echo admin_e($paymentExplorerUrl !== '' ? $paymentExplorerUrl : $paymentDetailsUrl); ?>"<?php echo $paymentExplorerUrl !== '' ? ' target="_blank" rel="noopener noreferrer"' : ''; ?> class="btn btn-outline-dark btn-sm admin-topbar-notifications__block-btn">
+                                                                                <span><?php echo admin_e($paymentExplorerUrl !== '' ? admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer') : admin_t($messages, 'payment_action_preview', 'Preview')); ?></span>
+                                                                                <?php if ($paymentExplorerUrl !== ''): ?>
+                                                                                    <i class="bi bi-box-arrow-up-right ms-1" aria-hidden="true"></i>
+                                                                                <?php endif; ?>
+                                                                            </a>
+                                                                            <div class="admin-topbar-notifications__decision-row">
+                                                                                <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-primary btn-sm admin-topbar-notifications__block-btn">
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'payment_action_preview', 'Preview')); ?></span>
+                                                                                </a>
+                                                                                <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
+                                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                    <input type="hidden" name="admin_payment_quick_action" value="1">
+                                                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
+                                                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                                                    <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="renew">
+                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
+                                                                                    </button>
+                                                                                </form>
+                                                                                <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
+                                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
+                                                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                                                    <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_delete_cancelled', 'Delete cancelled')); ?></span>
+                                                                                    </button>
+                                                                                </form>
                                                                             </div>
                                                                         </div>
                                                                     <?php else: ?>
@@ -8523,8 +8592,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 $editorWalletAddress
                                             );
                                             $editorAllowsNetworkChoice = admin_crypto_asset_allows_network_choice($editorAssetCode);
+                                            $showEditorNetworkHelp = !$walletCreateMode
+                                                && !empty($walletEditor['asset_is_active'])
+                                                && in_array($editorAssetCode, ['USDT', 'USDC'], true);
                                             $editorWalletProvider = trim((string)($walletEditor['wallet_provider'] ?? ''));
                                             $editorWalletProviderOptions = admin_crypto_wallet_provider_options($editorWalletProvider);
+                                            $walletPaymentRows = !$walletCreateMode && !empty($walletEditor['id'])
+                                                ? admin_crypto_wallet_payment_rows($db, (int)$walletEditor['id'])
+                                                : [];
+                                            $editorWalletPaymentsUrl = !$walletCreateMode && !empty($walletEditor['id'])
+                                                ? '/admin/?page=payments&payment_type_filter=crypto&wallet_id=' . (int)$walletEditor['id']
+                                                : '';
                                             ?>
                                             <aside class="admin-wallet-editor">
                                                 <div class="admin-wallet-editor__header">
@@ -8536,6 +8614,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'back_to_wallets', 'Back to wallets')); ?></span>
                                                         </a>
+                                                        <?php if ($editorWalletPaymentsUrl !== ''): ?>
+                                                            <a href="<?php echo admin_e($editorWalletPaymentsUrl); ?>" class="btn btn-primary btn-sm">
+                                                                <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                                <span><?php echo admin_e(admin_t($messages, 'wallet_open_all_payments', 'All payments')); ?></span>
+                                                            </a>
+                                                        <?php endif; ?>
                                                         <?php if ($editorExplorerUrl !== ''): ?>
                                                             <a href="<?php echo admin_e($editorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger btn-sm">
                                                                 <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
@@ -8616,11 +8700,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </select>
                                                             <input type="text" class="form-control<?php echo $editorAllowsNetworkChoice ? ' d-none' : ''; ?>" value="<?php echo admin_e(admin_crypto_network_label($editorNetworkCode)); ?>" readonly data-admin-wallet-network-fixed>
                                                         </div>
-                                                        <div class="col-md-6">
-                                                            <div class="admin-wallet-network-help">
-                                                                <?php echo admin_e(admin_t($messages, 'wallet_network_help', 'For BTC, BNB, SOL and similar coins the network is filled automatically. Stablecoins like USDT or USDC allow network selection per wallet.')); ?>
+                                                        <?php if ($showEditorNetworkHelp): ?>
+                                                            <div class="col-md-6">
+                                                                <div class="admin-wallet-network-help">
+                                                                    <?php echo admin_e(admin_t($messages, 'wallet_network_help', 'For BTC, BNB, SOL and similar coins the network is filled automatically. Stablecoins like USDT or USDC allow network selection per wallet.')); ?>
+                                                                </div>
                                                             </div>
-                                                        </div>
+                                                        <?php endif; ?>
 
                                                         <div class="col-12">
                                                             <label class="form-label" for="wallet_memo_tag"><?php echo admin_e(admin_t($messages, 'wallet_memo_tag', 'Memo / tag')); ?></label>
@@ -8700,6 +8786,89 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </button>
                                                     </div>
                                                 </form>
+
+                                                <?php if (!$walletCreateMode && !empty($walletEditor['id'])): ?>
+                                                <section class="admin-panel-card admin-panel-card--wide">
+                                                    <div class="admin-panel-card__header">
+                                                        <div>
+                                                            <h2><?php echo admin_e(admin_t($messages, 'wallet_payment_history_title', 'Payments for this wallet')); ?></h2>
+                                                            <p><?php echo admin_e(admin_t($messages, 'wallet_payment_history_text', 'All crypto payment requests assigned to this wallet address.')); ?></p>
+                                                        </div>
+                                                    </div>
+                                                    <?php if ($walletPaymentRows): ?>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <?php foreach ($walletPaymentRows as $walletPaymentRow): ?>
+                                                                        <?php
+                                                                        $walletPaymentId = (int)($walletPaymentRow['id'] ?? 0);
+                                                                        $walletPaymentCustomerId = (int)($walletPaymentRow['customer_id'] ?? 0);
+                                                                        $walletPaymentDate = admin_format_datetime((string)($walletPaymentRow['requested_at'] ?? ''));
+                                                                        $walletPaymentStatus = strtolower(trim((string)($walletPaymentRow['status'] ?? '')));
+                                                                        $walletPaymentAmountLabel = admin_format_money((float)($walletPaymentRow['amount_value'] ?? 0), (string)($walletPaymentRow['currency_symbol'] ?? ''), (string)($walletPaymentRow['currency_code'] ?? ''));
+                                                                        $walletPaymentCryptoAmount = trim((string)($walletPaymentRow['amount_crypto'] ?? ''));
+                                                                        $walletPaymentAssetCode = strtoupper(trim((string)($walletPaymentRow['asset_code'] ?? '')));
+                                                                        if ($walletPaymentCryptoAmount !== '' && $walletPaymentAssetCode !== '') {
+                                                                            $walletPaymentAmountLabel .= ' / ' . $walletPaymentCryptoAmount . ' ' . $walletPaymentAssetCode;
+                                                                        }
+                                                                        $walletPaymentCustomerUrl = $walletPaymentCustomerId > 0 ? '/admin/?page=users&customer_id=' . $walletPaymentCustomerId : '';
+                                                                        $walletPaymentDetailsUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $walletPaymentId;
+                                                                        $walletPaymentExplorerUrl = admin_crypto_wallet_explorer_url(
+                                                                            (string)($walletPaymentRow['asset_code'] ?? ''),
+                                                                            (string)($walletPaymentRow['network_code'] ?? ''),
+                                                                            (string)($walletPaymentRow['wallet_address'] ?? '')
+                                                                        );
+                                                                        ?>
+                                                                        <tr>
+                                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                                                <?php echo admin_e($walletPaymentDate !== '' ? $walletPaymentDate : '—'); ?>
+                                                                            </td>
+                                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?>">
+                                                                                <?php if ($walletPaymentCustomerUrl !== ''): ?>
+                                                                                    <a href="<?php echo admin_e($walletPaymentCustomerUrl); ?>"><?php echo admin_e((string)($walletPaymentRow['customer_email'] ?? '—')); ?></a>
+                                                                                <?php else: ?>
+                                                                                    <?php echo admin_e((string)($walletPaymentRow['customer_email'] ?? '—')); ?>
+                                                                                <?php endif; ?>
+                                                                            </td>
+                                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
+                                                                                <strong><?php echo admin_e($walletPaymentAmountLabel); ?></strong>
+                                                                            </td>
+                                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                                <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class($walletPaymentStatus)); ?>">
+                                                                                    <?php echo admin_e(admin_t($messages, 'enum_' . $walletPaymentStatus, ucfirst(str_replace('_', ' ', $walletPaymentStatus)))); ?>
+                                                                                </span>
+                                                                            </td>
+                                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                                <div class="d-flex flex-wrap gap-2">
+                                                                                    <?php if ($walletPaymentExplorerUrl !== ''): ?>
+                                                                                        <a href="<?php echo admin_e($walletPaymentExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark btn-sm">
+                                                                                            <span><?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?></span>
+                                                                                        </a>
+                                                                                    <?php endif; ?>
+                                                                                    <a href="<?php echo admin_e($walletPaymentDetailsUrl); ?>" class="btn btn-primary btn-sm">
+                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
+                                                                                    </a>
+                                                                                </div>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php endforeach; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'wallet_payment_history_empty', 'No payments were assigned to this wallet yet.')); ?></div>
+                                                    <?php endif; ?>
+                                                </section>
+                                                <?php endif; ?>
 
                                                 <?php if (!$walletCreateMode && !empty($walletEditor['id'])): ?>
                                                 <section class="admin-wallet-editor__danger">

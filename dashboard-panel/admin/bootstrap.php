@@ -3730,8 +3730,10 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 crypto_wallet_addresses.id AS wallet_address_id,
                 crypto_wallet_addresses.address AS payment_reference,
                 crypto_wallet_addresses.address AS wallet_address,
+                crypto_wallet_addresses.label AS wallet_label,
                 crypto_wallet_addresses.network_code AS network_code,
                 customers.email AS customer_email,
+                NULLIF(TRIM(customers.public_handle), '') AS public_handle,
                 crypto_assets.code AS asset_code,
                 crypto_assets.name AS asset_name,
                 crypto_assets.logo_url AS asset_logo_url,
@@ -3782,8 +3784,10 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 NULL AS wallet_address_id,
                 cryptocurrency.adress_code AS payment_reference,
                 cryptocurrency.adress_code AS wallet_address,
+                '' AS wallet_label,
                 '' AS network_code,
                 customers.email AS customer_email,
+                NULLIF(TRIM(customers.public_handle), '') AS public_handle,
                 UPPER(COALESCE(cryptocurrency.symbol, '')) AS asset_code,
                 cryptocurrency.name AS asset_name,
                 cryptocurrency.logo_url AS asset_logo_url,
@@ -3816,8 +3820,10 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 NULL AS wallet_address_id,
                 bank_transfer_requests.payment_reference AS payment_reference,
                 '' AS wallet_address,
+                '' AS wallet_label,
                 '' AS network_code,
                 customers.email AS customer_email,
+                NULLIF(TRIM(customers.public_handle), '') AS public_handle,
                 '' AS asset_code,
                 '' AS asset_name,
                 '' AS asset_logo_url,
@@ -4335,6 +4341,8 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 crypto_deposit_requests.id,
                 crypto_deposit_requests.order_id,
                 crypto_deposit_requests.customer_id,
+                crypto_deposit_requests.crypto_asset_id,
+                crypto_deposit_requests.fiat_currency_id,
                 crypto_deposit_requests.status,
                 crypto_deposit_requests.wallet_assignment_id,
                 crypto_deposit_requests.requested_fiat_amount AS amount_value,
@@ -4407,6 +4415,9 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 bank_transfer_requests.id,
                 bank_transfer_requests.order_id,
                 bank_transfer_requests.customer_id,
+                bank_transfer_requests.bank_account_id,
+                bank_transfer_requests.bank_account_assignment_id,
+                bank_transfer_requests.currency_id,
                 bank_transfer_requests.status,
                 bank_transfer_requests.requested_amount AS amount_value,
                 COALESCE(bank_transfer_requests.requested_at, bank_transfer_requests.expires_at) AS requested_at,
@@ -5122,6 +5133,10 @@ function admin_payment_apply_quick_action(
         return admin_payment_cancel_with_order($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
     }
 
+    if ($action === 'renew') {
+        return admin_payment_renew_request($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
+    }
+
     $payment = admin_payment_find($db, $paymentType, $paymentId);
     if (!is_array($payment) || empty($payment['id'])) {
         return ['ok' => false, 'message' => 'Payment request not found.'];
@@ -5146,6 +5161,364 @@ function admin_payment_apply_quick_action(
     }
 
     return ['ok' => false, 'message' => 'Payment action is invalid.'];
+}
+
+function admin_payment_renew_request(
+    Mysql_ks $db,
+    string $paymentType,
+    int $paymentId,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $payment = admin_payment_find($db, $paymentType, $paymentId);
+    if (!is_array($payment) || empty($payment['id'])) {
+        return ['ok' => false, 'message' => 'Payment request not found.'];
+    }
+
+    $status = strtolower(trim((string)($payment['status'] ?? '')));
+    if (!in_array($status, ['cancelled', 'rejected', 'failed'], true)) {
+        return ['ok' => false, 'message' => 'Only cancelled payments can be renewed.'];
+    }
+
+    if ($paymentType === 'crypto') {
+        return admin_payment_renew_crypto_request($db, $payment, $adminUserId, $ipAddress);
+    }
+
+    if ($paymentType === 'bank') {
+        return admin_payment_renew_bank_request($db, $payment, $adminUserId, $ipAddress);
+    }
+
+    return ['ok' => false, 'message' => 'This payment type cannot be renewed.'];
+}
+
+function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $adminUserId = 0, string $ipAddress = ''): array
+{
+    $settings = admin_app_settings($db);
+    if (empty($settings['crypto_payments_enabled'])) {
+        return ['ok' => false, 'message' => 'Crypto payments are disabled.'];
+    }
+
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    $orderId = (int)($payment['order_id'] ?? 0);
+    $assetId = (int)($payment['crypto_asset_id'] ?? 0);
+    $walletAddressId = (int)($payment['wallet_address_id'] ?? 0);
+    $walletAssignmentId = (int)($payment['wallet_assignment_id'] ?? 0);
+    $currencyId = (int)($payment['fiat_currency_id'] ?? 0);
+    $currencyCode = strtoupper(trim((string)($payment['currency_code'] ?? 'USD')));
+    $amountValue = (float)($payment['amount_value'] ?? 0);
+
+    if ($customerId <= 0 || $assetId <= 0 || $walletAddressId <= 0 || $currencyId <= 0 || $amountValue <= 0) {
+        return ['ok' => false, 'message' => 'Payment payload is incomplete.'];
+    }
+
+    $wallet = admin_crypto_wallet_find($db, $walletAddressId);
+    if (!is_array($wallet) || empty($wallet['id']) || (string)($wallet['status'] ?? '') === 'disabled') {
+        return ['ok' => false, 'message' => 'Wallet address is unavailable.'];
+    }
+
+    if ($walletAssignmentId <= 0) {
+        $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings, $ipAddress);
+        if (empty($assignResult['ok'])) {
+            return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign wallet.')];
+        }
+        $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+    }
+
+    $assetRows = admin_refresh_crypto_asset_rates($db, $currencyCode !== '' ? $currencyCode : 'USD', 0);
+    $selectedAsset = null;
+    foreach ($assetRows as $assetRow) {
+        if ((int)($assetRow['id'] ?? 0) === $assetId) {
+            $selectedAsset = $assetRow;
+            break;
+        }
+    }
+
+    if (!$selectedAsset || (float)($selectedAsset['current_rate_fiat'] ?? 0) <= 0) {
+        return ['ok' => false, 'message' => 'Current crypto rate is unavailable.'];
+    }
+
+    $rate = (float)$selectedAsset['current_rate_fiat'];
+    $requestedCryptoAmount = round($amountValue / $rate, 8);
+    if ($requestedCryptoAmount <= 0) {
+        return ['ok' => false, 'message' => 'Unable to calculate crypto amount.'];
+    }
+
+    $db->start();
+
+    $now = date('Y-m-d H:i:s');
+    $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
+    $orderCondition = $orderId > 0 ? "order_id = {$orderId}" : "order_id IS NULL";
+    $db->query(
+        "UPDATE crypto_deposit_requests
+         SET status = 'cancelled',
+             cancelled_at = CASE
+                 WHEN cancelled_at IS NULL THEN '{$now}'
+                 ELSE cancelled_at
+             END
+         WHERE customer_id = {$customerId}
+           AND {$orderCondition}
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
+    );
+
+    $openWalletRequest = $db->select_user(
+        "SELECT id, customer_id, order_id
+         FROM crypto_deposit_requests
+         WHERE wallet_address_id = {$walletAddressId}
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+
+    $newPaymentId = 0;
+    if (is_array($openWalletRequest) && !empty($openWalletRequest['id'])) {
+        $openOrderId = (int)($openWalletRequest['order_id'] ?? 0);
+        if ((int)($openWalletRequest['customer_id'] ?? 0) !== $customerId || $openOrderId !== $orderId) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
+        }
+
+        $updated = $db->update_using_id(
+            [
+                'crypto_asset_id',
+                'wallet_assignment_id',
+                'requested_fiat_amount',
+                'fiat_currency_id',
+                'exchange_rate',
+                'requested_crypto_amount',
+                'requested_at',
+                'expires_at',
+                'request_note',
+                'status',
+                'cancelled_at',
+            ],
+            [
+                $assetId,
+                $walletAssignmentId > 0 ? $walletAssignmentId : null,
+                $amountValue,
+                $currencyId,
+                $rate,
+                $requestedCryptoAmount,
+                $now,
+                $expiresAt,
+                'Renewed from admin payments',
+                'pending',
+                null,
+            ],
+            'crypto_deposit_requests',
+            (int)$openWalletRequest['id']
+        );
+        if (!$updated) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to renew crypto payment request.'];
+        }
+        $newPaymentId = (int)$openWalletRequest['id'];
+    } else {
+        $newPaymentId = app_create_crypto_deposit_request($db, [
+            'customer_id' => $customerId,
+            'order_id' => $orderId > 0 ? $orderId : null,
+            'crypto_asset_id' => $assetId,
+            'wallet_address_id' => $walletAddressId,
+            'wallet_assignment_id' => $walletAssignmentId > 0 ? $walletAssignmentId : null,
+            'requested_fiat_amount' => $amountValue,
+            'fiat_currency_id' => $currencyId,
+            'exchange_rate' => $rate,
+            'requested_crypto_amount' => $requestedCryptoAmount,
+            'assignment_mode' => 'manual',
+            'status' => 'pending',
+            'created_by_admin_user_id' => $adminUserId > 0 ? $adminUserId : null,
+            'requested_at' => $now,
+            'expires_at' => $expiresAt,
+            'request_note' => 'Renewed from admin payments',
+        ]);
+        if ($newPaymentId <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to create renewed crypto payment request.'];
+        }
+    }
+
+    if ($orderId > 0) {
+        app_queue_payment_request_notification($db, $orderId, $customerId);
+        app_queue_support_payment_request_notification($db, $orderId, $customerId, 'crypto');
+    }
+
+    $db->commit();
+
+    admin_log_customer_and_admin(
+        $db,
+        $customerId,
+        $adminUserId,
+        'payment_renewed',
+        'Crypto payment request #' . (int)($payment['id'] ?? 0) . ' renewed as #' . $newPaymentId . '.',
+        $ipAddress
+    );
+
+    return ['ok' => true, 'message' => 'Payment request renewed.', 'payment_id' => $newPaymentId, 'payment_type' => 'crypto'];
+}
+
+function admin_payment_renew_bank_request(Mysql_ks $db, array $payment, int $adminUserId = 0, string $ipAddress = ''): array
+{
+    $settings = admin_app_settings($db);
+    if (!admin_bank_transfers_enabled($settings)) {
+        return ['ok' => false, 'message' => 'Bank transfers are disabled.'];
+    }
+
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    $orderId = (int)($payment['order_id'] ?? 0);
+    $bankAccountId = (int)($payment['bank_account_id'] ?? 0);
+    $bankAccountAssignmentId = (int)($payment['bank_account_assignment_id'] ?? 0);
+    $currencyId = (int)($payment['currency_id'] ?? 0);
+    $amountValue = (float)($payment['amount_value'] ?? 0);
+    if ($customerId <= 0 || $bankAccountId <= 0 || $currencyId <= 0 || $amountValue <= 0) {
+        return ['ok' => false, 'message' => 'Payment payload is incomplete.'];
+    }
+
+    $preview = admin_chat_bank_payment_preview($db, $customerId, $amountValue, $bankAccountId, []);
+    if (empty($preview['ok'])) {
+        return ['ok' => false, 'message' => (string)($preview['message'] ?? 'Bank account is unavailable.')];
+    }
+
+    if ($bankAccountAssignmentId <= 0) {
+        $assignResult = admin_assign_bank_account_customer($db, $bankAccountId, $customerId, $adminUserId, $settings, $ipAddress);
+        if (empty($assignResult['ok'])) {
+            return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign bank account.')];
+        }
+        $assignments = admin_customer_active_bank_assignments($db, $customerId);
+        foreach ($assignments as $assignment) {
+            if ((int)($assignment['bank_account_id'] ?? 0) === $bankAccountId) {
+                $bankAccountAssignmentId = (int)($assignment['bank_account_assignment_id'] ?? 0);
+                break;
+            }
+        }
+    }
+
+    if ($bankAccountAssignmentId <= 0) {
+        $bankAccountAssignmentId = (int)($preview['bank_account_assignment_id'] ?? 0);
+    }
+
+    $db->start();
+
+    $now = date('Y-m-d H:i:s');
+    $expiresAt = date('Y-m-d H:i:s', strtotime('+72 hours'));
+    $orderCondition = $orderId > 0 ? "order_id = {$orderId}" : "order_id IS NULL";
+    $db->query(
+        "UPDATE bank_transfer_requests
+         SET status = 'cancelled'
+         WHERE customer_id = {$customerId}
+           AND {$orderCondition}
+           AND status IN ('pending_payment', 'awaiting_review')"
+    );
+
+    $openBankRequest = $db->select_user(
+        "SELECT id, customer_id, order_id
+         FROM bank_transfer_requests
+         WHERE bank_account_id = {$bankAccountId}
+           AND status IN ('pending_payment', 'awaiting_review')
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+
+    $newPaymentId = 0;
+    if (is_array($openBankRequest) && !empty($openBankRequest['id'])) {
+        $openOrderId = (int)($openBankRequest['order_id'] ?? 0);
+        if ((int)($openBankRequest['customer_id'] ?? 0) !== $customerId || $openOrderId !== $orderId) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'This bank account already has an active payment request.'];
+        }
+
+        $updated = $db->update_using_id(
+            [
+                'bank_account_assignment_id',
+                'requested_amount',
+                'currency_id',
+                'payment_reference',
+                'requested_at',
+                'expires_at',
+                'customer_transfer_note',
+                'status',
+            ],
+            [
+                $bankAccountAssignmentId > 0 ? $bankAccountAssignmentId : null,
+                $amountValue,
+                $currencyId,
+                '',
+                $now,
+                $expiresAt,
+                'Renewed from admin payments',
+                'pending_payment',
+            ],
+            'bank_transfer_requests',
+            (int)$openBankRequest['id']
+        );
+        if (!$updated) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to renew bank payment request.'];
+        }
+        $newPaymentId = (int)$openBankRequest['id'];
+    } else {
+        $created = $db->insert(
+            [
+                'customer_id',
+                'order_id',
+                'bank_account_id',
+                'bank_account_assignment_id',
+                'requested_amount',
+                'currency_id',
+                'payment_reference',
+                'status',
+                'created_by_admin_user_id',
+                'requested_at',
+                'expires_at',
+                'customer_transfer_note',
+            ],
+            [
+                $customerId,
+                $orderId > 0 ? $orderId : null,
+                $bankAccountId,
+                $bankAccountAssignmentId > 0 ? $bankAccountAssignmentId : null,
+                $amountValue,
+                $currencyId,
+                '',
+                'pending_payment',
+                $adminUserId > 0 ? $adminUserId : null,
+                $now,
+                $expiresAt,
+                'Renewed from admin payments',
+            ],
+            'bank_transfer_requests'
+        );
+        if (!$created || (int)$db->id() <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to create renewed bank payment request.'];
+        }
+        $newPaymentId = (int)$db->id();
+    }
+
+    $paymentReference = admin_chat_bank_reference_build(
+        (string)($preview['payment_reference_template'] ?? ''),
+        $customerId,
+        $newPaymentId,
+        $orderId
+    );
+    $db->update_using_id(['payment_reference'], [$paymentReference], 'bank_transfer_requests', $newPaymentId);
+
+    if ($orderId > 0) {
+        app_queue_payment_request_notification($db, $orderId, $customerId);
+        app_queue_support_payment_request_notification($db, $orderId, $customerId, 'bank transfer');
+    }
+
+    $db->commit();
+
+    admin_log_customer_and_admin(
+        $db,
+        $customerId,
+        $adminUserId,
+        'payment_renewed',
+        'Bank payment request #' . (int)($payment['id'] ?? 0) . ' renewed as #' . $newPaymentId . '.',
+        $ipAddress
+    );
+
+    return ['ok' => true, 'message' => 'Payment request renewed.', 'payment_id' => $newPaymentId, 'payment_type' => 'bank'];
 }
 
 function admin_payment_type_label(string $paymentType, array $messages): string
@@ -8539,6 +8912,7 @@ function admin_crypto_wallet_find(Mysql_ks $db, int $walletId): ?array
             wallet.updated_at,
             asset.code AS asset_code,
             asset.name AS asset_name,
+            asset.is_active AS asset_is_active,
             assignment.id AS active_assignment_id,
             assignment.customer_id AS assigned_customer_id,
             assignment.status AS assignment_status,
@@ -8584,6 +8958,42 @@ function admin_crypto_wallet_active_assignments(Mysql_ks $db, int $walletId): ar
          WHERE crypto_wallet_assignments.wallet_address_id = {$walletId}
            AND crypto_wallet_assignments.status IN ('reserved', 'active')
          ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC"
+    );
+}
+
+function admin_crypto_wallet_payment_rows(Mysql_ks $db, int $walletId, int $limit = 100): array
+{
+    if ($walletId <= 0 || !schema_object_exists($db, 'crypto_deposit_requests')) {
+        return [];
+    }
+
+    $limit = max(1, min(200, $limit));
+
+    return $db->select_full_user(
+        "SELECT
+            crypto_deposit_requests.id,
+            crypto_deposit_requests.order_id,
+            crypto_deposit_requests.customer_id,
+            crypto_deposit_requests.status,
+            crypto_deposit_requests.requested_fiat_amount AS amount_value,
+            crypto_deposit_requests.requested_crypto_amount AS amount_crypto,
+            COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS requested_at,
+            crypto_deposit_requests.expires_at,
+            customers.email AS customer_email,
+            currencies.code AS currency_code,
+            currencies.symbol AS currency_symbol,
+            crypto_assets.code AS asset_code,
+            crypto_assets.name AS asset_name,
+            crypto_wallet_addresses.address AS wallet_address,
+            crypto_wallet_addresses.network_code AS network_code
+         FROM crypto_deposit_requests
+         LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
+         LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
+         LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+         LEFT JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+         WHERE crypto_deposit_requests.wallet_address_id = {$walletId}
+         ORDER BY crypto_deposit_requests.id DESC
+         LIMIT {$limit}"
     );
 }
 
