@@ -194,7 +194,7 @@ return [
     'wallet_editor_title' => 'Edycja portfela',
     'wallet_editor_intro' => '',
     'wallet_provider' => 'Provider portfela',
-    'wallet_label' => 'Nazwa / info portfela',
+    'wallet_label' => 'Nazwa portfela np. TrustWallet 1-99',
     'wallet_label_placeholder' => 'TrustWallet 1-99',
     'wallet_owner_full_name' => 'Imię i nazwisko właściciela',
     'wallet_memo_tag' => 'Memo / tag',

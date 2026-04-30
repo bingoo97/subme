@@ -9010,7 +9010,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="wallet_label"><?php echo admin_e(admin_t($messages, 'wallet_label', 'Wallet name / info')); ?></label>
-                                                            <input type="text" class="form-control" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'wallet_label_placeholder', 'TrustWallet 1-99')); ?>" required>
+                                                            <input type="text" class="form-control admin-wallet-editor__label-input" id="wallet_label" name="label" value="<?php echo admin_e((string)($walletEditor['label'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'wallet_label_placeholder', 'TrustWallet 1-99')); ?>" required>
                                                         </div>
                                                         <div class="col-12">
                                                             <label class="form-label" for="wallet_address"><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></label>
@@ -9150,9 +9150,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         $walletPaymentId = (int)($walletPaymentRow['id'] ?? 0);
                                                                         $walletPaymentCustomerId = (int)($walletPaymentRow['customer_id'] ?? 0);
                                                                         $walletPaymentHandle = trim((string)($walletPaymentRow['customer_public_handle'] ?? ''));
-                                                                        $walletPaymentDate = admin_format_datetime((string)($walletPaymentRow['requested_at'] ?? ''));
+                                                                        $walletPaymentDate = admin_compact_datetime_label((string)($walletPaymentRow['requested_at'] ?? ''));
                                                                         $walletPaymentStatus = strtolower(trim((string)($walletPaymentRow['status'] ?? '')));
-                                                                        $walletPaymentAmountLabel = admin_format_money((float)($walletPaymentRow['amount_value'] ?? 0), (string)($walletPaymentRow['currency_symbol'] ?? ''), (string)($walletPaymentRow['currency_code'] ?? ''));
+                                                                        $walletPaymentAmountLabel = admin_format_money_value((float)($walletPaymentRow['amount_value'] ?? 0), (string)($walletPaymentRow['currency_code'] ?? ''));
                                                                         $walletPaymentCryptoAmount = trim((string)($walletPaymentRow['amount_crypto'] ?? ''));
                                                                         $walletPaymentAssetCode = strtoupper(trim((string)($walletPaymentRow['asset_code'] ?? '')));
                                                                         if ($walletPaymentCryptoAmount !== '' && $walletPaymentAssetCode !== '') {

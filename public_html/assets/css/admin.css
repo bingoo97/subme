@@ -60,6 +60,8 @@ body.admin-login-page{
 }
 
 .admin-shell{
+    --admin-sidebar-width:280px;
+    --admin-topbar-height:96px;
     min-height:100vh;
     display:flex;
     width:100%;
@@ -251,23 +253,36 @@ body.admin-login-page{
 
 .admin-main{
     flex:1 1 auto;
+    display:flex;
+    flex-direction:column;
     min-width:0;
+    min-height:100vh;
+    padding-top:var(--admin-topbar-height);
     width:100%;
     max-width:100vw;
     overflow-x:hidden;
 }
 
 .admin-topbar{
+    position:fixed;
+    top:0;
+    left:var(--admin-sidebar-width);
+    right:0;
+    z-index:1025;
     display:flex;
     align-items:center;
     flex-wrap:nowrap;
     justify-content:space-between;
     gap: 1rem;
-    width:100%;
+    width:auto;
+    max-width:none;
+    min-height:var(--admin-topbar-height);
     box-sizing:border-box;
+    overflow:visible;
     padding:1.5rem 1.75rem;
     background:#fff;
     border-bottom:1px solid rgba(15, 23, 42, 0.06);
+    box-shadow:0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
 .admin-topbar__left,
@@ -3354,6 +3369,7 @@ body.admin-login-page{
 }
 
 .admin-content{
+    flex:1 1 auto;
     padding:1.75rem;
     min-width:0;
     overflow-x:hidden;
@@ -5547,6 +5563,12 @@ body.admin-login-page .alert.alert-danger::before{
     text-decoration:none;
 }
 
+.admin-wallet-editor__label-input{
+    border:2px solid #000;
+    font-size:16px;
+    font-weight:800;
+}
+
 .admin-payment-summary__address{
     display: block;
     width: 100%;
@@ -7535,6 +7557,11 @@ body.admin-login-page .alert.alert-danger::before{
 }
 
 @media (max-width: 991px){
+    .admin-shell{
+        --admin-sidebar-width:0px;
+        --admin-topbar-height:84px;
+    }
+
     .admin-shell,
     .admin-main{
         width:100%;
@@ -7626,6 +7653,10 @@ body.admin-login-page .alert.alert-danger::before{
 }
 
 @media (max-width: 768px){
+    .admin-shell{
+        --admin-topbar-height:76px;
+    }
+
     body.admin-app-page{
         background:#fff;
     }
