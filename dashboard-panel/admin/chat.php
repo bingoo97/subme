@@ -608,11 +608,13 @@ $hasMoreMessages = $totalMessageCount > $loadedMessageCount;
 $oldestMessageId = $loadedMessageCount > 0 ? (int)($messageRows[0]['id'] ?? 0) : 0;
 $quickReplies = admin_chat_quick_reply_rows_for_locale($db, (string)($conversationRow['customer_locale_code'] ?? ''), true);
 $pendingCryptoPayment = false;
+$customerOrdersTotal = 0;
 $groupMemberSettings = null;
 $groupMemberSummaries = [];
 $groupMemberCountLabel = '';
 if (!empty($conversationRow['customer_id'])) {
     $pendingCryptoPayment = admin_customer_has_pending_crypto_payment($db, (int)$conversationRow['customer_id']);
+    $customerOrdersTotal = admin_order_count($db, (int)$conversationRow['customer_id']);
 }
 if ($conversationType === 'group_chat') {
     $groupMemberSettings = chat_group_member_row($db, $conversationId, chat_participant_key_for_admin((int)$adminUser['id']));
@@ -625,6 +627,7 @@ echo json_encode([
     'conversation_id' => $conversationId,
     'customer_id' => (int)($conversationRow['customer_id'] ?? 0),
     'customer_email' => (string)($conversationRow['customer_email'] ?? ''),
+    'orders_total' => $customerOrdersTotal,
     'conversation_type' => $conversationType,
     'customer_public_handle' => (string)($conversationRow['customer_public_handle'] ?? ''),
     'is_group_read_only' => !empty($conversationRow['is_group_read_only']),

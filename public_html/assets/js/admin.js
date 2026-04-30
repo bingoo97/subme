@@ -2450,6 +2450,9 @@ document.addEventListener('DOMContentLoaded', function () {
             var refreshBusy = false;
             var copyFeedbackTimer = 0;
             var copyValue = '';
+            var chatPanel = q('[data-admin-chat-panel]');
+            var chatToggle = q('[data-admin-chat-toggle]');
+            var restoreAdminChatAfterClose = false;
 
             if (!openButtons.length || !modal || !fiatInput || !assetSelect || !result || !copyFeedback || !rateHint || !assetLogo || !updatedLine || !refreshButton) {
                 return;
@@ -2468,12 +2471,21 @@ document.addEventListener('DOMContentLoaded', function () {
             function closeConverter() {
                 setHidden(modal, true);
                 hideCopyFeedback();
+                if (restoreAdminChatAfterClose && chatPanel && chatPanel.hasAttribute('hidden')) {
+                    setHidden(chatPanel, false);
+                    if (chatToggle) {
+                        chatToggle.classList.add('is-open');
+                        chatToggle.setAttribute('aria-expanded', 'true');
+                    }
+                }
+                restoreAdminChatAfterClose = false;
             }
 
-            function openConverter() {
+            function openConverter(trigger) {
                 if (activeFlyout) {
                     closeFlyout(activeFlyout);
                 }
+                restoreAdminChatAfterClose = !!(trigger && closest(trigger, '[data-admin-chat-panel], .admin-chat-inbox__conversation-header') && chatPanel && !chatPanel.hasAttribute('hidden'));
                 setHidden(modal, false);
                 updateConverter();
                 window.setTimeout(function () {
@@ -2603,7 +2615,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 openButton.addEventListener('click', function (event) {
                     event.preventDefault();
                     event.stopPropagation();
-                    openConverter();
+                    openConverter(openButton);
                 });
             });
 
@@ -2726,6 +2738,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var composerInput = q('[data-admin-chat-input]', root);
         var composerPreview = q('[data-admin-chat-link-preview]', root);
         var uploadInput = q('[data-admin-chat-file]', root);
+        var ordersLinkButton = q('[data-admin-chat-orders-link]', root);
         var cryptoOpenButton = q('[data-admin-chat-crypto-open]', root);
         var cryptoLoader = q('[data-admin-chat-crypto-loader]', root);
         var cryptoTooltip = q('[data-admin-chat-crypto-tooltip]', root);
@@ -4265,6 +4278,10 @@ document.addEventListener('DOMContentLoaded', function () {
             if (groupInviteOpenButton) {
                 setHidden(groupInviteOpenButton, true);
             }
+            if (ordersLinkButton) {
+                ordersLinkButton.setAttribute('href', '/admin/?page=orders');
+                setHidden(ordersLinkButton, true);
+            }
             if (groupSettingsOpenButton) {
                 setHidden(groupSettingsOpenButton, true);
             }
@@ -4405,6 +4422,12 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             if (groupInviteOpenButton) {
                 setHidden(groupInviteOpenButton, !(activeConversationType === 'group_chat' && !!payload.can_manage_group));
+            }
+            if (ordersLinkButton) {
+                var ordersTotal = parseInt(payload.orders_total || '0', 10) || 0;
+                var showOrdersLink = activeConversationType === 'live_chat' && activeCustomerId > 0 && ordersTotal > 0;
+                ordersLinkButton.setAttribute('href', showOrdersLink ? '/admin/?page=orders&customer_id=' + activeCustomerId : '/admin/?page=orders');
+                setHidden(ordersLinkButton, !showOrdersLink);
             }
             if (groupSettingsOpenButton) {
                 setHidden(groupSettingsOpenButton, activeConversationType !== 'group_chat');
@@ -4791,6 +4814,12 @@ document.addEventListener('DOMContentLoaded', function () {
         if (bankOpenButton) {
             bankOpenButton.addEventListener('click', function () {
                 openPaymentModal('bank');
+            });
+        }
+
+        if (ordersLinkButton) {
+            ordersLinkButton.addEventListener('click', function () {
+                closePanel();
             });
         }
 
@@ -5652,7 +5681,12 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             if (panel && !panel.hasAttribute('hidden')) {
-                if (!closest(event.target, '[data-admin-chat-inbox]') && !closest(event.target, '[data-admin-chat-open]') && !closest(event.target, '[data-admin-chat-open-conversation]')) {
+                if (
+                    !closest(event.target, '[data-admin-chat-inbox]') &&
+                    !closest(event.target, '[data-admin-chat-open]') &&
+                    !closest(event.target, '[data-admin-chat-open-conversation]') &&
+                    !closest(event.target, '[data-admin-converter-modal]')
+                ) {
                     closePanel();
                 }
             }

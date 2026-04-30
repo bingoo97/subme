@@ -4234,6 +4234,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <i class="bi bi-calculator" aria-hidden="true"></i>
                                         </button>
                                     <?php endif; ?>
+                                    <a href="/admin/?page=orders" class="admin-chat-inbox__header-action" data-admin-chat-orders-link title="<?php echo admin_e(admin_t($messages, 'section_recent_orders', 'Recent orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'section_recent_orders', 'Recent orders')); ?>" hidden>
+                                        <i class="bi bi-list-task" aria-hidden="true"></i>
+                                    </a>
                                     <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
                                         <div class="admin-chat-inbox__header-crypto-wrap" style="position: relative;">
                                             <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-crypto-open title="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_button', 'Create crypto payment request')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_crypto_request_button', 'Create crypto payment request')); ?>" hidden>

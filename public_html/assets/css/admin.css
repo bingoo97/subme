@@ -3870,6 +3870,17 @@ body.admin-login-page{
     margin-bottom:0;
 }
 
+.admin-user-detail .table-responsive{
+    width:100%;
+    overflow-x:auto;
+    overflow-y:visible;
+    -webkit-overflow-scrolling:touch;
+}
+
+.admin-user-detail .table-responsive > .admin-user-detail-table{
+    min-width:720px;
+}
+
 .admin-user-detail-table--records,
 .admin-user-history-table{
     border-collapse:separate;
@@ -7657,6 +7668,15 @@ body.admin-login-page .alert.alert-danger::before{
 
     .admin-user-detail__summary-grid{
         grid-template-columns:repeat(2, minmax(0, 1fr));
+    }
+
+    .admin-user-detail .table-responsive{
+        margin:0 -.15rem;
+        padding:0 .15rem .15rem;
+    }
+
+    .admin-user-detail .table-responsive > .admin-user-detail-table{
+        min-width:680px;
     }
 
     .admin-section-title{
