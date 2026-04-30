@@ -4582,10 +4582,15 @@ function admin_save_payment(
         $requestedAt = admin_normalize_datetime_input($input['requested_at'] ?? null) ?? (string)($payment['requested_at'] ?? date('Y-m-d H:i:s'));
         $expiresAt = admin_normalize_datetime_input($input['expires_at'] ?? null);
         $requestNote = trim((string)($input['request_note'] ?? ''));
+        $amountCryptoRaw = str_replace(',', '.', trim((string)($input['amount_crypto'] ?? ($payment['amount_crypto'] ?? ''))));
+        if ($amountCryptoRaw === '' || !is_numeric($amountCryptoRaw) || (float)$amountCryptoRaw < 0) {
+            return ['ok' => false, 'message' => 'Crypto amount must be a valid number.'];
+        }
+        $amountCrypto = round((float)$amountCryptoRaw, 8);
 
         $updated = $db->update_using_id(
-            ['status', 'requested_at', 'expires_at', 'request_note'],
-            [$status, $requestedAt, $expiresAt, $requestNote !== '' ? $requestNote : null],
+            ['status', 'requested_at', 'expires_at', 'requested_crypto_amount', 'request_note'],
+            [$status, $requestedAt, $expiresAt, $amountCrypto, $requestNote !== '' ? $requestNote : null],
             'crypto_deposit_requests',
             $paymentId
         );

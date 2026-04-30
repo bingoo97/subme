@@ -7865,7 +7865,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_crypto_amount', 'Crypto amount')); ?></label>
-                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
+                                                            <?php if ($paymentEditorType === 'crypto'): ?>
+                                                                <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
+                                                            <?php else: ?>
+                                                                <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
+                                                            <?php endif; ?>
                                                         </div>
                                                         <div class="col-12">
                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
