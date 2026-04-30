@@ -3695,6 +3695,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 $orderRowId = (int)($orderRow['id'] ?? 0);
                                                 $orderCustomerId = (int)($orderRow['customer_id'] ?? 0);
                                                 $orderDisplay = (string)($orderRow['customer_email'] ?? '');
+                                                $orderHandle = trim((string)($orderRow['public_handle'] ?? ''));
+                                                $orderHandleLabel = $orderHandle !== '' ? '@' . ltrim($orderHandle, '@') : '';
                                                 $orderStatusVisual = admin_order_status_visual((array)$orderRow);
                                                 $orderCryptoPaymentId = (int)($orderRow['crypto_payment_id'] ?? 0);
                                                 $orderBankPaymentId = (int)($orderRow['bank_payment_id'] ?? 0);
@@ -3719,8 +3721,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <i class="<?php echo admin_e((string)($orderStatusVisual['icon'] ?? 'bi bi-arrow-repeat')); ?> admin-order-status-icon <?php echo admin_e((string)($orderStatusVisual['class'] ?? 'admin-order-status-icon--awaiting-activation')); ?>"></i>
                                                     </div>
                                                     <div class="admin-topbar-notifications__item-main">
+                                                        <?php if ($orderCustomerId > 0): ?>
+                                                            <div class="admin-topbar-notifications__order-identity">
+                                                                <?php if ($orderHandleLabel !== ''): ?>
+                                                                    <a class="admin-topbar-notifications__order-handle" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>"><?php echo admin_e($orderHandleLabel); ?></a>
+                                                                <?php endif; ?>
+                                                                <?php if ($orderDisplay !== ''): ?>
+                                                                    <a class="admin-topbar-notifications__order-email" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>"><?php echo admin_e($orderDisplay); ?></a>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endif; ?>
                                                         <p>
-                                                            <a class="admin-inline-link admin-payment-summary__email" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>"><?php echo admin_e($orderDisplay); ?></a>
                                                             <?php echo admin_e(admin_t($messages, 'topbar_pending_order_created_message', 'created a new order and it is waiting for approval.')); ?>
                                                             <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$orderRowId); ?>"><?php echo admin_e(admin_t($messages, 'topbar_open_order_inline', 'order')); ?></a>
                                                             <?php if ($orderPaymentUrl !== ''): ?>
@@ -5142,8 +5153,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             && !$orderHasOpenPaymentRequest
                                                             && !$hasRecentBalanceTopupForOrder
                                                             && in_array($orderRowStatus, ['pending', 'pending_payment'], true);
-                                                        if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                        if ($isCompletedPaidOrder) {
                                                             $orderDetailsButtonClass = 'btn-success';
+                                                        } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                            $orderDetailsButtonClass = 'btn-primary';
                                                         } elseif ($isFreshUnpaidOrder) {
                                                             $orderDetailsButtonClass = 'btn-outline-default';
                                                         } else {
