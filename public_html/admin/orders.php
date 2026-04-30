@@ -2,4 +2,5 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/dashboard-panel/admin/orders.php';
+require __DIR__ . '/_bootstrap_admin.php';
+require $adminRoot . '/orders.php';
