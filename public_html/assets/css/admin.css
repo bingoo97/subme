@@ -6895,10 +6895,46 @@ body.admin-login-page .alert.alert-danger::before{
 .admin-search-wallet-card__meta{
     display:flex;
     flex-direction:column;
-    gap:.25rem;
-    color: #333;
-    font-size:.86rem;
-    font-weight:700;
+    gap:.34rem;
+}
+
+.admin-search-wallet-card__meta-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:.6rem;
+    flex-wrap:wrap;
+}
+
+.admin-search-wallet-card__handle{
+    color:#16181d;
+    font-size:.92rem;
+    font-weight:800;
+    text-decoration:none;
+}
+
+.admin-search-wallet-card__handle:hover{
+    color:#0f172a;
+    text-decoration:underline;
+}
+
+.admin-search-wallet-card__label{
+    display:inline-flex;
+    align-items:center;
+    max-width:100%;
+    padding:.32rem .58rem;
+    border-radius:999px;
+    background:#eef1f5;
+    color:#667085;
+    font-size:.72rem;
+    font-weight:800;
+    line-height:1;
+    text-decoration:none;
+}
+
+.admin-search-wallet-card__label:hover{
+    background:#e3e8f0;
+    color:#4b5565;
 }
 
 .admin-settings-access{

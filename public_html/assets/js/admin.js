@@ -4034,7 +4034,9 @@ document.addEventListener('DOMContentLoaded', function () {
             var keepBottom = false;
             var preservePrependOffset = false;
             var shouldReplaceBody = false;
+            var preserveTransientUi = false;
             options = options || {};
+            preserveTransientUi = !!options.preserveTransientUi;
 
             activeConversationId = parseInt(payload.conversation_id || 0, 10) || 0;
             activeCustomerId = parseInt(payload.customer_id || 0, 10) || 0;
@@ -4130,11 +4132,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 scrollConversationToBottom();
             }
             closeMembersPopover();
-            if (composerInput) {
+            if (composerInput && !preserveTransientUi) {
                 composerInput.value = '';
             }
-            resetLinkPreview();
-            closeAllPaymentModals();
+            if (!preserveTransientUi) {
+                resetLinkPreview();
+                closeAllPaymentModals();
+            }
             syncPaymentHeaderActions(payload);
             showConversation();
             openPanel(false);
@@ -4228,6 +4232,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     preservePrependOffset: !!requestOptions.preservePrependOffset,
                     scrollToBottom: !!requestOptions.scrollToBottom,
                     preserveScroll: !!requestOptions.preserveScroll,
+                    preserveTransientUi: !!requestOptions.silent,
                     animateConversation: !requestOptions.silent
                 });
             }).catch(function () {

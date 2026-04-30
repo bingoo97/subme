@@ -13774,6 +13774,7 @@ function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20):
             customer_crypto_wallets.wallet_address_id,
             customer_crypto_wallets.customer_id,
             customer_crypto_wallets.customer_email,
+            customers.public_handle,
             customer_crypto_wallets.crypto_asset_code,
             customer_crypto_wallets.crypto_asset_name,
             customer_crypto_wallets.label,
@@ -13783,6 +13784,8 @@ function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20):
             customer_crypto_wallets.assigned_at,
             customer_crypto_wallets.released_at
          FROM customer_crypto_wallets
+         LEFT JOIN customers
+            ON customers.id = customer_crypto_wallets.customer_id
          WHERE customer_crypto_wallets.address LIKE '{$safeLike}'
             OR customer_crypto_wallets.customer_email LIKE '{$safeLike}'
             OR customer_crypto_wallets.crypto_asset_code LIKE '{$safeLike}'
@@ -14120,13 +14123,12 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $assetName = trim((string)($row['crypto_asset_name'] ?? ''));
                                 $logoUrl = admin_crypto_asset_logo_url($assetCode);
                                 $walletAddress = trim((string)($row['address'] ?? ''));
-                                $walletStatus = trim((string)($row['status'] ?? ''));
-                                $walletStatusLabel = admin_t($messages, 'enum_' . $walletStatus, ucfirst(str_replace('_', ' ', $walletStatus)));
-                                $walletStatusClass = admin_wallet_status_badge_class($walletStatus);
                                 $walletCustomerId = (int)($row['customer_id'] ?? 0);
                                 $walletCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+                                $walletCustomerHandle = trim((string)($row['public_handle'] ?? ''));
                                 $walletCustomerUrl = '/admin/?page=users&customer_id=' . $walletCustomerId;
                                 $walletPageUrl = '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($row['wallet_address_id'] ?? 0);
+                                $walletLabel = trim((string)($row['label'] ?? ''));
                                 ?>
                             <article class="admin-search-wallet-card">
                                 <div class="admin-search-wallet-card__asset">
@@ -14141,8 +14143,16 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                         <code class="admin-search-wallet-card__address-code"><?php echo admin_e($walletAddress !== '' ? $walletAddress : '—'); ?></code>
                                     </a>
                                     <div class="admin-search-wallet-card__meta">
-                                        <span><?php echo admin_e(admin_t($messages, 'search_wallet_user_label', 'User')); ?>: <a class="admin-inline-link" href="<?php echo admin_e($walletCustomerUrl); ?>"><?php echo admin_e($walletCustomerEmail !== '' ? $walletCustomerEmail : '—'); ?></a></span>
-                                        <span><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>: <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($walletStatusClass); ?>"><?php echo admin_e($walletStatusLabel); ?></span></span>
+                                        <div class="admin-search-wallet-card__meta-row">
+                                            <a class="admin-search-wallet-card__handle" href="<?php echo admin_e($walletCustomerUrl); ?>">
+                                                <?php echo admin_e($walletCustomerHandle !== '' ? '@' . ltrim($walletCustomerHandle, '@') : ($walletCustomerEmail !== '' ? $walletCustomerEmail : '—')); ?>
+                                            </a>
+                                            <?php if ($walletLabel !== ''): ?>
+                                                <a class="admin-search-wallet-card__label" href="<?php echo admin_e($walletPageUrl); ?>">
+                                                    <?php echo admin_e($walletLabel); ?>
+                                                </a>
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
                                 </div>
                             </article>
