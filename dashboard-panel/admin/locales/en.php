@@ -58,6 +58,8 @@ return [
     'topbar_payment_step_explorer' => 'Check whether the payment has arrived.',
     'topbar_payment_step_decide' => 'Approve the payment or move it to verification.',
     'topbar_payment_step_payout' => 'Withdraw the payment to your main wallet.',
+    'topbar_payment_step_payout_approved' => 'Withdraw the funds to your main wallet.',
+    'topbar_payment_step_archive_approved' => 'Move the payment to archive.',
     'topbar_payment_check_explorer' => 'Check in explorer',
     'topbar_payment_accept_all' => 'Accept payment',
     'topbar_payment_cancel_all' => 'Cancel payment and order',

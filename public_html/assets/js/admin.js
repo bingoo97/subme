@@ -1804,6 +1804,68 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initWalletNetworkForms() {
+        qa('[data-admin-wallet-network-form]').forEach(function (form) {
+            var assetSelect = q('[data-admin-wallet-asset-select]', form);
+            var networkSelect = q('[data-admin-wallet-network-select]', form);
+            var fixedInput = q('[data-admin-wallet-network-fixed]', form);
+
+            if (!assetSelect || !networkSelect || !fixedInput) {
+                return;
+            }
+
+            function parseNetworkOptions(raw) {
+                if (!raw) {
+                    return {};
+                }
+                try {
+                    var parsed = JSON.parse(raw);
+                    return parsed && typeof parsed === 'object' ? parsed : {};
+                } catch (error) {
+                    return {};
+                }
+            }
+
+            function renderNetworkOptions(optionsMap, selectedValue) {
+                return Object.keys(optionsMap).map(function (networkCode) {
+                    var selected = String(networkCode) === String(selectedValue || '') ? ' selected' : '';
+                    return '<option value="' + escapeHtml(networkCode) + '"' + selected + '>' + escapeHtml(String(optionsMap[networkCode] || networkCode)) + '</option>';
+                }).join('');
+            }
+
+            function syncNetworkFromAsset() {
+                var selectedOption = assetSelect.options[assetSelect.selectedIndex];
+                var networkOptions = parseNetworkOptions(selectedOption ? selectedOption.getAttribute('data-network-options') : '');
+                var defaultNetwork = selectedOption ? String(selectedOption.getAttribute('data-default-network') || '') : '';
+                var allowsChoice = selectedOption ? selectedOption.getAttribute('data-allows-network-choice') === '1' : false;
+                var currentNetwork = String(networkSelect.value || '');
+                var resolvedNetwork = currentNetwork && Object.prototype.hasOwnProperty.call(networkOptions, currentNetwork)
+                    ? currentNetwork
+                    : defaultNetwork;
+
+                if (!resolvedNetwork) {
+                    resolvedNetwork = Object.keys(networkOptions)[0] || '';
+                }
+
+                networkSelect.innerHTML = renderNetworkOptions(networkOptions, resolvedNetwork);
+                networkSelect.value = resolvedNetwork;
+
+                if (allowsChoice) {
+                    networkSelect.classList.remove('d-none');
+                    fixedInput.classList.add('d-none');
+                    fixedInput.value = '';
+                } else {
+                    networkSelect.classList.add('d-none');
+                    fixedInput.classList.remove('d-none');
+                    fixedInput.value = resolvedNetwork ? String(networkOptions[resolvedNetwork] || resolvedNetwork) : '';
+                }
+            }
+
+            assetSelect.addEventListener('change', syncNetworkFromAsset);
+            syncNetworkFromAsset();
+        });
+    }
+
     function initOrderCreateForms() {
         qa('[data-admin-order-create]').forEach(function (form) {
             var searchInput = q('[data-admin-order-customer-search]', form);
@@ -5720,6 +5782,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initOrderStatusForms();
     initOrderCreateForms();
     initWalletCustomerPickers();
+    initWalletNetworkForms();
     initRichTextEditors();
     initSearch();
     initPaymentsCustomerSearch();

@@ -58,6 +58,8 @@ return [
     'topbar_payment_step_explorer' => 'Sprawdź, czy wpłata już dotarła.',
     'topbar_payment_step_decide' => 'Zatwierdź płatność albo przenieś ją do weryfikacji.',
     'topbar_payment_step_payout' => 'Wpłatę wypłać na swój główny portfel.',
+    'topbar_payment_step_payout_approved' => 'Środki wypłać na swój główny portfel.',
+    'topbar_payment_step_archive_approved' => 'Przenieś wpłatę do archiwum.',
     'topbar_payment_check_explorer' => 'Sprawdź w explorerze ',
     'topbar_payment_accept_all' => 'Zatwierdź płatność',
     'topbar_payment_cancel_all' => 'Anuluj płatność i zamówienie',

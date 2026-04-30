@@ -8216,8 +8216,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_explorer', 'Check whether the payment has arrived.')); ?></span>
                                                                                 <span>2. <?php echo admin_e($canReview ? admin_t($messages, 'topbar_payment_step_decide', 'Approve the payment or move it to verification.') : admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
                                                                             <?php else: ?>
-                                                                                <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_payout', 'Withdraw the payment to your main wallet.')); ?></span>
-                                                                                <span>2. <?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                                                <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_payout_approved', 'Withdraw the funds to your main wallet.')); ?></span>
+                                                                                <span>2. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_archive_approved', 'Move the payment to archive.')); ?></span>
                                                                             <?php endif; ?>
                                                                         </div>
                                                                         <div class="admin-topbar-notifications__payment-actions">
@@ -8744,7 +8744,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <label class="form-label" for="wallet_asset_id"><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></label>
                                                             <select class="form-select" id="wallet_asset_id" name="crypto_asset_id" required data-admin-wallet-asset-select>
                                                                 <?php foreach ($walletAssetOptions as $assetOption): ?>
-                                                                    <option value="<?php echo admin_e((string)$assetOption['id']); ?>" data-asset-code="<?php echo admin_e((string)($assetOption['code'] ?? '')); ?>"<?php echo (int)$assetOption['id'] === (int)$walletEditor['crypto_asset_id'] ? ' selected' : ''; ?>>
+                                                                    <?php
+                                                                    $walletAssetOptionCode = strtoupper(trim((string)($assetOption['code'] ?? '')));
+                                                                    $walletAssetOptionNetworks = admin_crypto_asset_network_options($walletAssetOptionCode);
+                                                                    $walletAssetOptionDefaultNetwork = $walletAssetOptionNetworks ? (string)array_key_first($walletAssetOptionNetworks) : '';
+                                                                    $walletAssetOptionAllowsChoice = admin_crypto_asset_allows_network_choice($walletAssetOptionCode);
+                                                                    ?>
+                                                                    <option
+                                                                        value="<?php echo admin_e((string)$assetOption['id']); ?>"
+                                                                        data-asset-code="<?php echo admin_e($walletAssetOptionCode); ?>"
+                                                                        data-default-network="<?php echo admin_e($walletAssetOptionDefaultNetwork); ?>"
+                                                                        data-allows-network-choice="<?php echo $walletAssetOptionAllowsChoice ? '1' : '0'; ?>"
+                                                                        data-network-options="<?php echo admin_e(json_encode($walletAssetOptionNetworks, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?>"
+                                                                        <?php echo (int)$assetOption['id'] === (int)$walletEditor['crypto_asset_id'] ? ' selected' : ''; ?>>
                                                                         <?php echo admin_e((string)$assetOption['name'] . ' (' . (string)$assetOption['code'] . ')'); ?>
                                                                     </option>
                                                                 <?php endforeach; ?>
