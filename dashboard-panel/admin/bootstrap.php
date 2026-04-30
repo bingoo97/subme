@@ -13762,37 +13762,61 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
 function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20): array
 {
     $query = trim($query);
-    if ($query === '' || !schema_object_exists($db, 'customer_crypto_wallets')) {
+    if ($query === '' || !schema_object_exists($db, 'crypto_wallet_addresses')) {
         return [];
     }
 
+    app_ensure_customer_runtime_columns($db);
+
     $limit = max(1, min(50, $limit));
     $safeLike = $db->escape('%' . $query . '%');
+    $safeExact = $db->escape(strtolower($query));
 
     return $db->select_full_user(
         "SELECT
-            customer_crypto_wallets.wallet_address_id,
-            customer_crypto_wallets.customer_id,
-            customer_crypto_wallets.customer_email,
-            customers.public_handle,
-            customer_crypto_wallets.crypto_asset_code,
-            customer_crypto_wallets.crypto_asset_name,
-            customer_crypto_wallets.label,
-            customer_crypto_wallets.address,
-            customer_crypto_wallets.wallet_provider,
-            customer_crypto_wallets.status,
-            customer_crypto_wallets.assigned_at,
-            customer_crypto_wallets.released_at
-         FROM customer_crypto_wallets
-         LEFT JOIN customers
-            ON customers.id = customer_crypto_wallets.customer_id
-         WHERE customer_crypto_wallets.address LIKE '{$safeLike}'
-            OR customer_crypto_wallets.customer_email LIKE '{$safeLike}'
-            OR customer_crypto_wallets.crypto_asset_code LIKE '{$safeLike}'
-            OR customer_crypto_wallets.crypto_asset_name LIKE '{$safeLike}'
-            OR customer_crypto_wallets.label LIKE '{$safeLike}'
-            OR customer_crypto_wallets.wallet_provider LIKE '{$safeLike}'
-         ORDER BY customer_crypto_wallets.assigned_at DESC
+            wallet.id AS wallet_address_id,
+            assignment.customer_id,
+            customer.email AS customer_email,
+            customer.public_handle,
+            asset.code AS crypto_asset_code,
+            asset.name AS crypto_asset_name,
+            wallet.label,
+            wallet.address,
+            wallet.wallet_provider,
+            wallet.status,
+            assignment.assigned_at,
+            assignment.released_at,
+            (
+                CASE WHEN LOWER(wallet.address) = '{$safeExact}' THEN 0 ELSE 100 END
+                + CASE WHEN LOWER(customer.email) = '{$safeExact}' THEN 1 ELSE 100 END
+                + CASE WHEN LOWER(customer.public_handle) = '{$safeExact}' THEN 2 ELSE 100 END
+                + CASE WHEN LOWER(wallet.label) = '{$safeExact}' THEN 3 ELSE 100 END
+                + CASE WHEN LOWER(asset.code) = '{$safeExact}' THEN 4 ELSE 100 END
+            ) AS search_rank
+         FROM crypto_wallet_addresses AS wallet
+         LEFT JOIN crypto_assets AS asset
+            ON asset.id = wallet.crypto_asset_id
+         LEFT JOIN crypto_wallet_assignments AS assignment
+            ON assignment.id = (
+                SELECT inner_assignment.id
+                FROM crypto_wallet_assignments AS inner_assignment
+                WHERE inner_assignment.wallet_address_id = wallet.id
+                ORDER BY
+                    CASE WHEN inner_assignment.status IN ('reserved', 'active') THEN 0 ELSE 1 END ASC,
+                    inner_assignment.assigned_at DESC,
+                    inner_assignment.id DESC
+                LIMIT 1
+            )
+         LEFT JOIN customers AS customer
+            ON customer.id = assignment.customer_id
+         WHERE wallet.address LIKE '{$safeLike}'
+            OR wallet.label LIKE '{$safeLike}'
+            OR wallet.wallet_provider LIKE '{$safeLike}'
+            OR asset.code LIKE '{$safeLike}'
+            OR asset.name LIKE '{$safeLike}'
+            OR customer.email LIKE '{$safeLike}'
+            OR customer.public_handle LIKE '{$safeLike}'
+         ORDER BY search_rank ASC, wallet.id DESC
          LIMIT {$limit}"
     );
 }
@@ -14165,6 +14189,281 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
     <?php
 
     return trim((string)ob_get_clean());
+}
+
+function admin_render_payment_customer_search_results_html(array $customers, array $messages, string $query): string
+{
+    $customers = is_array($customers) ? $customers : [];
+    $query = trim($query);
+
+    ob_start();
+    ?>
+    <div class="admin-payment-customer-search-results">
+        <?php if (!$customers): ?>
+            <div class="admin-search-empty admin-search-empty--inline">
+                <strong><?php echo admin_e(admin_t($messages, 'payment_customer_search_empty_title', 'No matching user')); ?></strong>
+                <p><?php echo admin_e(admin_t($messages, 'payment_customer_search_empty_text', 'There is no user with this email or handle.')); ?></p>
+            </div>
+        <?php else: ?>
+            <div class="admin-search-results__grid admin-search-results__grid--single">
+                <?php foreach ($customers as $row): ?>
+                    <?php
+                    $profileUrl = '/admin/?page=payments&customer_id=' . (int)($row['id'] ?? 0);
+                    $email = trim((string)($row['email'] ?? ''));
+                    $publicHandle = trim((string)($row['public_handle'] ?? ''));
+                    $status = strtolower(trim((string)($row['status'] ?? 'inactive')));
+                    $statusClass = admin_customer_status_badge_class($status);
+                    $statusLabel = admin_t($messages, 'status_' . $status, ucfirst($status));
+                    $avatarVisual = admin_search_customer_avatar_visual($row);
+                    $localeFlagUrl = admin_locale_flag_url((string)($row['locale_code'] ?? ''));
+                    $localeFlagAlt = strtoupper((string)($row['locale_code'] ?? 'EN'));
+                    $customerTypeValue = app_normalize_customer_type((string)($row['customer_type'] ?? 'client'));
+                    $customerTypeLabel = admin_t($messages, 'customer_type_' . $customerTypeValue, ucfirst($customerTypeValue));
+                    ?>
+                    <article class="admin-search-user-card admin-search-user-card--payments-picker">
+                        <div class="admin-search-user-card__avatar-wrap">
+                            <?php if ((string)($avatarVisual['type'] ?? 'image') === 'image'): ?>
+                                <span class="admin-search-user-card__avatar">
+                                    <img src="<?php echo admin_e((string)($avatarVisual['src'] ?? '')); ?>" alt="<?php echo admin_e((string)($avatarVisual['alt'] ?? 'User')); ?>" loading="lazy">
+                                </span>
+                            <?php else: ?>
+                                <span class="admin-search-user-card__avatar admin-search-user-card__avatar--initial <?php echo admin_e((string)($avatarVisual['theme'] ?? 'theme-1')); ?>">
+                                    <span><?php echo admin_e((string)($avatarVisual['initial'] ?? 'U')); ?></span>
+                                </span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="admin-search-user-card__body">
+                            <a class="admin-search-user-card__email" href="<?php echo admin_e($profileUrl); ?>">
+                                <?php echo admin_e($email !== '' ? $email : '—'); ?>
+                            </a>
+                            <?php if ($publicHandle !== ''): ?>
+                                <div class="admin-search-user-card__handle">@<?php echo admin_e($publicHandle); ?></div>
+                            <?php endif; ?>
+                            <div class="admin-search-user-card__meta">
+                                <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
+                                <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($statusClass); ?>">
+                                    <?php echo admin_e($statusLabel); ?>
+                                </span>
+                                <span class="admin-status-pill admin-status-pill--xs admin-status-pill--info">
+                                    <?php echo admin_e($customerTypeLabel); ?>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="admin-search-user-card__actions">
+                            <button
+                                type="button"
+                                class="btn btn-dark btn-sm"
+                                data-admin-payment-customer-select
+                                data-customer-id="<?php echo (int)($row['id'] ?? 0); ?>"
+                                data-customer-email="<?php echo admin_e($email); ?>"
+                                data-customer-handle="<?php echo admin_e($publicHandle); ?>">
+                                <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
+                                <span><?php echo admin_e(admin_t($messages, 'payment_customer_search_choose', 'Choose user')); ?></span>
+                            </button>
+                        </div>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php
+
+    return trim((string)ob_get_clean());
+}
+
+function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $messages = []): array
+{
+    $customer = $customerId > 0 ? app_find_customer_by_id($db, $customerId) : null;
+    if (!$customer) {
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $payload = admin_chat_payment_modal_data($db, 'crypto', $customerId, $messages);
+    if (empty($payload['ok'])) {
+        return $payload;
+    }
+
+    $payload['customer'] = [
+        'id' => (int)($customer['id'] ?? 0),
+        'email' => (string)($customer['email'] ?? ''),
+        'public_handle' => (string)($customer['public_handle'] ?? ''),
+    ];
+    $payload['has_pending_payment'] = admin_customer_has_pending_crypto_payment($db, $customerId) ? 1 : 0;
+
+    return $payload;
+}
+
+function admin_quick_create_crypto_payment_request(
+    Mysql_ks $db,
+    int $customerId,
+    int $assetId,
+    $amount,
+    int $adminUserId,
+    array $messages = []
+): array {
+    $settings = admin_app_settings($db);
+    if (empty($settings['crypto_payments_enabled'])) {
+        return ['ok' => false, 'message' => 'Crypto payments are disabled.'];
+    }
+
+    if (admin_customer_has_pending_crypto_payment($db, $customerId)) {
+        return ['ok' => false, 'message' => 'pending_crypto_payment'];
+    }
+
+    $preview = admin_chat_crypto_payment_preview($db, $customerId, $assetId, $amount, $messages);
+    if (empty($preview['ok'])) {
+        return $preview;
+    }
+
+    $walletAddressId = (int)($preview['wallet_address_id'] ?? 0);
+    if ($walletAddressId <= 0) {
+        return ['ok' => false, 'message' => 'Wallet address is unavailable.'];
+    }
+
+    $db->start();
+
+    $walletAssignmentId = (int)($preview['wallet_assignment_id'] ?? 0);
+    if ($walletAssignmentId <= 0) {
+        $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings);
+        if (empty($assignResult['ok'])) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign wallet.')];
+        }
+
+        $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+        if ($walletAssignmentId <= 0) {
+            $assignments = admin_customer_active_crypto_assignments($db, $customerId, (string)($preview['asset_code'] ?? ''));
+            foreach ($assignments as $assignment) {
+                if ((int)($assignment['wallet_address_id'] ?? 0) !== $walletAddressId) {
+                    continue;
+                }
+                $walletAssignmentId = (int)($assignment['wallet_assignment_id'] ?? 0);
+                break;
+            }
+        }
+
+        if ($walletAssignmentId <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
+        }
+    }
+
+    $requestId = 0;
+    $now = date('Y-m-d H:i:s');
+    $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
+    $db->query(
+        "UPDATE crypto_deposit_requests
+         SET status = 'archived'
+         WHERE customer_id = {$customerId}
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+           AND expires_at IS NOT NULL
+           AND expires_at < '{$now}'"
+    );
+    $openWalletRequest = $db->select_user(
+        "SELECT id, customer_id, order_id
+         FROM crypto_deposit_requests
+         WHERE wallet_address_id = {$walletAddressId}
+           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+
+    if (is_array($openWalletRequest) && !empty($openWalletRequest['id'])) {
+        if ((int)($openWalletRequest['customer_id'] ?? 0) !== $customerId || !empty($openWalletRequest['order_id'])) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
+        }
+
+        $updated = $db->update_using_id(
+            [
+                'crypto_asset_id',
+                'wallet_assignment_id',
+                'requested_fiat_amount',
+                'fiat_currency_id',
+                'exchange_rate',
+                'requested_crypto_amount',
+                'created_by_admin_user_id',
+                'requested_at',
+                'expires_at',
+                'request_note',
+                'status',
+            ],
+            [
+                (int)$preview['asset_id'],
+                $walletAssignmentId,
+                (float)$preview['fiat_amount'],
+                (int)$preview['currency_id'],
+                (float)$preview['rate'],
+                (float)$preview['crypto_amount'],
+                $adminUserId,
+                $now,
+                $expiresAt,
+                'Updated from admin payments quick create',
+                'pending',
+            ],
+            'crypto_deposit_requests',
+            (int)$openWalletRequest['id']
+        );
+        if (!$updated) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to update crypto payment request.'];
+        }
+        $requestId = (int)$openWalletRequest['id'];
+    } else {
+        $created = $db->insert(
+            [
+                'customer_id',
+                'order_id',
+                'crypto_asset_id',
+                'wallet_address_id',
+                'wallet_assignment_id',
+                'requested_fiat_amount',
+                'fiat_currency_id',
+                'exchange_rate',
+                'requested_crypto_amount',
+                'assignment_mode',
+                'status',
+                'created_by_admin_user_id',
+                'requested_at',
+                'expires_at',
+                'request_note',
+            ],
+            [
+                $customerId,
+                null,
+                (int)$preview['asset_id'],
+                $walletAddressId,
+                $walletAssignmentId,
+                (float)$preview['fiat_amount'],
+                (int)$preview['currency_id'],
+                (float)$preview['rate'],
+                (float)$preview['crypto_amount'],
+                'manual',
+                'pending',
+                $adminUserId,
+                $now,
+                $expiresAt,
+                'Created from admin payments quick create',
+            ],
+            'crypto_deposit_requests'
+        );
+
+        if (!$created || (int)$db->id() <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to create crypto payment request.'];
+        }
+
+        $requestId = (int)$db->id();
+    }
+
+    $db->commit();
+
+    return [
+        'ok' => true,
+        'request_id' => $requestId,
+        'payment_type' => 'crypto',
+        'payment_url' => '/admin/?page=payments&payment_type=crypto&payment_id=' . $requestId,
+    ];
 }
 
 function admin_page_cards(string $route, array $messages): array

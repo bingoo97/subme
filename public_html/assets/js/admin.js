@@ -1192,6 +1192,308 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initPaymentsCustomerSearch() {
+        var toggle = q('[data-admin-payment-customer-toggle]');
+        var wrap = q('[data-admin-payment-customer-search]');
+        var input = q('[data-admin-payment-customer-input]');
+        var results = q('[data-admin-payment-customer-results]');
+        var quickCreateWrap = q('[data-admin-payment-quick-create]');
+        var selectedUser = q('[data-admin-payment-selected-user]');
+        var quickAlert = q('[data-admin-payment-quick-alert]');
+        var assetSelect = q('[data-admin-payment-quick-asset]');
+        var amountSelect = q('[data-admin-payment-quick-amount]');
+        var submitButton = q('[data-admin-payment-quick-submit]');
+        var requestIndex = 0;
+        var selectedCustomerId = 0;
+        var cooldownTimer = 0;
+        var cooldownRemaining = 0;
+
+        if (!toggle || !wrap || !input || !results || !quickCreateWrap || !selectedUser || !quickAlert || !assetSelect || !amountSelect || !submitButton) {
+            return;
+        }
+
+        var searchUrl = input.getAttribute('data-search-url') || '/admin/search.php';
+        var loadingText = input.getAttribute('data-loading-text') || 'Loading results...';
+        var csrfToken = input.getAttribute('data-csrf-token') || '';
+        var createSuccessText = quickCreateWrap.getAttribute('data-create-success') || 'Payment request created successfully.';
+        var createErrorText = quickCreateWrap.getAttribute('data-create-error') || 'Unable to create payment request.';
+        var createPendingErrorText = quickCreateWrap.getAttribute('data-create-pending-error') || 'User already has a pending crypto payment request.';
+        var noAssetsText = quickCreateWrap.getAttribute('data-create-no-assets') || 'No active cryptocurrencies are available for this user.';
+        var openDetailsText = quickCreateWrap.getAttribute('data-open-details-text') || 'Open payment details';
+        var openPaymentsText = quickCreateWrap.getAttribute('data-open-payments-text') || 'Open payments';
+
+        function showQuickAlert(message, isError) {
+            quickAlert.textContent = message || '';
+            quickAlert.classList.toggle('alert-danger', !!isError);
+            quickAlert.classList.toggle('alert-success', !isError && !!message);
+            setHidden(quickAlert, !message);
+        }
+
+        function resetResults() {
+            results.innerHTML = '';
+            setHidden(results, true);
+        }
+
+        function resetQuickCreate() {
+            selectedCustomerId = 0;
+            selectedUser.innerHTML = '';
+            assetSelect.innerHTML = '';
+            amountSelect.innerHTML = '';
+            submitButton.disabled = true;
+            setHidden(quickCreateWrap, true);
+            showQuickAlert('', false);
+            if (cooldownTimer) {
+                window.clearInterval(cooldownTimer);
+                cooldownTimer = 0;
+            }
+            cooldownRemaining = 0;
+            submitButton.removeAttribute('data-default-label');
+        }
+
+        function setSubmitCooldown(seconds) {
+            if (cooldownTimer) {
+                window.clearInterval(cooldownTimer);
+            }
+            cooldownRemaining = Math.max(0, parseInt(seconds || 0, 10) || 0);
+            if (!submitButton.getAttribute('data-default-label')) {
+                submitButton.setAttribute('data-default-label', submitButton.textContent.trim());
+            }
+            submitButton.disabled = true;
+            submitButton.querySelector('span').textContent = 'Cooldown ' + cooldownRemaining + 's';
+            cooldownTimer = window.setInterval(function () {
+                cooldownRemaining -= 1;
+                if (cooldownRemaining <= 0) {
+                    window.clearInterval(cooldownTimer);
+                    cooldownTimer = 0;
+                    submitButton.querySelector('span').textContent = submitButton.getAttribute('data-default-label') || 'Create crypto payment request';
+                    submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+                    return;
+                }
+                submitButton.querySelector('span').textContent = 'Cooldown ' + cooldownRemaining + 's';
+            }, 1000);
+        }
+
+        function renderSelectedUser(customer) {
+            var handle = String(customer.public_handle || '').trim();
+            var email = String(customer.email || '').trim();
+            var userUrl = '/admin/?page=payments&customer_id=' + encodeURIComponent(String(customer.id || '0'));
+            selectedUser.innerHTML = '' +
+                '<div class="admin-payments-note__selected-user-card">' +
+                    '<div class="admin-payments-note__selected-user-text">' +
+                        (handle ? '<strong>@' + escapeHtml(handle) + '</strong>' : '') +
+                        '<span>' + escapeHtml(email || '—') + '</span>' +
+                    '</div>' +
+                    '<a class="btn btn-outline-dark btn-sm" href="' + escapeHtml(userUrl) + '">' + escapeHtml(openPaymentsText) + '</a>' +
+                '</div>';
+        }
+
+        function populateQuickSelect(select, items, mapper) {
+            select.innerHTML = '';
+            (items || []).forEach(function (item, index) {
+                var option = document.createElement('option');
+                var normalized = mapper(item, index);
+                option.value = normalized.value;
+                option.textContent = normalized.label;
+                select.appendChild(option);
+            });
+        }
+
+        function loadQuickCreateData(customerId, customerMeta) {
+            selectedCustomerId = parseInt(customerId || 0, 10) || 0;
+            if (!selectedCustomerId) {
+                return;
+            }
+
+            renderSelectedUser(customerMeta || {});
+            setHidden(quickCreateWrap, false);
+            submitButton.disabled = true;
+            assetSelect.innerHTML = '';
+            amountSelect.innerHTML = '';
+            showQuickAlert(loadingText, false);
+
+            jsonFetch(searchUrl + '?' + toQuery({
+                action: 'payment_customer_crypto_data',
+                customer_id: selectedCustomerId
+            })).then(function (payload) {
+                var items;
+                if (!payload || !payload.ok) {
+                    showQuickAlert((payload && payload.message) || 'Unable to load payment options.', true);
+                    submitButton.disabled = true;
+                    return;
+                }
+
+                items = Array.isArray(payload.items) ? payload.items : [];
+                populateQuickSelect(assetSelect, items, function (item) {
+                    var code = String(item.code || '').trim();
+                    var name = String(item.name || code).trim();
+                    return {
+                        value: String(item.id || ''),
+                        label: code ? (code + ' - ' + name) : name
+                    };
+                });
+                populateQuickSelect(amountSelect, payload.amount_options || [], function (item) {
+                    return {
+                        value: String(item || ''),
+                        label: String(item || '')
+                    };
+                });
+
+                if (!items.length) {
+                    showQuickAlert((payload.empty_state_html ? '' : (payload.message || noAssetsText)), true);
+                    if (payload.empty_state_html) {
+                        quickAlert.innerHTML = payload.empty_state_html;
+                        setHidden(quickAlert, false);
+                    }
+                    submitButton.disabled = true;
+                    return;
+                }
+
+                if (payload.has_pending_payment) {
+                    showQuickAlert(createPendingErrorText, true);
+                    submitButton.disabled = true;
+                    return;
+                }
+
+                showQuickAlert('', false);
+                submitButton.disabled = !assetSelect.value || !amountSelect.value;
+            }).catch(function () {
+                showQuickAlert('Unable to load payment options.', true);
+                submitButton.disabled = true;
+            });
+        }
+
+        function runSearch() {
+            var query = input.value.trim();
+
+            if (query === '') {
+                resetResults();
+                return;
+            }
+
+            requestIndex += 1;
+            var activeRequest = requestIndex;
+            setHidden(results, false);
+            results.innerHTML = '<div class="admin-panel-card"><div class="admin-search-feedback">' + escapeHtml(loadingText) + '</div></div>';
+
+            jsonFetch(searchUrl + '?' + toQuery({
+                action: 'payment_customer_search',
+                q: query
+            })).then(function (payload) {
+                if (activeRequest !== requestIndex) {
+                    return;
+                }
+
+                if (!payload || !payload.ok) {
+                    results.innerHTML = '';
+                    setHidden(results, true);
+                    return;
+                }
+
+                results.innerHTML = payload.html || '';
+                setHidden(results, !payload.html);
+            }).catch(function () {
+                if (activeRequest !== requestIndex) {
+                    return;
+                }
+                results.innerHTML = '';
+                setHidden(results, true);
+            });
+        }
+
+        toggle.addEventListener('click', function () {
+            var isHidden = wrap.hasAttribute('hidden');
+            setHidden(wrap, !isHidden);
+            toggle.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+            if (isHidden) {
+                window.setTimeout(function () {
+                    input.focus();
+                }, 30);
+            } else {
+                input.value = '';
+                resetResults();
+                resetQuickCreate();
+            }
+        });
+
+        input.addEventListener('input', debounce(runSearch, 250));
+
+        results.addEventListener('click', function (event) {
+            var button = closest(event.target, '[data-admin-payment-customer-select]');
+            if (!button) {
+                return;
+            }
+            loadQuickCreateData(button.getAttribute('data-customer-id'), {
+                id: button.getAttribute('data-customer-id') || '',
+                email: button.getAttribute('data-customer-email') || '',
+                public_handle: button.getAttribute('data-customer-handle') || ''
+            });
+        });
+
+        [assetSelect, amountSelect].forEach(function (field) {
+            field.addEventListener('change', function () {
+                if (cooldownRemaining > 0) {
+                    submitButton.disabled = true;
+                    return;
+                }
+                submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+            });
+        });
+
+        submitButton.addEventListener('click', function () {
+            if (!selectedCustomerId || !assetSelect.value || !amountSelect.value || cooldownRemaining > 0) {
+                return;
+            }
+
+            submitButton.disabled = true;
+            showQuickAlert('', false);
+
+            jsonFetch(searchUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: toQuery({
+                    action: 'create_quick_crypto_payment_request',
+                    customer_id: selectedCustomerId,
+                    asset_id: assetSelect.value,
+                    amount: amountSelect.value,
+                    _csrf: csrfToken
+                })
+            }).then(function (payload) {
+                if (!payload || !payload.ok) {
+                    if (payload && payload.message === 'pending_crypto_payment') {
+                        showQuickAlert(createPendingErrorText, true);
+                    } else {
+                        showQuickAlert((payload && payload.message) || createErrorText, true);
+                    }
+                    if (payload && payload.cooldown_remaining) {
+                        setSubmitCooldown(payload.cooldown_remaining);
+                    } else {
+                        submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+                    }
+                    return;
+                }
+
+                showQuickAlert(createSuccessText, false);
+                if (payload.payment_url) {
+                    qa('.admin-payments-note__selected-link', selectedUser).forEach(function (node) {
+                        node.remove();
+                    });
+                    selectedUser.insertAdjacentHTML('beforeend', '<a class="admin-inline-link admin-payments-note__selected-link" href="' + escapeHtml(payload.payment_url) + '">' + escapeHtml(openDetailsText) + '</a>');
+                }
+                setSubmitCooldown(payload.cooldown_seconds || 20);
+                window.setTimeout(function () {
+                    input.value = '';
+                    resetResults();
+                    resetQuickCreate();
+                    setHidden(wrap, true);
+                    toggle.setAttribute('aria-expanded', 'false');
+                }, 900);
+            }).catch(function () {
+                showQuickAlert(createErrorText, true);
+                submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+            });
+        });
+    }
+
     function initAdminHelpModal() {
         var modal = q('#adminHelpModal');
         var input = q('[data-admin-help-search]', modal);
@@ -5387,6 +5689,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initWalletCustomerPickers();
     initRichTextEditors();
     initSearch();
+    initPaymentsCustomerSearch();
     initAdminHelpModal();
     initChat();
 });

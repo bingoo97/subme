@@ -6633,6 +6633,111 @@ body.admin-login-page .alert.alert-danger::before{
     margin-top:.85rem;
 }
 
+.admin-payments-note__create-btn{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:.6rem;
+    width:100%;
+    margin-top:.95rem;
+    border-radius:18px;
+    min-height:56px;
+    font-weight:800;
+}
+
+.admin-payments-note__customer-search{
+    margin-top:1rem;
+    padding-top:1rem;
+    border-top:1px solid rgba(15, 23, 42, 0.08);
+}
+
+.admin-payments-note__customer-label{
+    display:block;
+    margin-bottom:.45rem;
+    font-weight:700;
+}
+
+.admin-payments-note__customer-input{
+    min-height:48px;
+    font-weight:700;
+}
+
+.admin-payments-note__customer-results{
+    margin-top:.85rem;
+}
+
+.admin-payments-note__quick-create{
+    margin-top:1rem;
+    padding:1rem;
+    border-radius:18px;
+    background:#f8f9fc;
+    border:1px solid rgba(15, 23, 42, 0.08);
+}
+
+.admin-payments-note__selected-user{
+    margin-bottom:.85rem;
+}
+
+.admin-payments-note__selected-user-card{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:.8rem;
+    flex-wrap:wrap;
+}
+
+.admin-payments-note__selected-user-text{
+    display:flex;
+    flex-direction:column;
+    gap:.15rem;
+}
+
+.admin-payments-note__selected-user-text strong{
+    color:#16181d;
+    font-size:.95rem;
+    font-weight:800;
+}
+
+.admin-payments-note__selected-user-text span{
+    color:#667085;
+    font-size:.82rem;
+    font-weight:700;
+}
+
+.admin-payments-note__quick-alert{
+    margin-bottom:.85rem;
+}
+
+.admin-payments-note__quick-actions{
+    margin-top:.95rem;
+}
+
+.admin-payments-note__quick-submit{
+    width:100%;
+}
+
+.admin-payments-note__selected-link{
+    display:inline-flex;
+    margin-top:.45rem;
+}
+
+.admin-search-user-card--payments-picker{
+    display:flex;
+    align-items:center;
+    gap:.9rem;
+    padding:.95rem 0;
+}
+
+.admin-search-user-card__actions{
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+}
+
+.admin-search-user-card__actions .btn{
+    white-space:nowrap;
+}
+
 .admin-search-section + .admin-search-section{
     margin-top:1.25rem;
 }
@@ -6827,7 +6932,7 @@ body.admin-login-page .alert.alert-danger::before{
 
 .admin-search-wallet-grid{
     display:grid;
-    grid-template-columns:repeat(2, minmax(0, 1fr));
+    grid-template-columns:minmax(0, 1fr);
     gap:1rem;
 }
 
