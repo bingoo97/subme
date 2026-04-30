@@ -5073,17 +5073,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             }
                                                         }
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
+                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
+                                                            && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
+                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true);
                                                         $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
                                                             && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
                                                             && !in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
                                                         $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
-                                                        $orderDetailsButtonClass = ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) ? 'btn-success' : 'btn-dark';
-                                                        $orderDetailsButtonLabel = ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)
-                                                            ? admin_t($messages, 'order_click_to_approve', 'Click to approve')
-                                                            : admin_t($messages, 'details', 'Details');
-                                                        $orderLeadingIcon = ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)
+                                                        $orderDetailsButtonClass = ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) ? 'btn-success' : 'btn-dark';
+                                                        if ($isCompletedPaidOrder) {
+                                                            $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
+                                                        } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                            $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_approve', 'Click to approve');
+                                                        } else {
+                                                            $orderDetailsButtonLabel = admin_t($messages, 'details', 'Details');
+                                                        }
+                                                        $orderLeadingIcon = ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)
                                                             ? 'bi bi-check-circle-fill text-success'
                                                             : 'bi bi-credit-card text-success';
+                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
+                                                        $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
+                                                            ? '@' . $orderCustomerHandleLabel
+                                                            : (string)($row['customer_email'] ?? '');
                                                         $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
                                                         $modalId = 'adminOrderModal' . $orderId;
                                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
@@ -5111,8 +5122,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
                                                                     <?php endif; ?>
                                                                     <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
-                                                                        <?php echo admin_e((string)$row['customer_email']); ?>
+                                                                        <?php echo admin_e($orderCustomerPrimaryLabel); ?>
                                                                     </a>
+                                                                    <?php if (trim((string)($row['customer_email'] ?? '')) !== ''): ?>
+                                                                        <div class="admin-order-summary__customer-email">
+                                                                            <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                                                        </div>
+                                                                    <?php endif; ?>
                                                                     <div class="admin-order-summary__created d-xl-none<?php echo $orderCreatedIsToday ? ' admin-order-summary__created--today' : ''; ?>">
                                                                         <span><?php echo admin_e($orderCreatedLabel); ?></span>
                                                                         <?php if ($orderWalletEditUrl !== ''): ?>
@@ -5175,7 +5191,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-order-row__actions">
                                                                     <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
-                                                                        <?php if (!($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)): ?>
+                                                                        <?php if (!($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)): ?>
                                                                             <i class="bi bi-search me-1" aria-hidden="true"></i>
                                                                         <?php endif; ?>
                                                                         <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
@@ -5185,7 +5201,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <i class="bi bi-receipt me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
                                                                         </a>
-                                                                    <?php elseif (trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
+                                                                    <?php elseif (!$isCompletedPaidOrder && trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
                                                                         <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer">
                                                                             <i class="bi bi-play-btn me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
@@ -5370,7 +5386,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php if (!empty($balanceSuggestion['id'])): ?>
                                                                         <input type="hidden" name="suggested_product_id" value="<?php echo admin_e((string)((int)$balanceSuggestion['id'])); ?>">
                                                                     <?php endif; ?>
-                                                                    <input type="hidden" name="payment_status" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status>
+                                                                    <input type="hidden" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status-original>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
                                                                         <?php if ($isAwaitingActivationOrder): ?>
@@ -5433,8 +5449,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_quick_status', 'Order status')); ?></label>
                                                                             <select class="form-select" name="status" data-admin-order-main-status>
                                                                                 <?php foreach (admin_order_status_options((string)($row['status'] ?? '')) as $statusOption): ?>
+                                                                                    <?php
+                                                                                    $statusOptionLabel = admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)));
+                                                                                    if ($statusOption === 'pending_payment' && $paymentStatusRaw === 'paid') {
+                                                                                        $statusOptionLabel = admin_t($messages, 'order_status_waiting_activation_short', 'Waiting for activation');
+                                                                                    }
+                                                                                    ?>
                                                                                     <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)($row['status'] ?? '') === $statusOption ? ' selected' : ''; ?><?php echo ($statusOption === 'active' && !empty($balanceActivationContext['needs_attention'])) ? ' disabled' : ''; ?>>
-                                                                                        <?php echo admin_e(admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)))); ?>
+                                                                                        <?php echo admin_e($statusOptionLabel); ?>
                                                                                     </option>
                                                                                 <?php endforeach; ?>
                                                                             </select>
@@ -5523,6 +5545,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <?php foreach (admin_order_payment_method_options((string)($row['payment_method'] ?? '')) as $paymentMethodOption): ?>
                                                                                             <option value="<?php echo admin_e($paymentMethodOption); ?>"<?php echo (string)($row['payment_method'] ?? '') === $paymentMethodOption ? ' selected' : ''; ?>>
                                                                                                 <?php echo admin_e($paymentMethodOption !== '' ? admin_t($messages, 'enum_' . $paymentMethodOption, ucfirst(str_replace('_', ' ', $paymentMethodOption))) : admin_t($messages, 'order_payment_method_none', 'None')); ?>
+                                                                                            </option>
+                                                                                        <?php endforeach; ?>
+                                                                                    </select>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_payment_short_label', 'Payment')); ?></label>
+                                                                                    <select class="form-select" name="payment_status" data-admin-order-payment-status>
+                                                                                        <?php foreach (admin_order_payment_status_options((string)($row['payment_status'] ?? '')) as $paymentStatusOption): ?>
+                                                                                            <option value="<?php echo admin_e($paymentStatusOption); ?>"<?php echo (string)($row['payment_status'] ?? '') === $paymentStatusOption ? ' selected' : ''; ?>>
+                                                                                                <?php echo admin_e(admin_t($messages, 'enum_' . $paymentStatusOption, ucfirst(str_replace('_', ' ', $paymentStatusOption)))); ?>
                                                                                             </option>
                                                                                         <?php endforeach; ?>
                                                                                     </select>

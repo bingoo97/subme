@@ -2020,6 +2020,7 @@ function admin_order_balance_payment_context(Mysql_ks $db, array $order): array
             $orderCreatedAt = trim((string)($order['created_at'] ?? ''));
             $creditTimestamp = $creditCreatedAt !== '' ? (int)strtotime($creditCreatedAt) : 0;
             $orderTimestamp = $orderCreatedAt !== '' ? (int)strtotime($orderCreatedAt) : 0;
+            $isSameDayAsNow = $creditTimestamp > 0 && date('Y-m-d', $creditTimestamp) === date('Y-m-d');
             $orderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
             $orderCreditSourceKey = is_array($orderCreditEvent) ? trim((string)($orderCreditEvent['source_key'] ?? '')) : '';
 
@@ -2027,6 +2028,7 @@ function admin_order_balance_payment_context(Mysql_ks $db, array $order): array
                 $creditSourceType === 'payment_approval'
                 && $creditSourceKey !== ''
                 && $creditSourceKey !== $orderCreditSourceKey
+                && $isSameDayAsNow
                 && ($orderTimestamp <= 0 || $creditTimestamp >= $orderTimestamp)
             ) {
                 $hasRecentTopupCredit = true;
@@ -2225,14 +2227,30 @@ function admin_mark_order_paid_from_balance(
     }
 
     $paidAt = trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s');
-    $updated = $db->update_using_id(
-        ['payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
-        ['balance', 'paid', 'pending', $paidAt, 'pending_payment'],
-        'orders',
-        $orderId
+    $saveResult = admin_save_order_info(
+        $db,
+        $orderId,
+        [
+            'order_reference' => (string)($order['order_reference'] ?? ''),
+            'payment_method' => 'balance',
+            'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
+            'customer_note' => (string)($order['customer_note'] ?? ''),
+            'support_note' => (string)($order['support_note'] ?? ''),
+            'delivery_link' => (string)($order['delivery_link'] ?? ''),
+            'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
+            'started_at' => (string)($order['started_at'] ?? ''),
+            'expires_at' => (string)($order['expires_at'] ?? ''),
+            'paid_at' => $paidAt,
+            'status' => 'pending_payment',
+            'payment_status' => 'paid',
+            'fulfillment_status' => 'pending',
+            'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
+        ],
+        $adminUserId,
+        $ipAddress
     );
 
-    if (!$updated) {
+    if (empty($saveResult['ok'])) {
         if (empty($balanceDebitResult['already_applied'])) {
             admin_apply_customer_balance_runtime_event(
                 $db,
@@ -2247,15 +2265,7 @@ function admin_mark_order_paid_from_balance(
             );
         }
 
-        return ['ok' => false, 'message' => 'Unable to mark the order as paid from customer balance.'];
-    }
-
-    if (schema_object_exists($db, 'order_status_events')) {
-        $db->insert(
-            ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
-            [$orderId, $adminUserId > 0 ? $adminUserId : null, (string)($order['status'] ?? 'pending_payment'), 'pending_payment', 'Payment confirmed from customer balance by admin'],
-            'order_status_events'
-        );
+        return ['ok' => false, 'message' => (string)($saveResult['message'] ?? 'Unable to mark the order as paid from customer balance.')];
     }
 
     admin_log_customer_and_admin(
@@ -2395,7 +2405,9 @@ function admin_order_payment_method_options(?string $current = ''): array
 function admin_order_progress_data(array $order): array
 {
     $createdAt = !empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0;
+    $startedAt = !empty($order['started_at']) ? strtotime((string)$order['started_at']) : 0;
     $expiresAt = !empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0;
+    $durationHours = max(0, (int)($order['duration_hours'] ?? 0));
     $now = time();
 
     if ($expiresAt <= 0) {
@@ -2409,20 +2421,24 @@ function admin_order_progress_data(array $order): array
         ];
     }
 
-    $totalSeconds = max(1, $expiresAt - ($createdAt > 0 ? $createdAt : $now));
+    if ($durationHours > 0) {
+        $totalSeconds = max(1, $durationHours * 3600);
+    } else {
+        $anchorTime = $startedAt > 0 ? $startedAt : ($createdAt > 0 ? $createdAt : $now);
+        $totalSeconds = max(1, $expiresAt - $anchorTime);
+    }
     $remainingSeconds = max(0, $expiresAt - $now);
-    $elapsedSeconds = max(0, $totalSeconds - $remainingSeconds);
-    $percent = (int)round(min(1, $elapsedSeconds / $totalSeconds) * 100);
+    $percent = (int)round(min(1, $remainingSeconds / $totalSeconds) * 100);
     $remainingDays = $remainingSeconds > 0 ? (int)ceil($remainingSeconds / 86400) : 0;
 
     if ($remainingSeconds <= 0) {
         $tone = 'expired';
         $color = '#ef4444';
-        $percent = 100;
-    } elseif ($remainingDays <= 7) {
+        $percent = 0;
+    } elseif ($percent <= 25) {
         $tone = 'danger';
         $color = '#ef4444';
-    } elseif ($remainingDays <= 30) {
+    } elseif ($percent <= 60) {
         $tone = 'warning';
         $color = '#f59e0b';
     } else {

@@ -6070,6 +6070,13 @@ body.admin-login-page .alert.alert-danger::before{
     text-decoration:none;
 }
 
+.admin-order-summary__customer-email{
+    margin-top:2px;
+    font-size:8px;
+    line-height:1.2;
+    color:#111111;
+}
+
 .admin-order-summary__note{
     display:flex;
     align-items:center;

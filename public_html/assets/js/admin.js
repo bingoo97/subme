@@ -1031,6 +1031,7 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-admin-order-status-form]').forEach(function (form) {
             var statusField = q('[data-admin-order-main-status]', form);
             var paymentField = q('[data-admin-order-payment-status]', form);
+            var originalPaymentField = q('[data-admin-order-payment-status-original]', form);
             var fulfillmentField = q('[data-admin-order-fulfillment-status]', form);
             var paymentPill = q('[data-admin-order-payment-pill]', form);
             var fulfillmentPill = q('[data-admin-order-fulfillment-pill]', form);
@@ -1039,7 +1040,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            var originalPayment = String(paymentField.value || '').toLowerCase();
+            var originalPayment = String((originalPaymentField ? originalPaymentField.value : paymentField.value) || '').toLowerCase();
             var originalFulfillment = String(fulfillmentField.value || '').toLowerCase();
 
             var paymentLabels = {
@@ -1061,7 +1062,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     paymentField.value = 'paid';
                     fulfillmentField.value = 'delivered';
                 } else if (statusValue === 'pending_payment') {
-                    paymentField.value = 'unpaid';
+                    if (String(paymentField.value || '').toLowerCase() === 'paid' || originalPayment === 'paid') {
+                        paymentField.value = 'paid';
+                    } else {
+                        paymentField.value = 'unpaid';
+                    }
                     fulfillmentField.value = 'pending';
                 } else {
                     paymentField.value = originalPayment;
@@ -1073,6 +1078,9 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             statusField.addEventListener('change', sync);
+            paymentField.addEventListener('change', function () {
+                applyPill(paymentPill, paymentField.value, 'payment', paymentLabels);
+            });
             sync();
         });
     }
