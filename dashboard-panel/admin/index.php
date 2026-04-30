@@ -8259,6 +8259,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     </form>
                                                                                 <?php endif; ?>
                                                                             </div>
+                                                                            <?php if (in_array($paymentStatus, ['pending', 'pending_payment'], true)): ?>
+                                                                                <div class="admin-topbar-notifications__hint text-muted small mt-2">
+                                                                                   *** <?php echo admin_e(admin_t($messages, 'payment_delete_hint_new', 'If you want to delete this payment, open details and use the Delete button at the bottom of the page.')); ?>
+                                                                                </div>
+                                                                            <?php endif; ?>
                                                                         </div>
                                                                     <?php elseif ($isCancelledPayment): ?>
                                                                         <div class="admin-topbar-notifications__payment-actions">

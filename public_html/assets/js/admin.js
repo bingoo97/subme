@@ -1481,11 +1481,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 setSubmitCooldown(payload.cooldown_seconds || 20);
                 window.setTimeout(function () {
-                    input.value = '';
-                    resetResults();
-                    resetQuickCreate();
-                    setHidden(wrap, true);
-                    toggle.setAttribute('aria-expanded', 'false');
+                    var nextUrl = new URL(window.location.href);
+                    nextUrl.searchParams.set('page', 'payments');
+                    nextUrl.searchParams.set('customer_id', String(selectedCustomerId));
+                    window.location.href = nextUrl.toString();
                 }, 900);
             }).catch(function () {
                 showQuickAlert(createErrorText, true);

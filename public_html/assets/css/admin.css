@@ -6721,6 +6721,13 @@ body.admin-login-page .alert.alert-danger::before{
     margin-top:.45rem;
 }
 
+.admin-topbar-notifications__hint{
+    color:#b42318 !important;
+    font-size:8px !important;
+    font-weight:800;
+    line-height:1.35;
+}
+
 .admin-search-user-card--payments-picker{
     display:flex;
     align-items:center;

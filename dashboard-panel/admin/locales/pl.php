@@ -1139,6 +1139,7 @@ return [
     'payment_quick_create_cooldown_error' => 'Poczekaj 20 sekund przed utworzeniem kolejnego requestu płatności dla tego usera.',
     'payment_quick_create_open_details' => 'Otwórz szczegóły płatności',
     'payment_quick_create_no_assets' => 'Brak aktywnych kryptowalut dostępnych dla tego usera.',
+    'payment_delete_hint_new' => 'Jeśli chcesz usunąć płatność, kliknij w szczegóły i przycisk Usuń na dole strony. Jeśli klient zapłacił ale nie ma jeszcze wpłaty a nie chcesz aby płatność trafiła do anulowanych kliknij Weryfikacja a po otrzymaniu środków oznacz jako zatwierdzone.',
     'empty_state' => 'Brak rekordów do wyświetlenia.',
     'locale_switch' => 'Język',
     'status_active' => 'Aktywny',
