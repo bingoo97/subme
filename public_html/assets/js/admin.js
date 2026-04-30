@@ -63,6 +63,50 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function buildUrlWithQuery(url, params) {
+        var base = String(url || '').trim();
+        var query = toQuery(params || {});
+
+        if (!base) {
+            return query ? ('?' + query) : '';
+        }
+        if (!query) {
+            return base;
+        }
+
+        return base + (base.indexOf('?') === -1 ? '?' : '&') + query;
+    }
+
+    function fallbackCopyText(text) {
+        var helper = document.createElement('textarea');
+        helper.value = String(text || '');
+        helper.setAttribute('readonly', 'readonly');
+        helper.style.position = 'fixed';
+        helper.style.opacity = '0';
+        helper.style.pointerEvents = 'none';
+        document.body.appendChild(helper);
+        helper.focus();
+        helper.select();
+        try {
+            document.execCommand('copy');
+        } catch (error) {
+            // noop
+        }
+        document.body.removeChild(helper);
+    }
+
+    function copyTextWithFallback(text) {
+        var value = String(text || '');
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            return navigator.clipboard.writeText(value).catch(function () {
+                fallbackCopyText(value);
+            });
+        }
+
+        fallbackCopyText(value);
+        return Promise.resolve();
+    }
+
     function initRichTextEditors() {
         var allowedTags = {
             P: true,
@@ -1790,7 +1834,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 var activeRequest = requestIndex;
                 renderEmpty('Loading...');
 
-                jsonFetch(searchUrl + '&' + toQuery({ q: query })).then(function (payload) {
+                jsonFetch(buildUrlWithQuery(searchUrl, { q: query }), {
+                    credentials: 'same-origin'
+                }).then(function (payload) {
                     if (activeRequest !== requestIndex) {
                         return;
                     }
@@ -2058,7 +2104,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 var activeRequest = requestIndex;
 
                 renderEmpty('Loading...');
-                jsonFetch(searchUrl + '&' + toQuery({ q: query })).then(function (payload) {
+                jsonFetch(buildUrlWithQuery(searchUrl, { q: query }), {
+                    credentials: 'same-origin'
+                }).then(function (payload) {
                     if (activeRequest !== requestIndex) {
                         return;
                     }
@@ -2184,6 +2232,32 @@ document.addEventListener('DOMContentLoaded', function () {
         function ctypeDigit(value) {
             return /^[0-9]+$/.test(String(value || '').trim());
         }
+    }
+
+    function initUserDetailCopy() {
+        qa('[data-admin-copy-value]').forEach(function (button) {
+            var timer = 0;
+            var feedback = q('[data-admin-copy-feedback]', button);
+            var feedbackText = String(button.getAttribute('data-admin-copy-feedback-text') || 'Copied').trim();
+
+            function showFeedback() {
+                if (!feedback) {
+                    return;
+                }
+                feedback.textContent = feedbackText || 'Copied';
+                setHidden(feedback, false);
+                window.clearTimeout(timer);
+                timer = window.setTimeout(function () {
+                    setHidden(feedback, true);
+                }, 1200);
+            }
+
+            button.addEventListener('click', function () {
+                copyTextWithFallback(button.getAttribute('data-admin-copy-value') || '').then(function () {
+                    showFeedback();
+                });
+            });
+        });
     }
 
     function initTopbarTools() {
@@ -2620,24 +2694,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 }, 1400);
             }
 
-            function fallbackCopyText(text) {
-                var helper = document.createElement('textarea');
-                helper.value = text;
-                helper.setAttribute('readonly', 'readonly');
-                helper.style.position = 'fixed';
-                helper.style.opacity = '0';
-                helper.style.pointerEvents = 'none';
-                document.body.appendChild(helper);
-                helper.focus();
-                helper.select();
-                try {
-                    document.execCommand('copy');
-                } catch (error) {
-                    // noop
-                }
-                document.body.removeChild(helper);
-            }
-
             function replaceAssets(items) {
                 var previousValue = String(assetSelect.value || '');
                 assets = Array.isArray(items) ? items : [];
@@ -2712,18 +2768,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
 
-                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-                    navigator.clipboard.writeText(copyValue).then(function () {
-                        showCopyFeedback();
-                    }).catch(function () {
-                        fallbackCopyText(copyValue);
-                        showCopyFeedback();
-                    });
-                    return;
-                }
-
-                fallbackCopyText(copyValue);
-                showCopyFeedback();
+                copyTextWithFallback(copyValue).then(function () {
+                    showCopyFeedback();
+                });
             });
             result.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter' || event.key === ' ') {
@@ -5798,6 +5845,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initProductTypeForms();
     initOrderStatusForms();
     initOrderCreateForms();
+    initUserDetailCopy();
     initWalletCustomerPickers();
     initWalletNetworkForms();
     initRichTextEditors();

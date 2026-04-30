@@ -3674,6 +3674,46 @@ body.admin-login-page{
     color:#0f62fe;
 }
 
+.admin-user-detail__email-title{
+    margin:0;
+}
+
+.admin-user-detail__copy-trigger{
+    display:inline-flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:.08rem;
+    padding:0;
+    border:0;
+    background:transparent;
+    text-align:left;
+    cursor:pointer;
+}
+
+.admin-user-detail__copy-trigger--handle{
+    color:#0f62fe;
+    font-size:inherit;
+    font-weight:900;
+}
+
+.admin-user-detail__copy-trigger--email{
+    color:#14171d;
+    font-size:1rem;
+    font-weight:800;
+}
+
+.admin-user-detail__copy-trigger:hover,
+.admin-user-detail__copy-trigger:focus{
+    opacity:.92;
+}
+
+.admin-user-detail__copy-feedback{
+    color:#198754;
+    font-size:.72rem;
+    font-weight:800;
+    line-height:1;
+}
+
 .admin-user-detail__header p{
     margin:.25rem 0 0;
     color:#778094;

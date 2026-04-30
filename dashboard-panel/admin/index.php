@@ -6610,9 +6610,29 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <?php $selectedCustomerHeaderHandle = trim((string)($selectedCustomer['public_handle'] ?? '')); ?>
                                                     <?php if ($selectedCustomerHeaderHandle !== ''): ?>
-                                                        <h1 class="admin-user-detail__handle-title"><?php echo admin_e('@' . ltrim($selectedCustomerHeaderHandle, '@')); ?></h1>
+                                                        <h1 class="admin-user-detail__handle-title">
+                                                            <button
+                                                                type="button"
+                                                                class="admin-user-detail__copy-trigger admin-user-detail__copy-trigger--handle"
+                                                                data-admin-copy-value="<?php echo admin_e('@' . ltrim($selectedCustomerHeaderHandle, '@')); ?>"
+                                                                data-admin-copy-feedback-text="Copied"
+                                                            >
+                                                                <span><?php echo admin_e('@' . ltrim($selectedCustomerHeaderHandle, '@')); ?></span>
+                                                                <small class="admin-user-detail__copy-feedback" data-admin-copy-feedback hidden>Copied</small>
+                                                            </button>
+                                                        </h1>
                                                     <?php endif; ?>
-                                                    <h3><?php echo admin_e((string)$selectedCustomer['email']); ?></h3>
+                                                    <h3 class="admin-user-detail__email-title">
+                                                        <button
+                                                            type="button"
+                                                            class="admin-user-detail__copy-trigger admin-user-detail__copy-trigger--email"
+                                                            data-admin-copy-value="<?php echo admin_e((string)$selectedCustomer['email']); ?>"
+                                                            data-admin-copy-feedback-text="Copied"
+                                                        >
+                                                            <span><?php echo admin_e((string)$selectedCustomer['email']); ?></span>
+                                                            <small class="admin-user-detail__copy-feedback" data-admin-copy-feedback hidden>Copied</small>
+                                                        </button>
+                                                    </h3>
                                                     <p><?php echo admin_e(admin_t($messages, 'user_detail_intro', 'Customer account overview, orders and payments.')); ?></p>
                                                 </div>
                                                 <a href="/admin/?page=users" class="btn btn-outline-dark btn-sm">
