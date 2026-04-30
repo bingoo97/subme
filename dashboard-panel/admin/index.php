@@ -5033,6 +5033,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderWalletEditUrl = ($orderPaymentStatusRaw === 'paid' && $orderWalletAddressId > 0 && $orderWalletLabel !== '')
                                                             ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $orderWalletAddressId
                                                             : '';
+                                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
+                                                        $orderCryptoPaymentStatus = strtolower(trim((string)($row['crypto_payment_status'] ?? '')));
+                                                        $orderBankPaymentId = (int)($row['bank_payment_id'] ?? 0);
+                                                        $orderBankPaymentStatus = strtolower(trim((string)($row['bank_payment_status'] ?? '')));
+                                                        $orderOpenPaymentDetailsUrl = '';
+                                                        $orderHasOpenPaymentRequest = false;
+                                                        if (
+                                                            $orderPaymentStatusRaw === 'unpaid'
+                                                            && in_array((string)($row['status'] ?? ''), ['pending', 'pending_payment'], true)
+                                                        ) {
+                                                            if ($orderCryptoPaymentId > 0 && in_array($orderCryptoPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
+                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId;
+                                                                $orderHasOpenPaymentRequest = true;
+                                                            } elseif ($orderBankPaymentId > 0 && in_array($orderBankPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
+                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=bank&payment_id=' . $orderBankPaymentId;
+                                                                $orderHasOpenPaymentRequest = true;
+                                                            }
+                                                        }
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                                         $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
                                                         $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
@@ -5120,7 +5138,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <i class="bi bi-search me-1" aria-hidden="true"></i>
                                                                         <span><?php echo admin_e(admin_t($messages, 'details', 'Details')); ?></span>
                                                                     </button>
-                                                                    <?php if (trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
+                                                                    <?php if ($orderHasOpenPaymentRequest && $orderOpenPaymentDetailsUrl !== ''): ?>
+                                                                        <a href="<?php echo admin_e($orderOpenPaymentDetailsUrl); ?>" class="btn btn-primary btn-sm w-100">
+                                                                            <i class="bi bi-receipt me-1" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
+                                                                        </a>
+                                                                    <?php elseif (trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
                                                                         <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer">
                                                                             <i class="bi bi-play-btn me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>

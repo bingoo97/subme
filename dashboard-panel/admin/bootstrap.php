@@ -1583,6 +1583,27 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
                 LIMIT 1
             ) AS crypto_payment_id,
             (
+                SELECT crypto_deposit_requests.status
+                FROM crypto_deposit_requests
+                WHERE crypto_deposit_requests.order_id = orders.id
+                ORDER BY crypto_deposit_requests.id DESC
+                LIMIT 1
+            ) AS crypto_payment_status,
+            (
+                SELECT bank_transfer_requests.id
+                FROM bank_transfer_requests
+                WHERE bank_transfer_requests.order_id = orders.id
+                ORDER BY bank_transfer_requests.id DESC
+                LIMIT 1
+            ) AS bank_payment_id,
+            (
+                SELECT bank_transfer_requests.status
+                FROM bank_transfer_requests
+                WHERE bank_transfer_requests.order_id = orders.id
+                ORDER BY bank_transfer_requests.id DESC
+                LIMIT 1
+            ) AS bank_payment_status,
+            (
                 SELECT crypto_wallet_addresses.address
                 FROM crypto_deposit_requests
                 INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
