@@ -178,6 +178,60 @@ function app_public_path(string $relativePath = ''): string
     return $basePath . '/' . $relativePath;
 }
 
+function app_chat_attachment_candidate_paths(string $attachmentPath): array
+{
+    $attachmentPath = trim($attachmentPath);
+    if ($attachmentPath === '' || strpos($attachmentPath, '/uploads/chat/') !== 0) {
+        return [];
+    }
+
+    $normalized = ltrim($attachmentPath, '/');
+    $paths = [
+        app_public_path($normalized),
+        dirname(__DIR__, 2) . '/public_html/' . $normalized,
+    ];
+
+    $uniquePaths = [];
+    foreach ($paths as $path) {
+        $path = rtrim((string)$path);
+        if ($path === '' || in_array($path, $uniquePaths, true)) {
+            continue;
+        }
+        $uniquePaths[] = $path;
+    }
+
+    return $uniquePaths;
+}
+
+function app_chat_attachment_absolute_path(string $attachmentPath, bool $migrateLegacyToPublicRoot = false): string
+{
+    $candidatePaths = app_chat_attachment_candidate_paths($attachmentPath);
+    if ($candidatePaths === []) {
+        return '';
+    }
+
+    $activePath = $candidatePaths[0];
+    foreach ($candidatePaths as $index => $candidatePath) {
+        if (!is_file($candidatePath)) {
+            continue;
+        }
+
+        if ($migrateLegacyToPublicRoot && $index > 0 && $candidatePath !== $activePath) {
+            $activeDirectory = dirname($activePath);
+            if ((!is_dir($activeDirectory) && @mkdir($activeDirectory, 0775, true)) || is_dir($activeDirectory)) {
+                @copy($candidatePath, $activePath);
+                if (is_file($activePath)) {
+                    return $activePath;
+                }
+            }
+        }
+
+        return $candidatePath;
+    }
+
+    return $activePath;
+}
+
 function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): string
 {
     $code = strtoupper(trim($assetCode));
@@ -5516,7 +5570,7 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
 
         $attachmentPath = trim((string)($row['attachment_path'] ?? ''));
         if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
-            $absolutePath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
+            $absolutePath = app_chat_attachment_absolute_path($attachmentPath);
             if (is_file($absolutePath) && @unlink($absolutePath)) {
                 $deletedFiles++;
             }

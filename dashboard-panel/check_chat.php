@@ -193,9 +193,10 @@ function chat_delete_uploaded_file(?string $attachmentPath): void
         return;
     }
 
-    $filePath = dirname(__DIR__) . '/public_html' . $attachmentPath;
-    if (is_file($filePath)) {
-        @unlink($filePath);
+    foreach (app_chat_attachment_candidate_paths($attachmentPath) as $filePath) {
+        if (is_file($filePath)) {
+            @unlink($filePath);
+        }
     }
 }
 
@@ -496,7 +497,7 @@ function chat_store_uploaded_image(array $file, int $customerId): ?string
         return null;
     }
 
-    $uploadDirectory = dirname(__DIR__) . '/public_html/uploads/chat';
+    $uploadDirectory = app_public_path('uploads/chat');
     if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
         return null;
     }

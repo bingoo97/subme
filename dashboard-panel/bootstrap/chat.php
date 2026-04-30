@@ -811,6 +811,9 @@ if (!function_exists('chat_normalize_messages')) {
                 isset($row['attachment_path']) ? (string)$row['attachment_path'] : '',
                 isset($row['tresc']) ? (string)$row['tresc'] : ''
             );
+            if ($attachmentPath !== '') {
+                app_chat_attachment_absolute_path($attachmentPath, true);
+            }
             $createdAt = $createdAtRaw;
             $anchorLabel = chat_time_anchor_label($createdAt);
             $showAnchor = $anchorLabel !== '' && $anchorLabel !== $previousAnchor;

@@ -759,9 +759,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return;
         }
 
-        $filePath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
-        if (is_file($filePath)) {
-            @unlink($filePath);
+        foreach (app_chat_attachment_candidate_paths($attachmentPath) as $filePath) {
+            if (is_file($filePath)) {
+                @unlink($filePath);
+            }
         }
     }
 
@@ -994,7 +995,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             }
             $attachmentPath = trim((string)($row['attachment_path'] ?? ''));
             if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
-                $absolutePath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
+                $absolutePath = app_chat_attachment_absolute_path($attachmentPath);
                 if (is_file($absolutePath) && @unlink($absolutePath)) {
                     $deletedFiles++;
                 }

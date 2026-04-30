@@ -12169,9 +12169,10 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
     $db->commit();
 
     foreach (array_unique($attachmentPaths) as $attachmentPath) {
-        $absoluteAttachmentPath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
-        if (is_file($absoluteAttachmentPath)) {
-            @unlink($absoluteAttachmentPath);
+        foreach (app_chat_attachment_candidate_paths($attachmentPath) as $absoluteAttachmentPath) {
+            if (is_file($absoluteAttachmentPath)) {
+                @unlink($absoluteAttachmentPath);
+            }
         }
     }
 
@@ -12202,9 +12203,10 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
 
     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
     if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
-        $absoluteAttachmentPath = dirname(__DIR__, 2) . '/public_html' . $attachmentPath;
-        if (is_file($absoluteAttachmentPath)) {
-            @unlink($absoluteAttachmentPath);
+        foreach (app_chat_attachment_candidate_paths($attachmentPath) as $absoluteAttachmentPath) {
+            if (is_file($absoluteAttachmentPath)) {
+                @unlink($absoluteAttachmentPath);
+            }
         }
     }
 
@@ -12294,6 +12296,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                                 <?php endif; ?>
                             </div>
                             <?php if ($attachmentPath !== ''): ?>
+                                <?php app_chat_attachment_absolute_path($attachmentPath, true); ?>
                                 <a href="<?php echo admin_e($attachmentPath); ?>" target="_blank" rel="noopener noreferrer" class="admin-chat-conversation__image-link">
                                     <img src="<?php echo admin_e($attachmentPath); ?>" alt="attachment" class="admin-chat-conversation__image">
                                 </a>
@@ -12541,7 +12544,7 @@ function admin_chat_store_uploaded_image(array $file, int $adminUserId): ?string
         return null;
     }
 
-    $uploadDirectory = dirname(__DIR__, 2) . '/public_html/uploads/chat';
+    $uploadDirectory = app_public_path('uploads/chat');
     if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
         return null;
     }
