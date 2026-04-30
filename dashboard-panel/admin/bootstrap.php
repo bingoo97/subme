@@ -1969,6 +1969,82 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
     ];
 }
 
+function admin_order_balance_payment_context(Mysql_ks $db, array $order): array
+{
+    $orderId = (int)($order['id'] ?? 0);
+    $customerId = (int)($order['customer_id'] ?? 0);
+    $status = strtolower(trim((string)($order['status'] ?? '')));
+    $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
+    $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+    $requiredAmount = round((float)($order['total_amount'] ?? 0), 2);
+
+    $isEligibleOrder = $orderId > 0
+        && $customerId > 0
+        && $requiredAmount > 0
+        && $paymentStatus === 'unpaid'
+        && in_array($status, ['pending', 'pending_payment', 'awaiting_review'], true)
+        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'cancelled'], true);
+
+    $currentBalance = 0.0;
+    if ($customerId > 0 && schema_object_exists($db, 'customers') && schema_column_exists($db, 'customers', 'balance_amount')) {
+        $customerRow = $db->select_user(
+            "SELECT balance_amount
+             FROM customers
+             WHERE id = {$customerId}
+             LIMIT 1"
+        );
+        if (is_array($customerRow)) {
+            $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
+        }
+    }
+
+    $canMarkPaidFromBalance = $isEligibleOrder && $currentBalance + 0.00001 >= $requiredAmount;
+    $shortfallAmount = max(0, round($requiredAmount - $currentBalance, 2));
+    $latestCreditEvent = null;
+    $hasRecentTopupCredit = false;
+
+    if ($customerId > 0 && schema_object_exists($db, 'customer_balance_runtime_events')) {
+        $latestCreditEvent = $db->select_user(
+            "SELECT source_type, source_key, amount, note, created_at
+             FROM customer_balance_runtime_events
+             WHERE customer_id = {$customerId}
+               AND direction = 'credit'
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+
+        if ($canMarkPaidFromBalance && is_array($latestCreditEvent)) {
+            $creditSourceType = strtolower(trim((string)($latestCreditEvent['source_type'] ?? '')));
+            $creditSourceKey = trim((string)($latestCreditEvent['source_key'] ?? ''));
+            $creditCreatedAt = trim((string)($latestCreditEvent['created_at'] ?? ''));
+            $orderCreatedAt = trim((string)($order['created_at'] ?? ''));
+            $creditTimestamp = $creditCreatedAt !== '' ? (int)strtotime($creditCreatedAt) : 0;
+            $orderTimestamp = $orderCreatedAt !== '' ? (int)strtotime($orderCreatedAt) : 0;
+            $orderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
+            $orderCreditSourceKey = is_array($orderCreditEvent) ? trim((string)($orderCreditEvent['source_key'] ?? '')) : '';
+
+            if (
+                $creditSourceType === 'payment_approval'
+                && $creditSourceKey !== ''
+                && $creditSourceKey !== $orderCreditSourceKey
+                && ($orderTimestamp <= 0 || $creditTimestamp >= $orderTimestamp)
+            ) {
+                $hasRecentTopupCredit = true;
+            }
+        }
+    }
+
+    return [
+        'is_eligible_order' => $isEligibleOrder,
+        'current_balance' => $currentBalance,
+        'required_amount' => $requiredAmount,
+        'shortfall_amount' => $shortfallAmount,
+        'can_mark_paid_from_balance' => $canMarkPaidFromBalance,
+        'has_recent_topup_credit' => $hasRecentTopupCredit,
+        'latest_credit_event' => is_array($latestCreditEvent) ? $latestCreditEvent : null,
+    ];
+}
+
 function admin_find_latest_approved_order_payment(Mysql_ks $db, int $orderId): ?array
 {
     if ($orderId <= 0) {
@@ -2075,6 +2151,123 @@ function admin_ensure_order_payment_balance_credit(Mysql_ks $db, array $order): 
         'already_applied' => !empty($creditResult['already_applied']),
         'message' => (string)($creditResult['message'] ?? ''),
     ];
+}
+
+function admin_cancel_open_order_payment_requests(Mysql_ks $db, int $customerId, int $orderId): void
+{
+    if ($customerId <= 0 || $orderId <= 0) {
+        return;
+    }
+
+    $safeNow = date('Y-m-d H:i:s');
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $db->query(
+            "UPDATE crypto_deposit_requests
+             SET status = 'cancelled',
+                 cancelled_at = '{$safeNow}'
+             WHERE customer_id = {$customerId}
+               AND order_id = {$orderId}
+               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
+        );
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $db->query(
+            "UPDATE bank_transfer_requests
+             SET status = 'cancelled'
+             WHERE customer_id = {$customerId}
+               AND order_id = {$orderId}
+               AND status IN ('pending_payment', 'awaiting_review')"
+        );
+    }
+}
+
+function admin_mark_order_paid_from_balance(
+    Mysql_ks $db,
+    int $orderId,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $order = admin_order_find($db, $orderId);
+    if (!$order) {
+        return ['ok' => false, 'message' => 'Order not found.'];
+    }
+
+    $balancePaymentContext = admin_order_balance_payment_context($db, $order);
+    if (empty($balancePaymentContext['can_mark_paid_from_balance'])) {
+        return ['ok' => false, 'message' => 'Customer balance is too low to mark this order as paid.'];
+    }
+
+    $customerId = (int)($order['customer_id'] ?? 0);
+    $amountValue = round((float)($order['total_amount'] ?? 0), 2);
+    if ($customerId <= 0 || $amountValue <= 0) {
+        return ['ok' => false, 'message' => 'This order cannot be paid from customer balance.'];
+    }
+
+    admin_cancel_open_order_payment_requests($db, $customerId, $orderId);
+
+    $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+        $db,
+        $customerId,
+        $amountValue,
+        'debit',
+        'order_activation',
+        (string)$orderId,
+        'Marked as paid from customer balance for order #' . $orderId,
+        $adminUserId,
+        $ipAddress
+    );
+
+    if (empty($balanceDebitResult['ok'])) {
+        return $balanceDebitResult;
+    }
+
+    $paidAt = trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s');
+    $updated = $db->update_using_id(
+        ['payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
+        ['balance', 'paid', 'pending', $paidAt, 'pending_payment'],
+        'orders',
+        $orderId
+    );
+
+    if (!$updated) {
+        if (empty($balanceDebitResult['already_applied'])) {
+            admin_apply_customer_balance_runtime_event(
+                $db,
+                $customerId,
+                $amountValue,
+                'credit',
+                'order_balance_payment_admin_rollback',
+                (string)$orderId . ':' . time(),
+                'Rollback after failed admin balance payment for order #' . $orderId,
+                $adminUserId,
+                $ipAddress
+            );
+        }
+
+        return ['ok' => false, 'message' => 'Unable to mark the order as paid from customer balance.'];
+    }
+
+    if (schema_object_exists($db, 'order_status_events')) {
+        $db->insert(
+            ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
+            [$orderId, $adminUserId > 0 ? $adminUserId : null, (string)($order['status'] ?? 'pending_payment'), 'pending_payment', 'Payment confirmed from customer balance by admin'],
+            'order_status_events'
+        );
+    }
+
+    admin_log_customer_and_admin(
+        $db,
+        $customerId,
+        $adminUserId,
+        'order_paid_from_balance',
+        'Order #' . $orderId . ' marked as paid from customer balance.',
+        $ipAddress
+    );
+
+    return ['ok' => true, 'message' => 'Order was marked as paid from customer balance.'];
 }
 
 function admin_apply_order_balance_suggestion(
@@ -2274,7 +2467,11 @@ function admin_order_status_visual(array $order): array
     $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
     $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
 
-    if ($status === 'pending_payment' && $paymentStatus === 'paid' && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)) {
+    if (
+        $paymentStatus === 'paid'
+        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)
+        && !in_array($status, ['active', 'expired', 'cancelled', 'failed', 'inactive'], true)
+    ) {
         return [
             'icon' => 'bi bi-arrow-repeat',
             'class' => 'admin-order-status-icon--awaiting-activation',
@@ -4937,7 +5134,9 @@ function admin_payment_accept_with_order(
                 'started_at' => (string)($order['started_at'] ?? ''),
                 'expires_at' => (string)($order['expires_at'] ?? ''),
                 'paid_at' => trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s'),
-                'status' => (string)($order['status'] ?? 'pending'),
+                'status' => in_array(strtolower(trim((string)($order['status'] ?? 'pending'))), ['active', 'expired', 'cancelled'], true)
+                    ? (string)($order['status'] ?? 'pending')
+                    : 'pending_payment',
                 'payment_status' => 'paid',
                 'fulfillment_status' => (string)($order['fulfillment_status'] ?? 'pending'),
                 'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',

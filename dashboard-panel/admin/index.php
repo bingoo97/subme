@@ -1489,6 +1489,22 @@ if ($route === 'orders') {
         }
     }
 
+    if (isset($_POST['admin_mark_order_paid_from_balance'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $balancePayResult = admin_mark_order_paid_from_balance(
+                $db,
+                (int)($_POST['order_id'] ?? 0),
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $pageAlert = (string)($balancePayResult['message'] ?? 'Unable to mark the order as paid from customer balance.');
+            $pageAlertType = !empty($balancePayResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
     if (isset($_POST['admin_extend_order'])) {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
@@ -4995,6 +5011,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $orderRows = admin_order_rows_filtered($db, $orderListPerPage, ($orderListPage - 1) * $orderListPerPage, $orderFilterCustomerId, $orderFilterOrderId);
                                     ?>
                                     <div class="admin-section-actions">
+                                        <a href="/admin/?page=payments" class="btn btn-primary">
+                                            <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'order_go_to_payments', 'Go to payments')); ?></span>
+                                        </a>
                                         <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark">
                                             <i class="bi bi-plus-circle" aria-hidden="true"></i>
                                             <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
@@ -5037,6 +5057,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderCryptoPaymentStatus = strtolower(trim((string)($row['crypto_payment_status'] ?? '')));
                                                         $orderBankPaymentId = (int)($row['bank_payment_id'] ?? 0);
                                                         $orderBankPaymentStatus = strtolower(trim((string)($row['bank_payment_status'] ?? '')));
+                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
                                                         $orderOpenPaymentDetailsUrl = '';
                                                         $orderHasOpenPaymentRequest = false;
                                                         if (
@@ -5052,7 +5073,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             }
                                                         }
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
-                                                        $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
+                                                        $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
+                                                            && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
+                                                            && !in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
+                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
+                                                        $orderDetailsButtonClass = ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) ? 'btn-success' : 'btn-dark';
+                                                        $orderDetailsButtonLabel = ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)
+                                                            ? admin_t($messages, 'order_click_to_approve', 'Click to approve')
+                                                            : admin_t($messages, 'details', 'Details');
+                                                        $orderLeadingIcon = ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)
+                                                            ? 'bi bi-check-circle-fill text-success'
+                                                            : 'bi bi-credit-card text-success';
                                                         $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
                                                         $modalId = 'adminOrderModal' . $orderId;
                                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
@@ -5060,7 +5091,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
-                                                                <strong>#<?php echo admin_e((string)$row['id']); ?></strong>
+                                                                <span class="d-inline-flex align-items-center justify-content-center w-100" title="#<?php echo admin_e((string)$row['id']); ?>">
+                                                                    <i class="<?php echo admin_e($orderLeadingIcon); ?> fs-3" aria-hidden="true"></i>
+                                                                </span>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
                                                                 <div class="admin-order-summary">
@@ -5068,6 +5101,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <strong><?php echo admin_e($orderTitle); ?></strong>
                                                                         <?php if ($isAwaitingActivationOrder): ?>
                                                                             <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
+                                                                        <?php elseif ($hasRecentBalanceTopupForOrder): ?>
+                                                                            <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_balance_paid_badge', 'BALANCE TOPPED UP')); ?></span>
                                                                         <?php elseif ($isPendingOrder): ?>
                                                                             <span class="admin-order-new-badge">NEW</span>
                                                                         <?php endif; ?>
@@ -5090,6 +5125,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <div class="admin-order-summary__note admin-order-summary__note--success">
                                                                             <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
+                                                                        </div>
+                                                                    <?php elseif ($hasRecentBalanceTopupForOrder): ?>
+                                                                        <div class="admin-order-summary__note admin-order-summary__note--success">
+                                                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_balance_recent_topup_message', 'The customer has just topped up their account balance.')); ?></span>
                                                                         </div>
                                                                     <?php elseif ((string)($row['status'] ?? '') === 'active'): ?>
                                                                         <div class="admin-order-progress">
@@ -5134,9 +5174,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-order-row__actions">
-                                                                    <button type="button" class="btn btn-dark btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
-                                                                        <i class="bi bi-search me-1" aria-hidden="true"></i>
-                                                                        <span><?php echo admin_e(admin_t($messages, 'details', 'Details')); ?></span>
+                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
+                                                                        <?php if (!($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)): ?>
+                                                                            <i class="bi bi-search me-1" aria-hidden="true"></i>
+                                                                        <?php endif; ?>
+                                                                        <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
                                                                     </button>
                                                                     <?php if ($orderHasOpenPaymentRequest && $orderOpenPaymentDetailsUrl !== ''): ?>
                                                                         <a href="<?php echo admin_e($orderOpenPaymentDetailsUrl); ?>" class="btn btn-primary btn-sm w-100">
@@ -5231,10 +5273,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $modalHeaderStatusClass = $modalOrderStatusClass;
                                                         $modalHeaderStatusIcon = $modalOrderStatusIcon;
                                                         $modalHeaderStatusIconClass = $modalOrderStatusIconClass;
-                                                        if ($orderStatusRaw === 'pending_payment' && $paymentStatusRaw === 'paid') {
+                                                        $balancePaymentContext = admin_order_balance_payment_context($db, $row);
+                                                        $hasRecentBalanceTopup = !empty($balancePaymentContext['has_recent_topup_credit']);
+                                                        $canMarkPaidFromBalance = !empty($balancePaymentContext['can_mark_paid_from_balance']);
+                                                        if ($isAwaitingActivationOrder) {
                                                             $modalHeaderStatusLabel = admin_t($messages, 'order_paid_badge', 'PAID');
                                                             $modalHeaderStatusClass = 'is-success';
                                                             $modalHeaderStatusIcon = 'bi bi-check-lg';
+                                                            $modalHeaderStatusIconClass = '';
+                                                        } elseif ($hasRecentBalanceTopup) {
+                                                            $modalHeaderStatusLabel = admin_t($messages, 'order_balance_paid_badge', 'BALANCE TOPPED UP');
+                                                            $modalHeaderStatusClass = 'is-success';
+                                                            $modalHeaderStatusIcon = 'bi bi-wallet2';
                                                             $modalHeaderStatusIconClass = '';
                                                         }
                                                         $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
@@ -5323,7 +5373,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="hidden" name="payment_status" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
-                                                                        <?php if ($paymentStatusRaw === 'paid'): ?>
+                                                                        <?php if ($isAwaitingActivationOrder): ?>
                                                                             <div class="admin-order-modal__paid-banner">
                                                                                 <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
                                                                                 <div>
@@ -5351,6 +5401,31 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-order-modal__next-step">
                                                                                     <strong class="admin-order-modal__next-step-title"><?php echo admin_e(admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')); ?></strong>
                                                                                     <span class="admin-order-modal__next-step-copy"><?php echo admin_e(admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.')); ?></span>
+                                                                                </div>
+                                                                            </div>
+                                                                        <?php elseif ($canMarkPaidFromBalance): ?>
+                                                                            <div class="admin-order-modal__paid-banner">
+                                                                                <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                                <div>
+                                                                                    <strong><?php echo admin_e($hasRecentBalanceTopup ? admin_t($messages, 'order_balance_recent_topup_message', 'The customer has just topped up their account balance.') : admin_t($messages, 'order_balance_ready_message', 'The customer has enough balance to pay for this order.')); ?></strong>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_balance_paid_steps_intro', 'Use the balance below to mark this order as paid before activation.')); ?></span>
+                                                                                </div>
+                                                                            </div>
+                                                                            <div class="admin-order-modal__next-steps">
+                                                                                <div class="admin-order-modal__next-step">
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(admin_t($messages, 'order_balance_ready_amount_title', 'Available customer balance')); ?></strong>
+                                                                                    <span class="admin-order-modal__next-step-copy">
+                                                                                        <?php echo admin_e(admin_format_money_value((float)($balancePaymentContext['current_balance'] ?? 0), (string)($row['currency_code'] ?? ''))); ?>
+                                                                                        ·
+                                                                                        <?php echo admin_e(admin_t($messages, 'order_balance_ready_required_copy', 'required for this order')); ?>:
+                                                                                        <?php echo admin_e(admin_format_money_value((float)($balancePaymentContext['required_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?>
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div class="admin-order-modal__next-step">
+                                                                                    <button type="submit" class="btn btn-success btn-lg" name="admin_mark_order_paid_from_balance">
+                                                                                        <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                                        <span><?php echo admin_e(admin_t($messages, 'order_balance_mark_paid_button', 'Use balance and mark as paid')); ?></span>
+                                                                                    </button>
                                                                                 </div>
                                                                             </div>
                                                                         <?php endif; ?>
@@ -7983,17 +8058,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                         <?php if ($visibleCancelledPaymentsCount > 0): ?>
                                             <div class="admin-payments-toolbar admin-payments-toolbar--secondary">
-                                                <form method="post" class="admin-payments-toolbar__danger admin-payments-toolbar__danger--visible">
-                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
-                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
-                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                    <button type="submit" class="btn btn-danger btn-md float-left" name="admin_delete_cancelled_payments" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_confirm', 'Delete all cancelled payments visible in this view?')); ?>');">
-                                                        <i class="bi bi-trash" aria-hidden="true"></i>
-                                                        <span><?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_button', 'Delete cancelled')); ?></span>
-                                                        <span class="admin-payments-filter__count"><?php echo admin_e((string)$visibleCancelledPaymentsCount); ?></span>
-                                                    </button>
-                                                </form>
+                                                <div class="d-flex flex-wrap gap-2 align-items-center">
+                                                    <a href="/admin/?page=orders" class="btn btn-primary btn-md">
+                                                        <i class="bi bi-list-task" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'payment_go_to_orders', 'Go to orders')); ?></span>
+                                                    </a>
+                                                    <form method="post" class="admin-payments-toolbar__danger admin-payments-toolbar__danger--visible">
+                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                        <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                        <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                        <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                        <button type="submit" class="btn btn-danger btn-md float-left" name="admin_delete_cancelled_payments" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_confirm', 'Delete all cancelled payments visible in this view?')); ?>');">
+                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_delete_cancelled_button', 'Delete cancelled')); ?></span>
+                                                            <span class="admin-payments-filter__count"><?php echo admin_e((string)$visibleCancelledPaymentsCount); ?></span>
+                                                        </button>
+                                                    </form>
+                                                </div>
                                             </div>
                                         <?php endif; ?>
 
