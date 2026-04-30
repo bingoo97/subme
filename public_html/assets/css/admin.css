@@ -1382,8 +1382,8 @@ body.admin-login-page{
 .admin-chat-inbox__list{
     flex:1 1 auto;
     overflow:auto;
-    padding:.65rem;
-    background:#fbfbfb;
+    padding:0;
+    background:#fff;
     scrollbar-width:none;
     -ms-overflow-style:none;
 }
@@ -1500,21 +1500,44 @@ body.admin-login-page{
 .admin-chat-inbox__item{
     width:100%;
     display:flex;
-    align-items:flex-start;
-    gap:.85rem;
-    padding: 10px;
-    border-radius: 10px;
+    align-items:center;
+    gap: 10px;
+    padding: 6px 15px 6px 10px;
+    min-height: 70px;
+    position:relative;
     background:#fff;
-    border:1px solid #eef1f7;
+    border:0;
+    border-radius:0;
     color:#16181d;
     text-decoration:none;
     text-align:left;
     cursor:pointer;
     appearance:none;
+    transition:background .15s ease;
 }
 
 .admin-chat-inbox__item + .admin-chat-inbox__item{
-    margin-top:.7rem;
+    margin-top:0;
+}
+
+.admin-chat-inbox__item::after{
+    content:"";
+    position:absolute;
+    left:0;
+    right:0;
+    bottom:0;
+    height:1px;
+    background:#d8d8dc;
+    transform:scaleY(.7);
+}
+
+.admin-chat-inbox__item.is-unread{
+    background:#fffcf4;
+}
+
+.admin-chat-inbox__item.is-unread .admin-chat-inbox__item-handle{
+    font-weight: bold;
+    color:#16181d;
 }
 
 .admin-chat-inbox__item-content{
@@ -1523,17 +1546,18 @@ body.admin-login-page{
 }
 
 .admin-chat-inbox__avatar{
-    width:46px;
-    height:46px;
-    flex:0 0 46px;
+    width: 40px;
+    height: 40px;
+    flex:0 0 40px;
     display:inline-flex;
     align-items:center;
     justify-content:center;
     border-radius:50%;
-    background:#dfe3eb;
+    background: #ffffff;
     color:#5f6880;
-    font-size:1rem;
+    font-size: 13px;
     font-weight:800;
+    letter-spacing:.01em;
 }
 
 .admin-chat-inbox__avatar.theme-1{
@@ -1567,14 +1591,10 @@ body.admin-login-page{
 }
 
 .admin-chat-inbox__item.is-unread .admin-chat-inbox__item-head strong,
-.admin-chat-inbox__item.is-unread .admin-chat-inbox__item-body p{
+.admin-chat-inbox__item.is-unread .admin-chat-inbox__item-body p,
+.admin-chat-inbox__item.is-unread .admin-chat-inbox__item-date{
     color:#111;
     font-weight:800;
-}
-
-.admin-chat-inbox__item.is-unread .admin-chat-inbox__item-head span{
-    color:#111;
-    font-weight:700;
 }
 
 .admin-chat-inbox__item-head strong{
@@ -1589,16 +1609,16 @@ body.admin-login-page{
 .admin-chat-inbox__item:focus{
     color:#16181d;
     text-decoration:none;
-    border-color:#e2e7f4;
-    background:#ffffff;
+    border-color:transparent;
+    background:#f7f7f8;
 }
 
 .admin-chat-inbox__item-head{
     display:flex;
     align-items:flex-start;
     justify-content:space-between;
-    gap:1rem;
-    margin-bottom:.45rem;
+    gap:10px;
+    margin-bottom:0;
 }
 
 .admin-chat-inbox__item-title,
@@ -1621,14 +1641,14 @@ body.admin-login-page{
 
 .admin-chat-inbox__avatar-presence{
     position:absolute;
-    top:-2px;
+    top:3px;
     right:-2px;
     z-index:2;
     display:inline-flex;
 }
 
 .admin-chat-inbox__avatar-presence .admin-chat-presence{
-    box-shadow:0 0 0 2px rgba(255,255,255,.95);
+    box-shadow:0 0 0 3px rgba(255,255,255,.95);
 }
 
 .admin-chat-inbox__avatar-presence--sm{
@@ -1640,7 +1660,23 @@ body.admin-login-page{
     min-width:0;
     display:flex;
     flex-direction:column;
-    gap:.12rem;
+    gap:.08rem;
+    flex:1 1 auto;
+}
+
+.admin-chat-inbox__item-title-line{
+    display:flex;
+    align-items:center;
+    gap:.35rem;
+    min-width:0;
+}
+
+.admin-chat-inbox__item-subline{
+    display:flex;
+    align-items:center;
+    gap:0;
+    min-width:0;
+    flex-wrap:nowrap;
 }
 
 .admin-chat-inbox__conversation-title-wrap a{
@@ -1673,9 +1709,11 @@ body.admin-login-page{
 }
 
 .admin-chat-inbox__item-head strong{
-    font-size:.95rem;
-    font-weight:800;
-    line-height:1.25;
+    font-size: 13px;
+    font-weight: 600;
+    line-height:1.12;
+    margin:0;
+    color: #0d6efd;
 }
 
 .admin-chat-inbox__item-title strong{
@@ -1688,27 +1726,45 @@ body.admin-login-page{
 
 .admin-chat-inbox__item-handle,
 .admin-chat-inbox__conversation-handle{
-    display:block;
-    color: #9d9d9d;
-    font-size: 9px;
+    display:inline-block;
+    color: #707070;
+    font-size:9px;
     font-weight: 500;
-    line-height:1.2;
+    line-height:1.1;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:22ch;
 }
 
-.admin-chat-inbox__item-head > span{
+.admin-chat-inbox__item-handle{
+    font-size: 10px;
+}
+
+.admin-chat-inbox__item-date{
     flex:0 0 auto;
-    color:#9199ab;
-    font-size:.74rem;
-    font-weight:700;
+    color:#8d8d94;
+    font-size: 11px;
+    font-weight:400;
+    white-space:nowrap;
+}
+
+.admin-chat-inbox__item-body{
+    display:flex;
+    align-items:center;
+    gap: 0.4rem;
+    min-width:0;
 }
 
 .admin-chat-inbox__item-body p{
-    margin:0 0 .55rem;
-    color:#5f6880;
-    font-size: 11px;
-    line-height:1.45;
+    flex:1 1 auto;
+    min-width:0;
+    margin:0;
+    color: #aeaeae;
+    font-size: 9px;
+    line-height:1.18;
     display:-webkit-box;
-    -webkit-line-clamp:2;
+    -webkit-line-clamp:1;
     -webkit-box-orient:vertical;
     overflow:hidden;
 }
@@ -1716,65 +1772,77 @@ body.admin-login-page{
 .admin-chat-inbox__meta{
     display:flex;
     align-items:center;
-    gap:.55rem;
+    gap:.3rem;
     flex-wrap:nowrap;
     min-width:0;
+    margin-top: 0;
+    margin-left:auto;
+    flex:0 0 auto;
 }
 
 .admin-chat-inbox__meta span{
     display:inline-flex;
     align-items:center;
-    min-height:24px;
-    padding: 0 6px;
-    border-radius: 4px;
-    background:#f3f5fb;
-    color:#5b6477;
-    font-size:.75rem;
+    min-height:16px;
+    padding:0 5px;
+    border-radius:999px;
+    background:#f2f4f7;
+    color:#667085;
+    font-size:.58rem;
     font-weight:800;
     white-space:nowrap;
-    font-size: 10px;
 }
 
-.admin-chat-inbox__meta .admin-chat-inbox__unread{
-    background:#fdecef;
-    color:#c61f4f;
+.admin-chat-inbox__item-status{
+    display:none !important;
+}
+
+.admin-chat-inbox__meta .admin-chat-inbox__unread,
+.admin-chat-inbox__item-title-line .admin-chat-inbox__unread{
+    display:inline-flex;
+    align-items:center;
+    min-height:16px;
+    padding:0 6px;
+    border: 1px solid #eadcb0;
+    border-radius: 4px;
+    background:#fff6db;
+    color:#9a6700;
+    font-size:.58rem;
+    font-weight:800;
+    line-height:1;
+    white-space:nowrap;
+    flex:0 0 auto;
 }
 
 .admin-chat-inbox__remove{
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    gap: 2px;
     flex:0 0 auto;
     margin-left:auto;
-    min-height: 15px;
-    padding: 0 6px;
-    border:1px solid rgba(220, 38, 38, 0.16);
-    border-radius: 4px;
-    background:#fff5f5;
-    color:#dc2626;
+    min-height:16px;
+    width:18px;
+    height:18px;
+    padding:0;
+    border:0;
+    border-radius:999px;
+    background:transparent;
+    color:#b42318;
     text-align:center;
     white-space:nowrap;
-    font-size: 10px;
-}
-
-.admin-chat-inbox__remove span{
-    background:#fff5f5;
-    color:#dc2626;
+    font-size:.58rem;
+    opacity:.72;
 }
 
 .admin-chat-inbox__remove .bi{
-    font-size: 10px;
-}
-
-.admin-chat-inbox__remove span{
-    font-size: 10px;
-    font-weight:800;
+    font-size:.62rem;
 }
 
 .admin-chat-inbox__remove:hover,
 .admin-chat-inbox__remove:focus{
-    background:#feecec;
+    background:#fff1f2;
+    color:#912018;
+    opacity:1;
 }
 
 .admin-chat-inbox__conversation-header{
@@ -3419,8 +3487,8 @@ body.admin-login-page{
 .admin-wallet-assigned{
     display:flex;
     flex-direction:column;
-    gap:.32rem;
-    font-size: 12px;
+    gap:.12rem;
+    font-size:12px;
 }
 
 .admin-wallet-assigned strong{
@@ -3432,6 +3500,34 @@ body.admin-login-page{
     font-size:.82rem;
     font-weight:800;
     color:#16181d;
+}
+
+.admin-wallet-assigned__handle{
+    display:block;
+    max-width:22ch;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    font-size:13px;
+    font-weight:800;
+    color:#2563eb;
+    text-decoration:none;
+}
+
+.admin-wallet-assigned__handle:hover{
+    color:#1d4ed8;
+    text-decoration:underline;
+}
+
+.admin-wallet-assigned__email{
+    display:block;
+    max-width:24ch;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    font-size:9px;
+    font-weight:600;
+    color:#111;
 }
 
 .admin-wallet-actions{
@@ -7832,7 +7928,10 @@ body.admin-login-page .alert.alert-danger::before{
         gap:.65rem;
     }
 
-    .admin-chat-inbox__list,
+    .admin-chat-inbox__list{
+        padding:0;
+    }
+
     .admin-chat-inbox__conversation-body{
         padding:.75rem;
     }
@@ -7871,6 +7970,39 @@ body.admin-login-page .alert.alert-danger::before{
 
     .admin-chat-inbox__remove{
         min-width:0;
+    }
+
+    .admin-chat-inbox__item{
+        gap:12px;
+        padding-left:12px;
+        padding-right:10px;
+    }
+
+    .admin-chat-inbox__item::after{
+        left:0;
+    }
+
+    .admin-chat-inbox__avatar{
+        width: 40px;
+        height: 40px;
+        flex-basis:58px;
+        font-size: 14px;
+    }
+
+    .admin-chat-inbox__item-head strong{
+        font-size: 13px;
+    }
+
+    .admin-chat-inbox__item-date{
+        font-size: 12px;
+    }
+
+    .admin-chat-inbox__item-body p{
+        font-size: 10px;
+    }
+
+    .admin-chat-inbox__item-handle{
+        font-size: 8px;
     }
 
     .admin-user-chip{

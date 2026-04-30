@@ -7071,21 +7071,31 @@ function admin_crypto_wallet_rows(Mysql_ks $db, int $limit = 20, int $offset = 0
             crypto_assets.name AS asset_name,
             crypto_assets.logo_url AS asset_logo_url,
             (
-                SELECT customer_crypto_wallets.customer_email
-                FROM customer_crypto_wallets
-                WHERE customer_crypto_wallets.wallet_address_id = crypto_wallet_addresses.id
-                  AND customer_crypto_wallets.status IN ('reserved', 'active')
-                ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC
+                SELECT customers.email
+                FROM crypto_wallet_assignments
+                INNER JOIN customers ON customers.id = crypto_wallet_assignments.customer_id
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
                 LIMIT 1
             ) AS assigned_customer_email,
             (
-                SELECT customer_crypto_wallets.customer_id
-                FROM customer_crypto_wallets
-                WHERE customer_crypto_wallets.wallet_address_id = crypto_wallet_addresses.id
-                  AND customer_crypto_wallets.status IN ('reserved', 'active')
-                ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC
+                SELECT crypto_wallet_assignments.customer_id
+                FROM crypto_wallet_assignments
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
                 LIMIT 1
             ) AS assigned_customer_id,
+            (
+                SELECT NULLIF(TRIM(customers.public_handle), '')
+                FROM crypto_wallet_assignments
+                INNER JOIN customers ON customers.id = crypto_wallet_assignments.customer_id
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
+                LIMIT 1
+            ) AS assigned_customer_public_handle,
             (
                 SELECT COUNT(*)
                 FROM crypto_wallet_assignments
@@ -7151,21 +7161,31 @@ function admin_crypto_wallet_rows_filtered(Mysql_ks $db, int $limit = 20, int $o
             crypto_assets.name AS asset_name,
             crypto_assets.logo_url AS asset_logo_url,
             (
-                SELECT customer_crypto_wallets.customer_email
-                FROM customer_crypto_wallets
-                WHERE customer_crypto_wallets.wallet_address_id = crypto_wallet_addresses.id
-                  AND customer_crypto_wallets.status IN ('reserved', 'active')
-                ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC
+                SELECT customers.email
+                FROM crypto_wallet_assignments
+                INNER JOIN customers ON customers.id = crypto_wallet_assignments.customer_id
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
                 LIMIT 1
             ) AS assigned_customer_email,
             (
-                SELECT customer_crypto_wallets.customer_id
-                FROM customer_crypto_wallets
-                WHERE customer_crypto_wallets.wallet_address_id = crypto_wallet_addresses.id
-                  AND customer_crypto_wallets.status IN ('reserved', 'active')
-                ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC
+                SELECT crypto_wallet_assignments.customer_id
+                FROM crypto_wallet_assignments
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
                 LIMIT 1
             ) AS assigned_customer_id,
+            (
+                SELECT NULLIF(TRIM(customers.public_handle), '')
+                FROM crypto_wallet_assignments
+                INNER JOIN customers ON customers.id = crypto_wallet_assignments.customer_id
+                WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
+                LIMIT 1
+            ) AS assigned_customer_public_handle,
             (
                 SELECT COUNT(*)
                 FROM crypto_wallet_assignments
