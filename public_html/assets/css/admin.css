@@ -7729,7 +7729,7 @@ body.admin-login-page .alert.alert-danger::before{
     }
 
     .admin-topbar{
-        padding:.85rem;
+        padding: 0 8px;
     }
 
     .admin-topbar__left{

@@ -4891,6 +4891,22 @@ function admin_save_payment(
             );
         }
 
+        $successStatuses = admin_payment_success_statuses($paymentType);
+        if ($updated && in_array($status, $successStatuses, true)) {
+            $finalizeResult = admin_finalize_successful_payment($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
+            if (empty($finalizeResult['ok'])) {
+                return $finalizeResult;
+            }
+
+            return [
+                'ok' => true,
+                'message' => 'Payment request saved successfully.',
+                'already_applied' => !empty($finalizeResult['already_applied']),
+                'order_id' => (int)($finalizeResult['order_id'] ?? 0),
+                'customer_id' => (int)($finalizeResult['customer_id'] ?? 0),
+            ];
+        }
+
         return [
             'ok' => (bool)$updated,
             'message' => $updated ? 'Payment request saved successfully.' : 'Unable to save payment request.',
@@ -4973,9 +4989,163 @@ function admin_save_payment(
         );
     }
 
+    $successStatuses = admin_payment_success_statuses($paymentType);
+    if ($updated && in_array($status, $successStatuses, true)) {
+        $finalizeResult = admin_finalize_successful_payment($db, $paymentType, $paymentId, $adminUserId, $ipAddress);
+        if (empty($finalizeResult['ok'])) {
+            return $finalizeResult;
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Payment request saved successfully.',
+            'already_applied' => !empty($finalizeResult['already_applied']),
+            'order_id' => (int)($finalizeResult['order_id'] ?? 0),
+            'customer_id' => (int)($finalizeResult['customer_id'] ?? 0),
+        ];
+    }
+
     return [
         'ok' => (bool)$updated,
         'message' => $updated ? 'Payment request saved successfully.' : 'Unable to save payment request.',
+    ];
+}
+
+function admin_finalize_successful_payment(
+    Mysql_ks $db,
+    string $paymentType,
+    int $paymentId,
+    int $adminUserId = 0,
+    string $ipAddress = ''
+): array
+{
+    $payment = admin_payment_find($db, $paymentType, $paymentId);
+    if (!is_array($payment) || empty($payment['id'])) {
+        return ['ok' => false, 'message' => 'Payment request not found.'];
+    }
+
+    $paymentType = strtolower((string)($payment['payment_type'] ?? $paymentType));
+    if (!in_array($paymentType, ['crypto', 'bank'], true)) {
+        return ['ok' => true];
+    }
+
+    $status = strtolower(trim((string)($payment['status'] ?? '')));
+    if (!in_array($status, admin_payment_success_statuses($paymentType), true)) {
+        return ['ok' => true];
+    }
+
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    $orderId = (int)($payment['order_id'] ?? 0);
+    $amountValue = round((float)($payment['amount_value'] ?? 0), 2);
+    if ($customerId <= 0 || $amountValue <= 0) {
+        return ['ok' => false, 'message' => 'This payment cannot be credited to customer balance.'];
+    }
+
+    $currentPaymentSourceKey = $paymentType . ':' . $paymentId;
+    $balanceAlreadyAppliedForThisPayment = false;
+
+    if ($orderId > 0) {
+        $existingOrderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
+        if (is_array($existingOrderCreditEvent) && !empty($existingOrderCreditEvent['source_key'])) {
+            $creditedSourceKey = (string)($existingOrderCreditEvent['source_key'] ?? '');
+            if ($creditedSourceKey === $currentPaymentSourceKey) {
+                $balanceAlreadyAppliedForThisPayment = true;
+            } else {
+                return [
+                    'ok' => false,
+                    'message' => 'This order was already credited to customer balance from another payment request.',
+                ];
+            }
+        }
+    }
+
+    $balanceCreditResult = [
+        'ok' => true,
+        'already_applied' => $balanceAlreadyAppliedForThisPayment,
+    ];
+
+    if (!$balanceAlreadyAppliedForThisPayment) {
+        $balanceCreditResult = admin_apply_customer_balance_runtime_event(
+            $db,
+            $customerId,
+            $amountValue,
+            'credit',
+            'payment_approval',
+            $currentPaymentSourceKey,
+            'Approved ' . ucfirst($paymentType) . ' payment #' . $paymentId,
+            $adminUserId,
+            $ipAddress
+        );
+        if (empty($balanceCreditResult['ok'])) {
+            return $balanceCreditResult;
+        }
+    }
+
+    if ($paymentType === 'crypto') {
+        $assignmentEnsureResult = admin_ensure_crypto_wallet_assignment_for_payment(
+            $db,
+            $payment,
+            $adminUserId,
+            admin_app_settings($db),
+            $ipAddress
+        );
+        if (empty($assignmentEnsureResult['ok'])) {
+            return $assignmentEnsureResult;
+        }
+    } elseif ($paymentType === 'bank') {
+        $assignmentEnsureResult = admin_ensure_bank_account_assignment_for_payment(
+            $db,
+            $payment,
+            $adminUserId,
+            admin_app_settings($db),
+            $ipAddress
+        );
+        if (empty($assignmentEnsureResult['ok'])) {
+            return $assignmentEnsureResult;
+        }
+    }
+
+    if ($orderId > 0) {
+        $order = admin_order_find($db, $orderId);
+        if (!$order) {
+            return ['ok' => false, 'message' => 'Linked order not found.'];
+        }
+
+        $orderSaveResult = admin_save_order_info(
+            $db,
+            $orderId,
+            [
+                'order_reference' => (string)($order['order_reference'] ?? ''),
+                'payment_method' => (string)($order['payment_method'] ?? ''),
+                'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
+                'customer_note' => (string)($order['customer_note'] ?? ''),
+                'support_note' => (string)($order['support_note'] ?? ''),
+                'delivery_link' => (string)($order['delivery_link'] ?? ''),
+                'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
+                'started_at' => (string)($order['started_at'] ?? ''),
+                'expires_at' => (string)($order['expires_at'] ?? ''),
+                'paid_at' => trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s'),
+                'status' => in_array(strtolower(trim((string)($order['status'] ?? 'pending'))), ['active', 'expired', 'cancelled'], true)
+                    ? (string)($order['status'] ?? 'pending')
+                    : 'pending_payment',
+                'payment_status' => 'paid',
+                'fulfillment_status' => (string)($order['fulfillment_status'] ?? 'pending'),
+                'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
+            ],
+            $adminUserId,
+            $ipAddress
+        );
+
+        if (empty($orderSaveResult['ok'])) {
+            return $orderSaveResult;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'already_applied' => !empty($balanceCreditResult['already_applied']),
+        'order_id' => $orderId,
+        'customer_id' => $customerId,
     ];
 }
 
@@ -5111,31 +5281,6 @@ function admin_payment_accept_with_order(
         return ['ok' => false, 'message' => 'This payment cannot be accepted from topbar.'];
     }
 
-    $orderId = (int)($payment['order_id'] ?? 0);
-    $customerId = (int)($payment['customer_id'] ?? 0);
-    $amountValue = round((float)($payment['amount_value'] ?? 0), 2);
-    if ($customerId <= 0 || $amountValue <= 0) {
-        return ['ok' => false, 'message' => 'This payment cannot be credited to customer balance.'];
-    }
-
-    $currentPaymentSourceKey = $paymentType . ':' . $paymentId;
-    $balanceAlreadyAppliedForThisPayment = false;
-
-    if ($orderId > 0) {
-        $existingOrderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
-        if (is_array($existingOrderCreditEvent) && !empty($existingOrderCreditEvent['source_key'])) {
-            $creditedSourceKey = (string)($existingOrderCreditEvent['source_key'] ?? '');
-            if ($creditedSourceKey === $currentPaymentSourceKey) {
-                $balanceAlreadyAppliedForThisPayment = true;
-            } else {
-                return [
-                    'ok' => false,
-                    'message' => 'This order was already credited to customer balance from another payment request.',
-                ];
-            }
-        }
-    }
-
     $paymentUpdateInput = [];
     if ($paymentType === 'crypto') {
         $paymentUpdateInput = [
@@ -5160,7 +5305,7 @@ function admin_payment_accept_with_order(
         ];
     }
 
-    $paymentSaveResult = admin_save_payment(
+    $saveResult = admin_save_payment(
         $db,
         $paymentType,
         $paymentId,
@@ -5168,87 +5313,18 @@ function admin_payment_accept_with_order(
         $adminUserId,
         $ipAddress
     );
-    if (empty($paymentSaveResult['ok'])) {
-        return $paymentSaveResult;
-    }
-
-    $balanceCreditResult = [
-        'ok' => true,
-        'already_applied' => $balanceAlreadyAppliedForThisPayment,
-    ];
-
-    if (!$balanceAlreadyAppliedForThisPayment) {
-        $balanceCreditResult = admin_apply_customer_balance_runtime_event(
-            $db,
-            $customerId,
-            $amountValue,
-            'credit',
-            'payment_approval',
-            $currentPaymentSourceKey,
-            'Approved ' . ucfirst($paymentType) . ' payment #' . $paymentId,
-            $adminUserId,
-            $ipAddress
-        );
-        if (empty($balanceCreditResult['ok'])) {
-            return $balanceCreditResult;
-        }
-    }
-
-    $assignmentEnsureResult = admin_ensure_crypto_wallet_assignment_for_payment(
-        $db,
-        $payment,
-        $adminUserId,
-        admin_app_settings($db),
-        $ipAddress
-    );
-    if (empty($assignmentEnsureResult['ok'])) {
-        return $assignmentEnsureResult;
-    }
-
-    if ($orderId > 0) {
-        $order = admin_order_find($db, $orderId);
-        if (!$order) {
-            return ['ok' => false, 'message' => 'Linked order not found.'];
-        }
-
-        $orderSaveResult = admin_save_order_info(
-            $db,
-            $orderId,
-            [
-                'order_reference' => (string)($order['order_reference'] ?? ''),
-                'payment_method' => (string)($order['payment_method'] ?? ''),
-                'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
-                'customer_note' => (string)($order['customer_note'] ?? ''),
-                'support_note' => (string)($order['support_note'] ?? ''),
-                'delivery_link' => (string)($order['delivery_link'] ?? ''),
-                'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
-                'started_at' => (string)($order['started_at'] ?? ''),
-                'expires_at' => (string)($order['expires_at'] ?? ''),
-                'paid_at' => trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s'),
-                'status' => in_array(strtolower(trim((string)($order['status'] ?? 'pending'))), ['active', 'expired', 'cancelled'], true)
-                    ? (string)($order['status'] ?? 'pending')
-                    : 'pending_payment',
-                'payment_status' => 'paid',
-                'fulfillment_status' => (string)($order['fulfillment_status'] ?? 'pending'),
-                'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
-            ],
-            $adminUserId,
-            $ipAddress
-        );
-
-        if (empty($orderSaveResult['ok'])) {
-            return $orderSaveResult;
-        }
+    if (empty($saveResult['ok'])) {
+        return $saveResult;
     }
 
     return [
         'ok' => true,
-        'message' => !empty($balanceCreditResult['already_applied'])
+        'message' => !empty($saveResult['already_applied'])
             ? 'Payment was accepted, but customer balance was not credited again because this payment was already processed earlier.'
             : 'Payment was accepted and customer balance was credited.',
-        'order_id' => $orderId,
-        'customer_id' => $customerId,
-        'already_applied' => !empty($balanceCreditResult['already_applied']),
+        'order_id' => (int)($saveResult['order_id'] ?? ($payment['order_id'] ?? 0)),
+        'customer_id' => (int)($saveResult['customer_id'] ?? ($payment['customer_id'] ?? 0)),
+        'already_applied' => !empty($saveResult['already_applied']),
     ];
 }
 
@@ -9707,6 +9783,19 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
     }
 
     if ($existingCustomerAssignmentId > 0 && ($sharedEnabled || count($customerAssignments) <= 1)) {
+        $db->query(
+            "UPDATE crypto_wallet_assignments
+             SET status = 'active',
+                 released_at = NULL,
+                 released_by_admin_user_id = NULL
+             WHERE id = {$existingCustomerAssignmentId}"
+        );
+        $db->update_using_id(
+            ['status', 'last_assigned_at', 'disabled_at'],
+            ['assigned', $db->expr('NOW()'), null],
+            'crypto_wallet_addresses',
+            $walletId
+        );
         return [
             'ok' => true,
             'message' => 'This wallet is already assigned to the selected customer.',
@@ -9951,7 +10040,154 @@ function admin_ensure_crypto_wallet_assignment_for_payment(Mysql_ks $db, array $
         return ['ok' => true];
     }
 
-    return admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings, $ipAddress);
+    $paymentId = (int)($payment['id'] ?? 0);
+    $walletAssignmentId = (int)($payment['wallet_assignment_id'] ?? 0);
+    $existingAssignment = null;
+
+    if ($walletAssignmentId > 0) {
+        $existingAssignment = $db->select_user(
+            "SELECT id
+             FROM crypto_wallet_assignments
+             WHERE id = {$walletAssignmentId}
+               AND wallet_address_id = {$walletAddressId}
+               AND customer_id = {$customerId}
+             LIMIT 1"
+        );
+    }
+
+    if (!is_array($existingAssignment) || empty($existingAssignment['id'])) {
+        $existingAssignment = $db->select_user(
+            "SELECT id
+             FROM crypto_wallet_assignments
+             WHERE wallet_address_id = {$walletAddressId}
+               AND customer_id = {$customerId}
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+    }
+
+    if (is_array($existingAssignment) && !empty($existingAssignment['id'])) {
+        $walletAssignmentId = (int)$existingAssignment['id'];
+        $db->query(
+            "UPDATE crypto_wallet_assignments
+             SET status = 'active',
+                 released_at = NULL,
+                 released_by_admin_user_id = NULL
+             WHERE id = {$walletAssignmentId}"
+        );
+        $db->update_using_id(
+            ['status', 'last_assigned_at', 'disabled_at'],
+            ['assigned', $db->expr('NOW()'), null],
+            'crypto_wallet_addresses',
+            $walletAddressId
+        );
+    } else {
+        $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings, $ipAddress);
+        if (empty($assignResult['ok'])) {
+            return $assignResult;
+        }
+        $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+    }
+
+    if ($paymentId > 0) {
+        $db->update_using_id(
+            ['wallet_address_id', 'wallet_assignment_id'],
+            [$walletAddressId, $walletAssignmentId > 0 ? $walletAssignmentId : null],
+            'crypto_deposit_requests',
+            $paymentId
+        );
+    }
+
+    return [
+        'ok' => true,
+        'wallet_address_id' => $walletAddressId,
+        'wallet_assignment_id' => $walletAssignmentId,
+    ];
+}
+
+function admin_ensure_bank_account_assignment_for_payment(Mysql_ks $db, array $payment, int $adminUserId, array $settings, string $ipAddress = ''): array
+{
+    $paymentType = strtolower(trim((string)($payment['payment_type'] ?? '')));
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    $bankAccountId = (int)($payment['bank_account_id'] ?? 0);
+    if ($paymentType !== 'bank' || $customerId <= 0 || $bankAccountId <= 0) {
+        return ['ok' => true];
+    }
+
+    $paymentId = (int)($payment['id'] ?? 0);
+    $bankAccountAssignmentId = (int)($payment['bank_account_assignment_id'] ?? 0);
+    $existingAssignment = null;
+
+    if ($bankAccountAssignmentId > 0) {
+        $existingAssignment = $db->select_user(
+            "SELECT id
+             FROM bank_account_assignments
+             WHERE id = {$bankAccountAssignmentId}
+               AND bank_account_id = {$bankAccountId}
+               AND customer_id = {$customerId}
+             LIMIT 1"
+        );
+    }
+
+    if (!is_array($existingAssignment) || empty($existingAssignment['id'])) {
+        $existingAssignment = $db->select_user(
+            "SELECT id
+             FROM bank_account_assignments
+             WHERE bank_account_id = {$bankAccountId}
+               AND customer_id = {$customerId}
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+    }
+
+    if (is_array($existingAssignment) && !empty($existingAssignment['id'])) {
+        $bankAccountAssignmentId = (int)$existingAssignment['id'];
+        $db->query(
+            "UPDATE bank_account_assignments
+             SET status = 'active',
+                 released_at = NULL,
+                 released_by_admin_user_id = NULL
+             WHERE id = {$bankAccountAssignmentId}"
+        );
+        $db->update_using_id(
+            ['status', 'last_assigned_at', 'disabled_at'],
+            ['assigned', $db->expr('NOW()'), null],
+            'bank_accounts',
+            $bankAccountId
+        );
+    } else {
+        $assignResult = admin_assign_bank_account_customer($db, $bankAccountId, $customerId, $adminUserId, $settings, $ipAddress);
+        if (empty($assignResult['ok'])) {
+            return $assignResult;
+        }
+        $bankAccountAssignmentId = (int)($assignResult['bank_account_assignment_id'] ?? 0);
+        if ($bankAccountAssignmentId <= 0) {
+            $assignmentRow = $db->select_user(
+                "SELECT id
+                 FROM bank_account_assignments
+                 WHERE bank_account_id = {$bankAccountId}
+                   AND customer_id = {$customerId}
+                 ORDER BY id DESC
+                 LIMIT 1"
+            );
+            $bankAccountAssignmentId = (int)($assignmentRow['id'] ?? 0);
+        }
+    }
+
+    if ($paymentId > 0) {
+        $db->update_using_id(
+            ['bank_account_assignment_id'],
+            [$bankAccountAssignmentId > 0 ? $bankAccountAssignmentId : null],
+            'bank_transfer_requests',
+            $paymentId
+        );
+    }
+
+    return [
+        'ok' => true,
+        'bank_account_id' => $bankAccountId,
+        'bank_account_assignment_id' => $bankAccountAssignmentId,
+    ];
 }
 
 function admin_bank_account_find(Mysql_ks $db, int $accountId): ?array
@@ -10119,7 +10355,25 @@ function admin_assign_bank_account_customer(Mysql_ks $db, int $accountId, int $c
     }
 
     if ($existingCustomerAssignmentId > 0 && ($sharedEnabled || count($customerAssignments) <= 1)) {
-        return ['ok' => false, 'message' => 'This bank account is already assigned to the selected customer.'];
+        $db->query(
+            "UPDATE bank_account_assignments
+             SET status = 'active',
+                 released_at = NULL,
+                 released_by_admin_user_id = NULL
+             WHERE id = {$existingCustomerAssignmentId}"
+        );
+        $db->update_using_id(
+            ['status', 'last_assigned_at', 'disabled_at'],
+            ['assigned', $db->expr('NOW()'), null],
+            'bank_accounts',
+            $accountId
+        );
+        return [
+            'ok' => true,
+            'message' => 'This bank account is already assigned to the selected customer.',
+            'bank_account_assignment_id' => $existingCustomerAssignmentId,
+            'bank_account_id' => $accountId,
+        ];
     }
 
     $db->start();

@@ -665,7 +665,7 @@ function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, 
     }
 
     $assignment = $db->select_user(
-        "SELECT id, wallet_address_id, status
+        "SELECT id, wallet_address_id, customer_id, status
          FROM crypto_wallet_assignments
          WHERE id = {$assignmentId}
          LIMIT 1"
@@ -686,6 +686,29 @@ function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, 
         : null;
     if (is_array($openRequest) && !empty($openRequest['id'])) {
         return false;
+    }
+
+    $walletAddressId = (int)($assignment['wallet_address_id'] ?? 0);
+    $customerId = (int)($assignment['customer_id'] ?? 0);
+    if ($walletAddressId > 0 && $customerId > 0 && schema_object_exists($db, 'crypto_deposit_requests')) {
+        $paidRequest = $db->select_user(
+            "SELECT crypto_deposit_requests.id
+             FROM crypto_deposit_requests
+             LEFT JOIN crypto_wallet_assignments AS payment_assignment
+               ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+             WHERE crypto_deposit_requests.customer_id = {$customerId}
+               AND (
+                    crypto_deposit_requests.wallet_assignment_id = {$assignmentId}
+                 OR crypto_deposit_requests.wallet_address_id = {$walletAddressId}
+                 OR payment_assignment.wallet_address_id = {$walletAddressId}
+               )
+               AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
+             ORDER BY crypto_deposit_requests.id DESC
+             LIMIT 1"
+        );
+        if (is_array($paidRequest) && !empty($paidRequest['id'])) {
+            return false;
+        }
     }
 
     $safeNote = $db->escape($note);

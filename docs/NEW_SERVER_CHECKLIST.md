@@ -74,7 +74,7 @@ Na nowym serwerze:
 
 ```bash
 cd ~
-git clone <URL-REPO> subme
+git clone https://github.com/bingoo97/subme.git subme
 cd ~/subme
 git checkout main
 ```
