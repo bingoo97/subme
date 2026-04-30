@@ -4197,29 +4197,31 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 role="button"
                                                 tabindex="0"
                                                 aria-label="<?php echo admin_e($chatPrimaryLabel); ?>">
+                                                <span class="admin-chat-inbox__avatar-wrap">
+                                                    <?php echo admin_chat_avatar_html($chatRow, $messages); ?>
+                                                    <span class="admin-chat-inbox__avatar-presence" data-admin-chat-presence-dot><?php echo admin_chat_presence_dot_html($presence); ?></span>
+                                                </span>
                                                 <div class="admin-chat-inbox__item-content">
                                                     <div class="admin-chat-inbox__item-head">
-                                                        <div class="admin-chat-inbox__item-title">
-                                                            <span class="admin-chat-inbox__avatar-wrap">
-                                                                <?php echo admin_chat_avatar_html($chatRow, $messages); ?>
-                                                                <span class="admin-chat-inbox__avatar-presence" data-admin-chat-presence-dot><?php echo admin_chat_presence_dot_html($presence); ?></span>
-                                                            </span>
-                                                            <span class="admin-chat-inbox__item-title-copy">
+                                                        <span class="admin-chat-inbox__item-title-copy">
+                                                            <span class="admin-chat-inbox__item-title-line">
                                                                 <strong title="<?php echo admin_e($chatPrimaryLabel); ?>"><?php echo admin_e($chatPrimaryLabel); ?></strong>
-                                                                <?php if ($chatSecondaryLabel !== ''): ?>
-                                                                    <span class="admin-chat-inbox__item-handle"><?php echo admin_e($chatSecondaryLabel); ?></span>
+                                                                <?php if ($isUnread): ?>
+                                                                    <span class="admin-chat-inbox__unread"><?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>: <?php echo admin_e((string)$chatRow['unread_count']); ?></span>
                                                                 <?php endif; ?>
                                                             </span>
-                                                        </div>
-                                                        <span><?php echo admin_e($chatTimeLabel); ?></span>
+                                                            <?php if ($chatSecondaryLabel !== ''): ?>
+                                                                <span class="admin-chat-inbox__item-subline">
+                                                                    <span class="admin-chat-inbox__item-handle"><?php echo admin_e($chatSecondaryLabel); ?></span>
+                                                                </span>
+                                                            <?php endif; ?>
+                                                        </span>
+                                                        <span class="admin-chat-inbox__item-date"><?php echo admin_e($chatTimeLabel); ?></span>
                                                     </div>
                                                     <div class="admin-chat-inbox__item-body">
-                                                        <p><?php echo admin_e(admin_chat_message_preview($chatRow, $messages)); ?></p>
+                                                        <p class="admin-chat-inbox__item-preview"><?php echo admin_e(admin_chat_message_preview($chatRow, $messages)); ?></p>
                                                         <div class="admin-chat-inbox__meta">
-                                                            <span><?php echo admin_e((string)($chatRow['status'] ?? 'open')); ?></span>
-                                                            <?php if ($isUnread): ?>
-                                                                <span class="admin-chat-inbox__unread"><?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>: <?php echo admin_e((string)$chatRow['unread_count']); ?></span>
-                                                            <?php endif; ?>
+                                                            <span class="admin-chat-inbox__item-status"><?php echo admin_e((string)($chatRow['status'] ?? 'open')); ?></span>
                                                             <button
                                                                 type="button"
                                                                 class="admin-chat-inbox__remove"
@@ -4228,7 +4230,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 data-display-name="<?php echo admin_e($chatPrimaryLabel); ?>"
                                                                 aria-label="<?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove conversation')); ?>">
                                                                 <i class="bi bi-trash3" aria-hidden="true"></i>
-                                                                <span><?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove')); ?></span>
                                                             </button>
                                                         </div>
                                                     </div>
@@ -9329,7 +9330,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 : $walletAddress;
                                                             $walletStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
                                                             $assignedCustomerEmail = trim((string)($row['assigned_customer_email'] ?? ''));
-                                                            $assignedCustomerEmailShort = $assignedCustomerEmail !== '' ? admin_string_truncate($assignedCustomerEmail, 20) : '';
+                                                            $assignedCustomerHandle = trim((string)($row['assigned_customer_public_handle'] ?? ''));
                                                             $activeAssignmentCount = (int)($row['active_assignment_count'] ?? 0);
                                                             $walletExplorerUrl = admin_crypto_wallet_explorer_url(
                                                                 (string)($row['asset_code'] ?? ''),
@@ -9365,9 +9366,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
                                                                     <?php if ($walletStatusRaw === 'disabled'): ?>
                                                                         <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'wallet_status_disabled', 'Disabled')); ?></span>
-                                                                    <?php elseif ($assignedCustomerEmailShort !== ''): ?>
+                                                                    <?php elseif ($assignedCustomerEmail !== '' || $assignedCustomerHandle !== '' || $activeAssignmentCount > 0): ?>
                                                                         <div class="admin-wallet-assigned">
-                                                                            <a class="admin-inline-link" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)($row['assigned_customer_id'] ?? 0)); ?>" title="<?php echo admin_e($assignedCustomerEmail); ?>"><?php echo admin_e($assignedCustomerEmailShort); ?></a>
+                                                                            <?php if ((int)($row['assigned_customer_id'] ?? 0) > 0): ?>
+                                                                                <a class="admin-wallet-assigned__handle" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)($row['assigned_customer_id'] ?? 0)); ?>" title="<?php echo admin_e($assignedCustomerEmail); ?>">
+                                                                                    <?php echo admin_e($assignedCustomerHandle !== '' ? '@' . $assignedCustomerHandle : admin_t($messages, 'wallet_status_assigned', 'Assigned')); ?>
+                                                                                </a>
+                                                                            <?php else: ?>
+                                                                                <span class="admin-wallet-assigned__handle">
+                                                                                    <?php echo admin_e($assignedCustomerHandle !== '' ? '@' . $assignedCustomerHandle : admin_t($messages, 'wallet_status_assigned', 'Assigned')); ?>
+                                                                                </span>
+                                                                            <?php endif; ?>
+                                                                            <?php if ($assignedCustomerEmail !== ''): ?>
+                                                                                <span class="admin-wallet-assigned__email"><?php echo admin_e($assignedCustomerEmail); ?></span>
+                                                                            <?php endif; ?>
                                                                             <?php if ($activeAssignmentCount > 1): ?>
                                                                                 <span class="admin-status-pill admin-status-pill--available">+<?php echo admin_e((string)($activeAssignmentCount - 1)); ?></span>
                                                                             <?php endif; ?>
