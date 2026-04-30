@@ -2982,6 +2982,7 @@ function admin_customer_wallet_rows(Mysql_ks $db, int $customerId, int $limit = 
     if (schema_object_exists($db, 'customer_crypto_wallets')) {
         $rows = $db->select_full_user(
             "SELECT
+                wallet_address_id,
                 wallet_assignment_id,
                 crypto_asset_code,
                 crypto_asset_name,
@@ -2991,7 +2992,23 @@ function admin_customer_wallet_rows(Mysql_ks $db, int $customerId, int $limit = 
                 network_code,
                 wallet_provider,
                 status,
-                assigned_at
+                assigned_at,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM crypto_deposit_requests
+                        LEFT JOIN crypto_wallet_assignments AS payment_assignment
+                          ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+                        WHERE crypto_deposit_requests.customer_id = {$customerId}
+                          AND (
+                               crypto_deposit_requests.wallet_address_id = customer_crypto_wallets.wallet_address_id
+                            OR payment_assignment.wallet_address_id = customer_crypto_wallets.wallet_address_id
+                          )
+                          AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
+                        LIMIT 1
+                    ) THEN 1
+                    ELSE 0
+                END AS has_payment_history
              FROM customer_crypto_wallets
              WHERE customer_id = {$customerId}
                AND status IN ('active', 'reserved')
@@ -3014,6 +3031,7 @@ function admin_customer_wallet_rows(Mysql_ks $db, int $customerId, int $limit = 
 
     return $db->select_full_user(
         "SELECT
+            wallet.id AS wallet_address_id,
             assignment.id AS wallet_assignment_id,
             asset.code AS crypto_asset_code,
             asset.name AS crypto_asset_name,
@@ -3023,7 +3041,23 @@ function admin_customer_wallet_rows(Mysql_ks $db, int $customerId, int $limit = 
             wallet.network_code,
             wallet.wallet_provider,
             assignment.status,
-            assignment.assigned_at
+            assignment.assigned_at,
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM crypto_deposit_requests
+                    LEFT JOIN crypto_wallet_assignments AS payment_assignment
+                      ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+                    WHERE crypto_deposit_requests.customer_id = assignment.customer_id
+                      AND (
+                           crypto_deposit_requests.wallet_address_id = wallet.id
+                        OR payment_assignment.wallet_address_id = wallet.id
+                      )
+                      AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
+                    LIMIT 1
+                ) THEN 1
+                ELSE 0
+            END AS has_payment_history
          FROM crypto_wallet_assignments AS assignment
          INNER JOIN crypto_wallet_addresses AS wallet
            ON wallet.id = assignment.wallet_address_id
@@ -3449,6 +3483,11 @@ function admin_delete_customer_wallet_assignment(
 
     if (!$assignment) {
         return ['ok' => false, 'message' => 'Wallet assignment not found.'];
+    }
+
+    $walletAddressId = (int)($assignment['wallet_address_id'] ?? 0);
+    if (admin_crypto_wallet_assignment_has_payment_history($db, $walletAddressId, $customerId)) {
+        return ['ok' => false, 'message' => 'This user already paid with this wallet, so the assignment cannot be removed.'];
     }
 
     $releasedAt = date('Y-m-d H:i:s');

@@ -7267,6 +7267,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         $walletStatus = strtolower(trim((string)($row['status'] ?? '')));
                                                                         $walletLogoUrl = admin_payment_asset_logo_url($walletAssetCode);
                                                                         $walletExplorerUrl = admin_crypto_wallet_explorer_url($walletAssetCode, $walletNetwork, $walletAddress);
+                                                                        $walletAddressId = (int)($row['wallet_address_id'] ?? 0);
+                                                                        $walletEditUrl = $walletAddressId > 0 ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $walletAddressId : '';
+                                                                        $walletAssignmentLocked = !empty($row['has_payment_history']);
                                                                         $walletStatusClass = $walletStatus === 'active' ? 'admin-status-pill--available' : ($walletStatus === 'released' ? 'admin-status-pill--muted' : 'admin-status-pill--neutral');
                                                                         ?>
                                                                         <tr>
@@ -7291,8 +7294,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 </div>
                                                                             </td>
                                                                             <td>
-                                                                                <?php if ($walletExplorerUrl !== ''): ?>
-                                                                                    <a class="admin-payment-summary__address admin-user-detail-table__mono" href="<?php echo admin_e($walletExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e($walletAddress); ?>"><?php echo admin_e(admin_compact_wallet_address($walletAddress, 6, 5)); ?></a>
+                                                                                <?php if ($walletEditUrl !== ''): ?>
+                                                                                    <a class="admin-payment-summary__address admin-user-detail-table__mono" href="<?php echo admin_e($walletEditUrl); ?>" title="<?php echo admin_e($walletAddress); ?>"><?php echo admin_e(admin_compact_wallet_address($walletAddress, 6, 5)); ?></a>
                                                                                 <?php else: ?>
                                                                                     <span class="admin-user-detail-table__mono" title="<?php echo admin_e($walletAddress); ?>"><?php echo admin_e(admin_compact_wallet_address($walletAddress, 6, 5)); ?></span>
                                                                                 <?php endif; ?>
@@ -7303,14 +7306,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <td>
                                                                                 <div class="admin-user-detail-table__actions">
                                                                                     <?php if ($walletExplorerUrl !== ''): ?>
-                                                                                        <a href="<?php echo admin_e($walletExplorerUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>">
+                                                                                        <a href="<?php echo admin_e($walletExplorerUrl); ?>" class="btn btn-danger btn-sm admin-user-row__icon-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_explorer', 'Explorer')); ?>">
                                                                                             <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
                                                                                         </a>
                                                                                     <?php endif; ?>
                                                                                     <form method="post" class="d-inline">
                                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                                         <input type="hidden" name="wallet_assignment_id" value="<?php echo admin_e((string)($row['wallet_assignment_id'] ?? 0)); ?>">
-                                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer_wallet_assignment" title="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_wallet_delete_confirm', 'Remove this crypto wallet assignment from the user?')); ?>');">
+                                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer_wallet_assignment" title="<?php echo admin_e($walletAssignmentLocked ? admin_t($messages, 'wallet_remove_assignment_locked', 'This user already paid with this wallet, so the assignment cannot be removed.') : admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_remove_assignment', 'Remove assignment')); ?>"<?php echo $walletAssignmentLocked ? ' disabled' : ' onclick="return confirm(\'' . admin_e(admin_t($messages, 'customer_wallet_delete_confirm', 'Remove this crypto wallet assignment from the user?')) . '\');"'; ?>>
                                                                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                                                                         </button>
                                                                                     </form>
@@ -9259,7 +9262,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                             </div>
                                             <?php if ($cryptoWalletFreeCount <= 0): ?>
-                                                <div class="alert alert-info" role="alert">
+                                                <div class="alert alert-danger" role="alert">
                                                     <?php echo admin_e(admin_t($messages, 'wallet_pool_empty_inline_alert', 'There are no free crypto wallet addresses in the database right now. Add or release wallet addresses so users can generate new payment requests.')); ?>
                                                 </div>
                                             <?php elseif ($cryptoWalletFreeCount === 1): ?>
