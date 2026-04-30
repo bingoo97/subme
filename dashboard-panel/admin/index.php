@@ -6382,6 +6382,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-user-detail">
                                             <div class="admin-user-detail__header">
                                                 <div>
+                                                    <?php $selectedCustomerHeaderHandle = trim((string)($selectedCustomer['public_handle'] ?? '')); ?>
+                                                    <?php if ($selectedCustomerHeaderHandle !== ''): ?>
+                                                        <h1 class="admin-user-detail__handle-title"><?php echo admin_e('@' . ltrim($selectedCustomerHeaderHandle, '@')); ?></h1>
+                                                    <?php endif; ?>
                                                     <h3><?php echo admin_e((string)$selectedCustomer['email']); ?></h3>
                                                     <p><?php echo admin_e(admin_t($messages, 'user_detail_intro', 'Customer account overview, orders and payments.')); ?></p>
                                                 </div>
@@ -6773,6 +6777,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         $paymentAssetName = trim((string)($row['asset_name'] ?? ''));
                                                                         $paymentWalletAddress = trim((string)($row['wallet_address'] ?? ''));
                                                                         $paymentWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
+                                                                        $paymentWalletLabel = trim((string)($row['wallet_label'] ?? ''));
                                                                         $paymentNetworkCode = trim((string)($row['network_code'] ?? ''));
                                                                         $paymentExplorerUrl = $paymentType === 'crypto' && $paymentWalletAddress !== ''
                                                                             ? admin_crypto_wallet_explorer_url($paymentAssetCode, $paymentNetworkCode, $paymentWalletAddress)
@@ -6841,6 +6846,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <span class="admin-status-pill <?php echo admin_e($paymentStatusClass); ?>"><?php echo admin_e($paymentStatusLabel); ?></span>
                                                                                     <?php if ($paymentCryptoAmount !== ''): ?>
                                                                                         <span class="admin-user-detail-table__muted"><?php echo admin_e($paymentCryptoAmount); ?></span>
+                                                                                        <?php if ($paymentWalletLabel !== '' && $paymentWalletPreviewUrl !== ''): ?>
+                                                                                            <a href="<?php echo admin_e($paymentWalletPreviewUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
+                                                                                                <?php echo admin_e($paymentWalletLabel); ?>
+                                                                                            </a>
+                                                                                        <?php elseif ($paymentWalletLabel !== ''): ?>
+                                                                                            <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e($paymentWalletLabel); ?></span>
+                                                                                        <?php endif; ?>
                                                                                     <?php elseif ($paymentReference !== ''): ?>
                                                                                         <span class="admin-user-detail-table__muted"><?php echo admin_e(admin_string_truncate($paymentReference, 28)); ?></span>
                                                                                     <?php endif; ?>
@@ -8194,7 +8206,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php endif; ?>
                                                                     </div>
                                                                 </td>
-                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <td class="admin-payments-table__actions-col" data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                     <?php if ($paymentCanAccept || $canArchive): ?>
                                                                         <div class="admin-topbar-notifications__task-list">
                                                                             <?php if ($paymentCanAccept): ?>

@@ -2682,6 +2682,7 @@ function admin_customer_payment_activity(Mysql_ks $db, int $customerId, int $lim
                 crypto_assets.name AS asset_name,
                 crypto_assets.logo_url AS asset_logo_url,
                 crypto_wallet_addresses.id AS wallet_address_id,
+                crypto_wallet_addresses.label AS wallet_label,
                 crypto_wallet_addresses.address AS wallet_address,
                 crypto_wallet_addresses.network_code AS network_code,
                 currencies.code AS currency_code,
@@ -2709,6 +2710,8 @@ function admin_customer_payment_activity(Mysql_ks $db, int $customerId, int $lim
                 customer_bank_accounts.currency_code AS asset_code,
                 '' AS asset_name,
                 '' AS asset_logo_url,
+                NULL AS wallet_address_id,
+                '' AS wallet_label,
                 customer_bank_accounts.iban AS wallet_address,
                 '' AS network_code,
                 currencies.code AS currency_code,
@@ -2735,55 +2738,135 @@ function admin_customer_payment_activity(Mysql_ks $db, int $customerId, int $lim
 
 function admin_customer_wallet_rows(Mysql_ks $db, int $customerId, int $limit = 12): array
 {
-    if ($customerId <= 0 || !schema_object_exists($db, 'customer_crypto_wallets')) {
+    if ($customerId <= 0) {
         return [];
     }
 
     $limit = max(1, min(30, $limit));
+    $rows = [];
+
+    if (schema_object_exists($db, 'customer_crypto_wallets')) {
+        $rows = $db->select_full_user(
+            "SELECT
+                wallet_assignment_id,
+                crypto_asset_code,
+                crypto_asset_name,
+                label,
+                owner_full_name,
+                address,
+                network_code,
+                wallet_provider,
+                status,
+                assigned_at
+             FROM customer_crypto_wallets
+             WHERE customer_id = {$customerId}
+               AND status IN ('active', 'reserved')
+             ORDER BY assigned_at DESC
+             LIMIT {$limit}"
+        );
+    }
+
+    if ($rows) {
+        return $rows;
+    }
+
+    if (
+        !schema_object_exists($db, 'crypto_wallet_assignments')
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
+        || !schema_object_exists($db, 'crypto_assets')
+    ) {
+        return [];
+    }
 
     return $db->select_full_user(
         "SELECT
-            wallet_assignment_id,
-            crypto_asset_code,
-            crypto_asset_name,
-            label,
-            owner_full_name,
-            address,
-            network_code,
-            wallet_provider,
-            status,
-            assigned_at
-         FROM customer_crypto_wallets
-         WHERE customer_id = {$customerId}
-           AND status IN ('active', 'reserved')
-         ORDER BY assigned_at DESC
+            assignment.id AS wallet_assignment_id,
+            asset.code AS crypto_asset_code,
+            asset.name AS crypto_asset_name,
+            wallet.label,
+            wallet.owner_full_name,
+            wallet.address,
+            wallet.network_code,
+            wallet.wallet_provider,
+            assignment.status,
+            assignment.assigned_at
+         FROM crypto_wallet_assignments AS assignment
+         INNER JOIN crypto_wallet_addresses AS wallet
+           ON wallet.id = assignment.wallet_address_id
+         INNER JOIN crypto_assets AS asset
+           ON asset.id = wallet.crypto_asset_id
+         WHERE assignment.customer_id = {$customerId}
+           AND assignment.status IN ('active', 'reserved')
+         ORDER BY assignment.assigned_at DESC, assignment.id DESC
          LIMIT {$limit}"
     );
 }
 
 function admin_customer_bank_rows(Mysql_ks $db, int $customerId, int $limit = 12): array
 {
-    if ($customerId <= 0 || !schema_object_exists($db, 'customer_bank_accounts')) {
+    if ($customerId <= 0) {
         return [];
     }
 
     $limit = max(1, min(30, $limit));
+    $rows = [];
+
+    if (schema_object_exists($db, 'customer_bank_accounts')) {
+        $rows = $db->select_full_user(
+            "SELECT
+                bank_account_id,
+                bank_account_assignment_id,
+                currency_code,
+                label,
+                account_holder_name,
+                bank_name,
+                iban,
+                status,
+                assigned_at
+             FROM customer_bank_accounts
+             WHERE customer_id = {$customerId}
+               AND status IN ('active', 'reserved')
+             ORDER BY assigned_at DESC
+             LIMIT {$limit}"
+        );
+    }
+
+    if ($rows) {
+        return $rows;
+    }
+
+    if (
+        !schema_object_exists($db, 'bank_account_assignments')
+        || !schema_object_exists($db, 'bank_accounts')
+    ) {
+        return [];
+    }
+
+    $currencyJoin = schema_object_exists($db, 'currencies')
+        ? 'LEFT JOIN currencies AS currency_row ON currency_row.id = bank.currency_id'
+        : '';
+    $currencySelect = schema_object_exists($db, 'currencies')
+        ? 'currency_row.code AS currency_code'
+        : "'' AS currency_code";
 
     return $db->select_full_user(
         "SELECT
-            bank_account_id,
-            bank_account_assignment_id,
-            currency_code,
-            label,
-            account_holder_name,
-            bank_name,
-            iban,
-            status,
-            assigned_at
-         FROM customer_bank_accounts
-         WHERE customer_id = {$customerId}
-           AND status IN ('active', 'reserved')
-         ORDER BY assigned_at DESC
+            bank.id AS bank_account_id,
+            assignment.id AS bank_account_assignment_id,
+            {$currencySelect},
+            bank.label,
+            bank.account_holder_name,
+            bank.bank_name,
+            bank.iban,
+            assignment.status,
+            assignment.assigned_at
+         FROM bank_account_assignments AS assignment
+         INNER JOIN bank_accounts AS bank
+           ON bank.id = assignment.bank_account_id
+         {$currencyJoin}
+         WHERE assignment.customer_id = {$customerId}
+           AND assignment.status IN ('active', 'reserved')
+         ORDER BY assignment.assigned_at DESC, assignment.id DESC
          LIMIT {$limit}"
     );
 }

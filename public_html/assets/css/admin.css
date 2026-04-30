@@ -3653,6 +3653,11 @@ body.admin-login-page{
     color:#14171d;
 }
 
+.admin-user-detail__handle-title{
+    margin:0 0 .18rem;
+    color:#0f62fe;
+}
+
 .admin-user-detail__header p{
     margin:.25rem 0 0;
     color:#778094;
@@ -5551,6 +5556,32 @@ body.admin-login-page .alert.alert-danger::before{
 .admin-payments-table__amount-col{
     text-align:center;
     vertical-align:middle;
+}
+
+.admin-payments-table__actions-col{
+    width:30%;
+    max-width:30%;
+    vertical-align:top;
+}
+
+.admin-payments-table__actions-col .admin-topbar-notifications__payment-actions{
+    gap:.45rem;
+}
+
+.admin-payments-table__actions-col .admin-topbar-notifications__decision-row{
+    gap:.4rem;
+}
+
+.admin-payments-table__actions-col .admin-topbar-notifications__block-btn{
+    min-height:34px;
+    padding:.42rem .6rem;
+    font-size:11px;
+    line-height:1.2;
+    border-radius:10px;
+}
+
+.admin-payments-table__actions-col .admin-topbar-notifications__block-btn .bi{
+    font-size:.78rem;
 }
 
 .admin-payment-amount{
