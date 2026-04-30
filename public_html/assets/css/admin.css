@@ -6450,6 +6450,13 @@ body.admin-login-page .alert.alert-danger::before{
     color: #198754;
 }
 
+.admin-order-modal__header-badge{
+    white-space:normal;
+    text-align:left;
+    font-weight:700;
+    pointer-events:none;
+}
+
 .admin-order-modal__summary-chip{
     display:inline-flex;
     align-items:center;

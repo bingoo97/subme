@@ -5171,9 +5171,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         } else {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'details', 'Details');
                                                         }
-                                                        $orderLeadingIcon = ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)
-                                                            ? 'bi bi-check-circle-fill text-success'
-                                                            : 'bi bi-credit-card text-success';
+                                                        if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                            $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
+                                                        } elseif ($isFreshUnpaidOrder) {
+                                                            $orderLeadingIcon = 'bi bi-plus-lg text-dark';
+                                                        } else {
+                                                            $orderLeadingIcon = 'bi bi-credit-card text-success';
+                                                        }
+                                                        $showOrderAmountStatusIcon = !$isFreshUnpaidOrder;
                                                         $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
                                                         $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
                                                             ? '@' . $orderCustomerHandleLabel
@@ -5258,7 +5263,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php if ((string)($row['delivery_link'] ?? '') !== '' && !empty($row['delivery_link_visible'])): ?>
                                                                         <span><?php echo admin_e(admin_t($messages, 'order_delivery_enabled', 'URL enabled')); ?></span>
                                                                     <?php endif; ?>
-                                                                    <i class="<?php echo admin_e($orderStatusVisual['icon']); ?> admin-order-status-icon <?php echo admin_e($orderStatusVisual['class']); ?>" aria-hidden="true" title="<?php echo admin_e($orderStatusVisual['label']); ?>"></i>
+                                                                    <?php if ($showOrderAmountStatusIcon): ?>
+                                                                        <i class="<?php echo admin_e($orderStatusVisual['icon']); ?> admin-order-status-icon <?php echo admin_e($orderStatusVisual['class']); ?>" aria-hidden="true" title="<?php echo admin_e($orderStatusVisual['label']); ?>"></i>
+                                                                    <?php endif; ?>
                                                                 </div>
                                                             </td>
                                                             <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
@@ -5388,6 +5395,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         }
                                                         $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
                                                         $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+                                                        $subscriptionStartedAt = trim((string)($row['started_at'] ?? ''));
+                                                        $subscriptionStartedLabel = $subscriptionStartedAt !== ''
+                                                            ? date('d.m.Y H:i', strtotime($subscriptionStartedAt))
+                                                            : '';
                                                         $balanceActivationContext = admin_order_balance_activation_context($db, $row);
                                                         $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
                                                         $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
@@ -5421,11 +5432,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
                                                                     </a>
                                                                 <?php endif; ?>
-                                                                <?php if ($providerDashboardUrl !== ''): ?>
-                                                                    <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="admin-order-modal__header-link admin-order-modal__header-link--muted" target="_blank" rel="noopener noreferrer">
-                                                                        <?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>
-                                                                                    <i class="bi bi-box-arrow-up-right ms-1" aria-hidden="true"></i>
-                                                                    </a>
+                                                                <?php if ($subscriptionStartedLabel !== ''): ?>
+                                                                    <span class="btn btn-outline-dark btn-md admin-order-modal__header-badge">
+                                                                        <?php echo admin_e(admin_t($messages, 'order_started_at', 'Started at')); ?>: <?php echo admin_e($subscriptionStartedLabel); ?>
+                                                                    </span>
                                                                 <?php endif; ?>
                                                             </div>
                                                             <div class="admin-order-modal__summary">
