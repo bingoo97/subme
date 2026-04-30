@@ -1164,6 +1164,7 @@ $orderCreateState = [
     'delivery_link' => '',
 ];
 $orderSelectedCustomer = null;
+$orderSelectedVisibleProviderIds = [];
 $orderProductsByProvider = [];
 $productListPage = 1;
 $productListPerPage = 20;
@@ -1566,6 +1567,7 @@ if ($route === 'orders') {
 
     if ($orderShowCreate && (int)$orderCreateState['customer_id'] > 0) {
         $orderSelectedCustomer = admin_customer_basic_row($db, (int)$orderCreateState['customer_id']);
+        $orderSelectedVisibleProviderIds = admin_customer_visible_provider_ids($db, (int)$orderCreateState['customer_id']);
     }
 
     if ((int)$orderCreateState['provider_id'] <= 0 && (int)$orderCreateState['product_id'] > 0) {
@@ -4962,6 +4964,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                   data-admin-order-create
                                                   data-search-url="/admin/orders.php?action=search_customers"
                                                   data-create-url="/admin/orders.php?action=create_customer"
+                                                  data-visible-provider-ids="<?php echo admin_e(json_encode(array_values(array_map('intval', $orderSelectedVisibleProviderIds)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?>"
                                                   data-search-empty="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_empty', 'No users found.')); ?>"
                                                   data-search-error="<?php echo admin_e(admin_t($messages, 'wallet_customer_search_error', 'Unable to search users.')); ?>"
                                                   data-create-label="<?php echo admin_e(admin_t($messages, 'order_customer_create_label', 'Add user')); ?>"
@@ -5399,6 +5402,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $subscriptionStartedLabel = $subscriptionStartedAt !== ''
                                                             ? date('d.m.Y H:i', strtotime($subscriptionStartedAt))
                                                             : '';
+                                                        $subscriptionExpiresAt = trim((string)($row['expires_at'] ?? ''));
+                                                        $subscriptionExpiresLabel = $subscriptionExpiresAt !== ''
+                                                            ? date('d.m.Y H:i', strtotime($subscriptionExpiresAt))
+                                                            : '';
                                                         $balanceActivationContext = admin_order_balance_activation_context($db, $row);
                                                         $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
                                                         $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
@@ -5435,6 +5442,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <?php if ($subscriptionStartedLabel !== ''): ?>
                                                                     <span class="btn btn-outline-dark btn-md admin-order-modal__header-badge">
                                                                         <?php echo admin_e(admin_t($messages, 'order_started_at', 'Started at')); ?>: <?php echo admin_e($subscriptionStartedLabel); ?>
+                                                                    </span>
+                                                                <?php endif; ?>
+                                                                <?php if ($subscriptionExpiresLabel !== ''): ?>
+                                                                    <span class="btn btn-outline-dark btn-md admin-order-modal__header-badge">
+                                                                        <?php echo admin_e(admin_t($messages, 'order_expires_at', 'Expires at')); ?>:
+                                                                        <span class="admin-order-modal__header-badge-date-danger"><?php echo admin_e($subscriptionExpiresLabel); ?></span>
                                                                     </span>
                                                                 <?php endif; ?>
                                                             </div>

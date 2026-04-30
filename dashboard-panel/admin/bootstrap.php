@@ -3822,6 +3822,31 @@ function admin_customer_provider_visibility_rows(Mysql_ks $db, int $customerId):
     );
 }
 
+function admin_customer_visible_provider_ids(Mysql_ks $db, int $customerId, bool $activeOnly = true): array
+{
+    $rows = admin_customer_provider_visibility_rows($db, $customerId);
+    if (!$rows) {
+        return [];
+    }
+
+    $visibleProviderIds = [];
+    foreach ($rows as $row) {
+        $providerId = (int)($row['id'] ?? 0);
+        if ($providerId <= 0) {
+            continue;
+        }
+        if ($activeOnly && empty($row['is_active'])) {
+            continue;
+        }
+        if ((int)($row['is_visible'] ?? 1) !== 1) {
+            continue;
+        }
+        $visibleProviderIds[] = $providerId;
+    }
+
+    return array_values(array_unique($visibleProviderIds));
+}
+
 function admin_provider_visibility_option_rows(Mysql_ks $db): array
 {
     if (!schema_object_exists($db, 'product_providers')) {
@@ -6494,6 +6519,7 @@ function admin_chat_payment_product_presets(Mysql_ks $db, array $currencyContext
     $query = "
         SELECT
             products.id,
+            products.provider_id,
             products.name,
             products.duration_hours,
             products.price_amount,
@@ -6528,6 +6554,7 @@ function admin_chat_payment_product_presets(Mysql_ks $db, array $currencyContext
         }
         $presets[] = [
             'product_id' => (int)($row['id'] ?? 0),
+            'provider_id' => (int)($row['provider_id'] ?? 0),
             'amount' => $amount,
             'label' => $label,
         ];
@@ -7606,6 +7633,10 @@ function admin_create_order(Mysql_ks $db, array $input): array
 
     if (!$product || empty($product['is_active'])) {
         return ['ok' => false, 'message' => 'Product is not available.'];
+    }
+
+    if (!app_customer_provider_is_visible($db, $customerId, (int)($product['provider_id'] ?? 0))) {
+        return ['ok' => false, 'message' => 'Selected product is not available for this user.'];
     }
 
     $note = trim((string)($input['customer_note'] ?? ''));
@@ -14780,7 +14811,17 @@ function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $m
         'public_handle' => (string)($customer['public_handle'] ?? ''),
     ];
     $payload['has_pending_payment'] = admin_customer_has_pending_crypto_payment($db, $customerId) ? 1 : 0;
-    $payload['product_options'] = admin_chat_payment_product_presets($db, admin_chat_payment_currency_context($db));
+    $visibleProviderIds = admin_customer_visible_provider_ids($db, $customerId);
+    $payload['visible_provider_ids'] = $visibleProviderIds;
+    $payload['product_options'] = array_values(array_filter(
+        admin_chat_payment_product_presets($db, admin_chat_payment_currency_context($db)),
+        static function (array $preset) use ($visibleProviderIds): bool {
+            if ($visibleProviderIds === []) {
+                return true;
+            }
+            return in_array((int)($preset['provider_id'] ?? 0), $visibleProviderIds, true);
+        }
+    ));
 
     return $payload;
 }
@@ -14803,6 +14844,10 @@ function admin_quick_create_crypto_payment_request(
         $product = admin_product_find($db, $productId);
         if (!is_array($product) || empty($product['id']) || empty($product['is_active']) || !empty($product['is_trial'])) {
             return ['ok' => false, 'message' => 'Selected product is unavailable.'];
+        }
+
+        if (!app_customer_provider_is_visible($db, $customerId, (int)($product['provider_id'] ?? 0))) {
+            return ['ok' => false, 'message' => 'Selected product is not available for this user.'];
         }
 
         $productAmount = (float)($product['price_amount'] ?? 0);

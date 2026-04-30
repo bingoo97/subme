@@ -1945,6 +1945,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var requestIndex = 0;
             var createIndex = 0;
             var selectedCustomerEmail = String(searchInput && searchInput.value ? searchInput.value : '').trim();
+            var customerVisibleProviderIds = [];
             var productOptions = [];
 
             if (!searchInput || !results || !customerIdInput || !selectedWrap || !selectedLink || !selectedEmail || searchUrl === '') {
@@ -1957,6 +1958,45 @@ document.addEventListener('DOMContentLoaded', function () {
                 } catch (error) {
                     productOptions = [];
                 }
+            }
+
+            function parseVisibleProviderIds(raw) {
+                if (Array.isArray(raw)) {
+                    return raw.map(function (value) {
+                        return parseInt(value, 10) || 0;
+                    }).filter(function (value) {
+                        return value > 0;
+                    });
+                }
+
+                if (typeof raw !== 'string' || raw.trim() === '') {
+                    return [];
+                }
+
+                try {
+                    return parseVisibleProviderIds(JSON.parse(raw));
+                } catch (error) {
+                    return raw.split(',').map(function (value) {
+                        return parseInt(String(value || '').trim(), 10) || 0;
+                    }).filter(function (value) {
+                        return value > 0;
+                    });
+                }
+            }
+
+            function hasSelectedCustomer() {
+                return (parseInt(customerIdInput.value || '0', 10) || 0) > 0;
+            }
+
+            function isProviderAllowed(providerId) {
+                providerId = parseInt(providerId || '0', 10) || 0;
+                if (providerId <= 0) {
+                    return false;
+                }
+                if (!hasSelectedCustomer() || !customerVisibleProviderIds.length) {
+                    return true;
+                }
+                return customerVisibleProviderIds.indexOf(providerId) !== -1;
             }
 
             function isValidEmail(value) {
@@ -1974,11 +2014,13 @@ document.addEventListener('DOMContentLoaded', function () {
             function resetSelectedState() {
                 customerIdInput.value = '0';
                 selectedCustomerEmail = '';
+                customerVisibleProviderIds = [];
                 selectedWrap.classList.remove('is-selected');
                 selectedLink.classList.add('is-disabled');
                 selectedLink.setAttribute('href', '#');
                 selectedLink.setAttribute('aria-disabled', 'true');
                 selectedEmail.textContent = selectedWrap.getAttribute('data-empty-label') || 'No customer assigned';
+                syncProviderOptions();
             }
 
             function setSelectedState(customer) {
@@ -1999,11 +2041,46 @@ document.addEventListener('DOMContentLoaded', function () {
                 selectedEmail.textContent = email || (selectedWrap.getAttribute('data-empty-label') || 'No customer assigned');
                 results.innerHTML = '';
                 setHidden(results, true);
+                customerVisibleProviderIds = parseVisibleProviderIds(customer && customer.visible_provider_ids ? customer.visible_provider_ids : []);
+                syncProviderOptions();
             }
 
             function renderEmpty(message) {
                 results.innerHTML = '<div class="admin-order-picker__empty">' + escapeHtml(message) + '</div>';
                 setHidden(results, false);
+            }
+
+            function syncProviderOptions() {
+                var currentProviderId;
+                var currentAllowed = false;
+
+                if (!providerSelect) {
+                    return;
+                }
+
+                currentProviderId = parseInt(providerSelect.value || '0', 10) || 0;
+
+                qa('option', providerSelect).forEach(function (option, index) {
+                    var optionProviderId = parseInt(option.value || '0', 10) || 0;
+                    var allowed = index === 0 || isProviderAllowed(optionProviderId);
+
+                    option.disabled = !allowed && index !== 0;
+                    option.hidden = !allowed && index !== 0;
+
+                    if (optionProviderId === currentProviderId && allowed) {
+                        currentAllowed = true;
+                    }
+                });
+
+                if (currentProviderId > 0 && !currentAllowed) {
+                    providerSelect.value = '';
+                }
+
+                if (productSelect) {
+                    productSelect.setAttribute('data-selected-product-id', '');
+                }
+
+                syncProductOptions();
             }
 
             function syncProductOptions() {
@@ -2031,7 +2108,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 filtered = productOptions.filter(function (item) {
-                    return (parseInt(item && item.provider_id ? item.provider_id : 0, 10) || 0) === providerId;
+                    var itemProviderId = parseInt(item && item.provider_id ? item.provider_id : 0, 10) || 0;
+                    return itemProviderId === providerId && isProviderAllowed(itemProviderId);
                 });
 
                 optionsHtml = '<option value="">' + escapeHtml(placeholder) + '</option>' + filtered.map(function (item) {
@@ -2076,7 +2154,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     itemsHtml += '' +
-                        '<button type="button" class="admin-order-picker__result" data-admin-order-customer-result data-customer-id="' + escapeHtml(customer.id) + '">' +
+                        '<button type="button" class="admin-order-picker__result" data-admin-order-customer-result data-customer-id="' + escapeHtml(customer.id) + '" data-visible-provider-ids="' + escapeHtml(JSON.stringify(customer.visible_provider_ids || [])) + '">' +
                             '<strong>' + escapeHtml(email) + '</strong>' +
                             '<span>' + escapeHtml(parts.join(' • ')) + '</span>' +
                         '</button>';
@@ -2191,7 +2269,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     event.preventDefault();
                     setSelectedState({
                         id: customerButton.getAttribute('data-customer-id') || '0',
-                        email: q('strong', customerButton) ? q('strong', customerButton).textContent : ''
+                        email: q('strong', customerButton) ? q('strong', customerButton).textContent : '',
+                        visible_provider_ids: customerButton.getAttribute('data-visible-provider-ids') || '[]'
                     });
                     return;
                 }
@@ -2225,7 +2304,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     productSelect.setAttribute('data-selected-product-id', String(productSelect.value || ''));
                 });
 
-                syncProductOptions();
+                customerVisibleProviderIds = parseVisibleProviderIds(form.getAttribute('data-visible-provider-ids') || '[]');
+                syncProviderOptions();
             }
         });
 

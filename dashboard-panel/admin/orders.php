@@ -36,12 +36,14 @@ if ($action === 'search_customers') {
     $rows = admin_search_customer_rows($db, $query, 8);
     $customers = [];
     foreach ($rows as $row) {
+        $customerId = (int)($row['id'] ?? 0);
         $customers[] = [
-            'id' => (int)($row['id'] ?? 0),
+            'id' => $customerId,
             'email' => (string)($row['email'] ?? ''),
             'public_handle' => (string)($row['public_handle'] ?? ''),
             'status' => (string)($row['status'] ?? ''),
             'locale_code' => (string)($row['locale_code'] ?? ''),
+            'visible_provider_ids' => admin_customer_visible_provider_ids($db, $customerId),
         ];
     }
 
@@ -71,6 +73,10 @@ if ($action === 'create_customer') {
         http_response_code(422);
         echo json_encode($result);
         exit;
+    }
+
+    if (!empty($result['customer']) && is_array($result['customer'])) {
+        $result['customer']['visible_provider_ids'] = admin_customer_visible_provider_ids($db, (int)($result['customer']['id'] ?? 0));
     }
 
     echo json_encode($result);
