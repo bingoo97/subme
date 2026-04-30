@@ -8148,16 +8148,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     hidden>
                                                     <div class="admin-payments-note__selected-user" data-admin-payment-selected-user></div>
                                                     <div class="admin-payments-note__quick-alert" data-admin-payment-quick-alert hidden></div>
-                                                    <div class="row g-3">
-                                                        <div class="col-md-6">
-                                                            <label class="form-label" for="adminPaymentQuickCryptoAsset"><?php echo admin_e(admin_t($messages, 'chat_crypto_asset_label', 'Cryptocurrency')); ?></label>
-                                                            <select class="form-select" id="adminPaymentQuickCryptoAsset" data-admin-payment-quick-asset></select>
+                                                        <div class="row g-3">
+                                                            <div class="col-md-6">
+                                                                <label class="form-label" for="adminPaymentQuickCryptoAsset"><?php echo admin_e(admin_t($messages, 'chat_crypto_asset_label', 'Cryptocurrency')); ?></label>
+                                                                <select class="form-select" id="adminPaymentQuickCryptoAsset" data-admin-payment-quick-asset></select>
+                                                            </div>
+                                                            <div class="col-md-6">
+                                                            <label class="form-label" for="adminPaymentQuickProduct"><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></label>
+                                                            <select class="form-select" id="adminPaymentQuickProduct" data-admin-payment-quick-product></select>
+                                                            </div>
                                                         </div>
-                                                        <div class="col-md-6">
-                                                            <label class="form-label" for="adminPaymentQuickAmount"><?php echo admin_e(admin_t($messages, 'chat_payment_amount_label', 'Amount')); ?></label>
-                                                            <select class="form-select" id="adminPaymentQuickAmount" data-admin-payment-quick-amount></select>
-                                                        </div>
-                                                    </div>
                                                     <div class="admin-payments-note__quick-actions">
                                                         <button type="button" class="btn btn-dark btn-lg admin-payments-note__quick-submit" data-admin-payment-quick-submit disabled>
                                                             <i class="bi bi-plus-circle" aria-hidden="true"></i>

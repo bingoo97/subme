@@ -9311,6 +9311,13 @@ function admin_crypto_wallet_payment_rows(Mysql_ks $db, int $walletId, int $limi
     app_ensure_customer_runtime_columns($db);
 
     $limit = max(1, min(200, $limit));
+    $walletRow = $db->select_user(
+        "SELECT crypto_asset_id, address, network_code
+         FROM crypto_wallet_addresses
+         WHERE id = {$walletId}
+         LIMIT 1"
+    );
+    $walletAssetId = (int)($walletRow['crypto_asset_id'] ?? 0);
 
     return $db->select_full_user(
         "SELECT
@@ -9329,9 +9336,9 @@ function admin_crypto_wallet_payment_rows(Mysql_ks $db, int $walletId, int $limi
             currencies.symbol AS currency_symbol,
             crypto_assets.code AS asset_code,
             crypto_assets.name AS asset_name,
-            COALESCE(direct_wallet.id, assigned_wallet.id) AS wallet_address_id,
-            COALESCE(direct_wallet.address, assigned_wallet.address) AS wallet_address,
-            COALESCE(direct_wallet.network_code, assigned_wallet.network_code) AS network_code
+            COALESCE(direct_wallet.id, assigned_wallet.id, {$walletId}) AS wallet_address_id,
+            COALESCE(direct_wallet.address, assigned_wallet.address, '" . $db->escape((string)($walletRow['address'] ?? '')) . "') AS wallet_address,
+            COALESCE(direct_wallet.network_code, assigned_wallet.network_code, '" . $db->escape((string)($walletRow['network_code'] ?? '')) . "') AS network_code
          FROM crypto_deposit_requests
          LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
          LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
@@ -9342,6 +9349,16 @@ function admin_crypto_wallet_payment_rows(Mysql_ks $db, int $walletId, int $limi
          WHERE (
                 crypto_deposit_requests.wallet_address_id = {$walletId}
              OR request_assignment.wallet_address_id = {$walletId}
+             OR (
+                    crypto_deposit_requests.wallet_address_id IS NULL
+                AND crypto_deposit_requests.wallet_assignment_id IS NULL
+                AND " . ($walletAssetId > 0 ? "crypto_deposit_requests.crypto_asset_id = {$walletAssetId}" : '1=0') . "
+                AND crypto_deposit_requests.customer_id IN (
+                    SELECT DISTINCT assignment.customer_id
+                    FROM crypto_wallet_assignments AS assignment
+                    WHERE assignment.wallet_address_id = {$walletId}
+                )
+             )
          )
          ORDER BY crypto_deposit_requests.id DESC
          LIMIT {$limit}"
@@ -14721,6 +14738,7 @@ function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $m
         'public_handle' => (string)($customer['public_handle'] ?? ''),
     ];
     $payload['has_pending_payment'] = admin_customer_has_pending_crypto_payment($db, $customerId) ? 1 : 0;
+    $payload['product_options'] = admin_chat_payment_product_presets($db, admin_chat_payment_currency_context($db));
 
     return $payload;
 }
@@ -14731,11 +14749,26 @@ function admin_quick_create_crypto_payment_request(
     int $assetId,
     $amount,
     int $adminUserId,
-    array $messages = []
+    array $messages = [],
+    int $productId = 0
 ): array {
     $settings = admin_app_settings($db);
     if (empty($settings['crypto_payments_enabled'])) {
         return ['ok' => false, 'message' => 'Crypto payments are disabled.'];
+    }
+
+    if ($productId > 0) {
+        $product = admin_product_find($db, $productId);
+        if (!is_array($product) || empty($product['id']) || empty($product['is_active']) || !empty($product['is_trial'])) {
+            return ['ok' => false, 'message' => 'Selected product is unavailable.'];
+        }
+
+        $productAmount = (float)($product['price_amount'] ?? 0);
+        if ($productAmount <= 0) {
+            return ['ok' => false, 'message' => 'Selected product has invalid price.'];
+        }
+
+        $amount = $productAmount;
     }
 
     if (admin_customer_has_pending_crypto_payment($db, $customerId)) {

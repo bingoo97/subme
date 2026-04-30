@@ -1209,14 +1209,14 @@ document.addEventListener('DOMContentLoaded', function () {
         var selectedUser = q('[data-admin-payment-selected-user]');
         var quickAlert = q('[data-admin-payment-quick-alert]');
         var assetSelect = q('[data-admin-payment-quick-asset]');
-        var amountSelect = q('[data-admin-payment-quick-amount]');
+        var productSelect = q('[data-admin-payment-quick-product]');
         var submitButton = q('[data-admin-payment-quick-submit]');
         var requestIndex = 0;
         var selectedCustomerId = 0;
         var cooldownTimer = 0;
         var cooldownRemaining = 0;
 
-        if (!toggle || !wrap || !input || !results || !quickCreateWrap || !selectedUser || !quickAlert || !assetSelect || !amountSelect || !submitButton) {
+        if (!toggle || !wrap || !input || !results || !quickCreateWrap || !selectedUser || !quickAlert || !assetSelect || !productSelect || !submitButton) {
             return;
         }
 
@@ -1246,7 +1246,7 @@ document.addEventListener('DOMContentLoaded', function () {
             selectedCustomerId = 0;
             selectedUser.innerHTML = '';
             assetSelect.innerHTML = '';
-            amountSelect.innerHTML = '';
+            productSelect.innerHTML = '';
             submitButton.disabled = true;
             setHidden(quickCreateWrap, true);
             showQuickAlert('', false);
@@ -1274,7 +1274,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     window.clearInterval(cooldownTimer);
                     cooldownTimer = 0;
                     submitButton.querySelector('span').textContent = submitButton.getAttribute('data-default-label') || 'Create crypto payment request';
-                    submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+                    submitButton.disabled = !selectedCustomerId || !assetSelect.value || !productSelect.value;
                     return;
                 }
                 submitButton.querySelector('span').textContent = 'Cooldown ' + cooldownRemaining + 's';
@@ -1316,7 +1316,7 @@ document.addEventListener('DOMContentLoaded', function () {
             setHidden(quickCreateWrap, false);
             submitButton.disabled = true;
             assetSelect.innerHTML = '';
-            amountSelect.innerHTML = '';
+            productSelect.innerHTML = '';
             showQuickAlert(loadingText, false);
 
             jsonFetch(searchUrl + '?' + toQuery({
@@ -1339,10 +1339,10 @@ document.addEventListener('DOMContentLoaded', function () {
                         label: code ? (code + ' - ' + name) : name
                     };
                 });
-                populateQuickSelect(amountSelect, payload.amount_options || [], function (item) {
+                populateQuickSelect(productSelect, payload.product_options || [], function (item) {
                     return {
-                        value: String(item || ''),
-                        label: String(item || '')
+                        value: String(item.product_id || ''),
+                        label: String(item.label || '')
                     };
                 });
 
@@ -1356,6 +1356,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
 
+                if (!(payload.product_options || []).length) {
+                    showQuickAlert('No active products are available.', true);
+                    submitButton.disabled = true;
+                    return;
+                }
+
                 if (payload.has_pending_payment) {
                     showQuickAlert(createPendingErrorText, true);
                     submitButton.disabled = true;
@@ -1363,7 +1369,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 showQuickAlert('', false);
-                submitButton.disabled = !assetSelect.value || !amountSelect.value;
+                submitButton.disabled = !assetSelect.value || !productSelect.value;
             }).catch(function () {
                 showQuickAlert('Unable to load payment options.', true);
                 submitButton.disabled = true;
@@ -1437,18 +1443,18 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
 
-        [assetSelect, amountSelect].forEach(function (field) {
+        [assetSelect, productSelect].forEach(function (field) {
             field.addEventListener('change', function () {
                 if (cooldownRemaining > 0) {
                     submitButton.disabled = true;
                     return;
                 }
-                submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+                submitButton.disabled = !selectedCustomerId || !assetSelect.value || !productSelect.value;
             });
         });
 
         submitButton.addEventListener('click', function () {
-            if (!selectedCustomerId || !assetSelect.value || !amountSelect.value || cooldownRemaining > 0) {
+            if (!selectedCustomerId || !assetSelect.value || !productSelect.value || cooldownRemaining > 0) {
                 return;
             }
 
@@ -1462,7 +1468,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     action: 'create_quick_crypto_payment_request',
                     customer_id: selectedCustomerId,
                     asset_id: assetSelect.value,
-                    amount: amountSelect.value,
+                    product_id: productSelect.value,
                     _csrf: csrfToken
                 })
             }).then(function (payload) {
@@ -1475,7 +1481,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (payload && payload.cooldown_remaining) {
                         setSubmitCooldown(payload.cooldown_remaining);
                     } else {
-                        submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+                        submitButton.disabled = !selectedCustomerId || !assetSelect.value || !productSelect.value;
                     }
                     return;
                 }
@@ -1496,7 +1502,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }, 900);
             }).catch(function () {
                 showQuickAlert(createErrorText, true);
-                submitButton.disabled = !selectedCustomerId || !assetSelect.value || !amountSelect.value;
+                submitButton.disabled = !selectedCustomerId || !assetSelect.value || !productSelect.value;
             });
         });
     }

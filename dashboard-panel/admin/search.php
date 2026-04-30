@@ -99,6 +99,7 @@ if ($action === 'create_quick_crypto_payment_request') {
     $customerId = (int)($_POST['customer_id'] ?? 0);
     $assetId = (int)($_POST['asset_id'] ?? 0);
     $amount = $_POST['amount'] ?? '';
+    $productId = (int)($_POST['product_id'] ?? 0);
     $cooldownKey = 'admin_quick_crypto_payment_' . $customerId;
     $lastRequestAt = (int)($_SESSION[$cooldownKey] ?? 0);
     $now = time();
@@ -114,7 +115,7 @@ if ($action === 'create_quick_crypto_payment_request') {
         exit;
     }
 
-    $result = admin_quick_create_crypto_payment_request($db, $customerId, $assetId, $amount, (int)($adminUser['id'] ?? 0), $messages);
+    $result = admin_quick_create_crypto_payment_request($db, $customerId, $assetId, $amount, (int)($adminUser['id'] ?? 0), $messages, $productId);
     if (empty($result['ok'])) {
         http_response_code(422);
         echo json_encode($result);
