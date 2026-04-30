@@ -4617,6 +4617,33 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <?php endforeach; ?>
                     </section>
 
+                    <section class="admin-panel-card admin-orders-workflow-card">
+                        <div class="admin-orders-workflow">
+                            <div class="admin-orders-workflow__intro">
+                                <strong><?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?></strong>
+                                <span><?php echo admin_e(admin_t($messages, 'orders_workflow_subtitle', 'Follow these steps to complete the order.')); ?></span>
+                            </div>
+                            <div class="admin-orders-workflow__steps" aria-label="<?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?>">
+                                <div class="admin-orders-workflow__step">
+                                    <span class="admin-orders-workflow__dot">1</span>
+                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=payments"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_payment_accept', 'Accept the payment')); ?></a></span>
+                                </div>
+                                <div class="admin-orders-workflow__step">
+                                    <span class="admin-orders-workflow__dot">2</span>
+                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=payments"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_order_confirm', 'Confirm payment on the order')); ?></a></span>
+                                </div>
+                                <div class="admin-orders-workflow__step">
+                                    <span class="admin-orders-workflow__dot">3</span>
+                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=orders"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_provider_extend', 'Extend the package in Dashboard URL')); ?></a></span>
+                                </div>
+                                <div class="admin-orders-workflow__step">
+                                    <span class="admin-orders-workflow__dot">4</span>
+                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=orders"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_complete', 'Change order status to completed')); ?></a></span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
                     <section class="admin-grid-2">
                         <article class="admin-panel-card">
                             <div class="admin-panel-card__header">
@@ -5015,11 +5042,41 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
                                             <span><?php echo admin_e(admin_t($messages, 'order_go_to_payments', 'Go to payments')); ?></span>
                                         </a>
+                                        <a href="/admin/?page=crypto-wallets" class="btn btn-danger">
+                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'order_add_wallet', 'Add wallet')); ?></span>
+                                        </a>
                                         <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark">
                                             <i class="bi bi-plus-circle" aria-hidden="true"></i>
                                             <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
                                         </a>
                                     </div>
+                                    <section class="admin-panel-card admin-orders-workflow-card">
+                                        <div class="admin-orders-workflow">
+                                            <div class="admin-orders-workflow__intro">
+                                                <strong><?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?></strong>
+                                                <span><?php echo admin_e(admin_t($messages, 'orders_workflow_subtitle', 'Follow these steps to complete the order.')); ?></span>
+                                            </div>
+                                            <div class="admin-orders-workflow__steps" aria-label="<?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?>">
+                                                <div class="admin-orders-workflow__step">
+                                                    <span class="admin-orders-workflow__dot">1</span>
+                                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=payments"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_payment_accept', 'Accept the payment')); ?></a></span>
+                                                </div>
+                                                <div class="admin-orders-workflow__step">
+                                                    <span class="admin-orders-workflow__dot">2</span>
+                                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=payments"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_order_confirm', 'Confirm payment on the order')); ?></a></span>
+                                                </div>
+                                                <div class="admin-orders-workflow__step">
+                                                    <span class="admin-orders-workflow__dot">3</span>
+                                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=orders"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_provider_extend', 'Extend the package in Dashboard URL')); ?></a></span>
+                                                </div>
+                                                <div class="admin-orders-workflow__step">
+                                                    <span class="admin-orders-workflow__dot">4</span>
+                                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=orders"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_complete', 'Change order status to completed')); ?></a></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </section>
                                     <?php if ($orderRows): ?>
                                         <div class="table-responsive">
                                             <table class="table admin-table admin-orders-table align-middle">
@@ -5060,9 +5117,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
                                                         $orderOpenPaymentDetailsUrl = '';
                                                         $orderHasOpenPaymentRequest = false;
+                                                        $orderRowStatus = (string)($row['status'] ?? '');
                                                         if (
                                                             $orderPaymentStatusRaw === 'unpaid'
-                                                            && in_array((string)($row['status'] ?? ''), ['pending', 'pending_payment'], true)
+                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true)
                                                         ) {
                                                             if ($orderCryptoPaymentId > 0 && in_array($orderCryptoPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
                                                                 $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId;
@@ -5078,13 +5136,25 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true);
                                                         $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
                                                             && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
-                                                            && !in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
+                                                            && !in_array(strtolower(trim($orderRowStatus)), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
                                                         $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
-                                                        $orderDetailsButtonClass = ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) ? 'btn-success' : 'btn-dark';
+                                                        $isFreshUnpaidOrder = $orderPaymentStatusRaw === 'unpaid'
+                                                            && !$orderHasOpenPaymentRequest
+                                                            && !$hasRecentBalanceTopupForOrder
+                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true);
+                                                        if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                            $orderDetailsButtonClass = 'btn-success';
+                                                        } elseif ($isFreshUnpaidOrder) {
+                                                            $orderDetailsButtonClass = 'btn-outline-default';
+                                                        } else {
+                                                            $orderDetailsButtonClass = 'btn-dark';
+                                                        }
                                                         if ($isCompletedPaidOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
                                                         } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_approve', 'Click to approve');
+                                                        } elseif ($isFreshUnpaidOrder) {
+                                                            $orderDetailsButtonLabel = admin_t($messages, 'enum_pending_payment', 'Awaiting payment');
                                                         } else {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'details', 'Details');
                                                         }
@@ -5191,7 +5261,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-order-row__actions">
                                                                     <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
-                                                                        <?php if (!($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder)): ?>
+                                                                        <?php if (!($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isFreshUnpaidOrder)): ?>
                                                                             <i class="bi bi-search me-1" aria-hidden="true"></i>
                                                                         <?php endif; ?>
                                                                         <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
@@ -5201,7 +5271,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <i class="bi bi-receipt me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
                                                                         </a>
-                                                                    <?php elseif (!$isCompletedPaidOrder && trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
+                                                                    <?php elseif (!$isCompletedPaidOrder && !$isFreshUnpaidOrder && trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
                                                                         <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer">
                                                                             <i class="bi bi-play-btn me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
