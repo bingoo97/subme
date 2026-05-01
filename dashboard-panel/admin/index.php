@@ -2986,7 +2986,7 @@ if ($route === 'payments') {
     };
 
     $paymentEditorType = strtolower(trim((string)($_GET['payment_type'] ?? '')));
-    if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+    if (!in_array($paymentEditorType, ['crypto', 'crypto_topup', 'bank'], true)) {
         $paymentEditorType = '';
     }
     if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
@@ -2998,7 +2998,7 @@ if ($route === 'payments') {
         header('Content-Type: application/json; charset=utf-8');
 
         $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
-        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+        if (!in_array($paymentEditorType, ['crypto', 'crypto_topup', 'bank'], true)) {
             $paymentEditorType = '';
         }
         if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
@@ -3107,7 +3107,7 @@ if ($route === 'payments') {
 
     if (isset($_POST['admin_payment_quick_action'])) {
         $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
-        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+        if (!in_array($paymentEditorType, ['crypto', 'crypto_topup', 'bank'], true)) {
             $paymentEditorType = '';
         }
         if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
@@ -3175,7 +3175,7 @@ if ($route === 'payments') {
 
     if (isset($_POST['admin_save_payment'])) {
         $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
-        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+        if (!in_array($paymentEditorType, ['crypto', 'crypto_topup', 'bank'], true)) {
             $paymentEditorType = '';
         }
         if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
@@ -3209,7 +3209,7 @@ if ($route === 'payments') {
 
     if (isset($_POST['admin_delete_payment'])) {
         $paymentEditorType = strtolower(trim((string)($_POST['payment_type'] ?? $paymentEditorType)));
-        if (!in_array($paymentEditorType, ['crypto', 'bank'], true)) {
+        if (!in_array($paymentEditorType, ['crypto', 'crypto_topup', 'bank'], true)) {
             $paymentEditorType = '';
         }
         if (!$bankTransfersVisibleInPayments && $paymentEditorType === 'bank') {
@@ -3738,7 +3738,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     ? admin_compact_wallet_address($paymentWalletAddressRaw, 8, 5)
                                                     : '';
                                                 $paymentPublicHandle = trim((string)($paymentRow['public_handle'] ?? ''));
-                                                $paymentCanAcceptAll = in_array($paymentType, ['crypto', 'bank'], true)
+                                                $paymentCanAcceptAll = in_array($paymentType, ['crypto', 'crypto_topup', 'bank'], true)
                                                     && in_array(strtolower(trim((string)($paymentRow['status'] ?? ''))), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
                                                 ?>
                                                 <article class="admin-topbar-notifications__item" data-admin-topbar-payment-item data-payment-id="<?php echo admin_e((string)($paymentRow['id'] ?? 0)); ?>">
@@ -8500,7 +8500,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         'payment_type_filter' => $paymentTypeFilter !== '' ? $paymentTypeFilter : null,
                                                         'saved_payment' => 1,
                                                     ])); ?>">
-                                                    <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)): ?>
+                                                    <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)): ?>
                                                         <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept">
                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                         </button>

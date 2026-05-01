@@ -4914,6 +4914,7 @@ function admin_save_payment(
 
     $paymentType = strtolower((string)$payment['payment_type']);
     $status = strtolower(trim((string)($input['status'] ?? (string)($payment['status'] ?? ''))));
+    $previousStatus = strtolower(trim((string)($payment['status'] ?? '')));
     if (!in_array($status, admin_payment_status_options($paymentType, (string)($payment['status'] ?? '')), true)) {
         $status = (string)($payment['status'] ?? '');
     }
@@ -5005,6 +5006,15 @@ function admin_save_payment(
             );
         }
 
+        $successStatuses = admin_payment_success_statuses($paymentType);
+        if (
+            $updated
+            && in_array($status, $successStatuses, true)
+            && !in_array($previousStatus, $successStatuses, true)
+        ) {
+            admin_notify_topup_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+        }
+
         return [
             'ok' => (bool)$updated,
             'message' => $updated ? 'Payment request saved successfully.' : 'Unable to save payment request.',
@@ -5079,6 +5089,41 @@ function admin_save_payment(
     return [
         'ok' => (bool)$updated,
         'message' => $updated ? 'Payment request saved successfully.' : 'Unable to save payment request.',
+    ];
+}
+
+function admin_topup_payment_approved_live_chat_message(string $localeCode): string
+{
+    $localeCode = app_normalize_email_locale($localeCode);
+
+    if ($localeCode === 'pl') {
+        return 'Dziękujemy za płatność. Twoje konto zostało przedłużone - aby dokonać płatności przejdź do zakładki ZAMÓWIENIA i wybierz Subskrypcje.';
+    }
+
+    return 'Thank you for your payment. Your account has been extended - to make a payment go to the ORDERS tab and choose Subscriptions.';
+}
+
+function admin_notify_topup_payment_approved_live_chat(Mysql_ks $db, int $customerId): array
+{
+    if ($customerId <= 0) {
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!is_array($customer) || empty($customer['id'])) {
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $messageBody = admin_topup_payment_approved_live_chat_message((string)($customer['locale_code'] ?? 'en'));
+    if (trim($messageBody) === '') {
+        return ['ok' => false, 'message' => 'Live chat message is empty.'];
+    }
+
+    $inserted = app_insert_live_chat_admin_message($db, $customerId, $messageBody);
+
+    return [
+        'ok' => $inserted,
+        'message' => $inserted ? 'Top-up approval live chat message created.' : 'Unable to create top-up approval live chat message.',
     ];
 }
 
@@ -5348,12 +5393,17 @@ function admin_payment_accept_with_order(
     }
 
     $paymentType = strtolower((string)($payment['payment_type'] ?? $paymentType));
-    if (!in_array($paymentType, ['crypto', 'bank'], true)) {
+    if (!in_array($paymentType, ['crypto', 'crypto_topup', 'bank'], true)) {
         return ['ok' => false, 'message' => 'This payment cannot be accepted from topbar.'];
     }
 
     $paymentUpdateInput = [];
-    if ($paymentType === 'crypto') {
+    if ($paymentType === 'crypto_topup') {
+        $paymentUpdateInput = [
+            'status' => 'archived',
+            'requested_at' => (string)($payment['requested_at'] ?? ''),
+        ];
+    } elseif ($paymentType === 'crypto') {
         $paymentUpdateInput = [
             'status' => 'approved',
             'requested_at' => (string)($payment['requested_at'] ?? ''),
@@ -5390,9 +5440,13 @@ function admin_payment_accept_with_order(
 
     return [
         'ok' => true,
-        'message' => !empty($saveResult['already_applied'])
-            ? 'Payment was accepted, but customer balance was not credited again because this payment was already processed earlier.'
-            : 'Payment was accepted and customer balance was credited.',
+        'message' => $paymentType === 'crypto_topup'
+            ? 'Top-up payment was accepted and the customer was notified in live chat.'
+            : (
+                !empty($saveResult['already_applied'])
+                    ? 'Payment was accepted, but customer balance was not credited again because this payment was already processed earlier.'
+                    : 'Payment was accepted and customer balance was credited.'
+            ),
         'order_id' => (int)($saveResult['order_id'] ?? ($payment['order_id'] ?? 0)),
         'customer_id' => (int)($saveResult['customer_id'] ?? ($payment['customer_id'] ?? 0)),
         'already_applied' => !empty($saveResult['already_applied']),
