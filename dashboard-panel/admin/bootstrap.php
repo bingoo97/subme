@@ -4962,6 +4962,10 @@ function admin_save_payment(
                 return $finalizeResult;
             }
 
+            if (!in_array($previousStatus, $successStatuses, true) && (int)($payment['order_id'] ?? 0) > 0) {
+                admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+            }
+
             return [
                 'ok' => true,
                 'message' => 'Payment request saved successfully.',
@@ -5077,6 +5081,10 @@ function admin_save_payment(
             return $finalizeResult;
         }
 
+        if (!in_array($previousStatus, $successStatuses, true) && (int)($payment['order_id'] ?? 0) > 0) {
+            admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+        }
+
         return [
             'ok' => true,
             'message' => 'Payment request saved successfully.',
@@ -5097,10 +5105,10 @@ function admin_topup_payment_approved_live_chat_message(string $localeCode): str
     $localeCode = app_normalize_email_locale($localeCode);
 
     if ($localeCode === 'pl') {
-        return 'Dziękujemy za płatność. Twoje konto zostało przedłużone - aby dokonać płatności przejdź do zakładki ZAMÓWIENIA i wybierz Subskrypcje.';
+        return 'Dziękujemy za płatność. Kwota została dodana do salda konta. Aby dokonać zakupu, przejdź do zakładki ZAMÓWIENIA i wybierz Subskrypcje.';
     }
 
-    return 'Thank you for your payment. Your account has been extended - to make a payment go to the ORDERS tab and choose Subscriptions.';
+    return 'Thank you for your payment. The amount has been added to your account balance. To make a purchase, go to the ORDERS tab and choose Subscriptions.';
 }
 
 function admin_notify_topup_payment_approved_live_chat(Mysql_ks $db, int $customerId): array
@@ -5124,6 +5132,41 @@ function admin_notify_topup_payment_approved_live_chat(Mysql_ks $db, int $custom
     return [
         'ok' => $inserted,
         'message' => $inserted ? 'Top-up approval live chat message created.' : 'Unable to create top-up approval live chat message.',
+    ];
+}
+
+function admin_order_payment_approved_live_chat_message(string $localeCode): string
+{
+    $localeCode = app_normalize_email_locale($localeCode);
+
+    if ($localeCode === 'pl') {
+        return 'Dziękujemy za płatność. Płatność została zatwierdzona, a Twoje zamówienie wkrótce zostanie zrealizowane.';
+    }
+
+    return 'Thank you for your payment. Your payment has been approved and your order will be fulfilled shortly.';
+}
+
+function admin_notify_order_payment_approved_live_chat(Mysql_ks $db, int $customerId): array
+{
+    if ($customerId <= 0) {
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!is_array($customer) || empty($customer['id'])) {
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
+    $messageBody = admin_order_payment_approved_live_chat_message((string)($customer['locale_code'] ?? 'en'));
+    if (trim($messageBody) === '') {
+        return ['ok' => false, 'message' => 'Live chat message is empty.'];
+    }
+
+    $inserted = app_insert_live_chat_admin_message($db, $customerId, $messageBody);
+
+    return [
+        'ok' => $inserted,
+        'message' => $inserted ? 'Order payment approval live chat message created.' : 'Unable to create order payment approval live chat message.',
     ];
 }
 
