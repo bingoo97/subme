@@ -14863,11 +14863,11 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     <?php echo admin_chat_presence_dot_html($presence); ?>
                                 </div>
                                 <div class="admin-search-user-card__body">
-                                    <a class="admin-search-user-card__email" href="<?php echo admin_e($profileUrl); ?>">
-                                        <?php echo admin_e((string)($row['email'] ?? '')); ?>
+                                    <a class="admin-search-user-card__primary" href="<?php echo admin_e($profileUrl); ?>">
+                                        <?php echo admin_e($publicHandle !== '' ? '@' . $publicHandle : (string)($row['email'] ?? '')); ?>
                                     </a>
-                                    <?php if ($publicHandle !== ''): ?>
-                                        <div class="admin-search-user-card__handle">@<?php echo admin_e($publicHandle); ?></div>
+                                    <?php if (trim((string)($row['email'] ?? '')) !== '' && $publicHandle !== ''): ?>
+                                        <div class="admin-search-user-card__secondary-email"><?php echo admin_e((string)($row['email'] ?? '')); ?></div>
                                     <?php endif; ?>
                                     <div class="admin-search-user-card__meta">
                                         <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">

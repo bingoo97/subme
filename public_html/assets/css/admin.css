@@ -4984,6 +4984,8 @@ body.admin-login-page .alert,
     border-radius:18px;
     line-height:1.6;
     font-weight:700;
+    margin: 1rem 0;
+    font-size: 12px;
 }
 
 body.admin-app-page .alert::before,
@@ -7090,6 +7092,11 @@ body.admin-login-page .alert.alert-danger::before{
     border-radius:18px;
 }
 
+.admin-orders-help-alert::before{
+    display:none !important;
+    content:none !important;
+}
+
 .admin-search-results{
     margin-bottom:1rem;
 }
@@ -7377,23 +7384,25 @@ body.admin-login-page .alert.alert-danger::before{
     gap:.28rem;
 }
 
-.admin-search-user-card__email{
-    color: #333;
-    font-weight: 600;
-    font-size: 13px;
+.admin-search-user-card__primary{
+    color:#0f62fe;
+    font-weight:800;
+    font-size:16px;
+    line-height:1.15;
     text-decoration:none;
     word-break:break-word;
 }
 
-.admin-search-user-card__email:hover{
-    color:#0f62fe;
+.admin-search-user-card__primary:hover{
+    color:#0b57d0;
 }
 
-.admin-search-user-card__handle{
-    color:#8b93a6;
+.admin-search-user-card__secondary-email{
+    color:#333;
     font-size:9px;
-    font-weight:700;
+    font-weight:500;
     line-height:1.2;
+    word-break:break-word;
 }
 
 .admin-search-user-card__meta{

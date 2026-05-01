@@ -5226,6 +5226,21 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     endif;
 
                                     $orderRows = admin_order_rows_filtered($db, $orderListPerPage, ($orderListPage - 1) * $orderListPerPage, $orderFilterCustomerId, $orderFilterOrderId);
+                                    $openOrderCount = 0;
+                                    $completedOrderCount = 0;
+                                    foreach ($orderRows as $orderRowPreview) {
+                                        $orderRowPreviewPaymentStatus = strtolower(trim((string)($orderRowPreview['payment_status'] ?? '')));
+                                        $orderRowPreviewFulfillmentStatus = strtolower(trim((string)($orderRowPreview['fulfillment_status'] ?? '')));
+                                        $orderRowPreviewStatus = strtolower(trim((string)($orderRowPreview['status'] ?? '')));
+                                        $isCompletedOrderPreview = $orderRowPreviewPaymentStatus === 'paid'
+                                            && in_array($orderRowPreviewFulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
+                                            && in_array($orderRowPreviewStatus, ['active', 'approved', 'completed', 'fulfilled'], true);
+                                        if ($isCompletedOrderPreview) {
+                                            $completedOrderCount++;
+                                        } else {
+                                            $openOrderCount++;
+                                        }
+                                    }
                                     ?>
                                     <div class="admin-section-actions">
                                         <a href="/admin/?page=payments" class="btn btn-primary">
@@ -5267,7 +5282,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
                                         </div>
                                     </section>
-                                    <?php if ($orderRows): ?>
+                                    <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mb-4" role="alert">
+                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
+                                        <div><?php echo admin_e(admin_t($messages, 'orders_open_help_alert', 'Jeśli klient dodał poniżej zamówienie, a nie widzisz płatności, kliknij w tabeli poniżej w @handle, aby sprawdzić jego profil. Zobaczysz tam, czy wygenerował już płatność, oraz czy jego przypisane portfele są puste i czy wpłynęła tam dzisiaj jakaś wpłata.')); ?></div>
+                                    </div>
+                                    <div class="d-flex align-items-center justify-content-between gap-3 mt-4 mb-3">
+                                        <h3 class="mb-0"><?php echo admin_e(admin_t($messages, 'orders_open_table_title', 'Otwarte zamówienia')); ?></h3>
+                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$openOrderCount); ?></span>
+                                    </div>
+                                    <?php if ($openOrderCount > 0): ?>
                                         <div class="table-responsive">
                                             <table class="table admin-table admin-orders-table align-middle">
                                                 <thead>
@@ -5367,6 +5390,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
                                                         ?>
+                                                        <?php if (!$isCompletedPaidOrder): ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
                                                                 <span class="d-inline-flex align-items-center justify-content-center w-100" title="#<?php echo admin_e((string)$row['id']); ?>">
@@ -5479,13 +5503,174 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                             </td>
                                                         </tr>
+                                                        <?php endif; ?>
                                                     <?php endforeach; ?>
                                                 </tbody>
                                             </table>
                                         </div>
                                     <?php else: ?>
                                         <div class="alert alert-warning" role="alert">
-                                            <?php echo admin_e(admin_t($messages, 'orders_empty_customer_short', 'Brak zamówień.')); ?></a>
+                                            <?php echo admin_e(admin_t($messages, 'orders_open_empty', 'Brak otwartych zamówień.')); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mt-4 mb-3" role="alert">
+                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
+                                        <div><?php echo admin_e(admin_t($messages, 'orders_completed_help_alert', 'Poniżej w tabeli znajdują się zamówienia, które zatwierdziłeś. Użytkownicy dokonali wpłaty, a Ty ją zatwierdziłeś w systemie. Jeśli masz wątpliwości, czy wpłata na pewno przyszła, kliknij w zamówieniu poniżej w @handle, aby przejść do profilu klienta i sprawdzić jego przypisane portfele, czy są puste, oraz kiedy wpłynęła tam wymagana płatność.')); ?></div>
+                                    </div>
+                                    <div class="d-flex align-items-center justify-content-between gap-3 mt-4 mb-3">
+                                        <h3 class="mb-0"><?php echo admin_e(admin_t($messages, 'orders_completed_table_title', 'Zrealizowane zamówienia')); ?></h3>
+                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$completedOrderCount); ?></span>
+                                    </div>
+                                    <?php if ($completedOrderCount > 0): ?>
+                                        <div class="table-responsive">
+                                            <table class="table admin-table admin-orders-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
+                                                        <th class="admin-orders-table__date-col d-none d-xl-table-cell"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($orderRows as $row): ?>
+                                                        <?php
+                                                        $orderId = (int)$row['id'];
+                                                        $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+                                                        $orderTitle = trim((string)($row['provider_name'] ?? ''));
+                                                        if ($durationLabel !== '') {
+                                                            $orderTitle = trim($orderTitle . ' ' . $durationLabel);
+                                                        }
+                                                        $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
+                                                        $orderStatusVisual = admin_order_status_visual($row);
+                                                        $orderProgress = admin_order_progress_data($row);
+                                                        $orderCreatedTimestamp = !empty($row['created_at']) ? strtotime((string)$row['created_at']) : 0;
+                                                        $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
+                                                        $orderCreatedIsToday = $orderCreatedTimestamp > 0 && date('Y-m-d', $orderCreatedTimestamp) === date('Y-m-d');
+                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
+                                                        $orderWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
+                                                        $orderWalletLabel = trim((string)($row['wallet_label'] ?? ''));
+                                                        $orderWalletEditUrl = ($orderPaymentStatusRaw === 'paid' && $orderWalletAddressId > 0 && $orderWalletLabel !== '')
+                                                            ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $orderWalletAddressId
+                                                            : '';
+                                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
+                                                        $orderCryptoPaymentStatus = strtolower(trim((string)($row['crypto_payment_status'] ?? '')));
+                                                        $orderBankPaymentId = (int)($row['bank_payment_id'] ?? 0);
+                                                        $orderBankPaymentStatus = strtolower(trim((string)($row['bank_payment_status'] ?? '')));
+                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
+                                                        $orderOpenPaymentDetailsUrl = '';
+                                                        $orderHasOpenPaymentRequest = false;
+                                                        $orderRowStatus = (string)($row['status'] ?? '');
+                                                        if (
+                                                            $orderPaymentStatusRaw === 'unpaid'
+                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true)
+                                                        ) {
+                                                            if ($orderCryptoPaymentId > 0 && in_array($orderCryptoPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
+                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId;
+                                                                $orderHasOpenPaymentRequest = true;
+                                                            } elseif ($orderBankPaymentId > 0 && in_array($orderBankPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
+                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=bank&payment_id=' . $orderBankPaymentId;
+                                                                $orderHasOpenPaymentRequest = true;
+                                                            }
+                                                        }
+                                                        $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
+                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
+                                                            && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
+                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true);
+                                                        $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
+                                                            && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
+                                                            && !in_array(strtolower(trim($orderRowStatus)), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
+                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
+                                                        $isFreshUnpaidOrder = $orderPaymentStatusRaw === 'unpaid'
+                                                            && !$orderHasOpenPaymentRequest
+                                                            && !$hasRecentBalanceTopupForOrder
+                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true);
+                                                        if (!$isCompletedPaidOrder) {
+                                                            continue;
+                                                        }
+                                                        $orderDetailsButtonClass = 'btn-success';
+                                                        $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
+                                                        $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
+                                                        $showOrderAmountStatusIcon = true;
+                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
+                                                        $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
+                                                            ? '@' . $orderCustomerHandleLabel
+                                                            : (string)($row['customer_email'] ?? '');
+                                                        $modalId = 'adminOrderModal' . $orderId;
+                                                        ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
+                                                                <span class="d-inline-flex align-items-center justify-content-center w-100" title="#<?php echo admin_e((string)$row['id']); ?>">
+                                                                    <i class="<?php echo admin_e($orderLeadingIcon); ?> fs-3" aria-hidden="true"></i>
+                                                                </span>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
+                                                                <div class="admin-order-summary">
+                                                                    <div class="admin-order-summary__title-row">
+                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
+                                                                    </div>
+                                                                    <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
+                                                                        <?php echo admin_e($orderCustomerPrimaryLabel); ?>
+                                                                    </a>
+                                                                    <?php if (trim((string)($row['customer_email'] ?? '')) !== ''): ?>
+                                                                        <div class="admin-order-summary__customer-email">
+                                                                            <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                                                        </div>
+                                                                    <?php endif; ?>
+                                                                    <div class="admin-order-progress">
+                                                                        <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
+                                                                            <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
+                                                                        </div>
+                                                                        <div class="admin-order-progress__track">
+                                                                            <div class="admin-order-progress__meta">
+                                                                                <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
+                                                                                <?php if (!empty($row['expires_at'])): ?>
+                                                                                    <span><?php echo admin_e(date('d.m.Y', strtotime((string)$row['expires_at']))); ?></span>
+                                                                                <?php else: ?>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
+                                                                                <?php endif; ?>
+                                                                            </div>
+                                                                            <div class="admin-order-progress__bar">
+                                                                                <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                            <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
+                                                                <div class="admin-order-amount">
+                                                                    <strong class="text-success"><?php echo admin_e($orderAmountLabel); ?></strong>
+                                                                    <?php if ($showOrderAmountStatusIcon): ?>
+                                                                        <i class="<?php echo admin_e($orderStatusVisual['icon']); ?> admin-order-status-icon <?php echo admin_e($orderStatusVisual['class']); ?>" aria-hidden="true" title="<?php echo admin_e($orderStatusVisual['label']); ?>"></i>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                            <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
+                                                                <div class="admin-order-date-meta">
+                                                                    <span class="<?php echo $orderCreatedIsToday ? 'text-danger fw-bold' : ''; ?>"><?php echo admin_e($orderCreatedLabel); ?></span>
+                                                                    <?php if ($orderWalletEditUrl !== ''): ?>
+                                                                        <a href="<?php echo admin_e($orderWalletEditUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
+                                                                            <?php echo admin_e($orderWalletLabel); ?>
+                                                                        </a>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-order-row__actions">
+                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
+                                                                        <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
+                                                                    </button>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="alert alert-warning" role="alert">
+                                            <?php echo admin_e(admin_t($messages, 'orders_completed_empty', 'Brak zrealizowanych zamówień.')); ?>
                                         </div>
                                     <?php endif; ?>
                                     <?php foreach ($orderRows as $row): ?>
