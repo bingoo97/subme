@@ -6069,6 +6069,33 @@ body.admin-login-page .alert.alert-danger::before{
     margin-bottom:0;
 }
 
+.admin-rich-editor__surface .red,
+.admin-rich-editor__surface .red *,
+.admin-rich-editor__surface #red,
+.admin-rich-editor__surface #red *{
+    color:#d70000 !important;
+}
+
+.admin-rich-editor__surface .border-red,
+.admin-rich-editor__surface #border-red{
+    display:block;
+    margin:1rem 0;
+    padding:.7rem .85rem;
+    border:1px solid #d70000 !important;
+    border-radius:8px;
+    text-align:left;
+    font-size:13px;
+    background:rgba(215, 0, 0, 0.03);
+}
+
+.admin-rich-editor__surface .border-red > :first-child{
+    margin-top:0;
+}
+
+.admin-rich-editor__surface .border-red > :last-child{
+    margin-bottom:0;
+}
+
 .admin-rich-editor__source{
     font-family:"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     resize:vertical;
@@ -8230,7 +8257,7 @@ body.admin-login-page .alert.alert-danger::before{
         border-right:0;
         border-bottom: 0;
         box-shadow:none;
-        padding: 10px 8px;
+        padding: 15px 8px;
     }
 
     .admin-page-hero{

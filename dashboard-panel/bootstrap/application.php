@@ -729,6 +729,72 @@ function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, 
     return true;
 }
 
+function app_cancel_crypto_deposit_requests(
+    Mysql_ks $db,
+    string $whereSql,
+    string $releaseNote = 'Released after crypto payment request cancellation',
+    ?string $cancelledAt = null
+): int {
+    $whereSql = trim($whereSql);
+    if (
+        $whereSql === ''
+        || !schema_object_exists($db, 'crypto_deposit_requests')
+        || !schema_object_exists($db, 'crypto_wallet_assignments')
+    ) {
+        return 0;
+    }
+
+    $safeNow = trim((string)$cancelledAt);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+
+    $rows = $db->select_full_user(
+        "SELECT id, wallet_assignment_id
+         FROM crypto_deposit_requests
+         WHERE {$whereSql}"
+    );
+    if (!$rows) {
+        return 0;
+    }
+
+    $requestIds = [];
+    foreach ($rows as $row) {
+        $requestId = (int)($row['id'] ?? 0);
+        if ($requestId > 0) {
+            $requestIds[$requestId] = $requestId;
+        }
+    }
+
+    if (!$requestIds) {
+        return 0;
+    }
+
+    $requestIdList = implode(',', $requestIds);
+    $updated = $db->query(
+        "UPDATE crypto_deposit_requests
+         SET status = 'cancelled',
+             cancelled_at = CASE
+                 WHEN cancelled_at IS NULL THEN '{$safeNowSql}'
+                 ELSE cancelled_at
+             END
+         WHERE id IN ({$requestIdList})"
+    );
+    if (!$updated) {
+        return 0;
+    }
+
+    foreach ($rows as $row) {
+        $assignmentId = (int)($row['wallet_assignment_id'] ?? 0);
+        if ($assignmentId > 0) {
+            app_release_crypto_wallet_assignment_if_unused($db, $assignmentId, $releaseNote);
+        }
+    }
+
+    return count($requestIds);
+}
+
 function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
 {
     if (!schema_object_exists($db, 'crypto_wallet_assignments')) {
@@ -5348,20 +5414,14 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
     $resetOrders = 0;
 
     if (schema_object_exists($db, 'crypto_deposit_requests')) {
-        $cryptoResult = $db->query(
-            "UPDATE crypto_deposit_requests
-             SET status = 'cancelled',
-                 cancelled_at = CASE
-                     WHEN cancelled_at IS NULL THEN '{$safeNowSql}'
-                     ELSE cancelled_at
-                 END
-             WHERE status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-               AND expires_at IS NOT NULL
-               AND expires_at <= '{$safeNowSql}'"
+        $cancelledCrypto = app_cancel_crypto_deposit_requests(
+            $db,
+            "status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+             AND expires_at IS NOT NULL
+             AND expires_at <= '{$safeNowSql}'",
+            'Released after expired crypto payment request',
+            $safeNow
         );
-        if ($cryptoResult) {
-            $cancelledCrypto = (int)$db->affected_rows;
-        }
     }
 
     if (schema_object_exists($db, 'bank_transfer_requests')) {

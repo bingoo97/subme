@@ -592,13 +592,13 @@ if (!function_exists('orders_payment_cancel_open_crypto_requests')) {
     function orders_payment_cancel_open_crypto_requests($db, int $customerId, int $orderId): void
     {
         $safeNow = date('Y-m-d H:i:s');
-        $db->query(
-            "UPDATE crypto_deposit_requests
-             SET status = 'cancelled',
-                 cancelled_at = '{$safeNow}'
-             WHERE customer_id = {$customerId}
-               AND order_id = {$orderId}
-               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
+        app_cancel_crypto_deposit_requests(
+            $db,
+            "customer_id = {$customerId}
+             AND order_id = {$orderId}
+             AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')",
+            'Released after customer cancelled order crypto payment request',
+            $safeNow
         );
     }
 }
@@ -620,18 +620,15 @@ if (!function_exists('orders_payment_archive_expired_crypto_requests')) {
     function orders_payment_archive_expired_crypto_requests($db, int $customerId, int $orderId): void
     {
         $safeNow = date('Y-m-d H:i:s');
-        $db->query(
-            "UPDATE crypto_deposit_requests
-             SET status = 'cancelled',
-                 cancelled_at = CASE
-                     WHEN cancelled_at IS NULL THEN '{$safeNow}'
-                     ELSE cancelled_at
-                 END
-             WHERE customer_id = {$customerId}
-               AND order_id = {$orderId}
-               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-               AND expires_at IS NOT NULL
-               AND expires_at <= '{$safeNow}'"
+        app_cancel_crypto_deposit_requests(
+            $db,
+            "customer_id = {$customerId}
+             AND order_id = {$orderId}
+             AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+             AND expires_at IS NOT NULL
+             AND expires_at <= '{$safeNow}'",
+            'Released after expired customer order crypto payment request',
+            $safeNow
         );
     }
 }

@@ -1166,6 +1166,16 @@ $orderCreateState = [
 $orderSelectedCustomer = null;
 $orderSelectedVisibleProviderIds = [];
 $orderProductsByProvider = [];
+$userQuickOrderState = [
+    'provider_id' => 0,
+    'product_id' => 0,
+    'customer_note' => '',
+];
+$userQuickOrderProviders = [];
+$userQuickOrderProducts = [];
+$userQuickOrderProductsByProvider = [];
+$userQuickOrderVisibleProviderIds = [];
+$userQuickOrderAvailable = false;
 $productListPage = 1;
 $productListPerPage = 20;
 $productListTotal = 0;
@@ -1395,6 +1405,11 @@ if ($route === 'settings' && isset($_GET['deleted_admin'])) {
 
 if ($route === 'users' && isset($_GET['deleted_user'])) {
     $pageAlert = admin_t($messages, 'customer_delete_success', 'User account deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'users' && isset($_GET['created_order'])) {
+    $pageAlert = admin_t($messages, 'order_create_success', 'Order created successfully.');
     $pageAlertType = 'success';
 }
 
@@ -2785,6 +2800,69 @@ if ($route === 'users') {
             $selectedCustomerWallets = admin_customer_wallet_rows($db, $selectedCustomerId);
             $selectedCustomerBankAccounts = admin_customer_bank_rows($db, $selectedCustomerId);
             $selectedCustomerActivity = admin_customer_activity_rows($db, $selectedCustomerId);
+
+            if ((int)($selectedCustomerSummary['orders_total'] ?? 0) === 0) {
+                $userQuickOrderVisibleProviderIds = admin_customer_visible_provider_ids($db, $selectedCustomerId);
+                $userQuickOrderProviders = array_values(array_filter(
+                    admin_product_provider_rows($db),
+                    static function (array $providerRow) use ($userQuickOrderVisibleProviderIds): bool {
+                        $providerId = (int)($providerRow['id'] ?? 0);
+                        return $providerId > 0 && in_array($providerId, $userQuickOrderVisibleProviderIds, true);
+                    }
+                ));
+                $userQuickOrderProducts = array_values(array_filter(
+                    admin_product_active_rows($db),
+                    static function (array $productRow) use ($userQuickOrderVisibleProviderIds): bool {
+                        $providerId = (int)($productRow['provider_id'] ?? 0);
+                        return $providerId > 0
+                            && in_array($providerId, $userQuickOrderVisibleProviderIds, true)
+                            && admin_order_product_can_extend($productRow);
+                    }
+                ));
+                foreach ($userQuickOrderProducts as $userQuickOrderProduct) {
+                    $providerId = (int)($userQuickOrderProduct['provider_id'] ?? 0);
+                    if ($providerId <= 0) {
+                        continue;
+                    }
+                    if (!isset($userQuickOrderProductsByProvider[$providerId])) {
+                        $userQuickOrderProductsByProvider[$providerId] = [];
+                    }
+                    $userQuickOrderProductsByProvider[$providerId][] = $userQuickOrderProduct;
+                }
+                $userQuickOrderAvailable = !empty($userQuickOrderProviders) && !empty($userQuickOrderProducts);
+            }
+        }
+    }
+
+    if (isset($_POST['admin_create_user_quick_order']) && $selectedCustomerId > 0) {
+        $userQuickOrderState = [
+            'provider_id' => (int)($_POST['provider_id'] ?? 0),
+            'product_id' => (int)($_POST['product_id'] ?? 0),
+            'customer_note' => trim((string)($_POST['customer_note'] ?? '')),
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } elseif (!$selectedCustomer || (int)($selectedCustomerSummary['orders_total'] ?? 0) > 0 || !$userQuickOrderAvailable) {
+            $pageAlert = admin_t($messages, 'order_create_error', 'Unable to create order.');
+            $pageAlertType = 'danger';
+        } else {
+            $createResult = admin_create_order($db, [
+                'customer_id' => $selectedCustomerId,
+                'product_id' => $userQuickOrderState['product_id'],
+                'customer_note' => $userQuickOrderState['customer_note'],
+                'has_delivery_link' => '0',
+                'delivery_link' => '',
+            ]);
+
+            if (!empty($createResult['ok'])) {
+                header('Location: /admin/?page=users&customer_id=' . $selectedCustomerId . '&created_order=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'order_create_error', 'Unable to create order.'));
+            $pageAlertType = 'danger';
         }
     }
 }
@@ -6658,15 +6736,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <div class="admin-user-detail__quick-links">
                                                 <a class="btn btn-dark admin-user-detail__quick-link" href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>">
                                                     <i class="bi bi-receipt" aria-hidden="true"></i>
-                                                    <span>Orders</span>
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?></span>
                                                 </a>
                                                 <a class="btn btn-dark admin-user-detail__quick-link" href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>">
                                                     <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
-                                                    <span>Payments</span>
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?></span>
                                                 </a>
+                                                <button
+                                                    type="button"
+                                                    class="btn btn-dark admin-user-detail__quick-link"
+                                                    data-admin-open-customer-chat
+                                                    data-customer-id="<?php echo admin_e((string)$selectedCustomer['id']); ?>"
+                                                >
+                                                    <i class="bi bi-chat-dots" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_action_live_chat', 'Live chat')); ?></span>
+                                                </button>
                                                 <a class="btn btn-dark admin-user-detail__quick-link" href="#customerActivity">
                                                     <i class="bi bi-clock-history" aria-hidden="true"></i>
-                                                    <span>History</span>
+                                                    <span><?php echo admin_e(admin_t($messages, 'user_action_history', 'History')); ?></span>
                                                 </a>
                                             </div>
 
@@ -6992,7 +7079,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <a href="<?php echo admin_e($orderUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
                                                                                         <i class="bi bi-receipt" aria-hidden="true"></i>
                                                                                     </a>
-                                                                                    <a href="<?php echo admin_e($orderPaymentUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
+                                                                                    <a href="<?php echo admin_e($orderPaymentUrl); ?>" class="btn btn-primary btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
                                                                                         <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
                                                                                     </a>
                                                                                 </div>
@@ -7013,6 +7100,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <a class="admin-inline-link" href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>"><?php echo admin_e(admin_t($messages, 'customer_link_all_payments', 'All payments')); ?></a>
                                                     </div>
                                                     <?php if ($selectedCustomerPayments): ?>
+                                                        <?php
+                                                        $userQuickOrderProductsJson = [];
+                                                        foreach ($userQuickOrderProducts as $productRow) {
+                                                            $userQuickOrderProductsJson[] = [
+                                                                'id' => (int)($productRow['id'] ?? 0),
+                                                                'provider_id' => (int)($productRow['provider_id'] ?? 0),
+                                                                'label' => admin_format_product_option_label($productRow),
+                                                            ];
+                                                        }
+                                                        ?>
                                                         <div class="table-responsive">
                                                             <table class="table admin-table admin-user-detail-table align-middle">
                                                                 <thead>
@@ -7066,6 +7163,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         $paymentDetailsUrl = '/admin/?page=payments&customer_id=' . (int)$selectedCustomer['id'] . '&payment_type=' . rawurlencode($paymentType) . '&payment_id=' . $paymentId;
                                                                         $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)$selectedCustomer['id'];
                                                                         $paymentReference = trim((string)($row['payment_reference'] ?? ''));
+                                                                        $paymentCanOpenQuickOrder = $userQuickOrderAvailable
+                                                                            && (int)($selectedCustomerSummary['orders_total'] ?? 0) === 0
+                                                                            && $paymentOrderId <= 0
+                                                                            && !in_array($paymentStatus, ['cancelled', 'rejected', 'failed'], true);
                                                                         if ($paymentReference === '') {
                                                                             $paymentReference = trim((string)($row['bank_name'] ?? $row['bank_label'] ?? ''));
                                                                         }
@@ -7126,6 +7227,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>">
                                                                                         <i class="bi bi-search" aria-hidden="true"></i>
                                                                                     </a>
+                                                                                    <?php if ($paymentCanOpenQuickOrder): ?>
+                                                                                        <button type="button" class="btn btn-primary btn-sm admin-user-row__icon-btn" data-bs-toggle="modal" data-bs-target="#adminUserQuickOrderModal" title="<?php echo admin_e(admin_t($messages, 'user_payment_create_order', 'Add order')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_payment_create_order', 'Add order')); ?>">
+                                                                                            <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                                                                                        </button>
+                                                                                    <?php endif; ?>
                                                                                     <?php if ($paymentOrderId > 0): ?>
                                                                                         <a href="<?php echo admin_e($paymentOrdersUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?>">
                                                                                             <i class="bi bi-receipt" aria-hidden="true"></i>
@@ -7143,6 +7249,67 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </tbody>
                                                             </table>
                                                         </div>
+                                                        <?php if ($userQuickOrderAvailable && (int)($selectedCustomerSummary['orders_total'] ?? 0) === 0): ?>
+                                                            <?php
+                                                            $userQuickOrderProviderId = (int)($userQuickOrderState['provider_id'] ?? 0);
+                                                            $userQuickOrderProductOptions = $userQuickOrderProviderId > 0 ? ($userQuickOrderProductsByProvider[$userQuickOrderProviderId] ?? []) : [];
+                                                            $userQuickOrderPlaceholder = $userQuickOrderProviderId > 0
+                                                                ? admin_t($messages, 'order_product_placeholder', 'Choose subscription time')
+                                                                : admin_t($messages, 'order_product_placeholder_locked', 'Choose package first');
+                                                            ?>
+                                                            <div class="modal fade" id="adminUserQuickOrderModal" tabindex="-1" aria-hidden="true">
+                                                                <div class="modal-dialog modal-dialog-centered">
+                                                                    <div class="modal-content">
+                                                                        <form method="post" data-admin-user-quick-order-form data-products="<?php echo admin_e(json_encode($userQuickOrderProductsJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?>">
+                                                                            <div class="modal-header">
+                                                                                <div>
+                                                                                    <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'user_payment_create_order_modal_title', 'Create first order')); ?></h5>
+                                                                                    <p class="mb-0 text-muted small"><?php echo admin_e(admin_t($messages, 'user_payment_create_order_modal_intro', 'Choose a package available for this user and create the first order without leaving this page.')); ?></p>
+                                                                                </div>
+                                                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                                            </div>
+                                                                            <div class="modal-body">
+                                                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                <div class="mb-3">
+                                                                                    <label class="form-label" for="adminUserQuickOrderProvider"><?php echo admin_e(admin_t($messages, 'order_provider_label', 'Package')); ?></label>
+                                                                                    <select class="form-select" id="adminUserQuickOrderProvider" name="provider_id" data-admin-user-quick-order-provider>
+                                                                                        <option value=""><?php echo admin_e(admin_t($messages, 'order_provider_placeholder', 'Choose package')); ?></option>
+                                                                                        <?php foreach ($userQuickOrderProviders as $providerRow): ?>
+                                                                                            <option value="<?php echo admin_e((string)($providerRow['id'] ?? 0)); ?>"<?php echo $userQuickOrderProviderId === (int)($providerRow['id'] ?? 0) ? ' selected' : ''; ?>>
+                                                                                                <?php echo admin_e((string)($providerRow['name'] ?? '')); ?>
+                                                                                            </option>
+                                                                                        <?php endforeach; ?>
+                                                                                    </select>
+                                                                                </div>
+                                                                                <div class="mb-3">
+                                                                                    <label class="form-label" for="adminUserQuickOrderProduct"><?php echo admin_e(admin_t($messages, 'order_duration_label', 'Subscription time')); ?></label>
+                                                                                    <select class="form-select" id="adminUserQuickOrderProduct" name="product_id" data-admin-user-quick-order-product data-selected-product-id="<?php echo admin_e((string)($userQuickOrderState['product_id'] ?? 0)); ?>" data-placeholder-default="<?php echo admin_e(admin_t($messages, 'order_product_placeholder', 'Choose subscription time')); ?>" data-placeholder-locked="<?php echo admin_e(admin_t($messages, 'order_product_placeholder_locked', 'Choose package first')); ?>"<?php echo $userQuickOrderProviderId <= 0 ? ' disabled' : ''; ?>>
+                                                                                        <option value=""><?php echo admin_e($userQuickOrderPlaceholder); ?></option>
+                                                                                        <?php foreach ($userQuickOrderProductOptions as $productRow): ?>
+                                                                                            <?php $quickProductId = (int)($productRow['id'] ?? 0); ?>
+                                                                                            <option value="<?php echo admin_e((string)$quickProductId); ?>"<?php echo (int)($userQuickOrderState['product_id'] ?? 0) === $quickProductId ? ' selected' : ''; ?>>
+                                                                                                <?php echo admin_e(admin_format_product_option_label($productRow)); ?>
+                                                                                            </option>
+                                                                                        <?php endforeach; ?>
+                                                                                    </select>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label class="form-label" for="adminUserQuickOrderNote"><?php echo admin_e(admin_t($messages, 'order_note_label', 'Note')); ?></label>
+                                                                                    <textarea class="form-control" id="adminUserQuickOrderNote" name="customer_note" rows="3"><?php echo admin_e((string)($userQuickOrderState['customer_note'] ?? '')); ?></textarea>
+                                                                                </div>
+                                                                            </div>
+                                                                            <div class="modal-footer">
+                                                                                <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'payment_action_cancel', 'Cancel')); ?></button>
+                                                                                <button type="submit" class="btn btn-primary" name="admin_create_user_quick_order">
+                                                                                    <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_create_button', 'Create order')); ?></span>
+                                                                                </button>
+                                                                            </div>
+                                                                        </form>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        <?php endif; ?>
                                                     <?php else: ?>
                                                         <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
                                                     <?php endif; ?>

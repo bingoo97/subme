@@ -2164,13 +2164,13 @@ function admin_cancel_open_order_payment_requests(Mysql_ks $db, int $customerId,
     $safeNow = date('Y-m-d H:i:s');
 
     if (schema_object_exists($db, 'crypto_deposit_requests')) {
-        $db->query(
-            "UPDATE crypto_deposit_requests
-             SET status = 'cancelled',
-                 cancelled_at = '{$safeNow}'
-             WHERE customer_id = {$customerId}
-               AND order_id = {$orderId}
-               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
+        app_cancel_crypto_deposit_requests(
+            $db,
+            "customer_id = {$customerId}
+             AND order_id = {$orderId}
+             AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')",
+            'Released after admin cancelled open order crypto payment request',
+            $safeNow
         );
     }
 
@@ -4905,6 +4905,14 @@ function admin_save_payment(
                 'order_id' => (int)($finalizeResult['order_id'] ?? 0),
                 'customer_id' => (int)($finalizeResult['customer_id'] ?? 0),
             ];
+        }
+
+        if ($updated && in_array($status, admin_payment_cancelled_statuses($paymentType), true) && !empty($payment['wallet_assignment_id'])) {
+            app_release_crypto_wallet_assignment_if_unused(
+                $db,
+                (int)$payment['wallet_assignment_id'],
+                'Released after crypto payment request status changed to ' . $status
+            );
         }
 
         return [

@@ -131,6 +131,10 @@ document.addEventListener('DOMContentLoaded', function () {
             DIV: true,
             SPAN: true
         };
+        var allowedClassNames = {
+            red: true,
+            'border-red': true
+        };
 
         function isSafeUrl(value, allowDataImages) {
             var url = String(value || '').trim();
@@ -157,6 +161,56 @@ document.addEventListener('DOMContentLoaded', function () {
             return match ? 'text-align:' + match[1].toLowerCase() + ';' : '';
         }
 
+        function sanitizeClassNames(value) {
+            return String(value || '')
+                .split(/\s+/)
+                .map(function (className) {
+                    return String(className || '').trim();
+                })
+                .filter(function (className) {
+                    return !!allowedClassNames[className];
+                })
+                .join(' ');
+        }
+
+        function styleHasBold(value) {
+            return /font-weight\s*:\s*(bold|[7-9]00)/i.test(String(value || ''));
+        }
+
+        function styleHasItalic(value) {
+            return /font-style\s*:\s*italic/i.test(String(value || ''));
+        }
+
+        function styleHasUnderline(value) {
+            return /text-decoration(?:-line)?\s*:\s*[^;]*underline/i.test(String(value || ''));
+        }
+
+        function wrapNodeChildren(node, tagName) {
+            var wrapper;
+            if (!node || !tagName) {
+                return null;
+            }
+
+            wrapper = doc.createElement(tagName);
+            while (node.firstChild) {
+                wrapper.appendChild(node.firstChild);
+            }
+            node.appendChild(wrapper);
+            return wrapper;
+        }
+
+        function unwrapNode(node) {
+            var parent = node && node.parentNode ? node.parentNode : null;
+            if (!node || !parent) {
+                return;
+            }
+
+            while (node.firstChild) {
+                parent.insertBefore(node.firstChild, node);
+            }
+            parent.removeChild(node);
+        }
+
         function sanitizeHtml(html) {
             var template = doc.createElement('template');
             template.innerHTML = String(html || '');
@@ -166,6 +220,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 children.forEach(function (child) {
                     if (child.nodeType === 1) {
                         var tag = child.tagName ? child.tagName.toUpperCase() : '';
+                        var rawStyle = child.getAttribute('style') || '';
+                        var preserveBold = styleHasBold(rawStyle);
+                        var preserveItalic = styleHasItalic(rawStyle);
+                        var preserveUnderline = styleHasUnderline(rawStyle);
                         if (!allowedTags[tag]) {
                             if (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|FORM|INPUT|BUTTON|TEXTAREA|SELECT|OPTION)$/i.test(tag)) {
                                 child.remove();
@@ -211,6 +269,16 @@ document.addEventListener('DOMContentLoaded', function () {
                                 return;
                             }
 
+                            if (attrName === 'class') {
+                                var safeClasses = sanitizeClassNames(attrValue);
+                                if (safeClasses) {
+                                    child.setAttribute('class', safeClasses);
+                                } else {
+                                    child.removeAttribute('class');
+                                }
+                                return;
+                            }
+
                             if (tag === 'A' && (attrName === 'target' || attrName === 'rel' || attrName === 'title')) {
                                 return;
                             }
@@ -222,12 +290,26 @@ document.addEventListener('DOMContentLoaded', function () {
                             child.removeAttribute(attribute.name);
                         });
 
+                        if (preserveBold) {
+                            wrapNodeChildren(child, 'strong');
+                        }
+                        if (preserveItalic) {
+                            wrapNodeChildren(child, 'em');
+                        }
+                        if (preserveUnderline) {
+                            wrapNodeChildren(child, 'u');
+                        }
+
                         if (tag === 'A' && child.getAttribute('href')) {
                             child.setAttribute('target', '_blank');
                             child.setAttribute('rel', 'noopener noreferrer');
                         }
 
                         walk(child);
+
+                        if (tag === 'SPAN' && child.attributes.length === 0) {
+                            unwrapNode(child);
+                        }
                         return;
                     }
 
@@ -296,7 +378,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 { action: 'alignLeft', label: 'Align left', html: '<strong>L</strong>' },
                 { action: 'alignCenter', label: 'Align center', html: '<strong>C</strong>' },
                 { action: 'alignRight', label: 'Align right', html: '<strong>R</strong>' },
-                { action: 'clear', label: 'Clear formatting', html: '<i class="bi bi-eraser"></i>' }
+                { action: 'clear', label: 'Clear formatting', html: '<i class="bi bi-eraser"></i>' },
+                { action: 'redBox', label: 'Insert red warning box', html: '<i class="bi bi-exclamation-triangle-fill"></i>' }
             ];
 
             if (allowImages) {
@@ -367,7 +450,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 surface.focus();
-                doc.execCommand('styleWithCSS', false, true);
+                try {
+                    doc.execCommand('styleWithCSS', false, false);
+                } catch (error) {
+                    // noop
+                }
+                try {
+                    doc.execCommand('useCSS', false, false);
+                } catch (error) {
+                    // noop
+                }
                 if (command === 'formatBlock') {
                     doc.execCommand(command, false, value);
                 } else if (command === 'insertHTML') {
@@ -428,6 +520,34 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 };
                 reader.readAsDataURL(file);
+            }
+
+            function getSelectedHtml() {
+                var selection = window.getSelection ? window.getSelection() : null;
+                var range;
+                var container;
+
+                if (!selection || selection.rangeCount <= 0 || selection.isCollapsed) {
+                    return '';
+                }
+
+                range = selection.getRangeAt(0);
+                container = doc.createElement('div');
+                container.appendChild(range.cloneContents());
+                return container.innerHTML;
+            }
+
+            function insertRedWarningBox() {
+                var selectedHtml = getSelectedHtml();
+                var boxHtml = '<div class="border-red red">' + (selectedHtml || 'Important content') + '</div>';
+
+                if (isSourceMode()) {
+                    source.value += (source.value ? '\n' : '') + boxHtml;
+                    syncSurfaceFromSource();
+                    return;
+                }
+
+                runCommand('insertHTML', boxHtml);
             }
 
             surface.innerHTML = sanitizeHtml(textarea.value);
@@ -501,6 +621,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 if (action === 'clear') {
                     runCommand('removeFormat');
+                    return;
+                }
+                if (action === 'redBox') {
+                    insertRedWarningBox();
                     return;
                 }
                 if (action === 'image') {
@@ -2314,6 +2438,61 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function initUserQuickOrderForms() {
+        qa('[data-admin-user-quick-order-form]').forEach(function (form) {
+            var providerSelect = q('[data-admin-user-quick-order-provider]', form);
+            var productSelect = q('[data-admin-user-quick-order-product]', form);
+            var productOptions = [];
+
+            if (!providerSelect || !productSelect) {
+                return;
+            }
+
+            try {
+                productOptions = JSON.parse(form.getAttribute('data-products') || '[]');
+            } catch (error) {
+                productOptions = [];
+            }
+
+            function syncProducts() {
+                var providerId = parseInt(providerSelect.value || '0', 10) || 0;
+                var previousProductId = String(productSelect.value || productSelect.getAttribute('data-selected-product-id') || '').trim();
+                var placeholder = providerId > 0
+                    ? (productSelect.getAttribute('data-placeholder-default') || 'Choose subscription time')
+                    : (productSelect.getAttribute('data-placeholder-locked') || 'Choose package first');
+                var filtered;
+                var optionsHtml;
+                var hasPrevious = false;
+
+                if (providerId <= 0) {
+                    productSelect.innerHTML = '<option value="">' + escapeHtml(placeholder) + '</option>';
+                    productSelect.value = '';
+                    productSelect.disabled = true;
+                    return;
+                }
+
+                filtered = productOptions.filter(function (item) {
+                    return (parseInt(item && item.provider_id ? item.provider_id : 0, 10) || 0) === providerId;
+                });
+
+                optionsHtml = '<option value="">' + escapeHtml(placeholder) + '</option>' + filtered.map(function (item) {
+                    var itemId = String(parseInt(item && item.id ? item.id : 0, 10) || 0);
+                    if (itemId === previousProductId) {
+                        hasPrevious = true;
+                    }
+                    return '<option value="' + escapeHtml(itemId) + '">' + escapeHtml(item && item.label ? item.label : '') + '</option>';
+                }).join('');
+
+                productSelect.innerHTML = optionsHtml;
+                productSelect.disabled = filtered.length === 0;
+                productSelect.value = hasPrevious ? previousProductId : '';
+            }
+
+            providerSelect.addEventListener('change', syncProducts);
+            syncProducts();
+        });
+    }
+
     function initUserDetailCopy() {
         qa('[data-admin-copy-value]').forEach(function (button) {
             var timer = 0;
@@ -3346,6 +3525,42 @@ document.addEventListener('DOMContentLoaded', function () {
             } catch (error) {
                 return 0;
             }
+        }
+
+        function startConversationWithCustomer(customerId, options) {
+            var normalizedCustomerId = parseInt(customerId || 0, 10) || 0;
+            var requestOptions = options || {};
+
+            if (normalizedCustomerId <= 0) {
+                return;
+            }
+
+            openPanel(false);
+            if (!requestOptions.preserveAlert) {
+                showComposerAlert('', false);
+            }
+
+            jsonFetch(chatUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: toQuery({
+                    action: 'start_conversation',
+                    participant_type: 'customer',
+                    customer_id: normalizedCustomerId,
+                    _csrf: csrfToken
+                })
+            }).then(function (payload) {
+                if (!payload.ok) {
+                    showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
+                    return;
+                }
+                renderConversation(payload, {
+                    scrollToBottom: !Object.prototype.hasOwnProperty.call(requestOptions, 'scrollToBottom') || !!requestOptions.scrollToBottom,
+                    animateConversation: !Object.prototype.hasOwnProperty.call(requestOptions, 'animateConversation') || !!requestOptions.animateConversation
+                });
+            }).catch(function () {
+                showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
+            });
         }
 
         function getConversationScrollMetrics() {
@@ -5435,24 +5650,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 }
 
-                jsonFetch(chatUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-                    body: toQuery({
-                        action: 'start_conversation',
-                        participant_type: 'customer',
-                        customer_id: targetCustomerId,
-                        _csrf: csrfToken
-                    })
-                }).then(function (payload) {
-                    if (!payload.ok) {
-                        showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
-                        return;
-                    }
-                    renderConversation(payload, { scrollToBottom: true, animateConversation: true });
-                }).catch(function () {
-                    showComposerAlert(root.getAttribute('data-chat-start-error') || 'Unable to start conversation.', true);
-                });
+                startConversationWithCustomer(targetCustomerId, { scrollToBottom: true, animateConversation: true });
                 return;
             }
 
@@ -5528,6 +5726,16 @@ document.addEventListener('DOMContentLoaded', function () {
             var groupSearchResult = closest(event.target, '[data-admin-chat-group-search-item]');
             if (groupSearchResult) {
                 addGroupEmail(groupSearchResult.getAttribute('data-invite-email') || '');
+                return;
+            }
+
+            var openCustomerChatTrigger = closest(event.target, '[data-admin-open-customer-chat]');
+            if (openCustomerChatTrigger) {
+                event.preventDefault();
+                startConversationWithCustomer(openCustomerChatTrigger.getAttribute('data-customer-id') || 0, {
+                    scrollToBottom: true,
+                    animateConversation: true
+                });
                 return;
             }
 
@@ -5925,6 +6133,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initProductTypeForms();
     initOrderStatusForms();
     initOrderCreateForms();
+    initUserQuickOrderForms();
     initUserDetailCopy();
     initWalletCustomerPickers();
     initWalletNetworkForms();

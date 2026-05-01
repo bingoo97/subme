@@ -55,18 +55,15 @@ switch ($site) {
         $topupCryptoAssets = [];
 
         if ($v2CryptoRequestsEnabled) {
-            $db->query(
-                "UPDATE crypto_deposit_requests
-                 SET status = 'cancelled',
-                     cancelled_at = CASE
-                         WHEN cancelled_at IS NULL THEN '{$safeNow}'
-                         ELSE cancelled_at
-                     END
-                 WHERE customer_id = " . (int)$user['id'] . "
-                   AND order_id IS NULL
-                   AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-                   AND expires_at IS NOT NULL
-                   AND expires_at <= '{$safeNow}'"
+            app_cancel_crypto_deposit_requests(
+                $db,
+                "customer_id = " . (int)$user['id'] . "
+                 AND order_id IS NULL
+                 AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+                 AND expires_at IS NOT NULL
+                 AND expires_at <= '{$safeNow}'",
+                'Released after expired customer crypto top-up payment request',
+                $safeNow
             );
         }
 
