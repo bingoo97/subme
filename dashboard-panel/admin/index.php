@@ -3761,6 +3761,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php endif; ?>
                                                             <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentRow['status'] ?? ''))); ?>"><?php echo admin_e($paymentStatusLabel); ?></span>
                                                         </div>
+                                                        <?php if ($paymentOrderId <= 0): ?>
+                                                            <div class="alert alert-info admin-topbar-notifications__topup-alert" role="alert">
+                                                                <?php echo admin_e(admin_t($messages, 'payment_topup_info', 'The user did not add an order. They only want to top up their account balance.')); ?>
+                                                            </div>
+                                                        <?php endif; ?>
                                                         <p>
                                                             <?php if ($paymentPublicHandle !== ''): ?>
                                                                 <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$paymentCustomerId); ?>" class="admin-topbar-notifications__payment-handle"><?php echo admin_e('@' . $paymentPublicHandle); ?></a>

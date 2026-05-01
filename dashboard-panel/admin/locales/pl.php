@@ -878,6 +878,8 @@ return [
     'orders_completed_empty' => 'Brak zrealizowanych zamówień.',
     'orders_open_help_alert' => 'Jeśli klient dodał poniżej zamówienie, a nie widzisz płatności, kliknij w tabeli poniżej w nazwę uzytkownika, aby sprawdzić jego profil. Zobaczysz tam, czy wygenerował już płatność, oraz czy jego przypisane portfele są puste i czy wpłynęła tam dzisiaj jakaś wpłata...',
     'orders_completed_help_alert' => 'Poniżej w tabeli znajdują się zamówienia, które zatwierdziłeś. Użytkownicy dokonali wpłaty, a Ty ją zatwierdziłeś w systemie. Jeśli masz wątpliwości, czy wpłata na pewno przyszła, kliknij w zamówieniu poniżej w nazwę uzytkownika, aby przejść do profilu klienta i sprawdzić jego przypisane portfele, czy są puste, oraz kiedy wpłynęła tam wymagana płatność.',
+    'payment_topup_badge' => 'Doładowanie konta',
+    'payment_topup_info' => 'Użytkownik nie dodał zamówienia, tylko chce dokonać doładowania konta.',
     'order_click_to_approve' => 'Kliknij aby zatwierdzić',
     'order_completed_button' => 'Zrealizowano',
     'order_paid_steps_intro' => 'Wykonaj poniższe kroki, aby dokończyć to zamówienie.',

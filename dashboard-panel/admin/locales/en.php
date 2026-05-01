@@ -876,6 +876,8 @@ return [
     'orders_completed_empty' => 'No completed orders.',
     'orders_open_help_alert' => 'If the customer added an order below and you do not see any payment, click the @handle in the table below to open the profile. There you can check whether a payment has already been generated and whether the assigned wallets are empty or received a payment today.',
     'orders_completed_help_alert' => 'The table below contains orders that you have already approved. The users made a payment and you approved it in the system. If you have any doubt whether the payment really arrived, click the @handle in the order below to open the customer profile and check the assigned wallets, whether they are empty, and when the required payment arrived there.',
+    'payment_topup_badge' => 'Balance top-up',
+    'payment_topup_info' => 'The user did not add an order. They only want to top up their account balance.',
     'order_click_to_approve' => 'Click to approve',
     'order_completed_button' => 'Completed',
     'order_paid_steps_intro' => 'Complete the steps below to finish this order.',

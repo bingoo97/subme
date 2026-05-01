@@ -5804,12 +5804,19 @@ body.admin-login-page .alert.alert-danger::before{
     min-height:26px;
     padding:0 .7rem;
     border-radius:999px;
-    background:#dcfce7;
-    color:#166534;
+    background:#cff4fc;
+    color:#055160;
     font-size:12px;
     font-weight:800;
     line-height:1;
     white-space:nowrap;
+}
+
+.admin-topbar-notifications__topup-alert{
+    margin:.7rem 0 .55rem;
+    padding:.65rem .8rem;
+    font-size:12px;
+    line-height:1.45;
 }
 
 .admin-topbar-notifications__payment-handle{
