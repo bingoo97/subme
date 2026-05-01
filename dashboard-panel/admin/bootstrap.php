@@ -14668,10 +14668,8 @@ function admin_search_wallet_rows(Mysql_ks $db, string $query, int $limit = 20):
                 SELECT inner_assignment.id
                 FROM crypto_wallet_assignments AS inner_assignment
                 WHERE inner_assignment.wallet_address_id = wallet.id
-                ORDER BY
-                    CASE WHEN inner_assignment.status IN ('reserved', 'active') THEN 0 ELSE 1 END ASC,
-                    inner_assignment.assigned_at DESC,
-                    inner_assignment.id DESC
+                  AND inner_assignment.status IN ('reserved', 'active')
+                ORDER BY inner_assignment.assigned_at DESC, inner_assignment.id DESC
                 LIMIT 1
             )
          LEFT JOIN customers AS customer
@@ -14922,6 +14920,9 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $orderCreatedAtRaw = trim((string)($row['created_at'] ?? ''));
                                 $orderCreatedAtLabel = admin_format_last_login_date($orderCreatedAtRaw);
                                 $orderCreatedAtIsToday = false;
+                                $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+                                $orderCustomerHandle = trim((string)($row['public_handle'] ?? ''));
+                                $orderCustomerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
                                 if ($orderCreatedAtRaw !== '') {
                                     $orderCreatedAtTimestamp = strtotime($orderCreatedAtRaw);
                                     if ($orderCreatedAtTimestamp !== false) {
@@ -14946,9 +14947,12 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                             <?php if ((string)($row['status'] ?? '') === 'expired'): ?>
                                                 <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
                                             <?php endif; ?>
-                                            <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)($row['customer_id'] ?? 0)); ?>">
-                                                <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                            <a class="admin-inline-link admin-order-summary__customer admin-search-table__primary-link" href="<?php echo admin_e($orderCustomerProfileUrl); ?>">
+                                                <?php echo admin_e($orderCustomerHandle !== '' ? '@' . ltrim($orderCustomerHandle, '@') : ($orderCustomerEmail !== '' ? $orderCustomerEmail : '—')); ?>
                                             </a>
+                                            <?php if ($orderCustomerEmail !== '' && $orderCustomerHandle !== ''): ?>
+                                                <div class="admin-search-table__email"><?php echo admin_e($orderCustomerEmail); ?></div>
+                                            <?php endif; ?>
                                             <div class="admin-search-table__muted<?php echo $orderCreatedAtIsToday ? ' text-danger fw-bold' : ''; ?>">
                                                 <?php echo admin_e($orderCreatedAtLabel !== '' ? $orderCreatedAtLabel : '—'); ?>
                                             </div>

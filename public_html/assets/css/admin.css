@@ -7439,6 +7439,25 @@ body.admin-login-page .alert.alert-danger::before{
     color:#16181d;
 }
 
+.admin-search-table__primary-link{
+    font-weight:700;
+    color:#16181d;
+    text-decoration:none;
+}
+
+.admin-search-table__primary-link:hover,
+.admin-search-table__primary-link:focus{
+    color:#0d6efd;
+}
+
+.admin-search-table__email{
+    margin-top:.12rem;
+    color:#16181d;
+    font-size:8px;
+    line-height:1.25;
+    font-weight:500;
+}
+
 .admin-search-table__muted{
     margin-top:.15rem;
     color:#7c8496;
