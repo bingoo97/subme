@@ -3542,11 +3542,6 @@ function admin_delete_customer_wallet_assignment(
         return ['ok' => false, 'message' => 'Wallet assignment not found.'];
     }
 
-    $walletAddressId = (int)($assignment['wallet_address_id'] ?? 0);
-    if (admin_crypto_wallet_assignment_has_payment_history($db, $walletAddressId, $customerId)) {
-        return ['ok' => false, 'message' => 'This user already paid with this wallet, so the assignment cannot be removed.'];
-    }
-
     $releasedAt = date('Y-m-d H:i:s');
     $deleted = $db->query(
         "UPDATE crypto_wallet_assignments
@@ -10050,10 +10045,33 @@ function admin_crypto_wallet_payment_conflict_summary(Mysql_ks $db, int $walletI
             continue;
         }
 
-        $primaryAssignment = app_customer_primary_crypto_wallet_assignment($db, $customerId, $assetId);
-        $primaryWalletId = (int)($primaryAssignment['wallet_address_id'] ?? 0);
+        $currentAssignments = $db->select_full_user(
+            "SELECT crypto_wallet_assignments.wallet_address_id
+             FROM crypto_wallet_assignments
+             INNER JOIN crypto_wallet_addresses
+               ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
+             WHERE crypto_wallet_assignments.customer_id = {$customerId}
+               AND crypto_wallet_assignments.status IN ('reserved', 'active')
+               AND crypto_wallet_addresses.crypto_asset_id = {$assetId}
+             ORDER BY
+                CASE WHEN crypto_wallet_assignments.wallet_address_id = {$walletId} THEN 0 ELSE 1 END ASC,
+                crypto_wallet_assignments.id DESC"
+        );
 
-        if ($primaryWalletId <= 0 || $primaryWalletId === $walletId) {
+        if (!$currentAssignments) {
+            $unresolvedRows[] = $row;
+            continue;
+        }
+
+        $hasCurrentAssignmentOnWallet = false;
+        foreach ($currentAssignments as $assignmentRow) {
+            if ((int)($assignmentRow['wallet_address_id'] ?? 0) === $walletId) {
+                $hasCurrentAssignmentOnWallet = true;
+                break;
+            }
+        }
+
+        if ($hasCurrentAssignmentOnWallet) {
             $unresolvedRows[] = $row;
         }
     }
