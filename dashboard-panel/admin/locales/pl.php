@@ -222,6 +222,7 @@ return [
     'wallet_conflict_text' => 'Więcej niż jeden klient z historią wpłat jest nadal przypisany do tego adresu. Ta akcja przeniesie klienta z mniejszą liczbą wpłat na nowy wolny portfel, a głównego płatnika zostawi na tym adresie.',
     'wallet_conflict_keep_customer' => 'Zostanie na tym portfelu: {customer}',
     'wallet_conflict_move_customer' => 'Otrzyma nowy portfel: {customer}',
+    'wallet_conflict_move_customers' => 'Otrzymają nowe portfele: {customer}',
     'wallet_conflict_button' => 'Rozbij konflikt portfela',
     'wallet_conflict_confirm' => 'Rozbić ten konflikt portfela i przenieść klienta z mniejszą liczbą wpłat na nowy wolny portfel?',
     'payments_wallet_conflict_alert_title' => 'Dwie osoby wpłaciły na ten sam portfel.',

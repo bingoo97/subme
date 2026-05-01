@@ -10086,22 +10086,23 @@ function admin_crypto_wallet_payment_conflict_summary(Mysql_ks $db, int $walletI
     });
 
     $candidate = null;
+    $candidates = [];
     foreach ($candidateRows as $row) {
         if ((int)($row['customer_id'] ?? 0) !== (int)($keeper['customer_id'] ?? 0)) {
-            $candidate = $row;
-            break;
+            if ($candidate === null) {
+                $candidate = $row;
+            }
+            $candidates[] = $row;
         }
-    }
-    if ($candidate === null) {
-        $candidate = $candidateRows[0] ?? null;
     }
 
     return [
-        'can_split' => is_array($candidate) && is_array($keeper) && (int)($candidate['customer_id'] ?? 0) > 0 && (int)($candidate['customer_id'] ?? 0) !== (int)($keeper['customer_id'] ?? 0),
+        'can_split' => !empty($candidates) && is_array($keeper) && (int)($keeper['customer_id'] ?? 0) > 0,
         'rows' => $rows,
         'active_rows' => $activeRows,
         'keeper' => $keeper,
         'candidate' => $candidate,
+        'candidates' => $candidates,
     ];
 }
 
@@ -10190,196 +10191,264 @@ function admin_resolve_crypto_wallet_payment_conflict(
     }
 
     $conflict = admin_crypto_wallet_payment_conflict_summary($db, $walletId);
-    if (empty($conflict['can_split']) || !is_array($conflict['candidate']) || !is_array($conflict['keeper'])) {
+    $candidates = array_values(array_filter($conflict['candidates'] ?? [], static function (array $row): bool {
+        return (int)($row['customer_id'] ?? 0) > 0;
+    }));
+
+    if (empty($conflict['can_split']) || !$candidates || !is_array($conflict['keeper'])) {
         return ['ok' => false, 'message' => 'No wallet conflict was detected for this address.'];
     }
 
-    $candidate = $conflict['candidate'];
-    $customerId = (int)($candidate['customer_id'] ?? 0);
-    if ($customerId <= 0) {
-        return ['ok' => false, 'message' => 'Customer not found.'];
-    }
-
-    $freeWallet = app_find_available_crypto_wallet_for_asset($db, $assetId, 0, $settings);
-    $newWalletId = (int)($freeWallet['wallet_address_id'] ?? 0);
-    if ($newWalletId <= 0) {
-        return ['ok' => false, 'message' => 'No free wallet address is available for this cryptocurrency.'];
-    }
-    if ($newWalletId === $walletId) {
-        return ['ok' => false, 'message' => 'A different free wallet address is required to split this conflict.'];
+    $freeWalletCountRow = $db->select_user(
+        "SELECT COUNT(DISTINCT crypto_wallet_addresses.id) AS total
+         FROM crypto_wallet_addresses
+         LEFT JOIN crypto_wallet_assignments
+           ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+          AND crypto_wallet_assignments.status IN ('reserved', 'active')
+         LEFT JOIN crypto_deposit_requests AS open_request
+           ON open_request.wallet_address_id = crypto_wallet_addresses.id
+          AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+         WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
+           AND crypto_wallet_addresses.id <> {$walletId}
+           AND crypto_wallet_addresses.status = 'available'
+           AND crypto_wallet_addresses.disabled_at IS NULL
+           AND crypto_wallet_assignments.id IS NULL
+           AND open_request.id IS NULL"
+    );
+    $freeWalletCount = (int)($freeWalletCountRow['total'] ?? 0);
+    if ($freeWalletCount < count($candidates)) {
+        return ['ok' => false, 'message' => 'Not enough free wallet addresses are available to split this conflict for every affected customer.'];
     }
 
     $oldWalletAddress = trim((string)($wallet['address'] ?? ''));
-    $newWalletAddress = trim((string)($freeWallet['address'] ?? ''));
-    $assetCode = strtoupper(trim((string)($wallet['asset_code'] ?? '')));
     $oldWalletCompact = admin_compact_wallet_address($oldWalletAddress, 8, 6);
-    $newWalletCompact = admin_compact_wallet_address($newWalletAddress, 8, 6);
-    $customerLabel = trim((string)($candidate['customer_public_handle'] ?? '')) !== ''
-        ? '@' . trim((string)$candidate['customer_public_handle'])
-        : trim((string)($candidate['customer_email'] ?? ''));
+    $assetCode = strtoupper(trim((string)($wallet['asset_code'] ?? '')));
     $keepLabel = trim((string)($conflict['keeper']['customer_public_handle'] ?? '')) !== ''
         ? '@' . trim((string)$conflict['keeper']['customer_public_handle'])
         : trim((string)($conflict['keeper']['customer_email'] ?? ''));
 
-    $paymentRows = $db->select_full_user(
-        "SELECT
-            crypto_deposit_requests.id,
-            crypto_deposit_requests.status,
-            crypto_deposit_requests.request_note,
-            COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS requested_at
-         FROM crypto_deposit_requests
-         LEFT JOIN crypto_wallet_assignments AS payment_assignment
-           ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
-         WHERE crypto_deposit_requests.customer_id = {$customerId}
-           AND (
-                crypto_deposit_requests.wallet_address_id = {$walletId}
-             OR payment_assignment.wallet_address_id = {$walletId}
-           )
-         ORDER BY crypto_deposit_requests.id DESC"
-    );
-
-    $sameAssetAssignments = $db->select_full_user(
-        "SELECT
-            crypto_wallet_assignments.id,
-            crypto_wallet_assignments.wallet_address_id
-         FROM crypto_wallet_assignments
-         INNER JOIN crypto_wallet_addresses
-           ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
-         WHERE crypto_wallet_assignments.customer_id = {$customerId}
-           AND crypto_wallet_assignments.status IN ('reserved', 'active')
-           AND crypto_wallet_addresses.crypto_asset_id = {$assetId}
-         ORDER BY crypto_wallet_assignments.id DESC"
-    );
-
+    $movedLabels = [];
+    $movedCount = 0;
     $db->start();
 
-    foreach ($sameAssetAssignments as $assignmentRow) {
-        $assignmentId = (int)($assignmentRow['id'] ?? 0);
-        if ($assignmentId <= 0) {
-            continue;
-        }
-        if (!admin_release_crypto_wallet_assignment($db, $assignmentId, $adminUserId, 'Released during wallet conflict split')) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to release previous wallet assignment during conflict split.'];
-        }
-    }
-
-    $newAssignmentRow = $db->select_user(
-        "SELECT id
-         FROM crypto_wallet_assignments
-         WHERE wallet_address_id = {$newWalletId}
-           AND customer_id = {$customerId}
-         ORDER BY id DESC
-         LIMIT 1"
-    );
-
-    $newAssignmentId = (int)($newAssignmentRow['id'] ?? 0);
-    if ($newAssignmentId > 0) {
-        $safeNote = $db->escape('Reactivated during wallet conflict split from wallet ' . $oldWalletCompact);
-        $reactivated = $db->query(
-            "UPDATE crypto_wallet_assignments
-             SET status = 'active',
-                 released_at = NULL,
-                 released_by_admin_user_id = NULL,
-                 assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
-             WHERE id = {$newAssignmentId}"
-        );
-        if ($reactivated === false) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to reactivate the new wallet assignment.'];
-        }
-    } else {
-        $inserted = $db->insert(
-            ['wallet_address_id', 'customer_id', 'assignment_reason', 'status', 'assigned_by_admin_user_id', 'assignment_note'],
-            [$newWalletId, $customerId, 'admin_conflict_split', 'active', $adminUserId, 'Assigned during wallet conflict split from wallet ' . $oldWalletCompact],
-            'crypto_wallet_assignments'
-        );
-        if (!$inserted || (int)$db->id() <= 0) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to assign a new wallet to the selected customer.'];
-        }
-        $newAssignmentId = (int)$db->id();
-    }
-
-    $db->update_using_id(
-        ['status', 'last_assigned_at', 'disabled_at'],
-        ['assigned', $db->expr('NOW()'), null],
-        'crypto_wallet_addresses',
-        $newWalletId
-    );
-
-    foreach ($paymentRows as $paymentRow) {
-        $paymentId = (int)($paymentRow['id'] ?? 0);
-        if ($paymentId <= 0) {
+    foreach ($candidates as $candidate) {
+        $customerId = (int)($candidate['customer_id'] ?? 0);
+        if ($customerId <= 0) {
             continue;
         }
 
-        $paymentStatus = strtolower(trim((string)($paymentRow['status'] ?? '')));
-        $paymentDate = substr((string)($paymentRow['requested_at'] ?? ''), 0, 10);
-        if ($paymentDate === '') {
-            $paymentDate = date('Y-m-d');
-        }
-
-        $noteLine = 'Wallet conflict fix: this customer paid on ' . $paymentDate . ' to wallet [' . $oldWalletAddress . ']. New assigned wallet: [' . $newWalletAddress . '].';
-        $currentNote = trim((string)($paymentRow['request_note'] ?? ''));
-        $updatedNote = $currentNote;
-        if ($updatedNote === '') {
-            $updatedNote = $noteLine;
-        } elseif (strpos($updatedNote, $noteLine) === false) {
-            $updatedNote .= "\n" . $noteLine;
-        }
-
-        if (in_array($paymentStatus, ['pending', 'pending_payment'], true)) {
-            $updated = $db->update_using_id(
-                ['wallet_assignment_id', 'wallet_address_id', 'request_note'],
-                [$newAssignmentId, $newWalletId, $updatedNote],
-                'crypto_deposit_requests',
-                $paymentId
+        $freeWallet = app_find_available_crypto_wallet_for_asset($db, $assetId, 0, $settings);
+        $newWalletId = (int)($freeWallet['wallet_address_id'] ?? 0);
+        if ($newWalletId === $walletId) {
+            $freeWallet = $db->select_user(
+                "SELECT
+                    crypto_wallet_addresses.id AS wallet_address_id,
+                    crypto_wallet_addresses.crypto_asset_id,
+                    crypto_wallet_addresses.label,
+                    crypto_wallet_addresses.owner_full_name,
+                    crypto_wallet_addresses.address,
+                    crypto_wallet_addresses.network_code,
+                    crypto_wallet_addresses.memo_tag,
+                    crypto_wallet_addresses.wallet_provider,
+                    crypto_assets.code AS crypto_asset_code,
+                    crypto_assets.name AS crypto_asset_name
+                 FROM crypto_wallet_addresses
+                 INNER JOIN crypto_assets
+                   ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
+                 LEFT JOIN crypto_wallet_assignments
+                   ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+                 LEFT JOIN crypto_deposit_requests AS open_request
+                   ON open_request.wallet_address_id = crypto_wallet_addresses.id
+                  AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+                 WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
+                   AND crypto_wallet_addresses.id <> {$walletId}
+                   AND crypto_wallet_addresses.status = 'available'
+                   AND crypto_wallet_addresses.disabled_at IS NULL
+                   AND crypto_wallet_assignments.id IS NULL
+                   AND open_request.id IS NULL
+                 ORDER BY crypto_wallet_addresses.is_reusable DESC,
+                          crypto_wallet_addresses.last_assigned_at ASC,
+                          crypto_wallet_addresses.id ASC
+                 LIMIT 1"
             );
+            $newWalletId = (int)($freeWallet['wallet_address_id'] ?? 0);
+        }
+
+        if ($newWalletId <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to find a free wallet for every conflicting customer.'];
+        }
+
+        $newWalletAddress = trim((string)($freeWallet['address'] ?? ''));
+        $newWalletCompact = admin_compact_wallet_address($newWalletAddress, 8, 6);
+        $customerLabel = trim((string)($candidate['customer_public_handle'] ?? '')) !== ''
+            ? '@' . trim((string)$candidate['customer_public_handle'])
+            : trim((string)($candidate['customer_email'] ?? ''));
+
+        $paymentRows = $db->select_full_user(
+            "SELECT
+                crypto_deposit_requests.id,
+                crypto_deposit_requests.status,
+                crypto_deposit_requests.request_note,
+                COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS requested_at
+             FROM crypto_deposit_requests
+             LEFT JOIN crypto_wallet_assignments AS payment_assignment
+               ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+             WHERE crypto_deposit_requests.customer_id = {$customerId}
+               AND (
+                    crypto_deposit_requests.wallet_address_id = {$walletId}
+                 OR payment_assignment.wallet_address_id = {$walletId}
+               )
+             ORDER BY crypto_deposit_requests.id DESC"
+        );
+
+        $sameAssetAssignments = $db->select_full_user(
+            "SELECT
+                crypto_wallet_assignments.id,
+                crypto_wallet_assignments.wallet_address_id
+             FROM crypto_wallet_assignments
+             INNER JOIN crypto_wallet_addresses
+               ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
+             WHERE crypto_wallet_assignments.customer_id = {$customerId}
+               AND crypto_wallet_assignments.status IN ('reserved', 'active')
+               AND crypto_wallet_addresses.crypto_asset_id = {$assetId}
+             ORDER BY crypto_wallet_assignments.id DESC"
+        );
+
+        foreach ($sameAssetAssignments as $assignmentRow) {
+            $assignmentId = (int)($assignmentRow['id'] ?? 0);
+            if ($assignmentId <= 0) {
+                continue;
+            }
+            if (!admin_release_crypto_wallet_assignment($db, $assignmentId, $adminUserId, 'Released during wallet conflict split')) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to release previous wallet assignment during wallet conflict split.'];
+            }
+        }
+
+        $newAssignmentRow = $db->select_user(
+            "SELECT id
+             FROM crypto_wallet_assignments
+             WHERE wallet_address_id = {$newWalletId}
+               AND customer_id = {$customerId}
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+
+        $newAssignmentId = (int)($newAssignmentRow['id'] ?? 0);
+        if ($newAssignmentId > 0) {
+            $safeNote = $db->escape('Reactivated during wallet conflict split from wallet ' . $oldWalletCompact);
+            $reactivated = $db->query(
+                "UPDATE crypto_wallet_assignments
+                 SET status = 'active',
+                     released_at = NULL,
+                     released_by_admin_user_id = NULL,
+                     assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
+                 WHERE id = {$newAssignmentId}"
+            );
+            if ($reactivated === false) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to reactivate a replacement wallet assignment during wallet conflict split.'];
+            }
         } else {
-            $updated = $db->update_using_id(
-                ['request_note'],
-                [$updatedNote],
-                'crypto_deposit_requests',
-                $paymentId
+            $inserted = $db->insert(
+                ['wallet_address_id', 'customer_id', 'assignment_reason', 'status', 'assigned_by_admin_user_id', 'assignment_note'],
+                [$newWalletId, $customerId, 'admin_conflict_split', 'active', $adminUserId, 'Assigned during wallet conflict split from wallet ' . $oldWalletCompact],
+                'crypto_wallet_assignments'
             );
+            if (!$inserted || (int)$db->id() <= 0) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to assign a new wallet during wallet conflict split.'];
+            }
+            $newAssignmentId = (int)$db->id();
         }
 
-        if (!$updated) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to update wallet payment notes during conflict split.'];
+        $db->update_using_id(
+            ['status', 'last_assigned_at', 'disabled_at'],
+            ['assigned', $db->expr('NOW()'), null],
+            'crypto_wallet_addresses',
+            $newWalletId
+        );
+
+        foreach ($paymentRows as $paymentRow) {
+            $paymentId = (int)($paymentRow['id'] ?? 0);
+            if ($paymentId <= 0) {
+                continue;
+            }
+
+            $paymentStatus = strtolower(trim((string)($paymentRow['status'] ?? '')));
+            $paymentDate = substr((string)($paymentRow['requested_at'] ?? ''), 0, 10);
+            if ($paymentDate === '') {
+                $paymentDate = date('Y-m-d');
+            }
+
+            $noteLine = 'Wallet conflict fix: this customer paid on ' . $paymentDate . ' to wallet [' . $oldWalletAddress . ']. New assigned wallet: [' . $newWalletAddress . '].';
+            $currentNote = trim((string)($paymentRow['request_note'] ?? ''));
+            $updatedNote = $currentNote === '' ? $noteLine : $currentNote;
+            if ($currentNote !== '' && strpos($currentNote, $noteLine) === false) {
+                $updatedNote .= "\n" . $noteLine;
+            }
+
+            if (in_array($paymentStatus, ['pending', 'pending_payment'], true)) {
+                $updated = $db->update_using_id(
+                    ['wallet_assignment_id', 'wallet_address_id', 'request_note'],
+                    [$newAssignmentId, $newWalletId, $updatedNote],
+                    'crypto_deposit_requests',
+                    $paymentId
+                );
+            } else {
+                $updated = $db->update_using_id(
+                    ['request_note'],
+                    [$updatedNote],
+                    'crypto_deposit_requests',
+                    $paymentId
+                );
+            }
+
+            if (!$updated) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to update payment notes during wallet conflict split.'];
+            }
         }
+
+        admin_cleanup_duplicate_crypto_wallet_assignments(
+            $db,
+            $newWalletId,
+            $customerId,
+            $newAssignmentId,
+            $adminUserId,
+            'Released duplicate crypto wallet assignments after wallet conflict split'
+        );
+
+        app_sync_crypto_wallet_address_statuses($db, $walletId);
+        app_sync_crypto_wallet_address_statuses($db, $newWalletId);
+
+        admin_log_customer_and_admin(
+            $db,
+            $customerId,
+            $adminUserId,
+            'crypto_wallet_conflict_split',
+            'Wallet conflict resolved for ' . $assetCode . ': customer ' . $customerLabel . ' was moved from wallet ' . $oldWalletCompact . ' to ' . $newWalletCompact . '. Primary wallet holder kept on the original wallet: ' . $keepLabel . '.',
+            $ipAddress
+        );
+
+        $movedLabels[] = $customerLabel !== '' ? $customerLabel : ('Customer #' . $customerId);
+        $movedCount++;
     }
-
-    admin_cleanup_duplicate_crypto_wallet_assignments(
-        $db,
-        $newWalletId,
-        $customerId,
-        $newAssignmentId,
-        $adminUserId,
-        'Released duplicate crypto wallet assignments after wallet conflict split'
-    );
-
-    app_sync_crypto_wallet_address_statuses($db, $walletId);
-    app_sync_crypto_wallet_address_statuses($db, $newWalletId);
 
     $db->commit();
 
-    admin_log_customer_and_admin(
-        $db,
-        $customerId,
-        $adminUserId,
-        'crypto_wallet_conflict_split',
-        'Wallet conflict resolved for ' . $assetCode . ': customer ' . $customerLabel . ' was moved from wallet ' . $oldWalletCompact . ' to ' . $newWalletCompact . '. Primary wallet holder kept on the original wallet: ' . $keepLabel . '.',
-        $ipAddress
-    );
+    if ($movedCount <= 0) {
+        return ['ok' => false, 'message' => 'No conflicting customers were moved to a new wallet.'];
+    }
 
     return [
         'ok' => true,
-        'message' => 'Wallet conflict resolved. ' . $customerLabel . ' now uses ' . $newWalletCompact . ' for future ' . ($assetCode !== '' ? $assetCode . ' ' : '') . 'payments.',
-        'customer_id' => $customerId,
+        'message' => 'Wallet conflict resolved. Moved ' . $movedCount . ' customer(s) to new ' . ($assetCode !== '' ? $assetCode . ' ' : '') . 'wallets: ' . implode(', ', $movedLabels) . '. The main payer stayed on ' . $oldWalletCompact . '.',
+        'moved_customers' => $movedLabels,
+        'moved_count' => $movedCount,
         'old_wallet_id' => $walletId,
-        'new_wallet_id' => $newWalletId,
     ];
 }
 

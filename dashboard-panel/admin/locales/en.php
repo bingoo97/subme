@@ -222,6 +222,7 @@ return [
     'wallet_conflict_text' => 'More than one customer with payment history is still attached to this wallet. This action moves the customer with fewer payments to a new free wallet and keeps the main payer on this address.',
     'wallet_conflict_keep_customer' => 'Will stay on this wallet: {customer}',
     'wallet_conflict_move_customer' => 'Will receive a new wallet: {customer}',
+    'wallet_conflict_move_customers' => 'Will receive new wallets: {customer}',
     'wallet_conflict_button' => 'Split wallet conflict',
     'wallet_conflict_confirm' => 'Split this wallet conflict and move the customer with fewer payments to a new free wallet?',
     'payments_wallet_conflict_alert_title' => 'Two customers paid to the same wallet.',

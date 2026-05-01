@@ -9822,10 +9822,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             $conflictCandidateLabel = $conflictCandidateHandle !== ''
                                                                 ? '@' . $conflictCandidateHandle
                                                                 : (string)($walletPaymentConflict['candidate']['customer_email'] ?? '—');
+                                                            $conflictCandidateRows = is_array($walletPaymentConflict['candidates'] ?? null)
+                                                                ? $walletPaymentConflict['candidates']
+                                                                : [];
+                                                            $conflictCandidateLabels = [];
+                                                            foreach ($conflictCandidateRows as $conflictCandidateRow) {
+                                                                $candidateHandle = trim((string)($conflictCandidateRow['customer_public_handle'] ?? ''));
+                                                                $conflictCandidateLabels[] = $candidateHandle !== ''
+                                                                    ? '@' . $candidateHandle
+                                                                    : (string)($conflictCandidateRow['customer_email'] ?? '—');
+                                                            }
+                                                            $conflictCandidateLabels = array_values(array_unique(array_filter($conflictCandidateLabels)));
                                                             $conflictKeeperHandle = trim((string)($walletPaymentConflict['keeper']['customer_public_handle'] ?? ''));
                                                             $conflictKeeperLabel = $conflictKeeperHandle !== ''
                                                                 ? '@' . $conflictKeeperHandle
                                                                 : (string)($walletPaymentConflict['keeper']['customer_email'] ?? '—');
+                                                            $conflictMoveLabel = count($conflictCandidateLabels) > 1
+                                                                ? implode(', ', $conflictCandidateLabels)
+                                                                : $conflictCandidateLabel;
                                                             ?>
                                                             <div class="alert alert-warning mt-3">
                                                                 <div class="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3">
@@ -9836,7 +9850,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </div>
                                                                         <div class="small mt-2">
                                                                             <?php echo admin_e(admin_t($messages, 'wallet_conflict_keep_customer', 'Will stay here: {customer}', ['customer' => $conflictKeeperLabel])); ?><br>
-                                                                            <?php echo admin_e(admin_t($messages, 'wallet_conflict_move_customer', 'Will get a new wallet: {customer}', ['customer' => $conflictCandidateLabel])); ?>
+                                                                            <?php echo admin_e(admin_t($messages, count($conflictCandidateLabels) > 1 ? 'wallet_conflict_move_customers' : 'wallet_conflict_move_customer', count($conflictCandidateLabels) > 1 ? 'Will get new wallets: {customer}' : 'Will get a new wallet: {customer}', ['customer' => $conflictMoveLabel])); ?>
                                                                         </div>
                                                                     </div>
                                                                     <form method="post" class="d-flex align-items-center gap-2">
