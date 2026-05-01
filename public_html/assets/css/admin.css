@@ -3456,6 +3456,52 @@ body.admin-login-page{
     min-width:0;
 }
 
+.admin-wallet-summary__intro{
+    margin:.35rem 0 0;
+    color:#6b7280;
+}
+
+.admin-wallet-summary__badges{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:.5rem;
+    margin-top:.75rem;
+}
+
+.admin-wallet-summary__alert{
+    margin-top:.85rem;
+    margin-bottom:0;
+}
+
+.admin-wallet-summary__badge{
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    white-space:nowrap;
+    background:#eef1f5;
+    border-color:rgba(148, 163, 184, 0.35);
+    color:#334155;
+}
+
+.admin-wallet-summary__badge strong{
+    font-weight:800;
+}
+
+.admin-wallet-summary__badge--danger{
+    background:#fee2e2;
+    border-color:rgba(220, 38, 38, 0.24);
+    color:#b91c1c;
+}
+
+.admin-wallet-summary__badge-logo{
+    width:16px;
+    height:16px;
+    border-radius:50%;
+    object-fit:cover;
+    flex:0 0 16px;
+}
+
 .admin-wallet-workspace__list .table-responsive{
     overflow-x:auto;
 }

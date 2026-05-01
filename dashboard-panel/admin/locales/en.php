@@ -343,6 +343,8 @@ return [
     'wallets_filtered_single' => 'Showing wallet address',
     'payments_filtered_for' => 'Showing payments for: ',
     'wallet_show_all_button' => 'Show all',
+    'wallet_summary_intro' => 'List of available wallets that have been added:',
+    'wallet_summary_missing_assets_alert' => 'Urgently add free wallets for: {assets}. Users cannot currently pay with these cryptocurrencies.',
     'page_dashboard_title' => 'Dashboard',
     'page_dashboard_intro' => 'A clean overview of customers, payments and content.',
     'dashboard_period_daily' => 'Daily',

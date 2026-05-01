@@ -7272,6 +7272,36 @@ function admin_crypto_wallet_rows_filtered(Mysql_ks $db, int $limit = 20, int $o
     );
 }
 
+function admin_crypto_wallet_asset_summary_rows(Mysql_ks $db): array
+{
+    if (!schema_object_exists($db, 'crypto_wallet_addresses') || !schema_object_exists($db, 'crypto_assets')) {
+        return [];
+    }
+
+    return $db->select_full_user(
+        "SELECT
+            crypto_assets.id AS asset_id,
+            crypto_assets.code AS asset_code,
+            crypto_assets.name AS asset_name,
+            crypto_assets.logo_url AS asset_logo_url,
+            COALESCE(SUM(
+                CASE
+                    WHEN crypto_wallet_addresses.disabled_at IS NULL
+                     AND crypto_wallet_addresses.status = 'available'
+                    THEN 1
+                    ELSE 0
+                END
+            ), 0) AS available_count,
+            COUNT(crypto_wallet_addresses.id) AS total_count
+         FROM crypto_assets
+         LEFT JOIN crypto_wallet_addresses
+            ON crypto_wallet_addresses.crypto_asset_id = crypto_assets.id
+         WHERE crypto_assets.is_active = 1
+         GROUP BY crypto_assets.id, crypto_assets.code, crypto_assets.name, crypto_assets.logo_url
+         ORDER BY crypto_assets.code ASC, crypto_assets.id ASC"
+    );
+}
+
 function admin_crypto_asset_rows(Mysql_ks $db, bool $onlyActive = false): array
 {
     if (!schema_object_exists($db, 'crypto_assets')) {

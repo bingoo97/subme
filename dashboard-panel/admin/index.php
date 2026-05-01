@@ -2477,6 +2477,14 @@ if ($route === 'crypto-wallets') {
     }
 
     $walletAssetOptions = admin_crypto_asset_rows($db, $walletCreateMode);
+    $walletAssetSummaryRows = admin_crypto_wallet_asset_summary_rows($db);
+    $walletAssetShortageCodes = [];
+    foreach ($walletAssetSummaryRows as $walletAssetSummaryRow) {
+        if ((int)($walletAssetSummaryRow['available_count'] ?? 0) <= 0) {
+            $walletAssetShortageCodes[] = strtoupper(trim((string)($walletAssetSummaryRow['asset_code'] ?? '')));
+        }
+    }
+    $walletAssetShortageCodes = array_values(array_filter(array_unique($walletAssetShortageCodes)));
     if ($walletCreateMode && !$walletAssetOptions) {
         $walletCreateMode = false;
         $pageAlert = admin_t($messages, 'wallet_create_no_active_assets', 'Activate a cryptocurrency first before adding a wallet address.');
@@ -9752,6 +9760,37 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <div class="admin-editor-page__header">
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'page_crypto_wallets_title', 'Crypto wallets')); ?></h3>
+                                                    <p class="admin-wallet-summary__intro"><?php echo admin_e(admin_t($messages, 'wallet_summary_intro', 'Lista dostępnych portfeli, które zostały dodane:')); ?></p>
+                                                    <?php if ($walletAssetSummaryRows): ?>
+                                                        <div class="admin-wallet-summary__badges" aria-label="<?php echo admin_e(admin_t($messages, 'wallet_summary_intro', 'Lista dostępnych portfeli, które zostały dodane:')); ?>">
+                                                            <?php foreach ($walletAssetSummaryRows as $walletAssetSummary): ?>
+                                                                <?php
+                                                                $summaryAssetCode = strtoupper(trim((string)($walletAssetSummary['asset_code'] ?? '')));
+                                                                $summaryAssetName = trim((string)($walletAssetSummary['asset_name'] ?? $summaryAssetCode));
+                                                                $summaryAssetLogo = admin_payment_asset_logo_url($summaryAssetCode, (string)($walletAssetSummary['asset_logo_url'] ?? ''));
+                                                                $summaryAvailableCount = (int)($walletAssetSummary['available_count'] ?? 0);
+                                                                $summaryTotalCount = (int)($walletAssetSummary['total_count'] ?? 0);
+                                                                $summaryBadgeClass = $summaryAvailableCount <= 0
+                                                                    ? ' admin-wallet-summary__badge--danger'
+                                                                    : '';
+                                                                ?>
+                                                                <span class="admin-status-pill admin-status-pill--muted admin-wallet-summary__badge<?php echo admin_e($summaryBadgeClass); ?>" title="<?php echo admin_e($summaryAssetName . ': ' . $summaryAvailableCount . '/' . $summaryTotalCount); ?>">
+                                                                    <?php if ($summaryAssetLogo !== ''): ?>
+                                                                        <img src="<?php echo admin_e($summaryAssetLogo); ?>" alt="" class="admin-wallet-summary__badge-logo" loading="lazy">
+                                                                    <?php endif; ?>
+                                                                    <strong><?php echo admin_e($summaryAssetCode !== '' ? $summaryAssetCode : $summaryAssetName); ?></strong>
+                                                                    <span><?php echo admin_e((string)$summaryAvailableCount . '/' . (string)$summaryTotalCount); ?></span>
+                                                                </span>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php if ($walletAssetShortageCodes): ?>
+                                                        <div class="alert alert-danger admin-wallet-summary__alert" role="alert">
+                                                            <?php echo admin_e(admin_t($messages, 'wallet_summary_missing_assets_alert', 'Pilnie dodaj wolne portfele dla: {assets}. Użytkownicy nie mogą teraz płacić tymi kryptowalutami.', [
+                                                                'assets' => implode(', ', $walletAssetShortageCodes),
+                                                            ])); ?>
+                                                        </div>
+                                                    <?php endif; ?>
                                                 </div>
                                                 <div class="d-flex gap-2">
                                                     <?php if ($walletFilterWalletId > 0): ?>

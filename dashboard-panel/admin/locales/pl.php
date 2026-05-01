@@ -343,6 +343,8 @@ return [
     'wallets_filtered_single' => 'Pokazuję adres portfela',
     'payments_filtered_for' => 'Pokazuję płatności dla: ',
     'wallet_show_all_button' => 'Pokaż wszystkie',
+    'wallet_summary_intro' => 'Lista dostępnych portfeli, które zostały dodane:',
+    'wallet_summary_missing_assets_alert' => 'Pilnie dodaj wolne portfele dla: {assets}. Użytkownicy nie mogą teraz płacić tymi kryptowalutami.',
     'page_dashboard_title' => 'Dashboard',
     'page_dashboard_intro' => 'Czysty podgląd użytkowników, płatności i treści.',
     'dashboard_period_daily' => 'Dzienne',
