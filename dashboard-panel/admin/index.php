@@ -3737,6 +3737,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 $paymentWalletAddressCompact = $paymentWalletAddressRaw !== ''
                                                     ? admin_compact_wallet_address($paymentWalletAddressRaw, 8, 5)
                                                     : '';
+                                                $paymentPublicHandle = trim((string)($paymentRow['public_handle'] ?? ''));
                                                 $paymentCanAcceptAll = in_array($paymentType, ['crypto', 'bank'], true)
                                                     && in_array(strtolower(trim((string)($paymentRow['status'] ?? ''))), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
                                                 ?>
@@ -3753,10 +3754,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php echo admin_e(admin_t($messages, 'chat_bank_transfer_title', 'Bank transfer')); ?>
                                                                 <?php endif; ?>
                                                             </strong>
+                                                            <?php if ($paymentOrderId <= 0): ?>
+                                                                <span class="admin-topbar-notifications__topup-badge">
+                                                                    <?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?>
+                                                                </span>
+                                                            <?php endif; ?>
                                                             <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentRow['status'] ?? ''))); ?>"><?php echo admin_e($paymentStatusLabel); ?></span>
                                                         </div>
                                                         <p>
-                                                            <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$paymentCustomerId); ?>"><?php echo admin_e((string)($paymentRow['customer_email'] ?? '')); ?></a>
+                                                            <?php if ($paymentPublicHandle !== ''): ?>
+                                                                <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$paymentCustomerId); ?>" class="admin-topbar-notifications__payment-handle"><?php echo admin_e('@' . $paymentPublicHandle); ?></a>
+                                                                <span class="admin-topbar-notifications__payment-email"><?php echo admin_e((string)($paymentRow['customer_email'] ?? '')); ?></span>
+                                                            <?php else: ?>
+                                                                <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$paymentCustomerId); ?>" class="admin-topbar-notifications__payment-email"><?php echo admin_e((string)($paymentRow['customer_email'] ?? '')); ?></a>
+                                                            <?php endif; ?>
                                                             ·
                                                             <span class="admin-topbar-notifications__amount"><?php echo admin_e($paymentAmountLabel); ?></span>
                                                             <?php if ($paymentRequestedLabel !== ''): ?>
