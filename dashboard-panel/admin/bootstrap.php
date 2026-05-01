@@ -3075,7 +3075,7 @@ function admin_customer_wallet_rows(Mysql_ks $db, int $customerId, int $limit = 
     }
 
     if ($rows) {
-        return $rows;
+        return admin_dedupe_customer_crypto_assignment_rows($rows);
     }
 
     if (
@@ -4670,6 +4670,8 @@ function admin_delete_cancelled_payments(
     $paymentTypeFilter = strtolower(trim($paymentTypeFilter));
     $cancelledStatuses = "'cancelled','rejected','failed'";
     $deletedTotal = 0;
+    $settings = admin_app_settings($db);
+    $releaseWalletAssignments = admin_crypto_wallet_shared_assignments_enabled($settings);
 
     if ($paymentTypeFilter === '' || $paymentTypeFilter === 'crypto') {
         if (schema_object_exists($db, 'crypto_deposit_requests')) {
@@ -4686,7 +4688,7 @@ function admin_delete_cancelled_payments(
             foreach ($rows as $row) {
                 $deleted = $db->delete_using_id('crypto_deposit_requests', (int)($row['id'] ?? 0));
                 if ($deleted) {
-                    if (!empty($row['wallet_assignment_id'])) {
+                    if ($releaseWalletAssignments && !empty($row['wallet_assignment_id'])) {
                         app_release_crypto_wallet_assignment_if_unused(
                             $db,
                             (int)$row['wallet_assignment_id'],
@@ -4800,14 +4802,20 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 currencies.symbol AS currency_symbol,
                 crypto_assets.code AS asset_code,
                 crypto_assets.name AS asset_name,
-                crypto_wallet_addresses.id AS wallet_address_id,
-                crypto_wallet_addresses.address AS wallet_address,
+                COALESCE(direct_wallet.id, assigned_wallet.id) AS wallet_address_id,
+                COALESCE(direct_wallet.address, assigned_wallet.address) AS wallet_address,
+                COALESCE(direct_wallet.memo_tag, assigned_wallet.memo_tag) AS payment_reference,
                 orders.status AS order_status
              FROM crypto_deposit_requests
              LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
              LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
              LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
-             LEFT JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+             LEFT JOIN crypto_wallet_assignments AS payment_assignment
+               ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+             LEFT JOIN crypto_wallet_addresses AS direct_wallet
+               ON direct_wallet.id = crypto_deposit_requests.wallet_address_id
+             LEFT JOIN crypto_wallet_addresses AS assigned_wallet
+               ON assigned_wallet.id = payment_assignment.wallet_address_id
              LEFT JOIN orders ON orders.id = crypto_deposit_requests.order_id
              WHERE crypto_deposit_requests.id = {$paymentId}
              LIMIT 1"
@@ -4923,15 +4931,48 @@ function admin_save_payment(
         $requestedAt = admin_normalize_datetime_input($input['requested_at'] ?? null) ?? (string)($payment['requested_at'] ?? date('Y-m-d H:i:s'));
         $expiresAt = admin_normalize_datetime_input($input['expires_at'] ?? null);
         $requestNote = trim((string)($input['request_note'] ?? ''));
+        $walletAddress = trim((string)($input['wallet_address'] ?? ($payment['wallet_address'] ?? '')));
+        $paymentReference = trim((string)($input['payment_reference'] ?? ($payment['payment_reference'] ?? '')));
+        $amountValueRaw = str_replace(',', '.', trim((string)($input['amount_value'] ?? ($payment['amount_value'] ?? ''))));
         $amountCryptoRaw = str_replace(',', '.', trim((string)($input['amount_crypto'] ?? ($payment['amount_crypto'] ?? ''))));
+        if ($amountValueRaw === '' || !is_numeric($amountValueRaw) || (float)$amountValueRaw <= 0) {
+            return ['ok' => false, 'message' => 'Amount must be a valid number.'];
+        }
         if ($amountCryptoRaw === '' || !is_numeric($amountCryptoRaw) || (float)$amountCryptoRaw < 0) {
             return ['ok' => false, 'message' => 'Crypto amount must be a valid number.'];
         }
+        if ($walletAddress === '') {
+            return ['ok' => false, 'message' => 'Wallet address is required.'];
+        }
+
+        $amountValue = round((float)$amountValueRaw, 2);
         $amountCrypto = round((float)$amountCryptoRaw, 8);
+        $walletAddressId = admin_crypto_payment_wallet_address_id($db, $payment);
+        if ($walletAddressId <= 0) {
+            return ['ok' => false, 'message' => 'Wallet address record is unavailable for this payment.'];
+        }
+
+        $duplicateWallet = $db->select_user(
+            "SELECT id
+             FROM crypto_wallet_addresses
+             WHERE address = '" . $db->escape($walletAddress) . "'
+               AND id <> {$walletAddressId}
+             LIMIT 1"
+        );
+        if (is_array($duplicateWallet) && !empty($duplicateWallet['id'])) {
+            return ['ok' => false, 'message' => 'This wallet address already exists in the database.'];
+        }
+
+        $db->update_using_id(
+            ['address', 'memo_tag'],
+            [$walletAddress, $paymentReference !== '' ? $paymentReference : null],
+            'crypto_wallet_addresses',
+            $walletAddressId
+        );
 
         $updated = $db->update_using_id(
-            ['status', 'requested_at', 'expires_at', 'requested_crypto_amount', 'request_note'],
-            [$status, $requestedAt, $expiresAt, $amountCrypto, $requestNote !== '' ? $requestNote : null],
+            ['status', 'wallet_address_id', 'requested_at', 'expires_at', 'requested_fiat_amount', 'requested_crypto_amount', 'request_note'],
+            [$status, $walletAddressId, $requestedAt, $expiresAt, $amountValue, $amountCrypto, $requestNote !== '' ? $requestNote : null],
             'crypto_deposit_requests',
             $paymentId
         );
@@ -4975,7 +5016,12 @@ function admin_save_payment(
             ];
         }
 
-        if ($updated && in_array($status, admin_payment_cancelled_statuses($paymentType), true) && !empty($payment['wallet_assignment_id'])) {
+        if (
+            $updated
+            && admin_crypto_wallet_shared_assignments_enabled(admin_app_settings($db))
+            && in_array($status, admin_payment_cancelled_statuses($paymentType), true)
+            && !empty($payment['wallet_assignment_id'])
+        ) {
             app_release_crypto_wallet_assignment_if_unused(
                 $db,
                 (int)$payment['wallet_assignment_id'],
@@ -5971,6 +6017,8 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
         app_queue_payment_request_notification($db, $orderId, $customerId);
         app_queue_support_payment_request_notification($db, $orderId, $customerId, 'crypto');
     }
+
+    app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
 
     $db->commit();
 
@@ -8215,6 +8263,42 @@ function admin_delete_order(
         return ['ok' => false, 'message' => 'Order not found.'];
     }
 
+    $customerId = (int)($order['customer_id'] ?? 0);
+
+    admin_cancel_open_order_payment_requests($db, $customerId, $orderId);
+
+    if (schema_object_exists($db, 'crypto_deposit_requests') && schema_column_exists($db, 'crypto_deposit_requests', 'order_id')) {
+        @$db->query(
+            "UPDATE crypto_deposit_requests
+             SET order_id = NULL,
+                 request_note = CONCAT(
+                     COALESCE(NULLIF(request_note, ''), 'Created as balance top-up after order deletion'),
+                     CASE
+                         WHEN COALESCE(request_note, '') LIKE '%Converted to balance top-up after order deletion%'
+                         THEN ''
+                         ELSE '\nConverted to balance top-up after order deletion'
+                     END
+                 )
+             WHERE order_id = {$orderId}"
+        );
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests') && schema_column_exists($db, 'bank_transfer_requests', 'order_id')) {
+        @$db->query(
+            "UPDATE bank_transfer_requests
+             SET order_id = NULL,
+                 admin_review_note = CONCAT(
+                     COALESCE(NULLIF(admin_review_note, ''), 'Created as balance top-up after order deletion'),
+                     CASE
+                         WHEN COALESCE(admin_review_note, '') LIKE '%Converted to balance top-up after order deletion%'
+                         THEN ''
+                         ELSE '\nConverted to balance top-up after order deletion'
+                     END
+                 )
+             WHERE order_id = {$orderId}"
+        );
+    }
+
     if (schema_object_exists($db, 'order_status_events')) {
         @$db->query("DELETE FROM order_status_events WHERE order_id = {$orderId}");
     }
@@ -8962,6 +9046,117 @@ function admin_customer_has_pending_crypto_payment(Mysql_ks $db, int $customerId
     return (int)($row['total'] ?? 0) > 0;
 }
 
+function admin_dedupe_customer_crypto_assignment_rows(array $rows): array
+{
+    if (!$rows) {
+        return [];
+    }
+
+    $deduped = [];
+    $seen = [];
+    foreach ($rows as $row) {
+        $walletAddressId = (int)($row['wallet_address_id'] ?? 0);
+        $address = strtolower(trim((string)($row['address'] ?? '')));
+        $key = $walletAddressId > 0 ? 'wallet:' . $walletAddressId : 'address:' . $address;
+        if ($key === 'address:' || isset($seen[$key])) {
+            continue;
+        }
+
+        $seen[$key] = true;
+        $deduped[] = $row;
+    }
+
+    return $deduped;
+}
+
+function admin_dedupe_wallet_assignment_rows(array $rows): array
+{
+    if (!$rows) {
+        return [];
+    }
+
+    $deduped = [];
+    $seen = [];
+    foreach ($rows as $row) {
+        $customerId = (int)($row['customer_id'] ?? 0);
+        $customerEmail = strtolower(trim((string)($row['customer_email'] ?? '')));
+        $key = $customerId > 0 ? 'customer:' . $customerId : 'email:' . $customerEmail;
+        if ($key === 'email:' || isset($seen[$key])) {
+            continue;
+        }
+
+        $seen[$key] = true;
+        $deduped[] = $row;
+    }
+
+    return $deduped;
+}
+
+function admin_cleanup_duplicate_crypto_wallet_assignments(
+    Mysql_ks $db,
+    int $walletId,
+    int $customerId,
+    int $keepAssignmentId = 0,
+    int $adminUserId = 0,
+    string $note = 'Released duplicate crypto wallet assignment'
+): int {
+    if (
+        $walletId <= 0
+        || $customerId <= 0
+        || !schema_object_exists($db, 'crypto_wallet_assignments')
+    ) {
+        return 0;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT id
+         FROM crypto_wallet_assignments
+         WHERE wallet_address_id = {$walletId}
+           AND customer_id = {$customerId}
+           AND status IN ('reserved', 'active')
+         ORDER BY assigned_at DESC, id DESC"
+    );
+    if (count($rows) <= 1) {
+        return 0;
+    }
+
+    if ($keepAssignmentId <= 0) {
+        $keepAssignmentId = (int)($rows[0]['id'] ?? 0);
+    }
+    if ($keepAssignmentId <= 0) {
+        return 0;
+    }
+
+    $safeNote = $db->escape($note);
+    $releasedBySql = $adminUserId > 0 ? (string)$adminUserId : 'NULL';
+    $releasedTotal = 0;
+    foreach ($rows as $row) {
+        $assignmentId = (int)($row['id'] ?? 0);
+        if ($assignmentId <= 0 || $assignmentId === $keepAssignmentId) {
+            continue;
+        }
+
+        $released = $db->query(
+            "UPDATE crypto_wallet_assignments
+             SET status = 'released',
+                 released_at = NOW(),
+                 released_by_admin_user_id = {$releasedBySql},
+                 assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
+             WHERE id = {$assignmentId}
+               AND status IN ('reserved', 'active')"
+        );
+        if ($released) {
+            $releasedTotal++;
+        }
+    }
+
+    if ($releasedTotal > 0) {
+        app_sync_crypto_wallet_address_statuses($db, $walletId);
+    }
+
+    return $releasedTotal;
+}
+
 function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId, string $assetCode = ''): array
 {
     if ($customerId <= 0) {
@@ -9015,7 +9210,7 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
         return [];
     }
 
-    return $db->select_full_user(
+    $rows = $db->select_full_user(
         "SELECT
             assignment.id AS wallet_assignment_id,
             wallet.id AS wallet_address_id,
@@ -9042,6 +9237,8 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
            {$baseAssetFilter}
          ORDER BY assignment.assigned_at DESC, assignment.id DESC"
     );
+
+    return admin_dedupe_customer_crypto_assignment_rows($rows);
 }
 
 function admin_chat_payment_amount_options(float $min = 1.0, float $max = 200.0, float $step = 1.0): array
@@ -9383,6 +9580,15 @@ function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $a
         return ['ok' => false, 'message' => 'Invalid crypto payment preview payload.'];
     }
 
+    if (!admin_crypto_wallet_shared_assignments_enabled($settings)) {
+        app_enforce_single_customer_crypto_wallet_per_asset(
+            $db,
+            $customerId,
+            $assetId,
+            'Normalized single crypto wallet per customer asset before admin crypto preview'
+        );
+    }
+
     $assetRows = admin_chat_payment_crypto_assets($db, $customerId, $currencyContext);
     $selectedAsset = null;
     foreach ($assetRows as $assetRow) {
@@ -9633,7 +9839,7 @@ function admin_crypto_wallet_active_assignments(Mysql_ks $db, int $walletId): ar
 
     app_ensure_customer_runtime_columns($db);
 
-    return $db->select_full_user(
+    $rows = $db->select_full_user(
         "SELECT
             crypto_wallet_assignments.id,
             crypto_wallet_assignments.customer_id,
@@ -9664,6 +9870,8 @@ function admin_crypto_wallet_active_assignments(Mysql_ks $db, int $walletId): ar
            AND crypto_wallet_assignments.status IN ('reserved', 'active')
          ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC"
     );
+
+    return admin_dedupe_wallet_assignment_rows($rows);
 }
 
 function admin_crypto_wallet_payment_rows(Mysql_ks $db, int $walletId, int $limit = 100): array
@@ -10014,6 +10222,14 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
             'crypto_wallet_addresses',
             $walletId
         );
+        admin_cleanup_duplicate_crypto_wallet_assignments(
+            $db,
+            $walletId,
+            $customerId,
+            $existingCustomerAssignmentId,
+            $adminUserId,
+            'Released duplicate crypto wallet assignment from admin wallet editor'
+        );
         return [
             'ok' => true,
             'message' => 'This wallet is already assigned to the selected customer.',
@@ -10089,6 +10305,14 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         ['assigned', $db->expr('NOW()'), null],
         'crypto_wallet_addresses',
         $walletId
+    );
+    admin_cleanup_duplicate_crypto_wallet_assignments(
+        $db,
+        $walletId,
+        $customerId,
+        $walletAssignmentId,
+        $adminUserId,
+        'Released duplicate crypto wallet assignment from admin wallet editor'
     );
 
     $db->commit();
@@ -10305,6 +10529,17 @@ function admin_ensure_crypto_wallet_assignment_for_payment(Mysql_ks $db, array $
             return $assignResult;
         }
         $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+    }
+
+    if ($walletAssignmentId > 0) {
+        admin_cleanup_duplicate_crypto_wallet_assignments(
+            $db,
+            $walletAddressId,
+            $customerId,
+            $walletAssignmentId,
+            $adminUserId,
+            'Released duplicate crypto wallet assignment after payment confirmation'
+        );
     }
 
     if ($paymentId > 0) {
@@ -11089,6 +11324,7 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     app_ensure_customer_runtime_columns($db);
 
     $limit = max(1, min(20, $limit));
+    $safeChatEpoch = '1970-01-01 00:00:00';
 
     $rows = $db->select_full_user(
         "SELECT
@@ -11128,11 +11364,11 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
          FROM support_conversations
          LEFT JOIN customers ON customers.id = support_conversations.customer_id
          WHERE support_conversations.conversation_type = 'live_chat'
-         ORDER BY COALESCE(
-            support_conversations.last_customer_message_at,
-            support_conversations.last_admin_message_at,
-            support_conversations.updated_at,
-            support_conversations.created_at
+         ORDER BY GREATEST(
+            COALESCE(support_conversations.last_customer_message_at, '{$safeChatEpoch}'),
+            COALESCE(support_conversations.last_admin_message_at, '{$safeChatEpoch}'),
+            COALESCE(support_conversations.updated_at, '{$safeChatEpoch}'),
+            COALESCE(support_conversations.created_at, '{$safeChatEpoch}')
          ) DESC, support_conversations.id DESC
          LIMIT {$limit}"
     );
@@ -11159,8 +11395,18 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     }
 
     usort($rows, static function (array $left, array $right): int {
-        $leftTime = strtotime((string)($left['updated_at'] ?? $left['created_at'] ?? '')) ?: 0;
-        $rightTime = strtotime((string)($right['updated_at'] ?? $right['created_at'] ?? '')) ?: 0;
+        $leftTime = max(
+            strtotime((string)($left['last_customer_message_at'] ?? '')) ?: 0,
+            strtotime((string)($left['last_admin_message_at'] ?? '')) ?: 0,
+            strtotime((string)($left['updated_at'] ?? '')) ?: 0,
+            strtotime((string)($left['created_at'] ?? '')) ?: 0
+        );
+        $rightTime = max(
+            strtotime((string)($right['last_customer_message_at'] ?? '')) ?: 0,
+            strtotime((string)($right['last_admin_message_at'] ?? '')) ?: 0,
+            strtotime((string)($right['updated_at'] ?? '')) ?: 0,
+            strtotime((string)($right['created_at'] ?? '')) ?: 0
+        );
         if ($leftTime === $rightTime) {
             return (int)($right['id'] ?? 0) <=> (int)($left['id'] ?? 0);
         }
@@ -12455,6 +12701,8 @@ function admin_chat_create_crypto_payment_request(
             }
         }
     }
+
+    app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
 
     $db->commit();
 
@@ -15483,6 +15731,8 @@ function admin_quick_create_crypto_payment_request(
 
         $requestId = (int)$db->id();
     }
+
+    app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
 
     $db->commit();
 

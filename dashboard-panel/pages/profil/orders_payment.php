@@ -1015,6 +1015,11 @@ if (app_uses_v2_schema($db)) {
                             'request_note' => 'Created from customer payment wizard',
                         ]);
                         if ($createdCryptoRequestId > 0) {
+                            app_delete_cancelled_crypto_requests_for_asset(
+                                $db,
+                                (int)$user['id'],
+                                (int)$selectedAsset['crypto_asset_id']
+                            );
                             app_queue_payment_request_notification($db, (int)$selected['id'], (int)$user['id']);
                             app_queue_support_payment_request_notification($db, (int)$selected['id'], (int)$user['id'], 'crypto');
                             app_queue_crypto_payment_live_chat_message(

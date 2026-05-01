@@ -610,6 +610,18 @@ function app_assign_customer_crypto_wallet(
 
     $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
     if (!$sharedEnabled && !empty($wallet['crypto_asset_id'])) {
+        $canonicalAssignment = app_enforce_single_customer_crypto_wallet_per_asset(
+            $db,
+            $customerId,
+            (int)$wallet['crypto_asset_id'],
+            'Normalized single crypto wallet per customer asset'
+        );
+        if (is_array($canonicalAssignment) && !empty($canonicalAssignment['id'])) {
+            return (int)$canonicalAssignment['id'];
+        }
+    }
+
+    if (!$sharedEnabled && !empty($wallet['crypto_asset_id'])) {
         $sameAssetAssignments = $db->select_full_user(
             "SELECT crypto_wallet_assignments.id
              FROM crypto_wallet_assignments
@@ -652,6 +664,133 @@ function app_assign_customer_crypto_wallet(
     );
 
     return $assignmentId;
+}
+
+function app_customer_primary_crypto_wallet_assignment($db, int $customerId, int $assetId): ?array
+{
+    if (
+        $customerId <= 0
+        || $assetId <= 0
+        || !schema_object_exists($db, 'crypto_wallet_assignments')
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
+    ) {
+        return null;
+    }
+
+    $row = $db->select_user(
+        "SELECT
+            crypto_wallet_assignments.id,
+            crypto_wallet_assignments.wallet_address_id,
+            crypto_wallet_assignments.customer_id,
+            crypto_wallet_assignments.status,
+            crypto_wallet_assignments.assigned_at,
+            crypto_wallet_addresses.address,
+            crypto_wallet_addresses.network_code,
+            crypto_wallet_addresses.memo_tag,
+            crypto_wallet_addresses.label,
+            crypto_wallet_addresses.owner_full_name,
+            crypto_wallet_addresses.wallet_provider,
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM crypto_deposit_requests
+                    LEFT JOIN crypto_wallet_assignments AS payment_assignment
+                      ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+                    WHERE crypto_deposit_requests.customer_id = crypto_wallet_assignments.customer_id
+                      AND crypto_deposit_requests.crypto_asset_id = {$assetId}
+                      AND (
+                            crypto_deposit_requests.wallet_assignment_id = crypto_wallet_assignments.id
+                         OR crypto_deposit_requests.wallet_address_id = crypto_wallet_assignments.wallet_address_id
+                         OR payment_assignment.wallet_address_id = crypto_wallet_assignments.wallet_address_id
+                      )
+                      AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
+                    LIMIT 1
+                ) THEN 1
+                ELSE 0
+            END AS has_payment_history
+         FROM crypto_wallet_assignments
+         INNER JOIN crypto_wallet_addresses
+           ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
+         WHERE crypto_wallet_assignments.customer_id = {$customerId}
+           AND crypto_wallet_addresses.crypto_asset_id = {$assetId}
+           AND crypto_wallet_assignments.status IN ('reserved', 'active', 'released')
+         ORDER BY
+            has_payment_history DESC,
+            CASE
+                WHEN crypto_wallet_assignments.status IN ('active', 'reserved') THEN 0
+                ELSE 1
+            END ASC,
+            crypto_wallet_assignments.assigned_at DESC,
+            crypto_wallet_assignments.id DESC
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
+function app_enforce_single_customer_crypto_wallet_per_asset(
+    $db,
+    int $customerId,
+    int $assetId,
+    string $note = 'Normalized single crypto wallet per customer asset'
+): ?array
+{
+    $primary = app_customer_primary_crypto_wallet_assignment($db, $customerId, $assetId);
+    if (!is_array($primary) || empty($primary['id'])) {
+        return null;
+    }
+
+    $keepAssignmentId = (int)($primary['id'] ?? 0);
+    $keepWalletId = (int)($primary['wallet_address_id'] ?? 0);
+    if ($keepAssignmentId <= 0 || $keepWalletId <= 0) {
+        return $primary;
+    }
+
+    $safeNote = $db->escape($note);
+    $db->query(
+        "UPDATE crypto_wallet_assignments
+         SET status = 'active',
+             released_at = NULL,
+             released_by_admin_user_id = NULL,
+             assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
+         WHERE id = {$keepAssignmentId}"
+    );
+
+    $duplicateRows = $db->select_full_user(
+        "SELECT crypto_wallet_assignments.id, crypto_wallet_assignments.wallet_address_id
+         FROM crypto_wallet_assignments
+         INNER JOIN crypto_wallet_addresses
+           ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
+         WHERE crypto_wallet_assignments.customer_id = {$customerId}
+           AND crypto_wallet_addresses.crypto_asset_id = {$assetId}
+           AND crypto_wallet_assignments.status IN ('reserved', 'active', 'released')
+           AND crypto_wallet_assignments.id <> {$keepAssignmentId}"
+    );
+
+    foreach ($duplicateRows as $duplicateRow) {
+        $duplicateAssignmentId = (int)($duplicateRow['id'] ?? 0);
+        if ($duplicateAssignmentId <= 0) {
+            continue;
+        }
+
+        $db->query(
+            "UPDATE crypto_wallet_assignments
+             SET status = 'released',
+                 released_at = NOW(),
+                 assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
+             WHERE id = {$duplicateAssignmentId}"
+        );
+    }
+
+    app_sync_crypto_wallet_address_statuses($db, $keepWalletId);
+    foreach ($duplicateRows as $duplicateRow) {
+        $duplicateWalletId = (int)($duplicateRow['wallet_address_id'] ?? 0);
+        if ($duplicateWalletId > 0 && $duplicateWalletId !== $keepWalletId) {
+            app_sync_crypto_wallet_address_statuses($db, $duplicateWalletId);
+        }
+    }
+
+    return app_customer_primary_crypto_wallet_assignment($db, $customerId, $assetId);
 }
 
 function app_release_crypto_wallet_assignment_if_unused($db, int $assignmentId, string $note = 'Released automatically'): bool
@@ -785,14 +924,153 @@ function app_cancel_crypto_deposit_requests(
         return 0;
     }
 
+    $settings = app_fetch_settings($db);
+    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
+
     foreach ($rows as $row) {
         $assignmentId = (int)($row['wallet_assignment_id'] ?? 0);
-        if ($assignmentId > 0) {
+        if ($sharedEnabled && $assignmentId > 0) {
             app_release_crypto_wallet_assignment_if_unused($db, $assignmentId, $releaseNote);
         }
     }
 
     return count($requestIds);
+}
+
+function app_release_cancelled_crypto_request_assignments_for_asset(
+    Mysql_ks $db,
+    int $customerId,
+    int $assetId,
+    string $releaseNote = 'Released after replaced cancelled crypto payment request'
+): int {
+    if (
+        $customerId <= 0
+        || $assetId <= 0
+        || !schema_object_exists($db, 'crypto_deposit_requests')
+        || !schema_object_exists($db, 'crypto_wallet_assignments')
+    ) {
+        return 0;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT id, wallet_assignment_id, wallet_address_id
+         FROM crypto_deposit_requests
+         WHERE customer_id = {$customerId}
+           AND crypto_asset_id = {$assetId}
+           AND status IN ('cancelled', 'rejected', 'failed')"
+    );
+    if (!$rows) {
+        return 0;
+    }
+
+    $releasedAssignments = [];
+    foreach ($rows as $row) {
+        $assignmentIds = [];
+        $walletAssignmentId = (int)($row['wallet_assignment_id'] ?? 0);
+        $walletAddressId = (int)($row['wallet_address_id'] ?? 0);
+
+        if ($walletAssignmentId > 0) {
+            $assignmentIds[$walletAssignmentId] = $walletAssignmentId;
+        }
+
+        if ($walletAddressId > 0) {
+            $extraAssignments = $db->select_full_user(
+                "SELECT id
+                 FROM crypto_wallet_assignments
+                 WHERE wallet_address_id = {$walletAddressId}
+                   AND customer_id = {$customerId}
+                   AND status IN ('reserved', 'active')"
+            );
+            foreach ($extraAssignments as $extraAssignment) {
+                $candidateId = (int)($extraAssignment['id'] ?? 0);
+                if ($candidateId > 0) {
+                    $assignmentIds[$candidateId] = $candidateId;
+                }
+            }
+        }
+
+        foreach ($assignmentIds as $assignmentId) {
+            if (isset($releasedAssignments[$assignmentId])) {
+                continue;
+            }
+
+            if (app_release_crypto_wallet_assignment_if_unused($db, $assignmentId, $releaseNote)) {
+                $releasedAssignments[$assignmentId] = true;
+            }
+        }
+    }
+
+    return count($releasedAssignments);
+}
+
+function app_delete_cancelled_crypto_requests_for_asset(
+    Mysql_ks $db,
+    int $customerId,
+    int $assetId
+): int {
+    if ($customerId <= 0 || $assetId <= 0 || !schema_object_exists($db, 'crypto_deposit_requests')) {
+        return 0;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT id
+         FROM crypto_deposit_requests
+         WHERE customer_id = {$customerId}
+           AND crypto_asset_id = {$assetId}
+           AND status IN ('cancelled', 'rejected', 'failed')"
+    );
+    if (!$rows) {
+        return 0;
+    }
+
+    $deletedTotal = 0;
+    foreach ($rows as $row) {
+        $requestId = (int)($row['id'] ?? 0);
+        if ($requestId > 0 && $db->delete_using_id('crypto_deposit_requests', $requestId)) {
+            $deletedTotal++;
+        }
+    }
+
+    return $deletedTotal;
+}
+
+function app_release_cancelled_crypto_request_assignments_for_customer(
+    Mysql_ks $db,
+    int $customerId,
+    string $releaseNote = 'Released after replaced cancelled crypto payment request'
+): int {
+    if ($customerId <= 0 || !schema_object_exists($db, 'crypto_deposit_requests')) {
+        return 0;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT DISTINCT crypto_asset_id
+         FROM crypto_deposit_requests
+         WHERE customer_id = {$customerId}
+           AND crypto_asset_id IS NOT NULL
+           AND crypto_asset_id > 0
+           AND status IN ('cancelled', 'rejected', 'failed')"
+    );
+    if (!$rows) {
+        return 0;
+    }
+
+    $releasedTotal = 0;
+    foreach ($rows as $row) {
+        $assetId = (int)($row['crypto_asset_id'] ?? 0);
+        if ($assetId <= 0) {
+            continue;
+        }
+
+        $releasedTotal += app_release_cancelled_crypto_request_assignments_for_asset(
+            $db,
+            $customerId,
+            $assetId,
+            $releaseNote
+        );
+    }
+
+    return $releasedTotal;
 }
 
 function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
@@ -1156,6 +1434,7 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
 
 function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrency = 'USD', array $settings = []): array
 {
+    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
     $hasCustomerWalletView = schema_object_exists($db, 'customer_crypto_wallets');
     if (
         $customerId <= 0
@@ -1175,6 +1454,20 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
     app_sync_crypto_wallet_address_statuses($db);
 
     $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
+    if (!$sharedEnabled) {
+        foreach ($activeAssets as $asset) {
+            $assetId = (int)($asset['id'] ?? 0);
+            if ($assetId > 0) {
+                app_enforce_single_customer_crypto_wallet_per_asset(
+                    $db,
+                    $customerId,
+                    $assetId,
+                    'Normalized single crypto wallet per customer asset before asset load'
+                );
+            }
+        }
+    }
+
     if ($hasCustomerWalletView) {
         $assignedCryptoWallets = $db->select_full_user(
             "SELECT *
@@ -5576,7 +5869,15 @@ function app_delete_stale_unpaid_orders(Mysql_ks $db, ?string $now = null): arra
         if (schema_column_exists($db, 'crypto_deposit_requests', 'order_id')) {
             $db->query(
                 "UPDATE crypto_deposit_requests
-                 SET order_id = NULL
+                 SET order_id = NULL,
+                     request_note = CONCAT(
+                         COALESCE(NULLIF(request_note, ''), 'Created as balance top-up after order cleanup'),
+                         CASE
+                             WHEN COALESCE(request_note, '') LIKE '%Converted to balance top-up after order cleanup%'
+                             THEN ''
+                             ELSE '\nConverted to balance top-up after order cleanup'
+                         END
+                     )
                  WHERE order_id IN ({$idList})
                    AND status NOT IN ('approved', 'confirmed', 'paid', 'completed', 'archived')"
             );
@@ -5597,7 +5898,15 @@ function app_delete_stale_unpaid_orders(Mysql_ks $db, ?string $now = null): arra
         if (schema_column_exists($db, 'bank_transfer_requests', 'order_id')) {
             $db->query(
                 "UPDATE bank_transfer_requests
-                 SET order_id = NULL
+                 SET order_id = NULL,
+                     admin_review_note = CONCAT(
+                         COALESCE(NULLIF(admin_review_note, ''), 'Created as balance top-up after order cleanup'),
+                         CASE
+                             WHEN COALESCE(admin_review_note, '') LIKE '%Converted to balance top-up after order cleanup%'
+                             THEN ''
+                             ELSE '\nConverted to balance top-up after order cleanup'
+                         END
+                     )
                  WHERE order_id IN ({$idList})
                    AND status NOT IN ('approved', 'confirmed', 'paid', 'completed', 'archived')"
             );

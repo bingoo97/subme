@@ -8596,21 +8596,38 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <input type="text" class="form-control" value="<?php echo admin_e(trim((string)($paymentEditor['asset_code'] ?? '') . ' ' . (string)($paymentEditor['asset_name'] ?? ''))); ?>" readonly>
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_crypto_amount', 'Crypto amount')); ?></label>
+                                                            <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
+                                                            <?php if ($paymentEditorType === 'crypto'): ?>
+                                                                <input type="text" class="form-control" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
+                                                            <?php else: ?>
+                                                                <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>" readonly>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_crypto_amount', 'Crypto amount')); ?></label>
                                                             <?php if ($paymentEditorType === 'crypto'): ?>
                                                                 <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
                                                             <?php else: ?>
                                                                 <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
                                                             <?php endif; ?>
                                                         </div>
-                                                        <div class="col-12">
-                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
-                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>" readonly>
-                                                        </div>
                                                         <?php if ($paymentEditorType === 'crypto'): ?>
+                                                            <div class="col-md-6">
+                                                                <label class="form-label" for="payment_reference"><?php echo admin_e(admin_t($messages, 'payment_reference_label', 'Payment reference')); ?></label>
+                                                                <input type="text" class="form-control" id="payment_reference" name="payment_reference" value="<?php echo admin_e((string)($paymentEditor['payment_reference'] ?? '')); ?>">
+                                                            </div>
+                                                            <div class="col-12">
+                                                                <label class="form-label" for="payment_wallet_address"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
+                                                                <input type="text" class="form-control" id="payment_wallet_address" name="wallet_address" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>">
+                                                            </div>
                                                             <div class="col-12">
                                                                 <label class="form-label" for="payment_request_note"><?php echo admin_e(admin_t($messages, 'payment_request_note', 'Request note')); ?></label>
                                                                 <textarea class="form-control" id="payment_request_note" name="request_note" rows="5"><?php echo admin_e((string)($paymentEditor['request_note'] ?? '')); ?></textarea>
+                                                            </div>
+                                                        <?php else: ?>
+                                                            <div class="col-12">
+                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
+                                                                <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>" readonly>
                                                             </div>
                                                         <?php endif; ?>
                                                     <?php else: ?>

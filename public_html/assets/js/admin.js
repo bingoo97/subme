@@ -3571,10 +3571,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function updateChatInboxItems(items) {
             var itemMap = {};
+            var orderedIds = [];
             var unreadLabel = root.getAttribute('data-chat-unread-label') || 'Unread';
+            var listNode = q('.admin-chat-inbox__list', root);
 
             (Array.isArray(items) ? items : []).forEach(function (item) {
-                itemMap[String(parseInt(item.conversation_id || 0, 10) || 0)] = item;
+                var conversationKey = String(parseInt(item.conversation_id || 0, 10) || 0);
+                itemMap[conversationKey] = item;
+                orderedIds.push(conversationKey);
             });
 
             qa('[data-admin-chat-item]', root).forEach(function (itemNode) {
@@ -3604,6 +3608,15 @@ document.addEventListener('DOMContentLoaded', function () {
                     unreadNode.remove();
                 }
             });
+
+            if (listNode && orderedIds.length) {
+                orderedIds.forEach(function (conversationId) {
+                    var itemNode = q('[data-admin-chat-item][data-conversation-id="' + conversationId + '"]', listNode);
+                    if (itemNode) {
+                        listNode.appendChild(itemNode);
+                    }
+                });
+            }
         }
 
         function pollChatInboxState(force) {

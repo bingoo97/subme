@@ -320,6 +320,7 @@ if ($action === 'inbox_state') {
             return [
                 'conversation_id' => (int)($row['id'] ?? 0),
                 'unread_count' => (int)($row['unread_count'] ?? 0),
+                'last_activity_at' => (string)($row['last_customer_message_at'] ?? $row['last_admin_message_at'] ?? $row['updated_at'] ?? $row['created_at'] ?? ''),
                 'presence' => $presence,
             ];
         }, $rows),

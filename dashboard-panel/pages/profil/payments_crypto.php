@@ -132,7 +132,7 @@ switch ($site) {
                     );
                     if ($cryptoPayment) {
                         $db->delete_using_id('crypto_deposit_requests', $cryptoPaymentId);
-                        if (!empty($cryptoPayment['wallet_assignment_id'])) {
+                        if (!empty($settings['crypto_wallet_shared_assignments_enabled']) && !empty($cryptoPayment['wallet_assignment_id'])) {
                             app_release_crypto_wallet_assignment_if_unused(
                                 $db,
                                 (int)$cryptoPayment['wallet_assignment_id'],
@@ -271,6 +271,11 @@ switch ($site) {
                     ]);
 
                     if ($createdCryptoRequestId > 0) {
+                        app_delete_cancelled_crypto_requests_for_asset(
+                            $db,
+                            (int)$user['id'],
+                            (int)$selectedAsset['crypto_asset_id']
+                        );
                         $paymentRedirectUrl = '/cryptocurrency';
                     }
 
