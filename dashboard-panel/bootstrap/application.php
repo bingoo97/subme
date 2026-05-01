@@ -5479,6 +5479,159 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
     ];
 }
 
+function app_delete_stale_unpaid_orders(Mysql_ks $db, ?string $now = null): array
+{
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    if (!schema_object_exists($db, 'orders')) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'deleted_orders' => 0,
+            'cancelled_crypto_requests' => 0,
+            'cancelled_bank_requests' => 0,
+            'message' => 'Orders table is not available.',
+        ];
+    }
+
+    $safeNowSql = $db->escape($safeNow);
+    $extraWhere = '';
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $extraWhere .= "
+           AND NOT EXISTS (
+               SELECT 1
+               FROM crypto_deposit_requests
+               WHERE crypto_deposit_requests.order_id = orders.id
+                 AND crypto_deposit_requests.status IN ('approved', 'confirmed', 'paid', 'completed', 'archived')
+           )";
+    }
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $extraWhere .= "
+           AND NOT EXISTS (
+               SELECT 1
+               FROM bank_transfer_requests
+               WHERE bank_transfer_requests.order_id = orders.id
+                 AND bank_transfer_requests.status IN ('approved', 'confirmed', 'paid', 'completed', 'archived')
+           )";
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT orders.id, orders.customer_id
+         FROM orders
+         WHERE orders.created_at IS NOT NULL
+           AND orders.created_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)
+           AND LOWER(COALESCE(orders.status, '')) IN ('pending', 'pending_payment')
+           AND LOWER(COALESCE(orders.payment_status, '')) IN ('', 'unpaid', 'pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+           AND LOWER(COALESCE(orders.fulfillment_status, '')) IN ('', 'pending')
+           {$extraWhere}
+         ORDER BY orders.id ASC"
+    );
+
+    if (!$rows) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'deleted_orders' => 0,
+            'cancelled_crypto_requests' => 0,
+            'cancelled_bank_requests' => 0,
+            'message' => 'No stale unpaid orders found.',
+        ];
+    }
+
+    $orderIds = [];
+    foreach ($rows as $row) {
+        $orderId = (int)($row['id'] ?? 0);
+        if ($orderId > 0) {
+            $orderIds[$orderId] = $orderId;
+        }
+    }
+
+    if (!$orderIds) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'deleted_orders' => 0,
+            'cancelled_crypto_requests' => 0,
+            'cancelled_bank_requests' => 0,
+            'message' => 'No stale unpaid orders found.',
+        ];
+    }
+
+    $idList = implode(',', $orderIds);
+    $cancelledCrypto = 0;
+    $cancelledBank = 0;
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cancelledCrypto = app_cancel_crypto_deposit_requests(
+            $db,
+            "order_id IN ({$idList})
+             AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')",
+            'Released after stale unpaid order cleanup',
+            $safeNow
+        );
+
+        if (schema_column_exists($db, 'crypto_deposit_requests', 'order_id')) {
+            $db->query(
+                "UPDATE crypto_deposit_requests
+                 SET order_id = NULL
+                 WHERE order_id IN ({$idList})
+                   AND status NOT IN ('approved', 'confirmed', 'paid', 'completed', 'archived')"
+            );
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankResult = $db->query(
+            "UPDATE bank_transfer_requests
+             SET status = 'cancelled'
+             WHERE order_id IN ({$idList})
+               AND status IN ('pending_payment', 'awaiting_review')"
+        );
+        if ($bankResult) {
+            $cancelledBank = (int)$db->affected_rows;
+        }
+
+        if (schema_column_exists($db, 'bank_transfer_requests', 'order_id')) {
+            $db->query(
+                "UPDATE bank_transfer_requests
+                 SET order_id = NULL
+                 WHERE order_id IN ({$idList})
+                   AND status NOT IN ('approved', 'confirmed', 'paid', 'completed', 'archived')"
+            );
+        }
+    }
+
+    if (schema_object_exists($db, 'order_status_events')) {
+        app_delete_records_by_ids($db, 'order_status_events', 'order_id', array_values($orderIds));
+    }
+
+    $deletedOrders = app_delete_records_by_ids($db, 'orders', 'id', array_values($orderIds));
+    if ($deletedOrders === null) {
+        return [
+            'ok' => false,
+            'time' => $safeNow,
+            'deleted_orders' => 0,
+            'cancelled_crypto_requests' => $cancelledCrypto,
+            'cancelled_bank_requests' => $cancelledBank,
+            'message' => 'Unable to delete stale unpaid orders.',
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'deleted_orders' => (int)$deletedOrders,
+        'cancelled_crypto_requests' => $cancelledCrypto,
+        'cancelled_bank_requests' => $cancelledBank,
+        'message' => $deletedOrders > 0
+            ? 'Stale unpaid orders deleted successfully.'
+            : 'No stale unpaid orders found.',
+    ];
+}
+
 function app_prune_retained_data(Mysql_ks $db, ?string $now = null): array
 {
     $settings = app_fetch_settings($db);
@@ -5753,6 +5906,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $email = app_email_process_queue($db, $emailLimit);
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
     $archive = app_archive_expired_payment_requests($db, $safeNow);
+    $staleOrders = app_delete_stale_unpaid_orders($db, $safeNow);
     $expire = app_expire_overdue_orders($db, $safeNow);
     $chat = app_prune_support_chat_messages($db, $safeNow);
     $messenger = function_exists('chat_prune_group_chat_messages')
@@ -5764,6 +5918,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         'email_queue' => $email,
         'crypto_daily_backup' => $cryptoBackup,
         'archive_requests' => $archive,
+        'stale_unpaid_orders' => $staleOrders,
         'expire_orders' => $expire,
         'live_chat_cleanup' => $chat,
         'group_chat_cleanup' => $messenger,
@@ -5791,6 +5946,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'archived_crypto_requests' => (int)($archive['archived_crypto_requests'] ?? 0),
             'archived_bank_requests' => (int)($archive['archived_bank_requests'] ?? 0),
             'reset_order_payment_method' => (int)($archive['reset_order_payment_method'] ?? 0),
+            'deleted_stale_unpaid_orders' => (int)($staleOrders['deleted_orders'] ?? 0),
             'expired_orders' => (int)($expire['expired_orders'] ?? 0),
             'deleted_chat_messages' => (int)($chat['deleted_messages'] ?? 0),
             'deleted_chat_conversations' => (int)($chat['deleted_empty_conversations'] ?? 0),

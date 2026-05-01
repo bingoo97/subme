@@ -133,6 +133,8 @@ if ($adminUser === null) {
     exit;
 }
 
+app_delete_stale_unpaid_orders($db);
+
 if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -1060,6 +1062,7 @@ if ($route === 'settings' && isset($_POST['admin_run_maintenance_cycle'])) {
             admin_e(admin_t($messages, 'settings_crypto_daily_backup_summary', 'Crypto backup CSV')) . ': <strong>' . admin_e((string)($summary['crypto_backup_sent'] ?? 0)) . '</strong> / ' .
             admin_e(admin_t($messages, 'settings_crypto_daily_backup_rows', 'rows')) . ': <strong>' . admin_e((string)($summary['crypto_backup_rows'] ?? 0)) . '</strong><br>' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_archived_requests', 'Archived requests')) . ': <strong>' . admin_e((string)(((int)($summary['archived_crypto_requests'] ?? 0)) + ((int)($summary['archived_bank_requests'] ?? 0)))) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_stale_orders', 'Deleted stale unpaid orders')) . ': <strong>' . admin_e((string)($summary['deleted_stale_unpaid_orders'] ?? 0)) . '</strong><br>' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_expired_orders', 'Expired orders')) . ': <strong>' . admin_e((string)($summary['expired_orders'] ?? 0)) . '</strong><br>' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_chat_messages', 'Deleted live chat messages')) . ': <strong>' . admin_e((string)($summary['deleted_chat_messages'] ?? 0)) . '</strong><br>' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_deleted_records', 'Deleted records')) . ': <strong>' . admin_e((string)(
@@ -4740,7 +4743,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 </section>
 
                 <?php if ($route === 'dashboard'): ?>
-                    <section class="admin-dashboard-period-grid d-none d-lg-block d-xl-block">
+                    <section class="admin-dashboard-period-grid">
                         <?php
                         $periodCards = [
                             ['key' => 'daily', 'tone' => 'peach', 'label' => admin_t($messages, 'dashboard_period_daily', 'Daily')],
@@ -4795,57 +4798,58 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         </div>
                     </section>
 
-                    <section class="admin-grid-2">
-                        <article class="admin-panel-card">
-                            <div class="admin-panel-card__header">
-                                <div>
-                                    <h2><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?></h2>
-                                    <p><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_intro', 'Paid orders from the last 30 days.')); ?></p>
+                    <section class="admin-panel-card admin-panel-card--wide">
+                        <div class="admin-panel-card__header">
+                            <div>
+                                <h2><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?></h2>
+                                <p><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_intro', 'Paid orders from the last 30 days.')); ?></p>
+                            </div>
+                        </div>
+                        <?php if ($dashboardSalesSeries): ?>
+                            <?php
+                            $chartMaxOrders = 0;
+                            $chartRevenueTotal = 0.0;
+                            foreach ($dashboardSalesSeries as $chartPoint) {
+                                $chartMaxOrders = max($chartMaxOrders, (int)($chartPoint['paid_orders'] ?? 0));
+                                $chartRevenueTotal += (float)($chartPoint['paid_revenue'] ?? 0);
+                            }
+                            $chartMaxOrders = max(1, $chartMaxOrders);
+                            ?>
+                            <div class="admin-dashboard-chart">
+                                <div class="admin-dashboard-chart__summary">
+                                    <div class="admin-dashboard-chart__summary-item">
+                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
+                                        <strong><?php echo admin_e(admin_format_money_value_with_symbol($chartRevenueTotal, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></strong>
+                                    </div>
+                                    <div class="admin-dashboard-chart__summary-item">
+                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_max_orders', 'Best day')); ?></span>
+                                        <strong><?php echo admin_e((string)$chartMaxOrders); ?></strong>
+                                    </div>
+                                </div>
+                                <div class="admin-dashboard-chart__canvas">
+                                    <svg viewBox="0 0 640 240" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
+                                        <line x1="20" y1="220" x2="620" y2="220" class="admin-dashboard-chart__axis"></line>
+                                        <line x1="20" y1="20" x2="20" y2="220" class="admin-dashboard-chart__axis"></line>
+                                        <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line"></path>
+                                        <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
+                                            <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="4" class="admin-dashboard-chart__point">
+                                                <title><?php echo admin_e(($dashboardSalesSeries[$pointIndex]['short_label'] ?? '') . ': ' . (string)($chartPoint['value'] ?? 0)); ?></title>
+                                            </circle>
+                                        <?php endforeach; ?>
+                                        <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
+                                            <?php if ($pointIndex % 4 === 0 || $pointIndex === count($dashboardSalesSeriesPoints) - 1): ?>
+                                                <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="236" text-anchor="middle" class="admin-dashboard-chart__label"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </svg>
                                 </div>
                             </div>
-                            <?php if ($dashboardSalesSeries): ?>
-                                <?php
-                                $chartMaxOrders = 0;
-                                $chartRevenueTotal = 0.0;
-                                foreach ($dashboardSalesSeries as $chartPoint) {
-                                    $chartMaxOrders = max($chartMaxOrders, (int)($chartPoint['paid_orders'] ?? 0));
-                                    $chartRevenueTotal += (float)($chartPoint['paid_revenue'] ?? 0);
-                                }
-                                $chartMaxOrders = max(1, $chartMaxOrders);
-                                ?>
-                                <div class="admin-dashboard-chart">
-                                    <div class="admin-dashboard-chart__summary">
-                                        <div class="admin-dashboard-chart__summary-item">
-                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
-                                            <strong><?php echo admin_e(admin_format_money_value_with_symbol($chartRevenueTotal, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></strong>
-                                        </div>
-                                        <div class="admin-dashboard-chart__summary-item">
-                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_max_orders', 'Best day')); ?></span>
-                                            <strong><?php echo admin_e((string)$chartMaxOrders); ?></strong>
-                                        </div>
-                                    </div>
-                                    <div class="admin-dashboard-chart__canvas">
-                                        <svg viewBox="0 0 640 240" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
-                                            <line x1="20" y1="220" x2="620" y2="220" class="admin-dashboard-chart__axis"></line>
-                                            <line x1="20" y1="20" x2="20" y2="220" class="admin-dashboard-chart__axis"></line>
-                                            <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line"></path>
-                                            <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
-                                                <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="4" class="admin-dashboard-chart__point">
-                                                    <title><?php echo admin_e(($dashboardSalesSeries[$pointIndex]['short_label'] ?? '') . ': ' . (string)($chartPoint['value'] ?? 0)); ?></title>
-                                                </circle>
-                                            <?php endforeach; ?>
-                                            <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
-                                                <?php if ($pointIndex % 4 === 0 || $pointIndex === count($dashboardSalesSeriesPoints) - 1): ?>
-                                                    <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="236" text-anchor="middle" class="admin-dashboard-chart__label"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
-                                                <?php endif; ?>
-                                            <?php endforeach; ?>
-                                        </svg>
-                                    </div>
-                                </div>
-                            <?php else: ?>
-                                <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
-                            <?php endif; ?>
-                        </article>
+                        <?php else: ?>
+                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                        <?php endif; ?>
+                    </section>
+
+                    <section class="admin-grid-2">
 
                         <article class="admin-panel-card d-none">
                             <div class="admin-panel-card__header">
@@ -5667,6 +5671,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="hidden" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status-original>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
+                                                                        <?php if ($orderStatusRaw !== 'active'): ?>
+                                                                            <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert>
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
+                                                                                <span><?php echo admin_e(admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.')); ?></span>
+                                                                            </div>
+                                                                        <?php else: ?>
+                                                                            <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert hidden>
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
+                                                                                <span><?php echo admin_e(admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.')); ?></span>
+                                                                            </div>
+                                                                        <?php endif; ?>
+                                                                        <?php if ($orderStatusRaw === 'active'): ?>
+                                                                            <div class="alert alert-success admin-order-modal__activation-alert admin-order-modal__activation-alert--success" role="alert" data-admin-order-active-alert>
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_activation_success_title', 'Order has been completed.')); ?></strong>
+                                                                                <span><?php echo admin_e(admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.')); ?></span>
+                                                                            </div>
+                                                                        <?php else: ?>
+                                                                            <div class="alert alert-success admin-order-modal__activation-alert admin-order-modal__activation-alert--success" role="alert" data-admin-order-active-alert hidden>
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_activation_success_title', 'Order has been completed.')); ?></strong>
+                                                                                <span><?php echo admin_e(admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.')); ?></span>
+                                                                            </div>
+                                                                        <?php endif; ?>
                                                                         <?php if ($isAwaitingActivationOrder): ?>
                                                                             <div class="admin-order-modal__paid-banner">
                                                                                 <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
@@ -5725,7 +5751,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php endif; ?>
                                                                         <div>
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_quick_status', 'Order status')); ?></label>
-                                                                            <select class="form-select" name="status" data-admin-order-main-status>
+                                                                            <select class="form-select admin-order-modal__main-status <?php echo admin_e($modalOrderStatusClass); ?>" name="status" data-admin-order-main-status>
                                                                                 <?php foreach (admin_order_status_options((string)($row['status'] ?? '')) as $statusOption): ?>
                                                                                     <?php
                                                                                     $statusOptionLabel = admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)));
@@ -8440,7 +8466,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <?php foreach ($paymentScopeOptions as $scopeValue => $scopeLabel): ?>
                                                     <?php
                                                     $scopeCount = match ($scopeValue) {
-                                                        'all' => (int)($paymentSummary['total'] ?? 0),
+                                                        'all' => max(0, (int)($paymentSummary['total'] ?? 0) - (int)($paymentSummary['archived_total'] ?? 0)),
                                                         'open' => (int)($paymentSummary['open_total'] ?? 0),
                                                         'new' => (int)($paymentSummary['new_total'] ?? 0),
                                                         'review' => (int)($paymentSummary['review_total'] ?? 0),

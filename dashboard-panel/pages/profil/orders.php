@@ -2,6 +2,10 @@
 switch ($site) {
 	case "orders":
 		if ($user["logged"]) {
+			if (app_uses_v2_schema($db)) {
+				app_delete_stale_unpaid_orders($db);
+			}
+
 			$tenantId = tenant_current_id($user);
 			$customerProductType = app_customer_product_type($user);
 			$orderSalesAvailable = app_customer_sales_enabled($user, $settings);

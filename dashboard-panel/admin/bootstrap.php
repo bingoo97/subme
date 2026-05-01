@@ -4141,6 +4141,12 @@ function admin_payment_statuses_for_scope(Mysql_ks $db, string $paymentType, str
         }));
     }
 
+    if ($scope === 'all') {
+        return array_values(array_filter($allStatuses, static function (string $status): bool {
+            return $status !== 'archived';
+        }));
+    }
+
     return $allStatuses;
 }
 

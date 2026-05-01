@@ -4682,7 +4682,7 @@ body.admin-login-page{
 .admin-dashboard-period-grid{
     display:grid;
     grid-template-columns:repeat(4, minmax(0, 1fr));
-    gap:1rem;
+    gap:.55rem;
     margin-bottom:1rem;
 }
 
@@ -4692,6 +4692,19 @@ body.admin-login-page{
     border-radius: 1rem;
     border:1px solid rgba(15, 23, 42, 0.04);
     margin: 5px;
+}
+
+.admin-dashboard-period-grid .admin-metric-card{
+    display:grid;
+    grid-template-columns:minmax(0, 1fr) auto;
+    grid-template-areas:
+        "label value"
+        "meta meta";
+    align-items:center;
+    gap:.2rem .55rem;
+    padding:.55rem .7rem;
+    margin:0;
+    border-radius:.85rem;
 }
 
 .admin-metric-card--peach{ background:#fbefe5; }
@@ -4707,11 +4720,28 @@ body.admin-login-page{
     margin-bottom: 0;
 }
 
+.admin-dashboard-period-grid .admin-metric-card__label{
+    grid-area:label;
+    font-size:.72rem;
+    line-height:1.1;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
 .admin-metric-card__value{
     display:block;
     font-size: 20px;
     font-weight:800;
     letter-spacing:-.03em;
+}
+
+.admin-dashboard-period-grid .admin-metric-card__value{
+    grid-area:value;
+    font-size:.96rem;
+    line-height:1;
+    text-align:right;
+    white-space:nowrap;
 }
 
 .admin-metric-card__meta{
@@ -4720,6 +4750,17 @@ body.admin-login-page{
     color:#5f6b7a;
     font-size: 10px;
     font-weight:700;
+}
+
+.admin-dashboard-period-grid .admin-metric-card__meta{
+    grid-area:meta;
+    margin-top:0;
+    font-size:.64rem;
+    line-height:1.15;
+    color:#6b7280;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
 }
 
 .admin-grid-2{
@@ -6889,6 +6930,29 @@ body.admin-login-page .alert.alert-danger::before{
     gap:1rem;
 }
 
+.admin-order-modal__activation-alert{
+    margin:0;
+    display:flex;
+    flex-direction:column;
+    gap:.2rem;
+    border-radius:16px;
+}
+
+.admin-order-modal__activation-alert--success{
+    border-color:rgba(22, 163, 74, 0.22);
+    background:#ecfdf5;
+}
+
+.admin-order-modal__activation-alert strong{
+    font-size:.92rem;
+    font-weight:800;
+}
+
+.admin-order-modal__activation-alert span{
+    font-size:.84rem;
+    line-height:1.45;
+}
+
 .admin-order-modal__stack .form-label{
     margin-bottom:.38rem;
     color:#60697d;
@@ -6908,6 +6972,40 @@ body.admin-login-page .alert.alert-danger::before{
     color:#16181d;
     box-shadow:none;
     font-size: 12px;
+}
+
+.admin-order-modal__main-status{
+    min-height:60px !important;
+    border:2px solid #111827 !important;
+    border-radius:12px !important;
+    font-size:16px !important;
+    font-weight:800 !important;
+    line-height:1.2;
+    padding:.85rem 1rem !important;
+}
+
+.admin-order-modal__main-status.is-success{
+    color:#166534 !important;
+    border-color:#166534 !important;
+    background:#ecfdf5 !important;
+}
+
+.admin-order-modal__main-status.is-danger{
+    color:#b91c1c !important;
+    border-color:#b91c1c !important;
+    background:#fef2f2 !important;
+}
+
+.admin-order-modal__main-status.is-pending{
+    color:#9a3412 !important;
+    border-color:#111827 !important;
+    background:#fffaf0 !important;
+}
+
+.admin-order-modal__main-status.is-neutral{
+    color:#111827 !important;
+    border-color:#111827 !important;
+    background:#ffffff !important;
 }
 
 .admin-order-modal__stack textarea.form-control{
@@ -8294,9 +8392,30 @@ body.admin-login-page .alert.alert-danger::before{
         border-radius:22px;
     }
 
-    .admin-metric-grid,
-    .admin-dashboard-period-grid{
+    .admin-metric-grid{
         grid-template-columns:1fr;
+    }
+
+    .admin-dashboard-period-grid{
+        grid-template-columns:repeat(2, minmax(0, 1fr));
+        gap:.45rem;
+    }
+
+    .admin-dashboard-period-grid .admin-metric-card{
+        padding:.5rem .55rem;
+        border-radius:.8rem;
+    }
+
+    .admin-dashboard-period-grid .admin-metric-card__label{
+        font-size:.62rem;
+    }
+
+    .admin-dashboard-period-grid .admin-metric-card__value{
+        font-size:.82rem;
+    }
+
+    .admin-dashboard-period-grid .admin-metric-card__meta{
+        font-size:.56rem;
     }
 
     .admin-dashboard-chart__summary{

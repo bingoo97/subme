@@ -1328,6 +1328,8 @@ document.addEventListener('DOMContentLoaded', function () {
             var fulfillmentField = q('[data-admin-order-fulfillment-status]', form);
             var paymentPill = q('[data-admin-order-payment-pill]', form);
             var fulfillmentPill = q('[data-admin-order-fulfillment-pill]', form);
+            var activationAlert = q('[data-admin-order-activation-alert]', form);
+            var activeAlert = q('[data-admin-order-active-alert]', form);
 
             if (!statusField || !paymentField || !fulfillmentField) {
                 return;
@@ -1348,6 +1350,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 other: form.getAttribute('data-label-shipping-other') || 'Cancelled'
             };
 
+            var applyStatusFieldTone = function (statusValue) {
+                var tone = 'is-neutral';
+                if (statusValue === 'active') {
+                    tone = 'is-success';
+                } else if (['expired', 'cancelled', 'failed', 'inactive'].indexOf(statusValue) !== -1) {
+                    tone = 'is-danger';
+                } else if (['pending_payment', 'awaiting_review', 'pending', 'unpaid'].indexOf(statusValue) !== -1) {
+                    tone = 'is-pending';
+                }
+
+                statusField.classList.remove('is-neutral', 'is-success', 'is-danger', 'is-pending');
+                statusField.classList.add(tone);
+            };
+
             var sync = function () {
                 var statusValue = String(statusField.value || '').toLowerCase();
 
@@ -1366,8 +1382,15 @@ document.addEventListener('DOMContentLoaded', function () {
                     fulfillmentField.value = originalFulfillment;
                 }
 
+                applyStatusFieldTone(statusValue);
                 applyPill(paymentPill, paymentField.value, 'payment', paymentLabels);
                 applyPill(fulfillmentPill, fulfillmentField.value, 'fulfillment', fulfillmentLabels);
+                if (activationAlert) {
+                    setHidden(activationAlert, statusValue === 'active');
+                }
+                if (activeAlert) {
+                    setHidden(activeAlert, statusValue !== 'active');
+                }
             };
 
             statusField.addEventListener('change', sync);
