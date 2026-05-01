@@ -4718,7 +4718,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div class="admin-user-provider-visibility admin-user-provider-visibility--compact">
                                                             <div class="admin-user-provider-visibility__head">
                                                                 <strong><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_title', 'Provider visibility')); ?></strong>
-                                                                <p><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_intro', 'New users see all active providers by default. Uncheck a provider here to hide its products from this user in Add new subscription.')); ?></p>
+                                                                <p><?php echo admin_e(admin_customer_provider_visibility_intro($messages, 'client', $appSettings)); ?></p>
                                                             </div>
                                                             <div class="admin-user-provider-visibility__grid">
                                                                 <?php foreach ($chatCreateCustomerProviderRows as $providerVisibilityRow): ?>
@@ -6262,7 +6262,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <div class="text-muted small"><?php echo admin_e(admin_t($messages, 'product_provider_logo_help', 'Upload a provider logo instantly or paste a direct image URL below.')); ?></div>
                                                                 </div>
                                                                 <div class="admin-settings-logo-field__actions">
-                                                                    <input type="file" id="product_provider_logo_file_create" accept=".jpg,.jpeg,.png,.gif,.svg,image/jpeg,image/png,image/gif,image/svg+xml" hidden data-product-provider-logo-file>
+                                                                    <input type="file" id="product_provider_logo_file_create" accept=".jpg,.jpeg,.png,.gif,.svg,.webp,image/jpeg,image/png,image/gif,image/webp,image/svg+xml" hidden data-product-provider-logo-file>
                                                                     <button type="button" class="btn btn-dark btn-sm" data-product-provider-logo-upload-trigger>
                                                                         <i class="bi bi-upload" aria-hidden="true"></i>
                                                                         <span><?php echo admin_e(admin_t($messages, 'product_provider_logo_upload', 'Upload logo')); ?></span>
@@ -6411,7 +6411,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <div class="text-muted small"><?php echo admin_e(admin_t($messages, 'product_provider_logo_help', 'Upload a provider logo instantly or paste a direct image URL below.')); ?></div>
                                                                 </div>
                                                                 <div class="admin-settings-logo-field__actions">
-                                                                    <input type="file" id="product_provider_logo_file_edit" accept=".jpg,.jpeg,.png,.gif,.svg,image/jpeg,image/png,image/gif,image/svg+xml" hidden data-product-provider-logo-file>
+                                                                    <input type="file" id="product_provider_logo_file_edit" accept=".jpg,.jpeg,.png,.gif,.svg,.webp,image/jpeg,image/png,image/gif,image/webp,image/svg+xml" hidden data-product-provider-logo-file>
                                                                     <button type="button" class="btn btn-dark btn-sm" data-product-provider-logo-upload-trigger>
                                                                         <i class="bi bi-upload" aria-hidden="true"></i>
                                                                         <span><?php echo admin_e(admin_t($messages, 'product_provider_logo_upload', 'Upload logo')); ?></span>
@@ -7250,7 +7250,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <input type="hidden" name="provider_visibility_form_present" value="1">
                                                                         <div class="admin-user-provider-visibility__head">
                                                                             <strong><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_title', 'Provider visibility')); ?></strong>
-                                                                            <p><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_intro', 'New users see all active providers by default. Uncheck a provider here to hide its products from this user in Add new subscription.')); ?></p>
+                                                                            <p><?php echo admin_e(admin_customer_provider_visibility_intro($messages, (string)($selectedCustomer['customer_type'] ?? 'client'), $appSettings)); ?></p>
                                                                         </div>
                                                                         <div class="admin-user-provider-visibility__grid">
                                                                             <?php foreach ($selectedCustomerProviderVisibility as $providerVisibilityRow): ?>
@@ -8090,7 +8090,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <input type="hidden" name="provider_visibility_form_present" value="1">
                                                                             <div class="admin-user-provider-visibility__head">
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_title', 'Provider visibility')); ?></strong>
-                                                                                <p><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_intro', 'New users see all active providers by default. Uncheck a provider here to hide its products from this user in Add new subscription.')); ?></p>
+                                                                                <p><?php echo admin_e(admin_customer_provider_visibility_intro($messages, (string)($userQuickCreateState['customer_type'] ?? 'client'), $appSettings)); ?></p>
                                                                             </div>
                                                                             <div class="admin-user-provider-visibility__grid">
                                                                                 <?php foreach ($userQuickCreateProviderRows as $providerVisibilityRow): ?>

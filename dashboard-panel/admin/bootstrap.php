@@ -3904,6 +3904,16 @@ function admin_customer_visible_provider_ids(Mysql_ks $db, int $customerId, bool
     return array_values(array_unique($visibleProviderIds));
 }
 
+function admin_customer_provider_visibility_intro(array $messages, ?string $customerType = null, array $settings = []): string
+{
+    $type = app_normalize_customer_type((string)$customerType);
+    if ($type === 'reseller' && admin_credits_sales_enabled($settings)) {
+        return admin_t($messages, 'customer_provider_visibility_intro_credits', 'New users see all active providers by default. Uncheck a provider here to hide its credits products from this user in Buy credits.');
+    }
+
+    return admin_t($messages, 'customer_provider_visibility_intro', 'New users see all active providers by default. Uncheck a provider here to hide its products from this user in Add new subscription.');
+}
+
 function admin_provider_visibility_option_rows(Mysql_ks $db): array
 {
     if (!schema_object_exists($db, 'product_providers')) {
@@ -10029,8 +10039,12 @@ function admin_crypto_wallet_payment_conflict_summary(Mysql_ks $db, int $walletI
     $activeRows = array_values(array_filter($rows, static function (array $row): bool {
         return (int)($row['active_assignment_total'] ?? 0) > 0;
     }));
+    $conflictRows = $activeRows;
+    if (count($conflictRows) <= 1) {
+        $conflictRows = $rows;
+    }
 
-    if (count($activeRows) <= 1) {
+    if (count($conflictRows) <= 1) {
         return [
             'can_split' => false,
             'rows' => $rows,
@@ -10040,7 +10054,7 @@ function admin_crypto_wallet_payment_conflict_summary(Mysql_ks $db, int $walletI
         ];
     }
 
-    $keeperRows = $activeRows;
+    $keeperRows = $conflictRows;
     usort($keeperRows, static function (array $left, array $right): int {
         $countCompare = ((int)($right['payment_total'] ?? 0)) <=> ((int)($left['payment_total'] ?? 0));
         if ($countCompare !== 0) {
@@ -10056,7 +10070,7 @@ function admin_crypto_wallet_payment_conflict_summary(Mysql_ks $db, int $walletI
     });
     $keeper = $keeperRows[0] ?? null;
 
-    $candidateRows = $activeRows;
+    $candidateRows = $conflictRows;
     usort($candidateRows, static function (array $left, array $right): int {
         $countCompare = ((int)($left['payment_total'] ?? 0)) <=> ((int)($right['payment_total'] ?? 0));
         if ($countCompare !== 0) {
@@ -10112,9 +10126,15 @@ function admin_first_crypto_wallet_payment_conflict(Mysql_ks $db): ?array
            ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
          WHERE EXISTS (
             SELECT 1
-            FROM crypto_wallet_assignments
-            WHERE crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
-              AND crypto_wallet_assignments.status IN ('reserved', 'active')
+            FROM crypto_deposit_requests
+            LEFT JOIN crypto_wallet_assignments AS payment_assignment
+              ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+            WHERE crypto_deposit_requests.customer_id > 0
+              AND (
+                    crypto_deposit_requests.wallet_address_id = crypto_wallet_addresses.id
+                 OR payment_assignment.wallet_address_id = crypto_wallet_addresses.id
+              )
+              AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
          )
          ORDER BY crypto_wallet_addresses.id DESC
          LIMIT 200"
@@ -13691,6 +13711,9 @@ function admin_chat_resize_image(string $sourcePath, string $destinationPath, st
         case 'image/gif':
             $image = @imagecreatefromgif($sourcePath);
             break;
+        case 'image/webp':
+            $image = function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($sourcePath) : false;
+            break;
         default:
             return false;
     }
@@ -13733,6 +13756,8 @@ function admin_chat_resize_image(string $sourcePath, string $destinationPath, st
         $saved = imagepng($target, $destinationPath, 7);
     } elseif ($mimeType === 'image/gif') {
         $saved = imagegif($target, $destinationPath);
+    } elseif ($mimeType === 'image/webp') {
+        $saved = function_exists('imagewebp') ? imagewebp($target, $destinationPath, 82) : false;
     }
 
     imagedestroy($target);
@@ -13815,9 +13840,9 @@ function admin_site_logo_public_path(array $file, int $adminUserId): ?string
     $originalName = (string)($file['name'] ?? '');
     $tmpPath = (string)($file['tmp_name'] ?? '');
     $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg'];
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'];
     $mimeType = function_exists('mime_content_type') ? (string)mime_content_type($tmpPath) : '';
-    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/svg+xml', 'text/plain', 'text/xml', 'application/xml'];
+    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'text/plain', 'text/xml', 'application/xml'];
     $isSvg = $extension === 'svg';
 
     if (
@@ -13861,9 +13886,9 @@ function admin_product_provider_logo_public_path(array $file, int $adminUserId):
     $originalName = (string)($file['name'] ?? '');
     $tmpPath = (string)($file['tmp_name'] ?? '');
     $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg'];
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'];
     $mimeType = function_exists('mime_content_type') ? (string)mime_content_type($tmpPath) : '';
-    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/svg+xml', 'text/plain', 'text/xml', 'application/xml'];
+    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'text/plain', 'text/xml', 'application/xml'];
     $isSvg = $extension === 'svg';
 
     if (

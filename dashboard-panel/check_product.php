@@ -30,7 +30,7 @@ if ((int)($settings['active_sale'] ?? 0) !== 1) {
 }
 
 if (!app_customer_sales_enabled($user, $settings)) {
-    $disabledMessage = app_customer_product_type($user) === 'credits'
+    $disabledMessage = app_customer_product_type($user, $settings) === 'credits'
         ? localization_translate($t, 'credits_sales_disabled_notice', 'Credits sales are currently unavailable.')
         : localization_translate($t, 'sales_disabled_notice', 'Sales are currently unavailable.');
     echo '<div class="form-group"><div class="col-lg-6"><p>' . htmlspecialchars($disabledMessage, ENT_QUOTES, 'UTF-8') . '</p></div></div>';
@@ -38,8 +38,8 @@ if (!app_customer_sales_enabled($user, $settings)) {
 }
 
 $trialsEnabled = (int)($settings['active_trials'] ?? 0) === 1;
-$productTypeSql = app_product_type_sql($db, $user);
-$catalogProductType = app_customer_product_type($user);
+$productTypeSql = app_product_type_sql($db, $user, $settings);
+$catalogProductType = app_customer_product_type($user, $settings);
 $productDescriptionSelect = schema_column_exists($db, 'products', 'description')
     ? 'products.description AS description,'
     : "'' AS description,";

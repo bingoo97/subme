@@ -703,6 +703,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var isSaving = false;
             var shouldResave = false;
             var saveTimer = 0;
+            var heartbeatTimer = 0;
 
             if (!textarea || !csrfInput || !statusNode) {
                 return;
@@ -732,6 +733,32 @@ document.addEventListener('DOMContentLoaded', function () {
             function queueSave(immediate) {
                 window.clearTimeout(saveTimer);
                 saveTimer = window.setTimeout(runSave, immediate ? 0 : 900);
+            }
+
+            function hasUnsavedChanges() {
+                return String(textarea.value || '') !== lastSavedValue;
+            }
+
+            function flushWithBeacon() {
+                var currentValue;
+                var payload;
+
+                if (!navigator.sendBeacon || isSaving || !hasUnsavedChanges()) {
+                    return;
+                }
+
+                currentValue = String(textarea.value || '');
+                payload = new window.FormData();
+                payload.append('admin_save_personal_notes_ajax', '1');
+                payload.append('_csrf', csrfInput.value);
+                payload.append('personal_notes_html', currentValue);
+
+                try {
+                    navigator.sendBeacon(saveUrl, payload);
+                    lastSavedValue = currentValue;
+                } catch (error) {
+                    // noop
+                }
             }
 
             function runSave() {
@@ -788,6 +815,22 @@ document.addEventListener('DOMContentLoaded', function () {
 
             textarea.addEventListener('change', function () {
                 queueSave(true);
+            });
+
+            heartbeatTimer = window.setInterval(function () {
+                if (!isSaving && hasUnsavedChanges()) {
+                    queueSave(true);
+                }
+            }, 10000);
+
+            window.addEventListener('visibilitychange', function () {
+                if (doc.visibilityState === 'hidden') {
+                    flushWithBeacon();
+                }
+            });
+
+            window.addEventListener('pagehide', function () {
+                flushWithBeacon();
             });
         });
     }

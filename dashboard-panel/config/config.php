@@ -283,7 +283,7 @@ if (
         if ($updatedCustomerType) {
             $user['customer_type'] = $newCustomerType;
             $user['is_reseller'] = $newCustomerType === 'reseller' ? 1 : 0;
-            $user['storefront_product_type'] = app_customer_product_type($user);
+            $user['storefront_product_type'] = app_customer_product_type($user, $settings);
 
             $modeLabelKey = $newCustomerType === 'reseller'
                 ? 'customer_type_switch_mode_reseller'
@@ -306,6 +306,7 @@ if (
 $user['lang_code'] = $currentLocale;
 $user = tenant_normalize_user_record($user);
 $reseller = tenant_normalize_reseller_record($reseller);
+$user['storefront_product_type'] = app_customer_product_type($user, $settings);
 $smarty->assign('user', $user);
 $smarty->assign('reseller', $reseller);
 

@@ -7,12 +7,12 @@ switch ($site) {
 			}
 
 			$tenantId = tenant_current_id($user);
-			$customerProductType = app_customer_product_type($user);
+			$customerProductType = app_customer_product_type($user, $settings);
 			$orderSalesAvailable = app_customer_sales_enabled($user, $settings);
 			$orderCatalogHasProducts = false;
 
 			if (app_uses_v2_schema($db)) {
-				$productTypeSql = app_product_type_sql($db, $user);
+				$productTypeSql = app_product_type_sql($db, $user, $settings);
 				$productCountRow = $db->select_user(
 					"SELECT COUNT(*) AS total
 					 FROM products
@@ -160,7 +160,7 @@ switch ($site) {
 					
 					
 					if (app_uses_v2_schema($db)) {
-						$productTypeSql = app_product_type_sql($db, $user);
+						$productTypeSql = app_product_type_sql($db, $user, $settings);
 						$zapytanie = "SELECT DISTINCT product_providers.*
 								  FROM product_providers
 								  INNER JOIN products

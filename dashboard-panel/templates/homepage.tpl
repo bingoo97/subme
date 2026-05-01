@@ -131,6 +131,188 @@
         </script>
     </div>
 {/if}
+{if $homepage_onboarding_enabled|default:false}
+<div class="homepage-onboarding" data-homepage-onboarding data-user-id="{$user.id|default:0}" data-delay="3000" data-cooldown-ms="86400000" hidden>
+    <div class="homepage-onboarding__step is-active" data-homepage-onboarding-step="0">
+        <div class="homepage-onboarding__inner">
+            <div class="homepage-onboarding__visual" aria-hidden="true">
+                <span class="homepage-onboarding__visual-shell">
+                    <i class="fa fa-credit-card" aria-hidden="true"></i>
+                </span>
+            </div>
+            <div class="homepage-onboarding__dots" aria-hidden="true">
+                <span class="is-active"></span><span></span><span></span><span></span>
+            </div>
+            <h2 class="homepage-onboarding__title">{$t.home_onboarding_step1_title|default:'Wybierz rodzaj subskrypcji'}</h2>
+            <p class="homepage-onboarding__text">{$t.home_onboarding_step1_text|default:'Kliknij w przycisk Zamówienia, a potem Dodaj nową subskrypcję. Wybierasz rodzaj pakietu, formę płatności i przechodzisz dalej gotowym procesem.'}</p>
+            <button type="button" class="btn btn-dark btn-lg homepage-onboarding__button" data-homepage-onboarding-next>{$t.home_onboarding_next|default:'Dalej'}</button>
+        </div>
+    </div>
+    <div class="homepage-onboarding__step" data-homepage-onboarding-step="1">
+        <div class="homepage-onboarding__inner">
+            <div class="homepage-onboarding__visual" aria-hidden="true">
+                <span class="homepage-onboarding__visual-shell">
+                    <i class="fa fa-tasks" aria-hidden="true"></i>
+                </span>
+            </div>
+            <div class="homepage-onboarding__dots" aria-hidden="true">
+                <span class="is-active"></span><span class="is-active"></span><span></span><span></span>
+            </div>
+            <h2 class="homepage-onboarding__title">{$t.home_onboarding_step2_title|default:'Skorzystaj z doładowania salda'}</h2>
+            <p class="homepage-onboarding__text">{$t.home_onboarding_step2_text|default:'Jeśli chcesz mieć środki na koncie do zakupu kilku subskrypcji, skorzystaj z doładowania salda. Dzięki temu kolejne zakupy wykonasz szybciej i bez generowania nowej płatności za każdym razem.'}</p>
+            <button type="button" class="btn btn-dark btn-lg homepage-onboarding__button" data-homepage-onboarding-next>{$t.home_onboarding_next|default:'Dalej'}</button>
+        </div>
+    </div>
+    <div class="homepage-onboarding__step" data-homepage-onboarding-step="2">
+        <div class="homepage-onboarding__inner">
+            <div class="homepage-onboarding__visual" aria-hidden="true">
+                <span class="homepage-onboarding__visual-shell">
+                    <i class="fa fa-check-square-o" aria-hidden="true"></i>
+                </span>
+            </div>
+            <div class="homepage-onboarding__dots" aria-hidden="true">
+                <span class="is-active"></span><span class="is-active"></span><span class="is-active"></span><span></span>
+            </div>
+            <h2 class="homepage-onboarding__title">{$t.home_onboarding_step3_title|default:'Opłać i dokończ zamówienie'}</h2>
+            <p class="homepage-onboarding__text">{$t.home_onboarding_step3_text|default:'Po wygenerowaniu płatności opłać ją wybraną metodą i wróć do swojego zamówienia. Gdy płatność zostanie zatwierdzona, subskrypcja pojawi się na Twoim koncie.'}</p>
+            <button type="button" class="btn btn-dark btn-lg homepage-onboarding__button" data-homepage-onboarding-next>{$t.home_onboarding_next|default:'Dalej'}</button>
+        </div>
+    </div>
+    <div class="homepage-onboarding__step" data-homepage-onboarding-step="3">
+        <div class="homepage-onboarding__inner">
+            <div class="homepage-onboarding__visual" aria-hidden="true">
+                <span class="homepage-onboarding__visual-shell">
+                    <i class="fa fa-comments-o" aria-hidden="true"></i>
+                </span>
+            </div>
+            <div class="homepage-onboarding__dots" aria-hidden="true">
+                <span class="is-active"></span><span class="is-active"></span><span class="is-active"></span><span class="is-active"></span>
+            </div>
+            <h2 class="homepage-onboarding__title">{$t.home_onboarding_step4_title|default:'Masz problemy? Napisz na Live Chat!'}</h2>
+            <p class="homepage-onboarding__text">{$t.home_onboarding_step4_text|default:'W przypadku problemów poniżej znajduje się komunikator do kontaktu. Jeśli coś nie działa albo nie wiesz co dalej, napisz do nas od razu na czacie.'}</p>
+            <button type="button" class="btn btn-dark btn-lg homepage-onboarding__button" data-homepage-onboarding-finish>{$t.home_onboarding_finish|default:'Rozpocznij'}</button>
+        </div>
+    </div>
+</div>
+<script>
+    (function () {
+        var overlay = document.querySelector('[data-homepage-onboarding]');
+        if (!overlay) {
+            return;
+        }
+
+        var userId = overlay.getAttribute('data-user-id') || '0';
+        var delay = parseInt(overlay.getAttribute('data-delay') || '3000', 10);
+        var cooldownMs = parseInt(overlay.getAttribute('data-cooldown-ms') || '86400000', 10);
+        var storageKey = 'homepage-onboarding-completed-' + userId;
+        var steps = Array.prototype.slice.call(overlay.querySelectorAll('[data-homepage-onboarding-step]'));
+        var nextButtons = overlay.querySelectorAll('[data-homepage-onboarding-next]');
+        var finishButton = overlay.querySelector('[data-homepage-onboarding-finish]');
+        var activeIndex = 0;
+
+        function storageAvailable(type) {
+            try {
+                var storage = window[type];
+                var probeKey = '__homepage_onboarding_probe__';
+                storage.setItem(probeKey, '1');
+                storage.removeItem(probeKey);
+                return storage;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        var localStore = storageAvailable('localStorage');
+
+        function wasCompletedRecently() {
+            if (!localStore) {
+                return false;
+            }
+
+            var rawValue = localStore.getItem(storageKey);
+            var timestamp = rawValue ? parseInt(rawValue, 10) : 0;
+            return timestamp > 0 && (Date.now() - timestamp) < cooldownMs;
+        }
+
+        function persistCompletion() {
+            if (!localStore) {
+                return;
+            }
+            localStore.setItem(storageKey, String(Date.now()));
+        }
+
+        function renderStep(index) {
+            activeIndex = index;
+            steps.forEach(function (step, stepIndex) {
+                step.classList.toggle('is-active', stepIndex === index);
+            });
+            playStepAnimation(steps[index] || null);
+        }
+
+        function restartAnimation(node, animationClass, duration) {
+            if (!node) {
+                return;
+            }
+
+            node.classList.remove('animated', animationClass, 'homepage-onboarding__animate', 'homepage-onboarding__animate--slow');
+            void node.offsetWidth;
+            node.classList.add('animated', animationClass, 'homepage-onboarding__animate');
+            if (duration === 'slow') {
+                node.classList.add('homepage-onboarding__animate--slow');
+            }
+        }
+
+        function playStepAnimation(step) {
+            if (!step) {
+                return;
+            }
+
+            restartAnimation(step.querySelector('.homepage-onboarding__visual-shell'), 'flipInX', 'slow');
+            restartAnimation(step.querySelector('.homepage-onboarding__dots'), 'fadeIn', 'slow');
+            restartAnimation(step.querySelector('.homepage-onboarding__title'), 'fadeIn', 'slow');
+            restartAnimation(step.querySelector('.homepage-onboarding__text'), 'fadeIn', 'slow');
+            restartAnimation(step.querySelector('.homepage-onboarding__button'), 'fadeIn', 'slow');
+        }
+
+        function openWizard() {
+            overlay.hidden = false;
+            window.requestAnimationFrame(function () {
+                overlay.classList.add('is-visible');
+                document.body.classList.add('homepage-onboarding-open');
+                renderStep(0);
+            });
+        }
+
+        function closeWizard(markCompleted) {
+            overlay.classList.remove('is-visible');
+            document.body.classList.remove('homepage-onboarding-open');
+            if (markCompleted) {
+                persistCompletion();
+            }
+            window.setTimeout(function () {
+                overlay.hidden = true;
+            }, 650);
+        }
+
+        nextButtons.forEach(function (button) {
+            button.addEventListener('click', function () {
+                var nextIndex = Math.min(activeIndex + 1, steps.length - 1);
+                renderStep(nextIndex);
+            });
+        });
+
+        if (finishButton) {
+            finishButton.addEventListener('click', function () {
+                closeWizard(true);
+            });
+        }
+
+        if (!wasCompletedRecently()) {
+            window.setTimeout(openWizard, Math.max(0, delay));
+        }
+    })();
+</script>
+{/if}
 {if $balance_topup_enabled|default:false}
 	{include file='profil/balance_topup_modal.tpl'}
 {/if}

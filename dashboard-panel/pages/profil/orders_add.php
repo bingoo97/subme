@@ -124,8 +124,8 @@
 		
 		if(isset($_POST['add_product'])){
 			$tenantId = tenant_current_id($user);
-			$customerProductType = app_customer_product_type($user);
-			$productTypeSql = app_product_type_sql($db, $user);
+			$customerProductType = app_customer_product_type($user, $settings);
+			$productTypeSql = app_product_type_sql($db, $user, $settings);
 			$existingPendingOrder = orders_find_pending_unpaid_order($db, $user, $tenantId);
 
 			if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {

@@ -2006,7 +2006,9 @@ function app_order_delivery_payload(array $order): array
 function app_order_progress_data(array $order): array
 {
     $createdAt = !empty($order['date_add']) ? strtotime((string)$order['date_add']) : (!empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0);
+    $startedAt = !empty($order['started_at']) ? strtotime((string)$order['started_at']) : (!empty($order['date_start']) ? strtotime((string)$order['date_start']) : 0);
     $expiresAt = !empty($order['date_end']) ? strtotime((string)$order['date_end']) : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
+    $durationHours = max(0, (int)($order['duration_hours'] ?? 0));
     $now = time();
 
     if ($expiresAt <= 0) {
@@ -2020,20 +2022,24 @@ function app_order_progress_data(array $order): array
         ];
     }
 
-    $totalSeconds = max(1, $expiresAt - ($createdAt > 0 ? $createdAt : $now));
+    if ($durationHours > 0) {
+        $totalSeconds = max(1, $durationHours * 3600);
+    } else {
+        $anchorTime = $startedAt > 0 ? $startedAt : ($createdAt > 0 ? $createdAt : $now);
+        $totalSeconds = max(1, $expiresAt - $anchorTime);
+    }
     $remainingSeconds = max(0, $expiresAt - $now);
-    $elapsedSeconds = max(0, $totalSeconds - $remainingSeconds);
-    $percent = (int)round(min(1, $elapsedSeconds / $totalSeconds) * 100);
+    $percent = (int)round(min(1, $remainingSeconds / $totalSeconds) * 100);
     $remainingDays = $remainingSeconds > 0 ? (int)ceil($remainingSeconds / 86400) : 0;
 
     if ($remainingSeconds <= 0) {
         $tone = 'expired';
         $color = '#ef4444';
-        $percent = 100;
-    } elseif ($remainingDays <= 7) {
+        $percent = 0;
+    } elseif ($percent <= 25) {
         $tone = 'danger';
         $color = '#ef4444';
-    } elseif ($remainingDays <= 30) {
+    } elseif ($percent <= 60) {
         $tone = 'warning';
         $color = '#f59e0b';
     } else {
@@ -2912,11 +2918,17 @@ function app_customer_avatar_theme(array $customer): string
     return 'theme-' . ($index + 1);
 }
 
-function app_customer_product_type(array $customer): string
+function app_customer_product_type(array $customer, array $settings = []): string
 {
-    return app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller'
-        ? 'credits'
-        : 'subscription';
+    if (app_normalize_customer_type($customer['customer_type'] ?? '') !== 'reseller') {
+        return 'subscription';
+    }
+
+    if ($settings === []) {
+        return 'credits';
+    }
+
+    return app_credits_sales_enabled($settings) ? 'credits' : 'subscription';
 }
 
 function app_credits_sales_enabled(array $settings): bool
@@ -2931,7 +2943,7 @@ function app_customer_sales_enabled(array $customer, array $settings): bool
         return false;
     }
 
-    if (app_customer_product_type($customer) === 'credits') {
+    if (app_customer_product_type($customer, $settings) === 'credits') {
         return app_credits_sales_enabled($settings);
     }
 
@@ -2957,9 +2969,9 @@ function app_sql_string_list(Mysql_ks $db, array $values): string
     return $safeValues ? implode(', ', $safeValues) : "''";
 }
 
-function app_product_type_sql(Mysql_ks $db, array $customer): string
+function app_product_type_sql(Mysql_ks $db, array $customer, array $settings = []): string
 {
-    return "'" . $db->escape(app_customer_product_type($customer)) . "'";
+    return "'" . $db->escape(app_customer_product_type($customer, $settings)) . "'";
 }
 
 function app_fetch_settings(Mysql_ks $db): array
