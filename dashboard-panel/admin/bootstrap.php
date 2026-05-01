@@ -9693,7 +9693,7 @@ function admin_crypto_wallet_explorer_url(?string $assetCode, ?string $networkNa
     }
 
     if ($networkName === 'bitcoin' || $assetCode === 'BTC') {
-        return 'https://mempool.space/address/' . rawurlencode($address);
+        return 'https://www.blockchain.com/explorer/addresses/btc/' . rawurlencode($address);
     }
 
     if ($networkName === 'bitcoin-cash' || $assetCode === 'BCH') {
