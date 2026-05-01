@@ -4927,6 +4927,28 @@ function admin_save_payment(
         $status = (string)($payment['status'] ?? '');
     }
 
+    $linkedOrderIdRaw = trim((string)($input['order_id'] ?? ($payment['order_id'] ?? '')));
+    $linkedOrderId = 0;
+    if ($linkedOrderIdRaw !== '') {
+        if (!ctype_digit($linkedOrderIdRaw)) {
+            return ['ok' => false, 'message' => 'Order number must be a valid ID.'];
+        }
+        $linkedOrderId = (int)$linkedOrderIdRaw;
+        if ($linkedOrderId > 0) {
+            $orderRow = $db->select_user(
+                "SELECT id
+                 FROM orders
+                 WHERE id = {$linkedOrderId}
+                   AND customer_id = " . (int)($payment['customer_id'] ?? 0) . "
+                 LIMIT 1"
+            );
+            if (!is_array($orderRow) || empty($orderRow['id'])) {
+                return ['ok' => false, 'message' => 'Selected order does not belong to this customer.'];
+            }
+        }
+    }
+    $linkedOrderIdValue = $linkedOrderId > 0 ? $linkedOrderId : null;
+
     if ($paymentType === 'crypto') {
         $requestedAt = admin_normalize_datetime_input($input['requested_at'] ?? null) ?? (string)($payment['requested_at'] ?? date('Y-m-d H:i:s'));
         $expiresAt = admin_normalize_datetime_input($input['expires_at'] ?? null);
@@ -4971,8 +4993,8 @@ function admin_save_payment(
         );
 
         $updated = $db->update_using_id(
-            ['status', 'wallet_address_id', 'requested_at', 'expires_at', 'requested_fiat_amount', 'requested_crypto_amount', 'request_note'],
-            [$status, $walletAddressId, $requestedAt, $expiresAt, $amountValue, $amountCrypto, $requestNote !== '' ? $requestNote : null],
+            ['status', 'order_id', 'wallet_address_id', 'requested_at', 'expires_at', 'requested_fiat_amount', 'requested_crypto_amount', 'request_note'],
+            [$status, $linkedOrderIdValue, $walletAddressId, $requestedAt, $expiresAt, $amountValue, $amountCrypto, $requestNote !== '' ? $requestNote : null],
             'crypto_deposit_requests',
             $paymentId
         );
@@ -4982,8 +5004,8 @@ function admin_save_payment(
             if ((string)($payment['status'] ?? '') !== $status) {
                 $description .= ': status ' . (string)($payment['status'] ?? 'unknown') . ' -> ' . $status;
             }
-            if (!empty($payment['order_id'])) {
-                $description .= ' for order #' . (int)$payment['order_id'];
+            if ($linkedOrderId > 0) {
+                $description .= ' for order #' . $linkedOrderId;
             }
 
             admin_log_customer_and_admin(
@@ -5004,7 +5026,7 @@ function admin_save_payment(
             }
 
             if (!in_array($previousStatus, $successStatuses, true)) {
-                if ((int)($payment['order_id'] ?? 0) > 0) {
+                if ($linkedOrderId > 0) {
                     admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
                 } else {
                     admin_notify_topup_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
@@ -5041,10 +5063,24 @@ function admin_save_payment(
 
     if ($paymentType === 'crypto_topup') {
         $requestedAt = admin_normalize_datetime_input($input['requested_at'] ?? null) ?? (string)($payment['requested_at'] ?? date('Y-m-d H:i:s'));
+        $amountValueRaw = str_replace(',', '.', trim((string)($input['amount_value'] ?? ($payment['amount_value'] ?? ''))));
+        $amountCryptoRaw = str_replace(',', '.', trim((string)($input['amount_crypto'] ?? ($payment['amount_crypto'] ?? ''))));
+        if ($amountValueRaw === '' || !is_numeric($amountValueRaw) || (float)$amountValueRaw <= 0) {
+            return ['ok' => false, 'message' => 'Amount must be a valid number.'];
+        }
+        if ($amountCryptoRaw === '' || !is_numeric($amountCryptoRaw) || (float)$amountCryptoRaw < 0) {
+            return ['ok' => false, 'message' => 'Crypto amount must be a valid number.'];
+        }
+
+        $amountValue = round((float)$amountValueRaw, 2);
+        $amountCrypto = round((float)$amountCryptoRaw, 8);
         $writeTable = schema_write_target('crypto_topups');
+        $legacyTopupProductPriceColumn = schema_read_column($db, 'crypto_topups', 'product_price', 'package_price');
+        $legacyTopupCreatedAtColumn = schema_read_column($db, 'crypto_topups', 'created_at', 'date');
+        $legacyTopupStatusColumn = schema_read_column($db, 'crypto_topups', 'is_active', 'status');
         $updated = $db->update_using_id(
-            ['status', 'date'],
-            [$status === 'archived' ? 1 : 0, $requestedAt],
+            [$legacyTopupStatusColumn, $legacyTopupCreatedAtColumn, $legacyTopupProductPriceColumn, 'crypto_amount'],
+            [$status === 'archived' ? 1 : 0, $requestedAt, $amountValue, $amountCrypto],
             $writeTable,
             $paymentId
         );
@@ -5081,15 +5117,22 @@ function admin_save_payment(
     $approvedAt = admin_normalize_datetime_input($input['approved_at'] ?? null);
     $rejectedAt = admin_normalize_datetime_input($input['rejected_at'] ?? null);
     $paymentReference = trim((string)($input['payment_reference'] ?? ''));
+    $amountValueRaw = str_replace(',', '.', trim((string)($input['amount_value'] ?? ($payment['amount_value'] ?? ''))));
     $payerName = trim((string)($input['payer_name'] ?? ''));
     $payerBankName = trim((string)($input['payer_bank_name'] ?? ''));
     $customerTransferNote = trim((string)($input['customer_transfer_note'] ?? ''));
     $adminReviewNote = trim((string)($input['admin_review_note'] ?? ''));
+    if ($amountValueRaw === '' || !is_numeric($amountValueRaw) || (float)$amountValueRaw <= 0) {
+        return ['ok' => false, 'message' => 'Amount must be a valid number.'];
+    }
+    $amountValue = round((float)$amountValueRaw, 2);
 
     $updated = $db->update_using_id(
-        ['status', 'requested_at', 'expires_at', 'submitted_at', 'approved_at', 'rejected_at', 'payment_reference', 'payer_name', 'payer_bank_name', 'customer_transfer_note', 'admin_review_note'],
+        ['status', 'order_id', 'requested_amount', 'requested_at', 'expires_at', 'submitted_at', 'approved_at', 'rejected_at', 'payment_reference', 'payer_name', 'payer_bank_name', 'customer_transfer_note', 'admin_review_note'],
         [
             $status,
+            $linkedOrderIdValue,
+            $amountValue,
             $requestedAt,
             $expiresAt,
             $submittedAt,
@@ -5110,8 +5153,8 @@ function admin_save_payment(
         if ((string)($payment['status'] ?? '') !== $status) {
             $description .= ': status ' . (string)($payment['status'] ?? 'unknown') . ' -> ' . $status;
         }
-        if (!empty($payment['order_id'])) {
-            $description .= ' for order #' . (int)$payment['order_id'];
+        if ($linkedOrderId > 0) {
+            $description .= ' for order #' . $linkedOrderId;
         }
 
         admin_log_customer_and_admin(
@@ -5132,7 +5175,7 @@ function admin_save_payment(
         }
 
         if (!in_array($previousStatus, $successStatuses, true)) {
-            if ((int)($payment['order_id'] ?? 0) > 0) {
+            if ($linkedOrderId > 0) {
                 admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
             } else {
                 admin_notify_topup_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));

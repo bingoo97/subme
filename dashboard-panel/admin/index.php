@@ -8567,7 +8567,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e('#' . (int)($paymentEditor['order_id'] ?? 0)); ?>" readonly>
+                                                        <?php if ($paymentEditorType === 'crypto_topup'): ?>
+                                                            <input type="text" class="form-control" value="" readonly>
+                                                        <?php else: ?>
+                                                            <input type="number" class="form-control" name="order_id" min="1" step="1" value="<?php echo admin_e((int)($paymentEditor['order_id'] ?? 0) > 0 ? (string)(int)$paymentEditor['order_id'] : ''); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?> ID">
+                                                        <?php endif; ?>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></label>
@@ -8575,7 +8579,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e($paymentAmountLabel); ?>" readonly>
+                                                        <?php if ($paymentEditorType === 'bank'): ?>
+                                                            <input type="text" class="form-control" id="payment_amount_value_bank" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
+                                                        <?php else: ?>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e($paymentAmountLabel); ?>" readonly>
+                                                        <?php endif; ?>
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_reference_summary', 'Reference')); ?></label>
@@ -8597,7 +8605,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
-                                                            <?php if ($paymentEditorType === 'crypto'): ?>
+                                                            <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
                                                                 <input type="text" class="form-control" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
                                                             <?php else: ?>
                                                                 <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>" readonly>
@@ -8605,7 +8613,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_crypto_amount', 'Crypto amount')); ?></label>
-                                                            <?php if ($paymentEditorType === 'crypto'): ?>
+                                                            <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
                                                                 <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
                                                             <?php else: ?>
                                                                 <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
