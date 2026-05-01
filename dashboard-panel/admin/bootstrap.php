@@ -3519,22 +3519,27 @@ function admin_delete_customer_wallet_assignment(
     if (
         $customerId <= 0
         || $walletAssignmentId <= 0
-        || !schema_object_exists($db, 'customer_crypto_wallets')
         || !schema_object_exists($db, 'crypto_wallet_assignments')
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
     ) {
         return ['ok' => false, 'message' => 'Wallet assignment not found.'];
     }
 
     $assignment = $db->select_user(
         "SELECT
-            wallet_assignment_id,
-            wallet_address_id,
-            crypto_asset_code,
-            crypto_asset_name,
-            address
-         FROM customer_crypto_wallets
-         WHERE customer_id = {$customerId}
-           AND wallet_assignment_id = {$walletAssignmentId}
+            crypto_wallet_assignments.id AS wallet_assignment_id,
+            crypto_wallet_assignments.wallet_address_id,
+            crypto_wallet_addresses.address,
+            crypto_assets.code AS crypto_asset_code,
+            crypto_assets.name AS crypto_asset_name
+         FROM crypto_wallet_assignments
+         INNER JOIN crypto_wallet_addresses
+           ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
+         LEFT JOIN crypto_assets
+           ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
+         WHERE crypto_wallet_assignments.customer_id = {$customerId}
+           AND crypto_wallet_assignments.id = {$walletAssignmentId}
+           AND crypto_wallet_assignments.status IN ('reserved', 'active')
          LIMIT 1"
     );
 
@@ -10869,11 +10874,14 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
                 continue;
             }
 
-            if (admin_crypto_wallet_assignment_has_payment_history($db, $assignmentWalletId, $customerId)) {
-                return ['ok' => false, 'message' => 'This customer already has payment history on another assigned wallet of this coin and cannot be moved automatically.'];
+            $previousAddress = trim((string)($assignment['address'] ?? ''));
+            $newAddress = trim((string)($wallet['address'] ?? ''));
+            $releaseNote = 'Moved to a new wallet from admin wallet editor';
+            if ($previousAddress !== '' || $newAddress !== '') {
+                $releaseNote .= ' [' . $previousAddress . '] -> [' . $newAddress . ']';
             }
 
-            $releaseOk = admin_release_crypto_wallet_assignment($db, $assignmentId, $adminUserId, 'Moved to a new wallet from admin wallet editor');
+            $releaseOk = admin_release_crypto_wallet_assignment($db, $assignmentId, $adminUserId, $releaseNote);
             if (!$releaseOk) {
                 $db->query('ROLLBACK');
                 return ['ok' => false, 'message' => 'Unable to release previous wallet assignment.'];
