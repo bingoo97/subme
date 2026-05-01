@@ -5003,8 +5003,12 @@ function admin_save_payment(
                 return $finalizeResult;
             }
 
-            if (!in_array($previousStatus, $successStatuses, true) && (int)($payment['order_id'] ?? 0) > 0) {
-                admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+            if (!in_array($previousStatus, $successStatuses, true)) {
+                if ((int)($payment['order_id'] ?? 0) > 0) {
+                    admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+                } else {
+                    admin_notify_topup_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+                }
             }
 
             return [
@@ -5127,8 +5131,12 @@ function admin_save_payment(
             return $finalizeResult;
         }
 
-        if (!in_array($previousStatus, $successStatuses, true) && (int)($payment['order_id'] ?? 0) > 0) {
-            admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+        if (!in_array($previousStatus, $successStatuses, true)) {
+            if ((int)($payment['order_id'] ?? 0) > 0) {
+                admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+            } else {
+                admin_notify_topup_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
+            }
         }
 
         return [
