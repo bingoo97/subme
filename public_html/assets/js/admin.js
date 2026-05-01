@@ -420,22 +420,40 @@ document.addEventListener('DOMContentLoaded', function () {
             textarea.insertAdjacentElement('afterend', wrapper);
             textarea.hidden = true;
 
+            function dispatchTextareaEvent(name) {
+                var event;
+                if (!name) {
+                    return;
+                }
+
+                if (typeof window.Event === 'function') {
+                    event = new window.Event(name, { bubbles: true });
+                } else {
+                    event = doc.createEvent('Event');
+                    event.initEvent(name, true, true);
+                }
+                textarea.dispatchEvent(event);
+            }
+
             function isSourceMode() {
                 return !source.hasAttribute('hidden');
             }
 
-            function syncTextareaFromSurface() {
+            function syncTextareaFromSurface(emitInput) {
                 textarea.value = sanitizeHtml(surface.innerHTML);
+                if (emitInput) {
+                    dispatchTextareaEvent('input');
+                }
             }
 
             function syncSourceFromSurface() {
-                syncTextareaFromSurface();
+                syncTextareaFromSurface(false);
                 source.value = textarea.value;
             }
 
             function syncSurfaceFromSource() {
                 surface.innerHTML = sanitizeHtml(source.value);
-                syncTextareaFromSurface();
+                syncTextareaFromSurface(false);
             }
 
             function updateToggleButton() {
@@ -467,7 +485,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 } else {
                     doc.execCommand(command, false, value || null);
                 }
-                syncTextareaFromSurface();
+                syncTextareaFromSurface(true);
             }
 
             function toggleSourceMode() {
@@ -551,7 +569,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             surface.innerHTML = sanitizeHtml(textarea.value);
-            syncTextareaFromSurface();
+            syncTextareaFromSurface(false);
             updateToggleButton();
 
             toolbar.addEventListener('click', function (event) {
@@ -644,14 +662,22 @@ document.addEventListener('DOMContentLoaded', function () {
                 fileInput.value = '';
             });
 
-            surface.addEventListener('input', syncTextareaFromSurface);
-            surface.addEventListener('blur', syncTextareaFromSurface);
+            surface.addEventListener('input', function () {
+                syncTextareaFromSurface(true);
+            });
+            surface.addEventListener('blur', function () {
+                syncTextareaFromSurface(true);
+                dispatchTextareaEvent('change');
+            });
             surface.addEventListener('paste', function () {
-                window.setTimeout(syncTextareaFromSurface, 0);
+                window.setTimeout(function () {
+                    syncTextareaFromSurface(true);
+                }, 0);
             });
 
             source.addEventListener('input', function () {
                 textarea.value = source.value;
+                dispatchTextareaEvent('input');
             });
 
             var form = closest(textarea, 'form');
@@ -664,6 +690,105 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 });
             }
+        });
+    }
+
+    function initAdminPersonalNotesAutosave() {
+        qa('[data-admin-personal-notes-form]').forEach(function (form) {
+            var textarea = q('textarea[name="personal_notes_html"]', form);
+            var csrfInput = q('input[name="_csrf"]', form);
+            var statusNode = q('[data-admin-personal-notes-status]', form);
+            var saveUrl = window.location.href;
+            var lastSavedValue = textarea ? String(textarea.value || '') : '';
+            var isSaving = false;
+            var shouldResave = false;
+            var saveTimer = 0;
+
+            if (!textarea || !csrfInput || !statusNode) {
+                return;
+            }
+
+            function setStatus(message, tone) {
+                statusNode.textContent = String(message || '');
+                statusNode.classList.remove('text-muted', 'text-success', 'text-danger');
+                if (tone === 'success') {
+                    statusNode.classList.add('text-success');
+                } else if (tone === 'error') {
+                    statusNode.classList.add('text-danger');
+                } else {
+                    statusNode.classList.add('text-muted');
+                }
+            }
+
+            function savedAtLabel(rawValue) {
+                var value = String(rawValue || '').trim();
+                if (!value) {
+                    return form.getAttribute('data-save-success') || 'Saved.';
+                }
+
+                return (form.getAttribute('data-save-success') || 'Saved.') + ' ' + value;
+            }
+
+            function queueSave(immediate) {
+                window.clearTimeout(saveTimer);
+                saveTimer = window.setTimeout(runSave, immediate ? 0 : 900);
+            }
+
+            function runSave() {
+                var currentValue = String(textarea.value || '');
+                var formData;
+
+                window.clearTimeout(saveTimer);
+
+                if (isSaving) {
+                    shouldResave = true;
+                    return;
+                }
+
+                if (currentValue === lastSavedValue) {
+                    setStatus(form.getAttribute('data-save-idle') || 'Changes save automatically.', 'idle');
+                    return;
+                }
+
+                isSaving = true;
+                shouldResave = false;
+                setStatus(form.getAttribute('data-save-saving') || 'Saving notes...', 'idle');
+
+                formData = new window.FormData();
+                formData.append('admin_save_personal_notes_ajax', '1');
+                formData.append('_csrf', csrfInput.value);
+                formData.append('personal_notes_html', currentValue);
+
+                jsonFetch(saveUrl, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                }).then(function (payload) {
+                    if (!payload || !payload.ok) {
+                        setStatus((payload && payload.message) ? payload.message : (form.getAttribute('data-save-error') || 'Unable to save administrator notes.'), 'error');
+                        return;
+                    }
+
+                    lastSavedValue = currentValue;
+                    setStatus(savedAtLabel(payload.updated_at || ''), 'success');
+                }).catch(function () {
+                    setStatus(form.getAttribute('data-save-error') || 'Unable to save administrator notes.', 'error');
+                }).finally(function () {
+                    isSaving = false;
+                    if (shouldResave || String(textarea.value || '') !== lastSavedValue) {
+                        queueSave(true);
+                    }
+                });
+            }
+
+            textarea.addEventListener('input', function () {
+                setStatus(form.getAttribute('data-save-pending') || 'You have unsaved changes...', 'idle');
+                queueSave(false);
+            });
+
+            textarea.addEventListener('change', function () {
+                queueSave(true);
+            });
         });
     }
 
@@ -6138,6 +6263,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initWalletCustomerPickers();
     initWalletNetworkForms();
     initRichTextEditors();
+    initAdminPersonalNotesAutosave();
     initSearch();
     initPaymentsCustomerSearch();
     initAdminHelpModal();

@@ -4745,6 +4745,16 @@ body.admin-login-page{
     width:100%;
 }
 
+.admin-dashboard-notes-card{
+    width:100%;
+    margin-top:1rem;
+}
+
+.admin-dashboard-notes-card .admin-rich-editor__surface,
+.admin-dashboard-notes-card .admin-rich-editor__source{
+    min-height:600px;
+}
+
 .admin-panel-card__header{
     margin-bottom:1rem;
 }

@@ -484,6 +484,63 @@ function admin_public_handle_label(array $adminUser): string
     return $handle !== '' ? $handle : 'Support';
 }
 
+function admin_personal_notes_available(Mysql_ks $db): bool
+{
+    return schema_object_exists($db, 'admin_users')
+        && schema_column_exists($db, 'admin_users', 'personal_notes_html');
+}
+
+function admin_personal_notes_html(array $adminUser): string
+{
+    return trim((string)($adminUser['personal_notes_html'] ?? ''));
+}
+
+function admin_save_personal_notes(
+    Mysql_ks $db,
+    int $adminUserId,
+    string $personalNotesHtml
+): array {
+    if ($adminUserId <= 0) {
+        return ['ok' => false, 'message' => 'Administrator account not found.'];
+    }
+
+    if (!admin_personal_notes_available($db)) {
+        return ['ok' => false, 'message' => 'Administrator personal notes are not available yet.'];
+    }
+
+    $updated = $db->update_using_id(
+        ['personal_notes_html'],
+        [trim($personalNotesHtml) !== '' ? trim($personalNotesHtml) : null],
+        'admin_users',
+        $adminUserId
+    );
+
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to save administrator notes.'];
+    }
+
+    $row = $db->select_user(
+        "SELECT id, personal_notes_html, updated_at
+         FROM admin_users
+         WHERE id = {$adminUserId}
+         LIMIT 1"
+    );
+
+    if (!is_array($row) || empty($row['id'])) {
+        return ['ok' => false, 'message' => 'Administrator account not found after saving notes.'];
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Administrator notes saved.',
+        'admin_user' => [
+            'id' => (int)($row['id'] ?? 0),
+            'personal_notes_html' => (string)($row['personal_notes_html'] ?? ''),
+            'updated_at' => (string)($row['updated_at'] ?? ''),
+        ],
+    ];
+}
+
 function admin_user_access_level(array $adminUser): int
 {
     return (int)($adminUser['role_access_level'] ?? 0);

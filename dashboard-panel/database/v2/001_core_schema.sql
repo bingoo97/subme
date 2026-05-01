@@ -122,6 +122,7 @@ CREATE TABLE `admin_users` (
   `login_name` VARCHAR(80) NOT NULL,
   `email` VARCHAR(191) NOT NULL,
   `public_handle` VARCHAR(80) DEFAULT NULL,
+  `personal_notes_html` LONGTEXT DEFAULT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `password_hash_algorithm` VARCHAR(50) NOT NULL DEFAULT 'password_hash',
   `phone_number` VARCHAR(30) DEFAULT NULL,

@@ -199,6 +199,10 @@ $smtpFormState = [
     'smtp_username' => trim((string)($appSettings['smtp_username'] ?? '')),
     'smtp_password' => '',
 ];
+$adminPersonalNotesAvailable = admin_personal_notes_available($db);
+$adminPersonalNotesFormState = [
+    'personal_notes_html' => admin_personal_notes_html($adminUser),
+];
 $adminProfileFormState = [
     'public_handle' => admin_public_handle_label($adminUser),
 ];
@@ -328,6 +332,61 @@ if (isset($_POST['admin_update_help_topic_ajax'])) {
             'keywords' => (string)($topicRow['keywords'] ?? ''),
             'search_text' => $searchText,
         ],
+    ]);
+    exit;
+}
+
+if (isset($_POST['admin_save_personal_notes_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    if ((int)($adminUser['id'] ?? 0) <= 0) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    if (!$adminPersonalNotesAvailable) {
+        http_response_code(409);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'settings_notes_sql_required', 'SQL migration is required before administrator notes can be saved.'),
+        ]);
+        exit;
+    }
+
+    $saveNotesResult = admin_save_personal_notes(
+        $db,
+        (int)($adminUser['id'] ?? 0),
+        (string)($_POST['personal_notes_html'] ?? '')
+    );
+
+    if (empty($saveNotesResult['ok']) || !is_array($saveNotesResult['admin_user'] ?? null)) {
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'settings_notes_save_error', (string)($saveNotesResult['message'] ?? 'Unable to save administrator notes.')),
+        ]);
+        exit;
+    }
+
+    $savedAdminUser = (array)$saveNotesResult['admin_user'];
+    echo json_encode([
+        'ok' => true,
+        'message' => admin_t($messages, 'settings_notes_saved', 'Your administrator notes have been saved automatically.'),
+        'notes_html' => (string)($savedAdminUser['personal_notes_html'] ?? ''),
+        'updated_at' => (string)($savedAdminUser['updated_at'] ?? ''),
     ]);
     exit;
 }
@@ -4880,6 +4939,40 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             <?php endif; ?>
                         </article>
                     </section>
+
+                    <article class="admin-panel-card admin-panel-card--wide admin-dashboard-notes-card">
+                        <div class="admin-panel-card__header">
+                            <div>
+                                <h2><?php echo admin_e(admin_t($messages, 'settings_notes_title', 'Moje notatki')); ?></h2>
+                                <p><?php echo admin_e(admin_t($messages, 'settings_notes_intro', 'Prywatne notatki przypisane do aktualnie zalogowanego konta administratora. Zmiany zapisują się automatycznie bez klikania przycisku.')); ?></p>
+                            </div>
+                        </div>
+                        <?php if ($adminPersonalNotesAvailable): ?>
+                            <form method="post"
+                                  class="admin-settings-access__form"
+                                  data-admin-personal-notes-form
+                                  data-save-success="<?php echo admin_e(admin_t($messages, 'settings_notes_saved', 'Your administrator notes have been saved automatically.')); ?>"
+                                  data-save-error="<?php echo admin_e(admin_t($messages, 'settings_notes_save_error', 'Unable to save administrator notes.')); ?>"
+                                  data-save-pending="<?php echo admin_e(admin_t($messages, 'settings_notes_pending', 'Unsaved changes...')); ?>"
+                                  data-save-saving="<?php echo admin_e(admin_t($messages, 'settings_notes_saving', 'Saving notes...')); ?>"
+                                  data-save-idle="<?php echo admin_e(admin_t($messages, 'settings_notes_idle', 'Changes save automatically.')); ?>">
+                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <label class="form-label" for="admin_personal_notes_html"><?php echo admin_e(admin_t($messages, 'settings_notes_label', 'Notatki administratora')); ?></label>
+                                        <textarea class="form-control" id="admin_personal_notes_html" name="personal_notes_html" rows="12" data-admin-rich-editor="1"><?php echo admin_e((string)($adminPersonalNotesFormState['personal_notes_html'] ?? '')); ?></textarea>
+                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="form-text text-muted" data-admin-personal-notes-status><?php echo admin_e(admin_t($messages, 'settings_notes_idle', 'Changes save automatically.')); ?></div>
+                                    </div>
+                                </div>
+                            </form>
+                        <?php else: ?>
+                            <div class="alert alert-warning mb-3"><?php echo admin_e(admin_t($messages, 'settings_notes_sql_required', 'SQL migration is required before administrator notes can be saved.')); ?></div>
+                            <div class="admin-settings-code"><code>ALTER TABLE `admin_users` ADD COLUMN `personal_notes_html` LONGTEXT NULL AFTER `public_handle`;</code></div>
+                        <?php endif; ?>
+                    </article>
 
                     <article class="admin-panel-card">
                         <div class="admin-panel-card__header">
