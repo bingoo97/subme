@@ -7418,8 +7418,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </td>
                                                                             <td>
                                                                                 <div class="admin-user-detail-table__actions">
-                                                                                    <a href="<?php echo admin_e($orderUrl); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
-                                                                                        <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                                                    <a href="<?php echo admin_e($orderUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
+                                                                                        <i class="bi bi-search" aria-hidden="true"></i>
                                                                                     </a>
                                                                                     <a href="<?php echo admin_e($orderPaymentUrl); ?>" class="btn btn-primary btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
                                                                                         <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
@@ -8462,6 +8462,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $paymentReferenceLabel = trim((string)($paymentEditor['payment_reference'] ?? ($paymentEditor['wallet_address'] ?? '')));
                                         $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
                                         $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
+                                        $paymentEditorExplorerUrl = ($paymentEditorType === 'crypto' && trim((string)($paymentEditor['wallet_address'] ?? '')) !== '')
+                                            ? admin_crypto_wallet_explorer_url(
+                                                (string)($paymentEditor['asset_code'] ?? ''),
+                                                (string)($paymentEditor['network_code'] ?? ''),
+                                                (string)($paymentEditor['wallet_address'] ?? '')
+                                            )
+                                            : '';
                                         $paymentWalletPanelUrl = ((int)($paymentEditor['wallet_address_id'] ?? 0) > 0)
                                             ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($paymentEditor['wallet_address_id'] ?? 0)
                                             : '';
@@ -8477,8 +8484,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'back_to_payments', 'Back to payments')); ?></span>
                                                     </a>
+                                                    <?php if ($paymentEditorExplorerUrl !== ''): ?>
+                                                        <a href="<?php echo admin_e($paymentEditorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger btn-sm">
+                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?></span>
+                                                        </a>
+                                                    <?php endif; ?>
                                                     <?php if ($paymentWalletPanelUrl !== ''): ?>
-                                                        <a href="<?php echo admin_e($paymentWalletPanelUrl); ?>" class="btn btn-danger btn-sm">
+                                                        <a href="<?php echo admin_e($paymentWalletPanelUrl); ?>" class="btn btn-dark btn-sm">
                                                             <i class="bi bi-wallet2" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_open_wallet', 'Wallet')); ?></span>
                                                         </a>
