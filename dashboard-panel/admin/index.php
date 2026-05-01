@@ -2476,6 +2476,19 @@ if ($route === 'crypto-wallets') {
         }
     }
 
+    if (isset($_POST['admin_split_crypto_wallet_conflict'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $walletEditorId = (int)($_POST['wallet_id'] ?? 0);
+            $walletListPage = max(1, (int)($_POST['wallet_list_page'] ?? $walletListPage));
+            $splitResult = admin_resolve_crypto_wallet_payment_conflict($db, $walletEditorId, (int)$adminUser['id'], $appSettings, $requestIp);
+            $pageAlert = (string)($splitResult['message'] ?? '');
+            $pageAlertType = !empty($splitResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
     $walletAssetOptions = admin_crypto_asset_rows($db, $walletCreateMode);
     $walletAssetSummaryRows = admin_crypto_wallet_asset_summary_rows($db);
     $walletAssetShortageCodes = [];
@@ -2501,6 +2514,7 @@ if ($route === 'crypto-wallets') {
         $walletEditor = admin_crypto_wallet_find($db, $walletEditorId);
         $walletAssignments = admin_crypto_wallet_active_assignments($db, $walletEditorId);
         $walletDeleteSummary = admin_crypto_wallet_delete_summary($db, $walletEditorId);
+        $walletPaymentConflict = admin_crypto_wallet_payment_conflict_summary($db, $walletEditorId);
     } elseif ($walletCreateMode) {
         $walletEditor = [
             'id' => 0,
@@ -8818,6 +8832,35 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
                                         </div>
 
+                                        <?php
+                                        $paymentsWalletConflict = admin_first_crypto_wallet_payment_conflict($db);
+                                        if (is_array($paymentsWalletConflict) && !empty($paymentsWalletConflict['wallet_id'])):
+                                            $paymentsConflictWalletId = (int)($paymentsWalletConflict['wallet_id'] ?? 0);
+                                            $paymentsConflictLabel = trim((string)($paymentsWalletConflict['label'] ?? ''));
+                                            $paymentsConflictAddress = trim((string)($paymentsWalletConflict['address'] ?? ''));
+                                            $paymentsConflictAssetCode = strtoupper(trim((string)($paymentsWalletConflict['asset_code'] ?? '')));
+                                            $paymentsConflictAddressCompact = admin_compact_wallet_address($paymentsConflictAddress, 8, 6);
+                                            $paymentsConflictWalletUrl = '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $paymentsConflictWalletId;
+                                        ?>
+                                            <div class="alert alert-warning mt-3">
+                                                <div class="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3">
+                                                    <div>
+                                                        <strong><?php echo admin_e(admin_t($messages, 'payments_wallet_conflict_alert_title', 'Two customers paid to the same wallet.')); ?></strong>
+                                                        <div class="small mt-1">
+                                                            <?php echo admin_e(admin_t($messages, 'payments_wallet_conflict_alert_text', 'Open the wallet editor to review the conflict and split the users if needed.')); ?>
+                                                        </div>
+                                                        <div class="small mt-2">
+                                                            <?php echo admin_e(($paymentsConflictAssetCode !== '' ? $paymentsConflictAssetCode . ' ' : '') . ($paymentsConflictLabel !== '' ? $paymentsConflictLabel . ' · ' : '') . $paymentsConflictAddressCompact); ?>
+                                                        </div>
+                                                    </div>
+                                                    <a href="<?php echo admin_e($paymentsConflictWalletUrl); ?>" class="btn btn-warning btn-sm">
+                                                        <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'payments_wallet_conflict_alert_button', 'Open wallet editor')); ?></span>
+                                                    </a>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+
                                         <?php if (!empty($paymentFilterCustomer) && !empty($paymentFilterCustomerId)): ?>
                                             <div class="admin-payments-context">
                                                 <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'payment_filtered_customer', 'Filtered customer')); ?>: <?php echo admin_e((string)($paymentFilterCustomer['email'] ?? '')); ?></span>
@@ -9477,6 +9520,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $walletPaymentRows = !$walletCreateMode && !empty($walletEditor['id'])
                                                 ? admin_crypto_wallet_payment_rows($db, (int)$walletEditor['id'])
                                                 : [];
+                                            $walletPaymentConflict = $walletPaymentConflict ?? ['can_split' => false, 'candidate' => null, 'keeper' => null];
                                             $editorWalletPaymentsUrl = !$walletCreateMode && !empty($walletEditor['id'])
                                                 ? '/admin/?page=payments&payment_type_filter=crypto&wallet_id=' . (int)$walletEditor['id']
                                                 : '';
@@ -9759,6 +9803,41 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </tbody>
                                                             </table>
                                                         </div>
+                                                        <?php if (!empty($walletPaymentConflict['can_split']) && !empty($walletPaymentConflict['candidate']) && !empty($walletPaymentConflict['keeper'])): ?>
+                                                            <?php
+                                                            $conflictCandidateHandle = trim((string)($walletPaymentConflict['candidate']['customer_public_handle'] ?? ''));
+                                                            $conflictCandidateLabel = $conflictCandidateHandle !== ''
+                                                                ? '@' . $conflictCandidateHandle
+                                                                : (string)($walletPaymentConflict['candidate']['customer_email'] ?? '—');
+                                                            $conflictKeeperHandle = trim((string)($walletPaymentConflict['keeper']['customer_public_handle'] ?? ''));
+                                                            $conflictKeeperLabel = $conflictKeeperHandle !== ''
+                                                                ? '@' . $conflictKeeperHandle
+                                                                : (string)($walletPaymentConflict['keeper']['customer_email'] ?? '—');
+                                                            ?>
+                                                            <div class="alert alert-warning mt-3">
+                                                                <div class="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3">
+                                                                    <div>
+                                                                        <strong><?php echo admin_e(admin_t($messages, 'wallet_conflict_title', 'Wallet conflict detected.')); ?></strong>
+                                                                        <div class="small mt-1">
+                                                                            <?php echo admin_e(admin_t($messages, 'wallet_conflict_text', 'More than one customer with payment history is still attached to this wallet. The split action will move the customer with fewer payments to a new free wallet, while keeping the main payer on this address.')); ?>
+                                                                        </div>
+                                                                        <div class="small mt-2">
+                                                                            <?php echo admin_e(admin_t($messages, 'wallet_conflict_keep_customer', 'Will stay here: {customer}', ['customer' => $conflictKeeperLabel])); ?><br>
+                                                                            <?php echo admin_e(admin_t($messages, 'wallet_conflict_move_customer', 'Will get a new wallet: {customer}', ['customer' => $conflictCandidateLabel])); ?>
+                                                                        </div>
+                                                                    </div>
+                                                                    <form method="post" class="d-flex align-items-center gap-2">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="wallet_id" value="<?php echo admin_e((string)$walletEditor['id']); ?>">
+                                                                        <input type="hidden" name="wallet_list_page" value="<?php echo admin_e((string)$walletListPage); ?>">
+                                                                        <button type="submit" class="btn btn-warning btn-sm" name="admin_split_crypto_wallet_conflict" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'wallet_conflict_confirm', 'Split this wallet conflict and move the customer with fewer payments to a new free wallet?')); ?>');">
+                                                                            <i class="bi bi-shuffle" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'wallet_conflict_button', 'Split wallet conflict')); ?></span>
+                                                                        </button>
+                                                                    </form>
+                                                                </div>
+                                                            </div>
+                                                        <?php endif; ?>
                                                     <?php else: ?>
                                                         <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'wallet_payment_history_empty', 'No payments were assigned to this wallet yet.')); ?></div>
                                                     <?php endif; ?>
