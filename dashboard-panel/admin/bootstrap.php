@@ -2232,12 +2232,12 @@ function admin_cancel_open_order_payment_requests(Mysql_ks $db, int $customerId,
     }
 
     if (schema_object_exists($db, 'bank_transfer_requests')) {
-        $db->query(
-            "UPDATE bank_transfer_requests
-             SET status = 'cancelled'
-             WHERE customer_id = {$customerId}
-               AND order_id = {$orderId}
-               AND status IN ('pending_payment', 'awaiting_review')"
+        app_cancel_bank_transfer_requests(
+            $db,
+            "customer_id = {$customerId}
+             AND order_id = {$orderId}
+             AND status IN ('pending_payment', 'awaiting_review')",
+            $safeNow
         );
     }
 }
@@ -4072,6 +4072,16 @@ function admin_payment_cancelled_statuses(string $paymentType): array
     return ['cancelled', 'rejected', 'failed'];
 }
 
+function admin_payment_expired_statuses(string $paymentType): array
+{
+    $paymentType = strtolower(trim($paymentType));
+    if ($paymentType === 'crypto_topup') {
+        return [];
+    }
+
+    return ['expired'];
+}
+
 function admin_payment_runtime_statuses(Mysql_ks $db, string $paymentType): array
 {
     $paymentType = strtolower(trim($paymentType));
@@ -4081,8 +4091,8 @@ function admin_payment_runtime_statuses(Mysql_ks $db, string $paymentType): arra
 
     $tableName = $paymentType === 'crypto' ? 'crypto_deposit_requests' : 'bank_transfer_requests';
     $knownStatuses = $paymentType === 'crypto'
-        ? ['pending', 'awaiting_review', 'awaiting_confirmation', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived']
-        : ['pending_payment', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived'];
+        ? ['pending', 'awaiting_review', 'awaiting_confirmation', 'expired', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived']
+        : ['pending_payment', 'awaiting_review', 'expired', 'confirmed', 'approved', 'paid', 'completed', 'cancelled', 'rejected', 'failed', 'archived'];
 
     if (!schema_object_exists($db, $tableName)) {
         return $knownStatuses;
@@ -4125,6 +4135,12 @@ function admin_payment_statuses_for_scope(Mysql_ks $db, string $paymentType, str
         if ($scope === 'approved' && $paymentType !== 'crypto_topup') {
             return $approvedStatuses;
         }
+        if ($scope === 'expired' && $paymentType !== 'crypto_topup') {
+            return admin_payment_expired_statuses($paymentType);
+        }
+        if ($scope === 'cancelled' && $paymentType !== 'crypto_topup') {
+            return admin_payment_cancelled_statuses($paymentType);
+        }
     } else {
         $openStatuses = ['pending_payment', 'awaiting_review'];
         $allStatuses = admin_payment_runtime_statuses($db, $paymentType);
@@ -4136,6 +4152,12 @@ function admin_payment_statuses_for_scope(Mysql_ks $db, string $paymentType, str
         }
         if ($scope === 'approved') {
             return $approvedStatuses;
+        }
+        if ($scope === 'expired') {
+            return admin_payment_expired_statuses($paymentType);
+        }
+        if ($scope === 'cancelled') {
+            return admin_payment_cancelled_statuses($paymentType);
         }
     }
 
@@ -4152,9 +4174,7 @@ function admin_payment_statuses_for_scope(Mysql_ks $db, string $paymentType, str
     }
 
     if ($scope === 'all') {
-        return array_values(array_filter($allStatuses, static function (string $status): bool {
-            return $status !== 'archived';
-        }));
+        return $allStatuses;
     }
 
     return $allStatuses;
@@ -4310,6 +4330,7 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
         'review_total' => 0,
         'approved_total' => 0,
         'archived_total' => 0,
+        'expired_total' => 0,
         'cancelled_total' => 0,
         'crypto_total' => 0,
         'crypto_cancelled_total' => 0,
@@ -4326,6 +4347,7 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
                 COUNT(*) AS total,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_total,
                 SUM(CASE WHEN status IN ('awaiting_review', 'awaiting_confirmation') THEN 1 ELSE 0 END) AS review_total,
+                SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS expired_total,
                 SUM(CASE WHEN status IN ('cancelled', 'rejected', 'failed') THEN 1 ELSE 0 END) AS cancelled_total,
                 SUM(CASE WHEN status IN ('confirmed', 'approved', 'paid', 'completed') THEN 1 ELSE 0 END) AS approved_total,
                 SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived_total
@@ -4335,6 +4357,7 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
         $summary['crypto_total'] += (int)($row['total'] ?? 0);
         $summary['new_total'] += (int)($row['pending_total'] ?? 0);
         $summary['review_total'] += (int)($row['review_total'] ?? 0);
+        $summary['expired_total'] += (int)($row['expired_total'] ?? 0);
         $summary['approved_total'] += (int)($row['approved_total'] ?? 0);
         $summary['crypto_cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
         $summary['cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
@@ -4364,6 +4387,7 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
                 COUNT(*) AS total,
                 SUM(CASE WHEN status = 'pending_payment' THEN 1 ELSE 0 END) AS pending_total,
                 SUM(CASE WHEN status = 'awaiting_review' THEN 1 ELSE 0 END) AS review_total,
+                SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS expired_total,
                 SUM(CASE WHEN status IN ('cancelled', 'rejected', 'failed') THEN 1 ELSE 0 END) AS cancelled_total,
                 SUM(CASE WHEN status IN ('confirmed', 'approved', 'paid', 'completed') THEN 1 ELSE 0 END) AS approved_total,
                 SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived_total
@@ -4373,6 +4397,7 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
         $summary['bank_total'] += (int)($row['total'] ?? 0);
         $summary['new_total'] += (int)($row['pending_total'] ?? 0);
         $summary['review_total'] += (int)($row['review_total'] ?? 0);
+        $summary['expired_total'] += (int)($row['expired_total'] ?? 0);
         $summary['approved_total'] += (int)($row['approved_total'] ?? 0);
         $summary['bank_cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
         $summary['cancelled_total'] += (int)($row['cancelled_total'] ?? 0);
@@ -4387,7 +4412,7 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
 
 function admin_topbar_notification_payment_rows(Mysql_ks $db, bool $includeBankTransfers = true, int $limit = 8): array
 {
-    return admin_payment_rows($db, max(1, min(20, $limit)), 0, 'new', '', $includeBankTransfers);
+    return admin_payment_rows($db, max(1, min(20, $limit)), 0, 'open', '', $includeBankTransfers);
 }
 
 function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): array
@@ -4769,11 +4794,11 @@ function admin_payment_status_options(string $paymentType, string $current = '')
     $current = strtolower(trim($current));
 
     if ($paymentType === 'crypto') {
-        $options = ['pending', 'awaiting_review', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
+        $options = ['pending', 'awaiting_review', 'awaiting_confirmation', 'expired', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
     } elseif ($paymentType === 'crypto_topup') {
         $options = ['pending', 'archived'];
     } else {
-        $options = ['pending_payment', 'awaiting_review', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
+        $options = ['pending_payment', 'awaiting_review', 'expired', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
     }
 
     if ($current !== '' && !in_array($current, $options, true)) {
@@ -4805,6 +4830,7 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 crypto_deposit_requests.requested_crypto_amount AS amount_crypto,
                 COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS requested_at,
                 crypto_deposit_requests.expires_at,
+                crypto_deposit_requests.cancelled_at,
                 crypto_deposit_requests.request_note,
                 crypto_deposit_requests.created_by_admin_user_id,
                 customers.email AS customer_email,
@@ -4871,6 +4897,7 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
     }
 
     if ($paymentType === 'bank' && schema_object_exists($db, 'bank_transfer_requests')) {
+        app_ensure_payment_request_runtime_columns($db);
         $row = $db->select_user(
             "SELECT
                 'bank' AS payment_type,
@@ -4887,6 +4914,7 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 bank_transfer_requests.submitted_at,
                 bank_transfer_requests.approved_at,
                 bank_transfer_requests.rejected_at,
+                bank_transfer_requests.cancelled_at,
                 bank_transfer_requests.payment_reference,
                 bank_transfer_requests.payer_name,
                 bank_transfer_requests.payer_bank_name,
@@ -4969,6 +4997,9 @@ function admin_save_payment(
     if ($paymentType === 'crypto') {
         $requestedAt = admin_normalize_datetime_input($input['requested_at'] ?? null) ?? (string)($payment['requested_at'] ?? date('Y-m-d H:i:s'));
         $expiresAt = admin_normalize_datetime_input($input['expires_at'] ?? null);
+        $cancelledAt = in_array($status, admin_payment_cancelled_statuses($paymentType), true)
+            ? (admin_normalize_datetime_input($input['cancelled_at'] ?? null) ?? (trim((string)($payment['cancelled_at'] ?? '')) !== '' ? (string)$payment['cancelled_at'] : date('Y-m-d H:i:s')))
+            : null;
         $requestNote = trim((string)($input['request_note'] ?? ''));
         $walletAddress = trim((string)($input['wallet_address'] ?? ($payment['wallet_address'] ?? '')));
         $paymentReference = trim((string)($input['payment_reference'] ?? ($payment['payment_reference'] ?? '')));
@@ -5010,8 +5041,8 @@ function admin_save_payment(
         );
 
         $updated = $db->update_using_id(
-            ['status', 'order_id', 'wallet_address_id', 'requested_at', 'expires_at', 'requested_fiat_amount', 'requested_crypto_amount', 'request_note'],
-            [$status, $linkedOrderIdValue, $walletAddressId, $requestedAt, $expiresAt, $amountValue, $amountCrypto, $requestNote !== '' ? $requestNote : null],
+            ['status', 'order_id', 'wallet_address_id', 'requested_at', 'expires_at', 'cancelled_at', 'requested_fiat_amount', 'requested_crypto_amount', 'request_note'],
+            [$status, $linkedOrderIdValue, $walletAddressId, $requestedAt, $expiresAt, $cancelledAt, $amountValue, $amountCrypto, $requestNote !== '' ? $requestNote : null],
             'crypto_deposit_requests',
             $paymentId
         );
@@ -5145,6 +5176,10 @@ function admin_save_payment(
     $submittedAt = admin_normalize_datetime_input($input['submitted_at'] ?? null);
     $approvedAt = admin_normalize_datetime_input($input['approved_at'] ?? null);
     $rejectedAt = admin_normalize_datetime_input($input['rejected_at'] ?? null);
+    app_ensure_payment_request_runtime_columns($db);
+    $cancelledAt = in_array($status, admin_payment_cancelled_statuses($paymentType), true)
+        ? (admin_normalize_datetime_input($input['cancelled_at'] ?? null) ?? (trim((string)($payment['cancelled_at'] ?? '')) !== '' ? (string)$payment['cancelled_at'] : date('Y-m-d H:i:s')))
+        : null;
     $paymentReference = trim((string)($input['payment_reference'] ?? ''));
     $amountValueRaw = str_replace(',', '.', trim((string)($input['amount_value'] ?? ($payment['amount_value'] ?? ''))));
     $payerName = trim((string)($input['payer_name'] ?? ''));
@@ -5157,7 +5192,7 @@ function admin_save_payment(
     $amountValue = round((float)$amountValueRaw, 2);
 
     $updated = $db->update_using_id(
-        ['status', 'order_id', 'requested_amount', 'requested_at', 'expires_at', 'submitted_at', 'approved_at', 'rejected_at', 'payment_reference', 'payer_name', 'payer_bank_name', 'customer_transfer_note', 'admin_review_note'],
+        ['status', 'order_id', 'requested_amount', 'requested_at', 'expires_at', 'submitted_at', 'approved_at', 'rejected_at', 'cancelled_at', 'payment_reference', 'payer_name', 'payer_bank_name', 'customer_transfer_note', 'admin_review_note'],
         [
             $status,
             $linkedOrderIdValue,
@@ -5167,6 +5202,7 @@ function admin_save_payment(
             $submittedAt,
             $approvedAt,
             $rejectedAt,
+            $cancelledAt,
             $paymentReference !== '' ? $paymentReference : null,
             $payerName !== '' ? $payerName : null,
             $payerBankName !== '' ? $payerBankName : null,
@@ -5498,6 +5534,9 @@ function admin_delete_payment(
     if ($paymentType === 'crypto_topup') {
         $tableName = schema_write_target('crypto_topups');
     } else {
+        if (!in_array(strtolower(trim((string)($payment['status'] ?? ''))), admin_payment_cancelled_statuses($paymentType), true)) {
+            return ['ok' => false, 'message' => 'Only cancelled payments can be deleted permanently.'];
+        }
         $tableName = $paymentType === 'crypto' ? 'crypto_deposit_requests' : 'bank_transfer_requests';
     }
 
@@ -5857,39 +5896,33 @@ function admin_payment_cancel_with_order(
 
     $order = admin_order_find($db, $orderId);
     if (!$order) {
-        return ['ok' => false, 'message' => 'Linked order not found.'];
+        admin_log_customer_and_admin(
+            $db,
+            (int)($payment['customer_id'] ?? 0),
+            $adminUserId,
+            'payment_cancelled',
+            'Payment request #' . $paymentId . ' was cancelled and stale linked order #' . $orderId . ' was ignored automatically.',
+            $ipAddress
+        );
+
+        return [
+            'ok' => true,
+            'message' => 'Payment was cancelled successfully.',
+            'order_id' => $orderId,
+        ];
     }
 
-    $orderSaveResult = admin_save_order_info(
-        $db,
-        $orderId,
-        [
-            'order_reference' => (string)($order['order_reference'] ?? ''),
-            'payment_method' => (string)($order['payment_method'] ?? ''),
-            'total_amount' => number_format((float)($order['total_amount'] ?? 0), 2, '.', ''),
-            'customer_note' => (string)($order['customer_note'] ?? ''),
-            'support_note' => (string)($order['support_note'] ?? ''),
-            'delivery_link' => (string)($order['delivery_link'] ?? ''),
-            'transaction_reference' => (string)($order['transaction_reference'] ?? ''),
-            'started_at' => (string)($order['started_at'] ?? ''),
-            'expires_at' => (string)($order['expires_at'] ?? ''),
-            'paid_at' => null,
-            'status' => 'cancelled',
-            'payment_status' => 'unpaid',
-            'fulfillment_status' => 'cancelled',
-            'delivery_link_visible' => !empty($order['delivery_link_visible']) ? '1' : '0',
-        ],
-        $adminUserId,
-        $ipAddress
-    );
-
-    if (empty($orderSaveResult['ok'])) {
-        return $orderSaveResult;
+    if (strtolower(trim((string)($order['payment_status'] ?? ''))) !== 'paid') {
+        $db->query(
+            "UPDATE orders
+             SET payment_method = NULL
+             WHERE id = {$orderId}"
+        );
     }
 
     return [
         'ok' => true,
-        'message' => 'Payment and linked order were cancelled successfully.',
+        'message' => 'Payment was cancelled successfully.',
         'order_id' => $orderId,
     ];
 }
@@ -6002,8 +6035,8 @@ function admin_payment_renew_request(
     }
 
     $status = strtolower(trim((string)($payment['status'] ?? '')));
-    if (!in_array($status, ['cancelled', 'rejected', 'failed'], true)) {
-        return ['ok' => false, 'message' => 'Only cancelled payments can be renewed.'];
+    if (!in_array($status, array_merge(admin_payment_expired_statuses($paymentType), admin_payment_cancelled_statuses($paymentType)), true)) {
+        return ['ok' => false, 'message' => 'Only expired or cancelled payments can be renewed.'];
     }
 
     if ($paymentType === 'crypto') {
@@ -6215,12 +6248,12 @@ function admin_payment_renew_bank_request(Mysql_ks $db, array $payment, int $adm
     $now = date('Y-m-d H:i:s');
     $expiresAt = date('Y-m-d H:i:s', strtotime('+72 hours'));
     $orderCondition = $orderId > 0 ? "order_id = {$orderId}" : "order_id IS NULL";
-    $db->query(
-        "UPDATE bank_transfer_requests
-         SET status = 'cancelled'
-         WHERE customer_id = {$customerId}
-           AND {$orderCondition}
-           AND status IN ('pending_payment', 'awaiting_review')"
+    app_cancel_bank_transfer_requests(
+        $db,
+        "customer_id = {$customerId}
+         AND {$orderCondition}
+         AND status IN ('pending_payment', 'awaiting_review')",
+        $now
     );
 
     $openBankRequest = $db->select_user(
@@ -6383,6 +6416,10 @@ function admin_payment_status_badge_class(string $status): string
         return 'admin-status-pill--muted';
     }
 
+    if ($status === 'expired') {
+        return 'admin-status-pill--danger';
+    }
+
     if (in_array($status, ['confirmed', 'approved', 'paid', 'completed'], true)) {
         return 'admin-status-pill--available';
     }
@@ -6392,6 +6429,11 @@ function admin_payment_status_badge_class(string $status): string
     }
 
     return 'admin-status-pill--available';
+}
+
+function admin_payment_status_is_archived(string $status): bool
+{
+    return strtolower(trim($status)) === 'archived';
 }
 
 function admin_compact_wallet_address(string $value, int $prefixLength = 4, int $suffixLength = 5): string

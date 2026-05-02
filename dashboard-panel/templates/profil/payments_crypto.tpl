@@ -102,7 +102,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <div
                             class="payment-request-countdown"
                             data-payment-countdown="{$active_v2_crypto_request_remaining_seconds|default:0}"
-                            data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment cancelled'}"
+                            data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment expired'}"
                         >
                             <span class="payment-request-countdown__label">{$t.payment_countdown_label|default:'Time left to pay'}</span>
                             <strong class="payment-request-countdown__value">60:00</strong>
@@ -115,6 +115,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                 <i class="fa fa-spinner spin" aria-hidden="true"></i> {$t.payment_cancel_crypto|default:'Cancel payment'}
                             </button>
                         </form>
+                        <p class="text-danger small payment-request-cancel-hint">*** {$t.payment_cancel_hint|default:'Kliknij Anuluj jeśli chcesz zrezygnować z płatności i nie dokonałeś żadnej wpłaty. Jeśli dokonałeś płatności, nie usuwaj zlecenia tylko napisz do nas na Live Chat.'}</p>
                     </div>
                 </div>
             </div>
@@ -238,6 +239,10 @@ $(function () {
           <i class="fa fa-minus-circle"></i> No payments.
         </div>
     {else}
+	<div class="alert alert-warning payment-crypto-history-warning">
+		<strong>{$t.payment_delete_warning_title|default:'Uwaga:'}</strong>
+		{$t.payment_delete_warning_text|default:'Usunięcie anulowanego requestu usuwa go całkowicie z bazy danych. Klikaj Usuń tylko wtedy, gdy na pewno nie dokonałeś żadnej wpłaty.'}
+	</div>
 	<p class="desc payment-crypto-history-intro">
 		{$t.payment_crypto_history_intro_line_1|default:'Poniżej znajdziesz historię swoich requestów płatności krypto i ich aktualne statusy.'}<br />
 		{$t.payment_crypto_history_intro_line_2|default:'Możesz tutaj szybko sprawdzić, które płatności zostały opłacone, anulowane albo wygasły.'}
@@ -251,14 +256,16 @@ $(function () {
 				<img src="../{$crypto_payments[i].qr_url}" class="img-responsive thumbnail" alt="img" />
 			</div>
 			<div class="col-sm-9 col-md-8 text-left">
+				{if $crypto_payments[i].order_id|default:0 <= 0}
 				<form action="" method="post" class="payments-crypto-remove-form">
 					<input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
 					<input type="hidden" name="del_crypto" value="{$crypto_payments[i].id}" />
 					<input type="hidden" name="del_crypto_kind" value="{$crypto_payments[i].request_kind|default:'legacy'}" />
-					<button type="submit" class="remove" title="{$t.orders_action_remove|default:'Remove'}">
-						<i class="fa fa-times-circle" aria-hidden="true"></i>
+					<button type="submit" class="remove btn btn-outline-danger btn-xs" title="{$t.orders_action_remove|default:'Remove'}">
+						{$t.orders_action_remove|default:'Remove'}
 					</button>
 				</form>
+				{/if}
 				<p class="title"><img src="../{$crypto_payments[i].crypto_logo_url}" class="img-responsive logo" alt="img" /> {$crypto_payments[i].crypto_name} ({$crypto_payments[i].crypto_symbol})</p>
 				<p>Zapłać po aktualnym kursie.</p>
 				<p>Po upływie czasu kurs wymiany zostanie ponownie zaktualizowany.</p>
@@ -281,18 +288,23 @@ $(function () {
 				<img src="../{$crypto_payments[i].crypto_logo_url}" class="img-responsive logo" alt="img" />
 			</div>
 			<div class="content">
-				{if $crypto_payments[i].status == 1}
+				{if $crypto_payments[i].status == 1 && $crypto_payments[i].status_label_key|default:'' == 'payment_ticket_status_cancelled' && $crypto_payments[i].order_id|default:0 <= 0}
 				<form action="" method="post" class="payments-crypto-remove-form">
 					<input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
 					<input type="hidden" name="del_crypto" value="{$crypto_payments[i].id}" />
 					<input type="hidden" name="del_crypto_kind" value="{$crypto_payments[i].request_kind|default:'legacy'}" />
-					<button type="submit" class="remove" title="{$t.orders_action_remove|default:'Remove'}">
-						<i class="fa fa-times" aria-hidden="true"></i>
+					<button type="submit" class="remove btn btn-outline-danger btn-xs" title="{$t.orders_action_remove|default:'Remove'}">
+						{$t.orders_action_remove|default:'Remove'}
 					</button>
 				</form>
 				{/if}
 				<p class="amount"><i class="fa fa-long-arrow-right" aria-hidden="true"></i> {$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol} <span>{$crypto_payments[i].discount_price} €</span></p>
-				<p class="desc">{$crypto_payments[i].date}</p>
+				<p class="desc">
+					{$crypto_payments[i].date}
+					{if $crypto_payments[i].order_id|default:0 > 0}
+						&nbsp;&middot;&nbsp;{$t.payment_summary_order|default:'Order'}: #{$crypto_payments[i].order_id}
+					{/if}
+				</p>
 				<p class="status">
 					{if $crypto_payments[i].status == 2}
 					<span class="success">{$t.payment_ticket_status_paid|default:'Paid'}</span>

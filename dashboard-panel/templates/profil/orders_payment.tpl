@@ -384,7 +384,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             <div
                                 class="payment-request-countdown"
                                 data-payment-countdown="{$payment_active_request_remaining_seconds|default:0}"
-                                data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment cancelled'}"
+                                data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment expired'}"
                             >
                                 <span class="payment-request-countdown__label">{$t.payment_countdown_label|default:'Time left to pay'}</span>
                                 <strong class="payment-request-countdown__value">60:00</strong>
@@ -396,6 +396,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                     <i class="fa fa-spinner spin" aria-hidden="true"></i> {$t.payment_cancel_crypto|default:'Cancel payment'}
                                 </button>
                             </form>
+                            <p class="text-danger small payment-request-cancel-hint">*** {$t.payment_cancel_hint|default:'Kliknij Anuluj jeśli chcesz zrezygnować z płatności i nie dokonałeś żadnej wpłaty. Jeśli dokonałeś płatności, nie usuwaj zlecenia tylko napisz do nas na Live Chat.'}</p>
                         </div>
                     </div>
                 </div>
@@ -442,7 +443,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     <div
                         class="payment-request-countdown"
                         data-payment-countdown="{$payment_active_request_remaining_seconds|default:0}"
-                        data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment cancelled'}"
+                        data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment expired'}"
                     >
                         <span class="payment-request-countdown__label">{$t.payment_countdown_label|default:'Time left to pay'}</span>
                         <strong class="payment-request-countdown__value">60:00</strong>
@@ -454,6 +455,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             <i class="fa fa-spinner spin" aria-hidden="true"></i> {$t.payment_cancel_crypto|default:'Cancel payment'}
                         </button>
                     </form>
+                    <p class="text-danger small payment-request-cancel-hint">*** {$t.payment_cancel_hint|default:'Kliknij Anuluj jeśli chcesz zrezygnować z płatności i nie dokonałeś żadnej wpłaty. Jeśli dokonałeś płatności, nie usuwaj zlecenia tylko napisz do nas na Live Chat.'}</p>
                     <div class="alert alert-warning payment-support-alert">
                         {$t.instructions_transfer_confirmation_note|default:'Send your transfer confirmation to the support email address below:'}
                         <strong>{$settings.admin_email|default:$settings.smtp_login}</strong>

@@ -56,14 +56,13 @@ switch ($site) {
         $topupCryptoAssets = [];
 
         if ($v2CryptoRequestsEnabled) {
-            app_cancel_crypto_deposit_requests(
+            app_expire_crypto_deposit_requests(
                 $db,
                 "customer_id = " . (int)$user['id'] . "
                  AND order_id IS NULL
                  AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
                  AND expires_at IS NOT NULL
                  AND expires_at <= '{$safeNow}'",
-                'Released after expired customer crypto top-up payment request',
                 $safeNow
             );
         }
@@ -88,7 +87,6 @@ switch ($site) {
                          FROM crypto_deposit_requests
                          WHERE id = {$cryptoPaymentId}
                            AND customer_id = " . (int)$user['id'] . "
-                           AND order_id IS NULL
                          LIMIT 1"
                     );
                     if ($cryptoPayment) {
@@ -97,13 +95,12 @@ switch ($site) {
                             app_cancel_crypto_deposit_requests(
                                 $db,
                                 "id = {$cryptoPaymentId}
-                                 AND customer_id = " . (int)$user['id'] . "
-                                 AND order_id IS NULL",
-                                'Released after customer cancelled crypto top-up payment request',
+                                 AND customer_id = " . (int)$user['id'],
+                                'Released after customer cancelled crypto payment request',
                                 $safeNow
                             );
                             $smarty->assign('alert', localization_translate($t, 'payment_cancelled', 'Payment cancelled.'));
-                        } else {
+                        } elseif ($statusRaw === 'cancelled') {
                             $db->delete_using_id('crypto_deposit_requests', $cryptoPaymentId);
                             if (!empty($settings['crypto_wallet_shared_assignments_enabled']) && !empty($cryptoPayment['wallet_assignment_id'])) {
                                 app_release_crypto_wallet_assignment_if_unused(
@@ -113,6 +110,8 @@ switch ($site) {
                                 );
                             }
                             $smarty->assign('alert', localization_translate($t, 'payment_removed', 'Payment removed.'));
+                        } else {
+                            $smarty->assign('alert_error', localization_translate($t, 'payment_remove_only_cancelled', 'Only cancelled payments can be removed permanently.'));
                         }
                         $smarty->display('alert.tpl');
                     }
@@ -389,6 +388,7 @@ switch ($site) {
                 "SELECT
                     crypto_deposit_requests.id,
                     crypto_deposit_requests.status,
+                    crypto_deposit_requests.order_id,
                     crypto_deposit_requests.requested_fiat_amount,
                     crypto_deposit_requests.requested_crypto_amount,
                     crypto_deposit_requests.exchange_rate,
@@ -409,7 +409,6 @@ switch ($site) {
                  LEFT JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
                  LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
                  WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
-                   AND crypto_deposit_requests.order_id IS NULL
                  ORDER BY crypto_deposit_requests.id DESC"
             );
 
@@ -417,22 +416,24 @@ switch ($site) {
                 foreach ($v2CryptoPayments as $index => $cryptoPayment) {
                     $createdTimestamp = !empty($cryptoPayment['requested_at']) ? strtotime((string)$cryptoPayment['requested_at']) : 0;
                     $expiresTimestamp = !empty($cryptoPayment['expires_at']) ? strtotime((string)$cryptoPayment['expires_at']) : 0;
-                    $cancelledTimestamp = !empty($cryptoPayment['cancelled_at']) ? strtotime((string)$cryptoPayment['cancelled_at']) : 0;
                     $statusRaw = strtolower(trim((string)($cryptoPayment['status'] ?? '')));
                     $statusValue = 1;
                     $statusLabelKey = 'payment_ticket_status_expired';
                     if (in_array($statusRaw, ['pending', 'awaiting_confirmation', 'awaiting_review'], true) && $expiresTimestamp > $time_s) {
                         $statusValue = 0;
-                    } elseif (in_array($statusRaw, ['confirmed', 'approved', 'paid', 'completed'], true)) {
+                    } elseif (in_array($statusRaw, ['confirmed', 'approved'], true)) {
+                        $statusValue = 2;
+                        $statusLabelKey = 'payment_ticket_status_approved';
+                    } elseif (in_array($statusRaw, ['paid', 'completed'], true)) {
                         $statusValue = 2;
                         $statusLabelKey = 'payment_ticket_status_paid';
                     } elseif ($statusRaw === 'archived') {
                         $statusValue = 2;
                         $statusLabelKey = 'payment_ticket_status_archived';
+                    } elseif ($statusRaw === 'expired') {
+                        $statusLabelKey = 'payment_ticket_status_expired';
                     } elseif (in_array($statusRaw, ['cancelled', 'rejected', 'failed'], true)) {
-                        if ($statusRaw === 'cancelled' && $expiresTimestamp > 0 && $cancelledTimestamp > 0 && $cancelledTimestamp >= $expiresTimestamp) {
-                            $statusLabelKey = 'payment_ticket_status_expired';
-                        } elseif ($statusRaw === 'rejected') {
+                        if ($statusRaw === 'rejected') {
                             $statusLabelKey = 'payment_ticket_status_rejected';
                         } elseif ($statusRaw === 'failed') {
                             $statusLabelKey = 'payment_ticket_status_failed';
@@ -471,12 +472,6 @@ switch ($site) {
 
         if ($cryptoPayments) {
             usort($cryptoPayments, static function (array $left, array $right): int {
-                $leftStatus = (int)($left['status'] ?? 1);
-                $rightStatus = (int)($right['status'] ?? 1);
-                if ($leftStatus !== $rightStatus) {
-                    return $leftStatus <=> $rightStatus;
-                }
-
                 return (int)($right['date_s'] ?? 0) <=> (int)($left['date_s'] ?? 0);
             });
             $smarty->assign('crypto_payments', $cryptoPayments);

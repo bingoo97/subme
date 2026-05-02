@@ -2962,9 +2962,9 @@ if ($route === 'payments') {
         }
     }
 
-    $paymentScope = strtolower(trim((string)($_GET['payment_scope'] ?? 'all')));
-    if (!in_array($paymentScope, ['open', 'new', 'review', 'approved', 'archived', 'all'], true)) {
-        $paymentScope = 'all';
+    $paymentScope = strtolower(trim((string)($_GET['payment_scope'] ?? 'open')));
+    if (!in_array($paymentScope, ['open', 'new', 'review', 'approved', 'archived', 'expired', 'cancelled', 'all'], true)) {
+        $paymentScope = 'open';
     }
 
     $paymentTypeFilter = strtolower(trim((string)($_GET['payment_type_filter'] ?? '')));
@@ -2982,7 +2982,7 @@ if ($route === 'payments') {
         $query = [
             'page' => 'payments',
             'customer_id' => $paymentFilterCustomerId > 0 ? $paymentFilterCustomerId : null,
-            'payment_scope' => $paymentScope !== 'all' ? $paymentScope : null,
+            'payment_scope' => $paymentScope,
             'payment_type_filter' => $paymentTypeFilter !== '' ? $paymentTypeFilter : null,
         ];
 
@@ -3130,8 +3130,8 @@ if ($route === 'payments') {
         $paymentEditorId = (int)($_POST['payment_id'] ?? $paymentEditorId);
         $paymentFilterCustomerId = max(0, (int)($_POST['customer_id'] ?? $paymentFilterCustomerId));
         $paymentScope = strtolower(trim((string)($_POST['payment_scope'] ?? $paymentScope)));
-        if (!in_array($paymentScope, ['open', 'new', 'review', 'approved', 'archived', 'all'], true)) {
-            $paymentScope = 'all';
+        if (!in_array($paymentScope, ['open', 'new', 'review', 'approved', 'archived', 'expired', 'cancelled', 'all'], true)) {
+            $paymentScope = 'open';
         }
         $paymentTypeFilter = strtolower(trim((string)($_POST['payment_type_filter'] ?? $paymentTypeFilter)));
         if (!in_array($paymentTypeFilter, ['', 'crypto', 'bank'], true)) {
@@ -3169,9 +3169,9 @@ if ($route === 'payments') {
                 } else {
                     $redirectUrl = trim((string)($_POST['redirect_to'] ?? ''));
                     if ($redirectUrl === '') {
-                        $redirectScope = $quickAction === 'review'
-                            ? 'review'
-                            : ($quickAction === 'archive' ? 'archived' : $paymentScope);
+                        $redirectScope = $quickAction === 'archive'
+                            ? 'archived'
+                            : ($quickAction === 'renew' ? 'open' : ($quickAction === 'cancel' ? 'cancelled' : $paymentScope));
                         $redirectUrl = $buildPaymentsListUrl([
                             $quickAction === 'delete' ? 'deleted_payment' : 'saved_payment' => 1,
                             'payment_scope' => $redirectScope !== 'all' ? $redirectScope : null,
@@ -3254,8 +3254,8 @@ if ($route === 'payments') {
     if (isset($_POST['admin_delete_cancelled_payments'])) {
         $paymentFilterCustomerId = max(0, (int)($_POST['customer_id'] ?? $paymentFilterCustomerId));
         $paymentScope = strtolower(trim((string)($_POST['payment_scope'] ?? $paymentScope)));
-        if (!in_array($paymentScope, ['open', 'new', 'review', 'approved', 'archived', 'all'], true)) {
-            $paymentScope = 'all';
+        if (!in_array($paymentScope, ['open', 'new', 'review', 'approved', 'archived', 'expired', 'cancelled', 'all'], true)) {
+            $paymentScope = 'open';
         }
         $paymentTypeFilter = strtolower(trim((string)($_POST['payment_type_filter'] ?? $paymentTypeFilter)));
         if (!in_array($paymentTypeFilter, ['', 'crypto', 'bank'], true)) {
@@ -3773,7 +3773,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?>
                                                                 </span>
                                                             <?php endif; ?>
-                                                            <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentRow['status'] ?? ''))); ?>"><?php echo admin_e($paymentStatusLabel); ?></span>
+                                                            <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentRow['status'] ?? ''))); ?>"><?php if (admin_payment_status_is_archived((string)($paymentRow['status'] ?? ''))): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e($paymentStatusLabel); ?></span>
                                                         </div>
                                                         <?php if ($paymentOrderId <= 0): ?>
                                                             <div class="alert alert-info admin-topbar-notifications__topup-alert" role="alert">
@@ -4956,7 +4956,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php echo admin_e($recentOrderStatusLabel); ?>
                                                         </span>
                                                         <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class($recentPaymentStatus)); ?>">
-                                                            <?php echo admin_e(admin_t($messages, 'enum_' . $recentPaymentStatus, ucfirst(str_replace('_', ' ', $recentPaymentStatus)))); ?>
+                                                            <?php if (admin_payment_status_is_archived($recentPaymentStatus)): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e(admin_t($messages, 'enum_' . $recentPaymentStatus, ucfirst(str_replace('_', ' ', $recentPaymentStatus)))); ?>
                                                         </span>
                                                         <?php if ($recentPaymentMethod !== ''): ?>
                                                             <span class="admin-status-pill admin-status-pill--muted">
@@ -7092,7 +7092,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <i class="bi bi-receipt" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?></span>
                                                 </a>
-                                                <a class="btn btn-dark admin-user-detail__quick-link" href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>">
+                                                <a class="btn btn-dark admin-user-detail__quick-link" href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>&amp;payment_scope=all">
                                                     <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?></span>
                                                 </a>
@@ -7558,7 +7558,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </td>
                                                                             <td>
                                                                                 <div class="admin-user-detail-status">
-                                                                                    <span class="admin-status-pill <?php echo admin_e($paymentStatusClass); ?>"><?php echo admin_e($paymentStatusLabel); ?></span>
+                                                                                    <span class="admin-status-pill <?php echo admin_e($paymentStatusClass); ?>"><?php if (admin_payment_status_is_archived($paymentStatus)): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e($paymentStatusLabel); ?></span>
                                                                                     <?php if ($paymentCryptoAmount !== ''): ?>
                                                                                         <span class="admin-user-detail-table__muted"><?php echo admin_e($paymentCryptoAmount); ?></span>
                                                                                         <?php if ($paymentWalletLabel !== '' && $paymentWalletPreviewUrl !== ''): ?>
@@ -8429,7 +8429,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         'all' => admin_t($messages, 'payment_filter_all', 'All'),
                                         'open' => admin_t($messages, 'payment_filter_open', 'Open'),
                                         'new' => admin_t($messages, 'payment_filter_new', 'New'),
-                                        'review' => admin_t($messages, 'payment_filter_review', 'Review'),
+                                        'expired' => admin_t($messages, 'payment_filter_expired', 'Expired'),
+                                        'cancelled' => admin_t($messages, 'payment_filter_cancelled', 'Cancelled'),
                                         'approved' => admin_t($messages, 'payment_filter_approved', 'Approved'),
                                         'archived' => admin_t($messages, 'payment_filter_archived', 'Archived'),
                                     ];
@@ -8538,14 +8539,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         'payment_type_filter' => $paymentTypeFilter !== '' ? $paymentTypeFilter : null,
                                                         'saved_payment' => 1,
                                                     ])); ?>">
-                                                    <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)): ?>
+                                                    <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
                                                         <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept">
                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
-                                                    <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment'], true)): ?>
-                                                        <button type="submit" class="btn btn-warning btn-sm" name="quick_action" value="review">
-                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_review', 'Move to review')); ?></span>
+                                                    <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
+                                                        <button type="submit" class="btn btn-danger btn-sm" name="quick_action" value="cancel">
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if ($paymentEditorType !== 'crypto_topup' && (string)($paymentEditor['status'] ?? '') === 'expired'): ?>
+                                                        <button type="submit" class="btn btn-warning btn-sm" name="quick_action" value="renew">
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true)): ?>
@@ -8559,7 +8565,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <div class="admin-payments-summary">
                                                 <div class="admin-payments-summary-card">
                                                     <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></span>
-                                                    <strong><span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentEditor['status'] ?? ''))); ?>"><?php echo admin_e(admin_t($messages, 'enum_' . (string)($paymentEditor['status'] ?? ''), ucfirst(str_replace('_', ' ', (string)($paymentEditor['status'] ?? ''))))); ?></span></strong>
+                                                    <strong><span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentEditor['status'] ?? ''))); ?>"><?php if (admin_payment_status_is_archived((string)($paymentEditor['status'] ?? ''))): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e(admin_t($messages, 'enum_' . (string)($paymentEditor['status'] ?? ''), ucfirst(str_replace('_', ' ', (string)($paymentEditor['status'] ?? ''))))); ?></span></strong>
                                                 </div>
                                                 <div class="admin-payments-summary-card">
                                                     <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></span>
@@ -8574,7 +8580,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <?php
                                             $paymentEditorStatusRaw = strtolower(trim((string)($paymentEditor['status'] ?? '')));
                                             $paymentEditorStatusSelectClass = 'admin-payment-status-select--warning';
-                                            if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed'], true)) {
+                                            if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed', 'expired'], true)) {
                                                 $paymentEditorStatusSelectClass = 'admin-payment-status-select--danger';
                                             } elseif (in_array($paymentEditorStatusRaw, ['awaiting_confirmation', 'awaiting_review'], true)) {
                                                 $paymentEditorStatusSelectClass = 'admin-payment-status-select--info';
@@ -8721,10 +8727,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <i class="bi bi-floppy" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'payment_save_button', 'Save payment')); ?></span>
                                                     </button>
-                                                    <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
-                                                        <i class="bi bi-trash" aria-hidden="true"></i>
-                                                        <span><?php echo admin_e(admin_t($messages, 'payment_delete_button', 'Delete payment')); ?></span>
-                                                    </button>
+                                                    <?php if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed'], true)): ?>
+                                                        <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_delete_button', 'Delete payment')); ?></span>
+                                                        </button>
+                                                    <?php endif; ?>
                                                 </div>
                                             </form>
                                         </div>
@@ -8738,16 +8746,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <?php foreach ($paymentScopeOptions as $scopeValue => $scopeLabel): ?>
                                                     <?php
                                                     $scopeCount = match ($scopeValue) {
-                                                        'all' => max(0, (int)($paymentSummary['total'] ?? 0) - (int)($paymentSummary['archived_total'] ?? 0)),
+                                                        'all' => (int)($paymentSummary['total'] ?? 0),
                                                         'open' => (int)($paymentSummary['open_total'] ?? 0),
                                                         'new' => (int)($paymentSummary['new_total'] ?? 0),
-                                                        'review' => (int)($paymentSummary['review_total'] ?? 0),
+                                                        'expired' => (int)($paymentSummary['expired_total'] ?? 0),
+                                                        'cancelled' => (int)($paymentSummary['cancelled_total'] ?? 0),
                                                         'approved' => (int)($paymentSummary['approved_total'] ?? 0),
                                                         'archived' => (int)($paymentSummary['archived_total'] ?? 0),
                                                         default => 0,
                                                     };
                                                     ?>
-                                                    <a class="admin-payments-filter<?php echo $paymentScope === $scopeValue ? ' admin-payments-filter--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => $scopeValue === 'all' ? null : $scopeValue])); ?>">
+                                                    <a class="admin-payments-filter<?php echo $paymentScope === $scopeValue ? ' admin-payments-filter--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => $scopeValue])); ?>">
                                                         <?php echo admin_e($scopeLabel); ?>
                                                         <?php if ($scopeCount > 0): ?>
                                                             <span class="admin-payments-filter__count"><?php echo admin_e((string)$scopeCount); ?></span>
@@ -8776,7 +8785,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <?php endif; ?>
                                         </div>
 
-                                        <?php if ($visibleCancelledPaymentsCount > 0): ?>
+                                        <?php if ($paymentScope === 'cancelled' && $visibleCancelledPaymentsCount > 0): ?>
                                             <div class="admin-payments-toolbar admin-payments-toolbar--secondary">
                                                 <div class="d-flex flex-wrap gap-2 align-items-center">
                                                     <a href="/admin/?page=orders" class="btn btn-primary btn-md">
@@ -8800,7 +8809,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                         <div class="admin-payments-note">
                                             <strong><?php echo admin_e(admin_t($messages, 'payment_note_title', 'Recommended workflow')); ?></strong>
-                                            <span><?php echo admin_e(admin_t($messages, 'payment_note_text', 'New requests should first move to review. Final payment approval and subscription activation happen in the related order view.')); ?></span>
+                                            <span>
+                                                <?php
+                                                echo admin_e(
+                                                    $paymentScope === 'cancelled'
+                                                        ? admin_t($messages, 'payment_cancelled_queue_warning', 'Cancelled payment requests are removed permanently. Use Delete only when the customer definitely did not send any funds.')
+                                                        : admin_t($messages, 'payment_note_text', 'Open requests are waiting for your decision. Expired requests can still be accepted late, renewed with a fresh rate or moved to cancelled queue.')
+                                                );
+                                                ?>
+                                            </span>
                                             <button
                                                 type="button"
                                                 class="btn btn-dark btn-lg admin-payments-note__create-btn"
@@ -8855,6 +8872,27 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                             </div>
                                         </div>
+
+                                        <?php if ($paymentScope === 'all'): ?>
+                                            <div class="mt-3">
+                                                <div class="alert alert-info mb-2">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'payment_scope_help_open_title', 'Open and New')); ?></strong>
+                                                    <span> <?php echo admin_e(admin_t($messages, 'payment_scope_help_open_text', 'These requests are still active and waiting for your decision. Use Accept, Details or Cancel depending on whether the customer paid or wants to stop the request.')); ?></span>
+                                                </div>
+                                                <div class="alert alert-warning mb-2">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'payment_scope_help_expired_title', 'Expired')); ?></strong>
+                                                    <span> <?php echo admin_e(admin_t($messages, 'payment_scope_help_expired_text', 'These requests were not completed on time, but you can still verify late incoming funds. You can accept them, renew them with a fresh rate or move them to cancelled queue.')); ?></span>
+                                                </div>
+                                                <div class="alert alert-danger mb-2">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'payment_scope_help_cancelled_title', 'Cancelled')); ?></strong>
+                                                    <span> <?php echo admin_e(admin_t($messages, 'payment_scope_help_cancelled_text', 'These requests were cancelled manually or moved to the cancelled queue after inactivity. Delete them only if you are sure the customer did not send any funds.')); ?></span>
+                                                </div>
+                                                <div class="alert alert-success mb-0">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'payment_scope_help_success_title', 'Approved and Archived')); ?></strong>
+                                                    <span> <?php echo admin_e(admin_t($messages, 'payment_scope_help_success_text', 'Approved payments are waiting to be paid out to your main wallet. Archived payments are already completed and kept only as payment history.')); ?></span>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
 
                                         <?php
                                         $paymentsWalletConflict = admin_first_crypto_wallet_payment_conflict($db);
@@ -8911,29 +8949,34 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             $requestedTimestamp = !empty($row['requested_at']) ? strtotime((string)$row['requested_at']) : 0;
                                                             $expiresTimestamp = !empty($row['expires_at']) ? strtotime((string)$row['expires_at']) : 0;
                                                             $isArchivedPayment = $paymentStatus === 'archived';
+                                                            $isExpiredPayment = $paymentStatus === 'expired';
                                                             $isSuccessPayment = in_array($paymentStatus, ['confirmed', 'approved', 'paid', 'completed'], true);
                                                             $isCancelledPayment = in_array($paymentStatus, ['cancelled', 'rejected', 'failed'], true);
                                                             $isReviewPayment = in_array($paymentStatus, ['awaiting_confirmation', 'awaiting_review'], true);
                                                             $needsAttention = in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
-                                                            $isExpiredQueue = !$isArchivedPayment && $expiresTimestamp > 0 && $expiresTimestamp < time();
+                                                            $isExpiredQueue = $isExpiredPayment || (!$isArchivedPayment && !$isCancelledPayment && !$isSuccessPayment && $expiresTimestamp > 0 && $expiresTimestamp < time());
                                                             $queueStageLabel = $isArchivedPayment
                                                                 ? admin_t($messages, 'payment_stage_archived', 'Archived')
+                                                                : ($isExpiredPayment
+                                                                    ? admin_t($messages, 'enum_expired', 'Expired')
                                                                 : ($isCancelledPayment
                                                                     ? admin_t($messages, 'enum_cancelled', 'Cancelled')
                                                                     : ($isSuccessPayment
                                                                         ? admin_t($messages, 'payment_stage_success', 'Success')
                                                                         : (in_array($paymentStatus, ['pending', 'pending_payment'], true)
                                                                             ? admin_t($messages, 'payment_stage_new', 'New')
-                                                                            : admin_t($messages, 'payment_stage_review', 'Review'))));
+                                                                            : admin_t($messages, 'payment_filter_open', 'Open')))));
                                                             $queueStageClass = $isArchivedPayment
                                                                 ? 'admin-status-pill--muted'
+                                                                : ($isExpiredPayment
+                                                                    ? 'admin-status-pill--danger'
                                                                 : ($isCancelledPayment
                                                                     ? 'admin-status-pill--danger'
                                                                     : ($isSuccessPayment
                                                                         ? 'admin-status-pill--available'
                                                                         : (in_array($paymentStatus, ['pending', 'pending_payment'], true)
                                                                             ? 'admin-status-pill--warning'
-                                                                            : ($isReviewPayment ? 'admin-status-pill--assigned' : 'admin-status-pill--neutral'))));
+                                                                            : ($isReviewPayment ? 'admin-status-pill--assigned' : 'admin-status-pill--neutral')))));
                                                             $paymentRowCurrencyCode = trim((string)($row['currency_code'] ?? ''));
                                                             $paymentRowCurrencySymbol = trim((string)($row['currency_symbol'] ?? ''));
                                                             if ($paymentRowCurrencyCode === '') {
@@ -8992,8 +9035,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             ]);
                                                             $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
                                                             $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($row['customer_id'] ?? 0);
-                                                            $paymentCanAccept = in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
-                                                            $canReview = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['pending', 'pending_payment'], true);
+                                                            $paymentCanAccept = in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true);
+                                                            $canReview = false;
+                                                            $canCancel = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true);
+                                                            $canRenew = $paymentType !== 'crypto_topup' && $isExpiredPayment;
+                                                            $canDeleteCancelled = $paymentType !== 'crypto_topup' && $isCancelledPayment;
                                                             $canArchive = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true);
                                                             $expiresLabel = '-';
                                                             if ($expiresTimestamp > 0) {
@@ -9052,6 +9098,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </div>
                                                                         </div>
                                                                         <div class="admin-status-pill <?php echo admin_e($queueStageClass); ?>">
+                                                                            <?php if ($isArchivedPayment): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?>
                                                                             <?php echo admin_e($queueStageLabel); ?>
                                                                         </div>
                                                                     </div>
@@ -9067,11 +9114,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </div>
                                                                 </td>
                                                                 <td class="admin-payments-table__actions-col" data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                    <?php if ($paymentCanAccept || $canArchive): ?>
+                                                                    <?php if ($paymentCanAccept || $canArchive || $canCancel || $canRenew): ?>
                                                                         <div class="admin-topbar-notifications__task-list">
-                                                                            <?php if ($paymentCanAccept): ?>
+                                                                            <?php if ($isExpiredPayment): ?>
+                                                                                <span>1. <?php echo admin_e(admin_t($messages, 'payment_expired_info_line_1', 'This payment request expired after the time limit, but you can still verify whether the funds arrived.')); ?></span>
+                                                                                <span>2. <?php echo admin_e(admin_t($messages, 'payment_expired_info_line_2', 'Approve it if the customer paid, renew it to recalculate the rate or cancel it to move it to cancelled queue.')); ?></span>
+                                                                            <?php elseif ($paymentCanAccept): ?>
                                                                                 <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_explorer', 'Check whether the payment has arrived.')); ?></span>
-                                                                                <span>2. <?php echo admin_e($canReview ? admin_t($messages, 'topbar_payment_step_decide', 'Approve the payment or move it to verification.') : admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                                                <span>2. <?php echo admin_e(admin_t($messages, 'payment_open_info_line_2', 'Approve the payment, open details or cancel the request if the customer wants to stop.')); ?></span>
                                                                             <?php else: ?>
                                                                                 <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_payout_approved', 'Withdraw the funds to your main wallet.')); ?></span>
                                                                                 <span>2. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_archive_approved', 'Move the payment to archive.')); ?></span>
@@ -9102,7 +9152,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-primary btn-sm admin-topbar-notifications__block-btn">
                                                                                     <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
                                                                                 </a>
-                                                                                <?php if ($canReview): ?>
+                                                                                <?php if ($canCancel): ?>
                                                                                     <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
                                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                                         <input type="hidden" name="admin_payment_quick_action" value="1">
@@ -9111,8 +9161,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="review">
-                                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_review_short', 'Review')); ?></span>
+                                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="cancel">
+                                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
+                                                                                        </button>
+                                                                                    </form>
+                                                                                <?php endif; ?>
+                                                                                <?php if ($canRenew): ?>
+                                                                                    <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
+                                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                        <input type="hidden" name="admin_payment_quick_action" value="1">
+                                                                                        <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
+                                                                                        <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                                        <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                                                        <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                                                        <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                                                        <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="renew">
+                                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
                                                                                         </button>
                                                                                     </form>
                                                                                 <?php endif; ?>
@@ -9131,9 +9195,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     </form>
                                                                                 <?php endif; ?>
                                                                             </div>
-                                                                            <?php if (in_array($paymentStatus, ['pending', 'pending_payment'], true)): ?>
+                                                                            <?php if (in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)): ?>
                                                                                 <div class="admin-topbar-notifications__hint text-muted small mt-2">
-                                                                                   *** <?php echo admin_e(admin_t($messages, 'payment_delete_hint_new', 'If you want to delete this payment, open details and use the Delete button at the bottom of the page.')); ?>
+                                                                                   *** <?php echo admin_e(admin_t($messages, 'payment_open_cancel_hint', 'Use Cancel if the customer wants to resign and did not send any funds yet.')); ?>
                                                                                 </div>
                                                                             <?php endif; ?>
                                                                         </div>
@@ -9164,50 +9228,26 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <i class="bi bi-box-arrow-up-right ms-1" aria-hidden="true"></i>
                                                                                 <?php endif; ?>
                                                                             </a>
-                                                                            <?php if ($paymentType !== 'crypto_topup'): ?>
-                                                                                <form method="post" class="admin-topbar-notifications__inline-form">
-                                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                                                    <input type="hidden" name="admin_payment_quick_action" value="1">
-                                                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
-                                                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
-                                                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
-                                                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
-                                                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                    <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="accept">
-                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_accept_late', 'Approve received payment')); ?></span>
-                                                                                    </button>
-                                                                                </form>
-                                                                            <?php endif; ?>
                                                                             <div class="admin-topbar-notifications__decision-row">
                                                                                 <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-primary btn-sm admin-topbar-notifications__block-btn">
                                                                                     <span><?php echo admin_e(admin_t($messages, 'payment_action_preview', 'Preview')); ?></span>
                                                                                 </a>
-                                                                                <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
-                                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                                                    <input type="hidden" name="admin_payment_quick_action" value="1">
-                                                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
-                                                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
-                                                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
-                                                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
-                                                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                    <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="renew">
-                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
-                                                                                    </button>
-                                                                                </form>
-                                                                                <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
-                                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
-                                                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
-                                                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
-                                                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
-                                                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                    <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
-                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_delete_cancelled', 'Delete cancelled')); ?></span>
-                                                                                    </button>
-                                                                                </form>
+                                                                                <?php if ($canDeleteCancelled): ?>
+                                                                                    <form method="post" class="admin-topbar-notifications__inline-form admin-topbar-notifications__inline-form--decision">
+                                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                        <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
+                                                                                        <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                                        <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                                                        <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                                                        <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_delete_cancelled', 'Delete cancelled')); ?></span>
+                                                                                        </button>
+                                                                                    </form>
+                                                                                <?php endif; ?>
                                                                             </div>
                                                                             <div class="admin-topbar-notifications__hint text-danger small mt-2">
-                                                                                <?php echo admin_e(admin_t($messages, 'payment_cancelled_renew_hint', 'Click Renew to recalculate the amount and create a new payment request.')); ?>
+                                                                                <?php echo admin_e(admin_t($messages, 'payment_cancelled_delete_hint', 'This request will be removed permanently. Delete it only if the customer definitely did not send any funds.')); ?>
                                                                             </div>
                                                                         </div>
                                                                     <?php else: ?>
@@ -9821,7 +9861,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </td>
                                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
                                                                                 <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class($walletPaymentStatus)); ?>">
-                                                                                    <?php echo admin_e(admin_t($messages, 'enum_' . $walletPaymentStatus, ucfirst(str_replace('_', ' ', $walletPaymentStatus)))); ?>
+                                                                                    <?php if (admin_payment_status_is_archived($walletPaymentStatus)): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e(admin_t($messages, 'enum_' . $walletPaymentStatus, ucfirst(str_replace('_', ' ', $walletPaymentStatus)))); ?>
                                                                                 </span>
                                                                             </td>
                                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">

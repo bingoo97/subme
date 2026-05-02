@@ -606,12 +606,12 @@ if (!function_exists('orders_payment_cancel_open_crypto_requests')) {
 if (!function_exists('orders_payment_cancel_open_bank_requests')) {
     function orders_payment_cancel_open_bank_requests($db, int $customerId, int $orderId): void
     {
-        $db->query(
-            "UPDATE bank_transfer_requests
-             SET status = 'cancelled'
-             WHERE customer_id = {$customerId}
-               AND order_id = {$orderId}
-               AND status IN ('pending_payment', 'awaiting_review')"
+        app_cancel_bank_transfer_requests(
+            $db,
+            "customer_id = {$customerId}
+             AND order_id = {$orderId}
+             AND status IN ('pending_payment', 'awaiting_review')",
+            date('Y-m-d H:i:s')
         );
     }
 }
@@ -620,21 +620,25 @@ if (!function_exists('orders_payment_archive_expired_crypto_requests')) {
     function orders_payment_archive_expired_crypto_requests($db, int $customerId, int $orderId): void
     {
         $safeNow = date('Y-m-d H:i:s');
-        app_cancel_crypto_deposit_requests(
+        $expiredCount = app_expire_crypto_deposit_requests(
             $db,
             "customer_id = {$customerId}
              AND order_id = {$orderId}
              AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              AND expires_at IS NOT NULL
              AND expires_at <= '{$safeNow}'",
-            'Released after expired customer order crypto payment request',
             $safeNow
         );
-        app_order_cancel_pending_renewal(
-            $db,
-            $orderId,
-            'Cancelled after expired customer crypto payment request'
-        );
+
+        if ($expiredCount > 0 && schema_object_exists($db, 'orders')) {
+            @$db->query(
+                "UPDATE orders
+                 SET payment_method = NULL
+                 WHERE id = {$orderId}
+                   AND customer_id = {$customerId}
+                   AND payment_status NOT IN ('paid', 'manual_review', 'processing', 'awaiting_confirmation', 'awaiting_review')"
+            );
+        }
     }
 }
 
@@ -642,20 +646,25 @@ if (!function_exists('orders_payment_archive_expired_bank_requests')) {
     function orders_payment_archive_expired_bank_requests($db, int $customerId, int $orderId): void
     {
         $safeNow = date('Y-m-d H:i:s');
-        $db->query(
-            "UPDATE bank_transfer_requests
-             SET status = 'cancelled'
-             WHERE customer_id = {$customerId}
-               AND order_id = {$orderId}
-               AND status IN ('pending_payment', 'awaiting_review')
-               AND expires_at IS NOT NULL
-               AND expires_at <= '{$safeNow}'"
-        );
-        app_order_cancel_pending_renewal(
+        $expiredCount = app_expire_bank_transfer_requests(
             $db,
-            $orderId,
-            'Cancelled after expired customer bank payment request'
+            "customer_id = {$customerId}
+             AND order_id = {$orderId}
+             AND status IN ('pending_payment', 'awaiting_review')
+             AND expires_at IS NOT NULL
+             AND expires_at <= '{$safeNow}'",
+            $safeNow
         );
+
+        if ($expiredCount > 0 && schema_object_exists($db, 'orders')) {
+            @$db->query(
+                "UPDATE orders
+                 SET payment_method = NULL
+                 WHERE id = {$orderId}
+                   AND customer_id = {$customerId}
+                   AND payment_status NOT IN ('paid', 'manual_review', 'processing', 'awaiting_confirmation', 'awaiting_review')"
+            );
+        }
     }
 }
 

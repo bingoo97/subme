@@ -989,6 +989,125 @@ function app_cancel_crypto_deposit_requests(
     return count($requestIds);
 }
 
+function app_payment_open_crypto_statuses(): array
+{
+    return ['pending', 'awaiting_confirmation', 'awaiting_review'];
+}
+
+function app_payment_open_bank_statuses(): array
+{
+    return ['pending_payment', 'awaiting_review'];
+}
+
+function app_payment_expired_statuses(): array
+{
+    return ['expired'];
+}
+
+function app_payment_cancelled_statuses(): array
+{
+    return ['cancelled', 'rejected', 'failed'];
+}
+
+function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
+{
+    if (schema_object_exists($db, 'bank_transfer_requests') && !schema_column_exists($db, 'bank_transfer_requests', 'cancelled_at')) {
+        $db->query(
+            "ALTER TABLE bank_transfer_requests
+             ADD COLUMN cancelled_at DATETIME DEFAULT NULL
+             AFTER rejected_at"
+        );
+        schema_forget_column_cache('bank_transfer_requests', 'cancelled_at');
+    }
+}
+
+function app_expire_crypto_deposit_requests(
+    Mysql_ks $db,
+    string $whereSql,
+    ?string $expiredAt = null
+): int {
+    $whereSql = trim($whereSql);
+    if ($whereSql === '' || !schema_object_exists($db, 'crypto_deposit_requests')) {
+        return 0;
+    }
+
+    $safeNow = trim((string)$expiredAt);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    $statusSql = "'" . implode("','", array_map([$db, 'escape'], app_payment_open_crypto_statuses())) . "'";
+    $updated = $db->query(
+        "UPDATE crypto_deposit_requests
+         SET status = 'expired'
+         WHERE status IN ({$statusSql})
+           AND {$whereSql}"
+    );
+
+    return $updated ? (int)$db->affected_rows : 0;
+}
+
+function app_cancel_bank_transfer_requests(
+    Mysql_ks $db,
+    string $whereSql,
+    ?string $cancelledAt = null
+): int {
+    $whereSql = trim($whereSql);
+    if ($whereSql === '' || !schema_object_exists($db, 'bank_transfer_requests')) {
+        return 0;
+    }
+
+    app_ensure_payment_request_runtime_columns($db);
+
+    $safeNow = trim((string)$cancelledAt);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+    $statusSql = "'" . implode("','", array_map([$db, 'escape'], app_payment_open_bank_statuses())) . "','expired'";
+
+    $updated = $db->query(
+        "UPDATE bank_transfer_requests
+         SET status = 'cancelled',
+             cancelled_at = CASE
+                 WHEN cancelled_at IS NULL THEN '{$safeNowSql}'
+                 ELSE cancelled_at
+             END
+         WHERE status IN ({$statusSql})
+           AND {$whereSql}"
+    );
+
+    return $updated ? (int)$db->affected_rows : 0;
+}
+
+function app_expire_bank_transfer_requests(
+    Mysql_ks $db,
+    string $whereSql,
+    ?string $expiredAt = null
+): int {
+    $whereSql = trim($whereSql);
+    if ($whereSql === '' || !schema_object_exists($db, 'bank_transfer_requests')) {
+        return 0;
+    }
+
+    app_ensure_payment_request_runtime_columns($db);
+
+    $safeNow = trim((string)$expiredAt);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    $statusSql = "'" . implode("','", array_map([$db, 'escape'], app_payment_open_bank_statuses())) . "'";
+    $updated = $db->query(
+        "UPDATE bank_transfer_requests
+         SET status = 'expired'
+         WHERE status IN ({$statusSql})
+           AND {$whereSql}"
+    );
+
+    return $updated ? (int)$db->affected_rows : 0;
+}
+
 function app_release_cancelled_crypto_request_assignments_for_asset(
     Mysql_ks $db,
     int $customerId,
@@ -6474,32 +6593,28 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
     }
     $safeNowSql = $db->escape($safeNow);
 
-    $cancelledCrypto = 0;
-    $cancelledBank = 0;
+    $expiredCrypto = 0;
+    $expiredBank = 0;
     $resetOrders = 0;
 
     if (schema_object_exists($db, 'crypto_deposit_requests')) {
-        $cancelledCrypto = app_cancel_crypto_deposit_requests(
+        $expiredCrypto = app_expire_crypto_deposit_requests(
             $db,
             "status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              AND expires_at IS NOT NULL
              AND expires_at <= '{$safeNowSql}'",
-            'Released after expired crypto payment request',
             $safeNow
         );
     }
 
     if (schema_object_exists($db, 'bank_transfer_requests')) {
-        $bankResult = $db->query(
-            "UPDATE bank_transfer_requests
-             SET status = 'cancelled'
-             WHERE status IN ('pending_payment', 'awaiting_review')
-               AND expires_at IS NOT NULL
-               AND expires_at <= '{$safeNowSql}'"
+        $expiredBank = app_expire_bank_transfer_requests(
+            $db,
+            "status IN ('pending_payment', 'awaiting_review')
+             AND expires_at IS NOT NULL
+             AND expires_at <= '{$safeNowSql}'",
+            $safeNow
         );
-        if ($bankResult) {
-            $cancelledBank = (int)$db->affected_rows;
-        }
     }
 
     if (schema_object_exists($db, 'orders')) {
@@ -6512,13 +6627,13 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
                    FROM (
                        SELECT order_id
                        FROM crypto_deposit_requests
-                       WHERE status = 'cancelled'
+                       WHERE status = 'expired'
                          AND expires_at IS NOT NULL
                          AND expires_at <= '{$safeNowSql}'
                        UNION
                        SELECT order_id
                        FROM bank_transfer_requests
-                       WHERE status = 'cancelled'
+                       WHERE status = 'expired'
                          AND expires_at IS NOT NULL
                          AND expires_at <= '{$safeNowSql}'
                    ) AS expired_requests
@@ -6533,14 +6648,158 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
     return [
         'ok' => true,
         'time' => $safeNow,
-        'archived_crypto_requests' => $cancelledCrypto,
-        'archived_bank_requests' => $cancelledBank,
+        'expired_crypto_requests' => $expiredCrypto,
+        'expired_bank_requests' => $expiredBank,
+        'archived_crypto_requests' => $expiredCrypto,
+        'archived_bank_requests' => $expiredBank,
+        'reset_order_payment_method' => $resetOrders,
+        'message' => ($expiredCrypto + $expiredBank + $resetOrders) > 0
+            ? 'Expired payment requests moved to expired queue.'
+            : 'No expired payment requests found.',
+    ];
+}
+
+function app_cancel_stale_expired_payment_requests(Mysql_ks $db, ?string $now = null): array
+{
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+
+    $cancelledCrypto = 0;
+    $cancelledBank = 0;
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $expiredCryptoRows = $db->select_full_user(
+            "SELECT id, order_id
+             FROM crypto_deposit_requests
+             WHERE status = 'expired'
+               AND expires_at IS NOT NULL
+               AND expires_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
+        );
+        if (is_array($expiredCryptoRows) && $expiredCryptoRows) {
+            $cancelledCrypto = app_cancel_crypto_deposit_requests(
+                $db,
+                "status = 'expired'
+                 AND expires_at IS NOT NULL
+                 AND expires_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)",
+                'Released after expired crypto payment request was moved to cancelled queue',
+                $safeNow
+            );
+
+            foreach ($expiredCryptoRows as $row) {
+                $orderId = (int)($row['order_id'] ?? 0);
+                if ($orderId > 0) {
+                    app_order_cancel_pending_renewal(
+                        $db,
+                        $orderId,
+                        'Cancelled automatically after expired crypto payment request timeout',
+                        'crypto',
+                        (int)($row['id'] ?? 0)
+                    );
+                }
+            }
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        app_ensure_payment_request_runtime_columns($db);
+        $expiredBankRows = $db->select_full_user(
+            "SELECT id, order_id
+             FROM bank_transfer_requests
+             WHERE status = 'expired'
+               AND expires_at IS NOT NULL
+               AND expires_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
+        );
+        if (is_array($expiredBankRows) && $expiredBankRows) {
+            $cancelledBank = app_cancel_bank_transfer_requests(
+                $db,
+                "status = 'expired'
+                 AND expires_at IS NOT NULL
+                 AND expires_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)",
+                $safeNow
+            );
+
+            foreach ($expiredBankRows as $row) {
+                $orderId = (int)($row['order_id'] ?? 0);
+                if ($orderId > 0) {
+                    app_order_cancel_pending_renewal(
+                        $db,
+                        $orderId,
+                        'Cancelled automatically after expired bank payment request timeout',
+                        'bank',
+                        (int)($row['id'] ?? 0)
+                    );
+                }
+            }
+        }
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
         'cancelled_crypto_requests' => $cancelledCrypto,
         'cancelled_bank_requests' => $cancelledBank,
-        'reset_order_payment_method' => $resetOrders,
-        'message' => ($cancelledCrypto + $cancelledBank + $resetOrders) > 0
-            ? 'Expired payment requests cancelled.'
-            : 'No expired payment requests found.',
+        'message' => ($cancelledCrypto + $cancelledBank) > 0
+            ? 'Expired payment requests moved to cancelled queue.'
+            : 'No stale expired payment requests found.',
+    ];
+}
+
+function app_delete_stale_cancelled_payment_requests(Mysql_ks $db, ?string $now = null): array
+{
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+
+    app_ensure_payment_request_runtime_columns($db);
+
+    $deletedCrypto = 0;
+    $deletedBank = 0;
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoRows = $db->select_full_user(
+            "SELECT id
+             FROM crypto_deposit_requests
+             WHERE status = 'cancelled'
+               AND cancelled_at IS NOT NULL
+               AND cancelled_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
+        );
+        foreach ((array)$cryptoRows as $row) {
+            $deleted = $db->delete_using_id('crypto_deposit_requests', (int)($row['id'] ?? 0));
+            if ($deleted) {
+                $deletedCrypto++;
+            }
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankRows = $db->select_full_user(
+            "SELECT id
+             FROM bank_transfer_requests
+             WHERE status = 'cancelled'
+               AND cancelled_at IS NOT NULL
+               AND cancelled_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
+        );
+        foreach ((array)$bankRows as $row) {
+            $deleted = $db->delete_using_id('bank_transfer_requests', (int)($row['id'] ?? 0));
+            if ($deleted) {
+                $deletedBank++;
+            }
+        }
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'deleted_crypto_requests' => $deletedCrypto,
+        'deleted_bank_requests' => $deletedBank,
+        'message' => ($deletedCrypto + $deletedBank) > 0
+            ? 'Cancelled payment requests deleted automatically.'
+            : 'No stale cancelled payment requests found.',
     ];
 }
 
@@ -6657,15 +6916,12 @@ function app_delete_stale_unpaid_orders(Mysql_ks $db, ?string $now = null): arra
     }
 
     if (schema_object_exists($db, 'bank_transfer_requests')) {
-        $bankResult = $db->query(
-            "UPDATE bank_transfer_requests
-             SET status = 'cancelled'
-             WHERE order_id IN ({$idList})
-               AND status IN ('pending_payment', 'awaiting_review')"
+        $cancelledBank = app_cancel_bank_transfer_requests(
+            $db,
+            "order_id IN ({$idList})
+             AND status IN ('pending_payment', 'awaiting_review')",
+            $safeNow
         );
-        if ($bankResult) {
-            $cancelledBank = (int)$db->affected_rows;
-        }
 
         if (schema_column_exists($db, 'bank_transfer_requests', 'order_id')) {
             $db->query(
@@ -6987,6 +7243,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $email = app_email_process_queue($db, $emailLimit);
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
     $archive = app_archive_expired_payment_requests($db, $safeNow);
+    $cancelExpired = app_cancel_stale_expired_payment_requests($db, $safeNow);
+    $deleteCancelled = app_delete_stale_cancelled_payment_requests($db, $safeNow);
     $staleOrders = app_delete_stale_unpaid_orders($db, $safeNow);
     $expire = app_expire_overdue_orders($db, $safeNow);
     $chat = app_prune_support_chat_messages($db, $safeNow);
@@ -6999,6 +7257,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         'email_queue' => $email,
         'crypto_daily_backup' => $cryptoBackup,
         'archive_requests' => $archive,
+        'cancel_expired_requests' => $cancelExpired,
+        'delete_cancelled_requests' => $deleteCancelled,
         'stale_unpaid_orders' => $staleOrders,
         'expire_orders' => $expire,
         'live_chat_cleanup' => $chat,
@@ -7024,9 +7284,13 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'emails_failed' => (int)($email['failed'] ?? 0),
             'crypto_backup_sent' => (int)($cryptoBackup['sent'] ?? 0),
             'crypto_backup_rows' => (int)($cryptoBackup['rows'] ?? 0),
-            'archived_crypto_requests' => (int)($archive['archived_crypto_requests'] ?? 0),
-            'archived_bank_requests' => (int)($archive['archived_bank_requests'] ?? 0),
+            'expired_crypto_requests' => (int)($archive['expired_crypto_requests'] ?? 0),
+            'expired_bank_requests' => (int)($archive['expired_bank_requests'] ?? 0),
             'reset_order_payment_method' => (int)($archive['reset_order_payment_method'] ?? 0),
+            'cancelled_crypto_requests' => (int)($cancelExpired['cancelled_crypto_requests'] ?? 0),
+            'cancelled_bank_requests' => (int)($cancelExpired['cancelled_bank_requests'] ?? 0),
+            'auto_deleted_cancelled_crypto_requests' => (int)($deleteCancelled['deleted_crypto_requests'] ?? 0),
+            'auto_deleted_cancelled_bank_requests' => (int)($deleteCancelled['deleted_bank_requests'] ?? 0),
             'deleted_stale_unpaid_orders' => (int)($staleOrders['deleted_orders'] ?? 0),
             'expired_orders' => (int)($expire['expired_orders'] ?? 0),
             'deleted_chat_messages' => (int)($chat['deleted_messages'] ?? 0),

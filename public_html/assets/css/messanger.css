@@ -59,6 +59,14 @@
 	line-height:1;
 }
 
+.messenger-unread-pill--desktop{
+	display:none !important;
+}
+
+.messenger-unread-badge--mobile{
+	display:inline-flex;
+}
+
 .messenger-heading-title i{
 	font-size: 20px;
 	color: #000000;
@@ -117,6 +125,12 @@
 	background: #000000;
 	color:#fff;
 	text-shadow:none;
+}
+
+@media (max-width: 1199.98px){
+	.messenger-unread-pill--desktop{
+		display:none !important;
+	}
 }
 
 @keyframes messengerUnreadPulse{
@@ -2044,8 +2058,12 @@
 		display:none !important;
 	}
 
-	.messanger.messenger-desktop-docked .messenger-heading-title .messenger-unread-pill{
+	.messanger.messenger-desktop-docked .messenger-heading-title .messenger-unread-pill--desktop{
 		display:inline-flex;
+	}
+
+	.messanger.messenger-desktop-docked .messenger-unread-badge--mobile{
+		display:none !important;
 	}
 
 	.messanger.messenger-desktop-docked .panel-collapse,

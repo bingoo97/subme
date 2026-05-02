@@ -53,7 +53,7 @@
                 </thead>
                 <tbody>
                     {section name=i loop=$wygrane}
-                        {assign var="showInlineRenewPaymentButton" value=($wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].status == 1 && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days <= 7)}
+                        {assign var="showInlineRenewPaymentButton" value=($wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].status == 1 && !$wygrane[i].payment_waiting_activation && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days <= 7)}
                         <tr>
                             <td data-label="{$t.history_badge_order|default:'Order'}">
                                 <span class="badge badge-secondary">#{$wygrane[i].id}</span>
@@ -137,13 +137,13 @@
                                     {/if}
                             </td>
                             <td data-label="{$t.orders_actions|default:'Actions'}" class="orders-user-table__actions-col">
-                                {if $wygrane[i].status != 1 || $wygrane[i].show_inline_extend_payment || $showInlineRenewPaymentButton}
+                                {if !$wygrane[i].payment_waiting_activation && ($wygrane[i].status != 1 || $wygrane[i].show_inline_extend_payment || $showInlineRenewPaymentButton)}
                                 <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-danger" aria-label="Pay" style="width: 40px;">
                                     <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
                                 </a>
                                 {/if}
-                                <button type="button" class="btn {if $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 40px;">
-                                    <i class="fa fa-search" aria-hidden="true"></i>
+                                <button type="button" class="btn {if $wygrane[i].payment_waiting_activation}btn-dark{elseif $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 40px;">
+                                    <i class="fa {if $wygrane[i].payment_waiting_activation}fa-repeat fa-spin{else}fa-search{/if}" aria-hidden="true"></i>
                                 </button>
                             </td>
                         </tr>
@@ -194,7 +194,7 @@
                             <li role="presentation" class="nav-item">
                                 <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">Details</a>
                             </li>
-                            {if $order_sales_available && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' neq 'credits'))}
+                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' neq 'credits'))}
                                 <li role="presentation" class="nav-item">
                                     <a class="nav-link" href="#orderActions{$wygrane[i].id}" aria-controls="orderActions{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">
                                         {if $can_pending_payment_actions}
@@ -285,7 +285,7 @@
                                     {/if}
                                 </div>
                             </div>
-                            {if $order_sales_available && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' neq 'credits'))}
+                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' neq 'credits'))}
                                 <div role="tabpanel" class="tab-pane fade" id="orderActions{$wygrane[i].id}">
                                     <div class="user-order-modal__actions-stack">
                                         {if $can_pending_payment_actions}

@@ -6,9 +6,9 @@
                         <i class="fa fa-envelope-o" aria-hidden="true"></i>
                         <span>{if $user.customer_type|default:'client' eq 'reseller'}Messenger{else}Technical Support{/if}</span>
                         {if $chat_nieprzeczytane > 0}
-                            <span class="messenger-unread-pill messenger-unread-badge">{$chat_nieprzeczytane}</span>
+                            <span class="messenger-unread-pill messenger-unread-pill--desktop messenger-unread-badge">{$chat_nieprzeczytane}</span>
                         {else}
-                            <span class="messenger-unread-pill messenger-unread-badge" style="display:none;">0</span>
+                            <span class="messenger-unread-pill messenger-unread-pill--desktop messenger-unread-badge" style="display:none;">0</span>
                         {/if}
                     </span>
                     <div class="btn-group pull-right">
@@ -19,9 +19,9 @@
                         {/if}
                         <button type="button" class="btn btn-default btn-xs messenger-toggle-action{if $chat_nieprzeczytane > 0} is-unread is-attention{/if}" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle-button onclick="event.stopPropagation(); return toggleMessengerPanel();">
                         {if $chat_nieprzeczytane > 0}
-                        	<span class="badge wow pulse messenger-unread-badge" data-wow-iteration="infinite" data-wow-duration="1500ms">{$chat_nieprzeczytane}</span>
+                        	<span class="badge wow pulse messenger-unread-badge messenger-unread-badge--mobile" data-wow-iteration="infinite" data-wow-duration="1500ms">{$chat_nieprzeczytane}</span>
                         {else}
-                            <span class="badge messenger-unread-badge" style="display:none;">0</span>
+                            <span class="badge messenger-unread-badge messenger-unread-badge--mobile" style="display:none;">0</span>
                         {/if}
                             <i class="fa fa-angle-down messenger-toggle-icon" aria-hidden="true"></i>
                         </button>
