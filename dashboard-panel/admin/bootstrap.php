@@ -4939,6 +4939,8 @@ function admin_save_payment(
 
     $linkedOrderIdRaw = trim((string)($input['order_id'] ?? ($payment['order_id'] ?? '')));
     $linkedOrderId = 0;
+    $currentOrderId = (int)($payment['order_id'] ?? 0);
+    $autoClearedInvalidOrderLink = false;
     if ($linkedOrderIdRaw !== '') {
         if (!ctype_digit($linkedOrderIdRaw)) {
             return ['ok' => false, 'message' => 'Order number must be a valid ID.'];
@@ -4953,7 +4955,12 @@ function admin_save_payment(
                  LIMIT 1"
             );
             if (!is_array($orderRow) || empty($orderRow['id'])) {
-                return ['ok' => false, 'message' => 'Selected order does not belong to this customer.'];
+                if ($linkedOrderId === $currentOrderId) {
+                    $linkedOrderId = 0;
+                    $autoClearedInvalidOrderLink = true;
+                } else {
+                    return ['ok' => false, 'message' => 'Selected order does not belong to this customer.'];
+                }
             }
         }
     }
@@ -5016,6 +5023,8 @@ function admin_save_payment(
             }
             if ($linkedOrderId > 0) {
                 $description .= ' for order #' . $linkedOrderId;
+            } elseif ($autoClearedInvalidOrderLink) {
+                $description .= ' and invalid order link #' . $currentOrderId . ' was cleared automatically';
             }
 
             admin_log_customer_and_admin(
