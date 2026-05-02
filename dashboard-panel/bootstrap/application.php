@@ -2974,6 +2974,29 @@ function app_product_type_sql(Mysql_ks $db, array $customer, array $settings = [
     return "'" . $db->escape(app_customer_product_type($customer, $settings)) . "'";
 }
 
+function app_customer_order_catalog_product_types(array $customer, array $settings = []): array
+{
+    if (app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller') {
+        return ['subscription', 'credits'];
+    }
+
+    return ['subscription'];
+}
+
+function app_customer_order_catalog_product_type_sql(Mysql_ks $db, array $customer, array $settings = []): string
+{
+    return app_sql_string_list($db, app_customer_order_catalog_product_types($customer, $settings));
+}
+
+function app_customer_order_catalog_mode(array $customer, array $settings = []): string
+{
+    if (app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller') {
+        return 'mixed';
+    }
+
+    return app_customer_product_type($customer, $settings);
+}
+
 function app_fetch_settings(Mysql_ks $db): array
 {
     if (!app_uses_v2_schema($db)) {

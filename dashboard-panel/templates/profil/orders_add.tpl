@@ -12,7 +12,9 @@
 									 </div>
 									 <div class="col">
 										 <p class="text-muted mb-0" style="max-width: 400px;">
-                                             {if $order_catalog_product_type|default:'subscription' eq 'credits'}
+                                             {if $order_catalog_product_type|default:'subscription' eq 'mixed'}
+                                                 {$t.order_add_provider_description_mixed|default:'Select the provider and then choose any available subscription or credits product for this account.'}
+                                             {elseif $order_catalog_product_type|default:'subscription' eq 'credits'}
                                                  {$t.order_add_provider_description_credits|default:'Select the provider for the credits order. Each provider can have different credit packages and pricing.'}
                                              {else}
                                                  {$t.order_add_provider_description|default:'Select the service provider for your subscription. Each provider offers different packages and pricing options.'}

@@ -8,11 +8,12 @@ switch ($site) {
 
 			$tenantId = tenant_current_id($user);
 			$customerProductType = app_customer_product_type($user, $settings);
+			$orderCatalogMode = app_customer_order_catalog_mode($user, $settings);
 			$orderSalesAvailable = app_customer_sales_enabled($user, $settings);
 			$orderCatalogHasProducts = false;
 
 			if (app_uses_v2_schema($db)) {
-				$productTypeSql = app_product_type_sql($db, $user, $settings);
+				$productTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
 				$productCountRow = $db->select_user(
 					"SELECT COUNT(*) AS total
 					 FROM products
@@ -20,14 +21,14 @@ switch ($site) {
 					    ON product_providers.id = products.provider_id
 					 WHERE products.is_active = 1
 					   AND product_providers.is_active = 1
-					   AND products.product_type = {$productTypeSql}
+					   AND products.product_type IN ({$productTypeSql})
 					   " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
 					   " . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0")
 				);
 				$orderCatalogHasProducts = (int)($productCountRow['total'] ?? 0) > 0;
 			}
 
-			$smarty->assign('order_catalog_product_type', $customerProductType);
+			$smarty->assign('order_catalog_product_type', $orderCatalogMode);
 			$smarty->assign('order_sales_available', $orderSalesAvailable ? 1 : 0);
 			$smarty->assign('order_catalog_has_products', $orderCatalogHasProducts ? 1 : 0);
 
@@ -160,14 +161,14 @@ switch ($site) {
 					
 					
 					if (app_uses_v2_schema($db)) {
-						$productTypeSql = app_product_type_sql($db, $user, $settings);
+						$productTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
 						$zapytanie = "SELECT DISTINCT product_providers.*
 								  FROM product_providers
 								  INNER JOIN products
 									ON product_providers.id = products.provider_id
 								  WHERE product_providers.is_active = 1
 									AND products.is_active = 1
-									AND products.product_type = {$productTypeSql}
+									AND products.product_type IN ({$productTypeSql})
 									" . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
 									" . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0") . "
 								  ORDER BY product_providers.id";

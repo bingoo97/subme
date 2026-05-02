@@ -38,8 +38,8 @@ if (!app_customer_sales_enabled($user, $settings)) {
 }
 
 $trialsEnabled = (int)($settings['active_trials'] ?? 0) === 1;
-$productTypeSql = app_product_type_sql($db, $user, $settings);
-$catalogProductType = app_customer_product_type($user, $settings);
+$productTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
+$catalogProductType = app_customer_order_catalog_mode($user, $settings);
 $productDescriptionSelect = schema_column_exists($db, 'products', 'description')
     ? 'products.description AS description,'
     : "'' AS description,";
@@ -62,7 +62,7 @@ if (app_uses_v2_schema($db)) {
          LEFT JOIN currencies ON currencies.id = products.currency_id
          WHERE products.provider_id = {$providerId}
            AND products.is_active = 1
-           AND products.product_type = {$productTypeSql}
+           AND products.product_type IN ({$productTypeSql})
            " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
            " . ($trialsEnabled ? '' : "AND products.is_trial = 0") . "
          ORDER BY products.duration_hours ASC, products.price_amount ASC, products.id ASC"
@@ -93,7 +93,12 @@ if (!$products) {
 
 echo '<div class="form-group" data-products-found="1">';
 echo '<div class="col-lg-8">';
-echo '<label class="form-label" for="id_product">' . htmlspecialchars((string)localization_translate($t, $catalogProductType === 'credits' ? 'order_add_credits_label' : 'order_add_subscription_label', $catalogProductType === 'credits' ? 'Select credits package' : 'Select subscription'), ENT_QUOTES, 'UTF-8') . '</label>';
+if ($catalogProductType === 'mixed') {
+    $productPickerLabel = localization_translate($t, 'order_add_mixed_label', 'Select product');
+} else {
+    $productPickerLabel = localization_translate($t, $catalogProductType === 'credits' ? 'order_add_credits_label' : 'order_add_subscription_label', $catalogProductType === 'credits' ? 'Select credits package' : 'Select subscription');
+}
+echo '<label class="form-label" for="id_product">' . htmlspecialchars((string)$productPickerLabel, ENT_QUOTES, 'UTF-8') . '</label>';
 echo '<input type="hidden" name="id_product" id="id_product" value="" required>';
 echo '<div class="order-product-picker" id="order_product_picker">';
 

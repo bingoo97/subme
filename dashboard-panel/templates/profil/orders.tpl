@@ -5,7 +5,9 @@
             <form action="" method="post">
                 <input type="hidden" name="_csrf" value="{$csrf_token|default:''}">
                 <button type="submit" class="btn btn-dark btn-lg" name="order_add">
-                    {if $order_catalog_product_type|default:'subscription' eq 'credits'}
+                    {if $order_catalog_product_type|default:'subscription' eq 'mixed'}
+                        {$t.order_add_mixed|default:'Add new'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
+                    {elseif $order_catalog_product_type|default:'subscription' eq 'credits'}
                         {$t.order_add_credits|default:'Buy credits'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
                     {else}
                         {$t.order_add_subscription|default:'Add subscription'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
@@ -21,7 +23,9 @@
                         {$t.sales_disabled_notice|default:'Sales are currently unavailable.'}
                     {/if}
                 {else}
-                    {if $order_catalog_product_type|default:'subscription' eq 'credits'}
+                    {if $order_catalog_product_type|default:'subscription' eq 'mixed'}
+                        {$t.order_add_no_products_mixed_notice|default:'There are currently no available products for your account.'}
+                    {elseif $order_catalog_product_type|default:'subscription' eq 'credits'}
                         {$t.order_add_no_products_credits_notice|default:'There are currently no available credits packages for your account.'}
                     {else}
                         {$t.order_add_no_products_subscription_notice|default:'There are currently no available subscription packages for your account.'}
