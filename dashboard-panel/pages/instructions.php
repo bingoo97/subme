@@ -26,12 +26,12 @@ $instructionGuides = [
         'title' => localization_translate($t, 'instructions_crypto_exchange'),
         'group' => 'payments',
     ],
-    [
-        'href' => '/instruction-smart-iptv',
-        'icon' => 'fa-tv',
-        'title' => localization_translate($t, 'instructions_smart_iptv'),
-        'group' => 'applications',
-    ],
+ //   [
+ //       'href' => '/instruction-smart-iptv',
+////       'icon' => 'fa-tv',
+//        'title' => localization_translate($t, 'instructions_smart_iptv'),
+//        'group' => 'applications',
+//    ],
     [
         'href' => '/instruction-ott-player',
         'icon' => 'fa-play-circle',
