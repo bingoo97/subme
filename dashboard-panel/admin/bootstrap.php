@@ -5074,6 +5074,16 @@ function admin_save_payment(
             );
         }
 
+        if ($updated && in_array($status, admin_payment_cancelled_statuses($paymentType), true) && !empty($payment['order_id'])) {
+            app_order_cancel_pending_renewal(
+                $db,
+                (int)$payment['order_id'],
+                'Cancelled from admin payment editor',
+                'crypto',
+                $paymentId
+            );
+        }
+
         return [
             'ok' => (bool)$updated,
             'message' => $updated ? 'Payment request saved successfully.' : 'Unable to save payment request.',
@@ -5183,6 +5193,16 @@ function admin_save_payment(
             'payment_updated',
             $description . '.',
             $ipAddress
+        );
+    }
+
+    if ($updated && in_array($status, admin_payment_cancelled_statuses($paymentType), true) && !empty($payment['order_id'])) {
+        app_order_cancel_pending_renewal(
+            $db,
+            (int)$payment['order_id'],
+            'Cancelled from admin payment editor',
+            'bank',
+            $paymentId
         );
     }
 
@@ -5317,9 +5337,10 @@ function admin_finalize_successful_payment(
     }
 
     $currentPaymentSourceKey = $paymentType . ':' . $paymentId;
+    $pendingRenewalForPayment = $orderId > 0 ? app_order_find_pending_renewal($db, $orderId, $paymentType, $paymentId, true) : null;
     $balanceAlreadyAppliedForThisPayment = false;
 
-    if ($orderId > 0) {
+    if ($orderId > 0 && !$pendingRenewalForPayment) {
         $existingOrderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
         if (is_array($existingOrderCreditEvent) && !empty($existingOrderCreditEvent['source_key'])) {
             $creditedSourceKey = (string)($existingOrderCreditEvent['source_key'] ?? '');
@@ -5332,6 +5353,18 @@ function admin_finalize_successful_payment(
                 ];
             }
         }
+    } elseif (
+        schema_object_exists($db, 'customer_balance_runtime_events')
+    ) {
+        $currentPaymentEvent = $db->select_user(
+            "SELECT id
+             FROM customer_balance_runtime_events
+             WHERE source_type = 'payment_approval'
+               AND source_key = '" . $db->escape($currentPaymentSourceKey) . "'
+               AND direction = 'credit'
+             LIMIT 1"
+        );
+        $balanceAlreadyAppliedForThisPayment = is_array($currentPaymentEvent) && !empty($currentPaymentEvent['id']);
     }
 
     $balanceCreditResult = [
@@ -5381,6 +5414,30 @@ function admin_finalize_successful_payment(
     }
 
     if ($orderId > 0) {
+        $pendingRenewal = $pendingRenewalForPayment;
+        if (!$pendingRenewal) {
+            $pendingRenewal = app_order_find_pending_renewal($db, $orderId);
+        }
+        if ($pendingRenewal) {
+            $applyRenewalResult = app_apply_pending_order_renewal(
+                $db,
+                (int)$pendingRenewal['id'],
+                'admin',
+                $adminUserId,
+                $ipAddress
+            );
+            if (empty($applyRenewalResult['ok'])) {
+                return $applyRenewalResult;
+            }
+
+            return [
+                'ok' => true,
+                'already_applied' => !empty($balanceCreditResult['already_applied']),
+                'order_id' => $orderId,
+                'customer_id' => $customerId,
+            ];
+        }
+
         $order = admin_order_find($db, $orderId);
         if (!$order) {
             return ['ok' => false, 'message' => 'Linked order not found.'];
@@ -5447,6 +5504,15 @@ function admin_delete_payment(
     $deleted = $db->delete_using_id($tableName, $paymentId);
 
     if ($deleted) {
+        if (!empty($payment['order_id']) && in_array($paymentType, ['crypto', 'bank'], true)) {
+            app_order_cancel_pending_renewal(
+                $db,
+                (int)$payment['order_id'],
+                'Deleted from admin payments list',
+                $paymentType,
+                $paymentId
+            );
+        }
         if ($paymentType === 'crypto' && !empty($payment['wallet_assignment_id'])) {
             app_release_crypto_wallet_assignment_if_unused(
                 $db,
@@ -8453,6 +8519,27 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
         'orders',
         $orderId
     );
+
+    if ($updated && schema_object_exists($db, 'order_renewals')) {
+        app_ensure_order_renewal_runtime_columns($db);
+        $db->insert(
+            ['order_id', 'customer_id', 'product_id', 'price_amount', 'currency_id', 'duration_hours', 'status', 'requested_at', 'applied_at', 'target_expires_at', 'renewal_note'],
+            [
+                $orderId,
+                (int)($order['customer_id'] ?? 0),
+                $productId,
+                $extensionAmount,
+                (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
+                $durationHours,
+                'applied',
+                date('Y-m-d H:i:s'),
+                date('Y-m-d H:i:s'),
+                $newExpiry,
+                'Extended from admin panel',
+            ],
+            'order_renewals'
+        );
+    }
 
     if ($updated && schema_object_exists($db, 'order_status_events')) {
         $db->insert(
@@ -15997,6 +16084,12 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                                             <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
                                                         </div>
                                                     </div>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                <div class="admin-order-summary__note admin-order-summary__note--warning">
+                                                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
                                                 </div>
                                             <?php endif; ?>
                                         </div>

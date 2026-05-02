@@ -328,7 +328,7 @@ function app_http_json(string $url): ?array
     return is_array($decoded) ? $decoded : null;
 }
 
-function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl = 900): array
+function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl = 900, array $assetIds = []): array
 {
     if (!schema_object_exists($db, 'crypto_assets')) {
         return [];
@@ -341,6 +341,13 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
 
     $vsCurrencyLower = strtolower($vsCurrency);
     $now = time();
+    $assetIds = array_values(array_filter(array_map('intval', $assetIds), static function (int $value): bool {
+        return $value > 0;
+    }));
+    $assetFilterSql = '';
+    if ($assetIds) {
+        $assetFilterSql = ' AND id IN (' . implode(',', $assetIds) . ')';
+    }
 
     $rows = $db->select_full_user(
         "SELECT
@@ -355,6 +362,7 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
             is_active
          FROM crypto_assets
          WHERE is_active = 1
+         {$assetFilterSql}
          ORDER BY id ASC"
     );
 
@@ -372,16 +380,15 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
             $rows[$index]['coingecko_id'] = $coingeckoId;
         }
 
-        if ($coingeckoId !== '') {
-            $coingeckoIds[$coingeckoId] = true;
-        }
-
         $rate = isset($row['current_rate_fiat']) ? (float)$row['current_rate_fiat'] : 0.0;
         $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
         $rateUpdatedAt = !empty($row['rate_updated_at']) ? app_timestamp_from_utc_datetime((string)$row['rate_updated_at']) : 0;
 
         if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
             $needsRefresh = true;
+            if ($coingeckoId !== '') {
+                $coingeckoIds[$coingeckoId] = true;
+            }
         }
     }
 
@@ -1435,27 +1442,24 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
 function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrency = 'USD', array $settings = []): array
 {
     $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
+    $hasAssignmentsTable = schema_object_exists($db, 'crypto_wallet_assignments');
+    $hasWalletsTable = schema_object_exists($db, 'crypto_wallet_addresses');
+    $hasAssetsTable = schema_object_exists($db, 'crypto_assets');
     $hasCustomerWalletView = schema_object_exists($db, 'customer_crypto_wallets');
-    if (
-        $customerId <= 0
-        || (
-            !$hasCustomerWalletView
-            && (
-                !schema_object_exists($db, 'crypto_wallet_assignments')
-                || !schema_object_exists($db, 'crypto_wallet_addresses')
-                || !schema_object_exists($db, 'crypto_assets')
-            )
-        )
-    ) {
+    if ($customerId <= 0 || ((!$hasAssignmentsTable || !$hasWalletsTable || !$hasAssetsTable) && !$hasCustomerWalletView)) {
         return [];
     }
 
     app_release_stale_auto_crypto_wallet_assignments($db);
     app_sync_crypto_wallet_address_statuses($db);
-
-    $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
     if (!$sharedEnabled) {
-        foreach ($activeAssets as $asset) {
+        $activeAssetRows = $db->select_full_user(
+            "SELECT id
+             FROM crypto_assets
+             WHERE is_active = 1
+             ORDER BY id ASC"
+        );
+        foreach ((array)$activeAssetRows as $asset) {
             $assetId = (int)($asset['id'] ?? 0);
             if ($assetId > 0) {
                 app_enforce_single_customer_crypto_wallet_per_asset(
@@ -1468,19 +1472,12 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
         }
     }
 
-    if ($hasCustomerWalletView) {
-        $assignedCryptoWallets = $db->select_full_user(
-            "SELECT *
-             FROM customer_crypto_wallets
-             WHERE customer_id = {$customerId}
-               AND status = 'active'
-             ORDER BY assigned_at DESC"
-        );
-    } else {
+    if ($hasAssignmentsTable && $hasWalletsTable && $hasAssetsTable) {
         $assignedCryptoWallets = $db->select_full_user(
             "SELECT
                 assignment.id AS wallet_assignment_id,
                 assignment.customer_id,
+                wallet.crypto_asset_id,
                 asset.code AS crypto_asset_code,
                 asset.name AS crypto_asset_name,
                 wallet.id AS wallet_address_id,
@@ -1504,14 +1501,46 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
                AND assignment.status = 'active'
              ORDER BY assignment.assigned_at DESC"
         );
+    } elseif ($hasCustomerWalletView) {
+        $assignedCryptoWallets = $db->select_full_user(
+            "SELECT *
+             FROM customer_crypto_wallets
+             WHERE customer_id = {$customerId}
+               AND status = 'active'
+             ORDER BY assigned_at DESC"
+        );
+    } else {
+        $assignedCryptoWallets = [];
     }
     if (!is_array($assignedCryptoWallets)) {
         $assignedCryptoWallets = [];
     }
 
+    $preferredAssetIds = [];
+    foreach ($assignedCryptoWallets as $assignedWallet) {
+        $assetId = (int)($assignedWallet['crypto_asset_id'] ?? 0);
+        if ($assetId > 0) {
+            $preferredAssetIds[$assetId] = true;
+        }
+    }
+
+    $rateAssetIds = (!$sharedEnabled && $preferredAssetIds)
+        ? array_keys($preferredAssetIds)
+        : [];
+    $activeAssets = app_refresh_crypto_rates($db, $vsCurrency, 900, $rateAssetIds);
+    if (!$activeAssets && $rateAssetIds) {
+        $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
+    }
+
     $activeAssetsByCode = [];
+    $activeAssetsById = [];
     foreach ($activeAssets as $asset) {
-        $activeAssetsByCode[(string)($asset['code'] ?? '')] = $asset;
+        $assetCode = (string)($asset['code'] ?? '');
+        $assetId = (int)($asset['id'] ?? 0);
+        $activeAssetsByCode[$assetCode] = $asset;
+        if ($assetId > 0) {
+            $activeAssetsById[$assetId] = $asset;
+        }
     }
 
     foreach ($assignedCryptoWallets as &$wallet) {
@@ -1567,7 +1596,23 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
     $cryptoAssets = [];
     foreach ($assignedCryptoWallets as $assignedWallet) {
         $assetCode = (string)($assignedWallet['crypto_asset_code'] ?? '');
-        $asset = $activeAssetsByCode[$assetCode] ?? null;
+        $assignedAssetId = (int)($assignedWallet['crypto_asset_id'] ?? 0);
+        $asset = $activeAssetsByCode[$assetCode] ?? ($assignedAssetId > 0 ? ($activeAssetsById[$assignedAssetId] ?? null) : null);
+        if (!is_array($asset) && $assignedAssetId > 0) {
+            $asset = $db->select_user(
+                "SELECT
+                    id,
+                    code,
+                    name,
+                    logo_url,
+                    current_rate_fiat,
+                    rate_currency_code,
+                    is_active
+                 FROM crypto_assets
+                 WHERE id = {$assignedAssetId}
+                 LIMIT 1"
+            );
+        }
         if (!is_array($asset)) {
             continue;
         }
@@ -1642,6 +1687,170 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
     }
 
     return $cryptoAssets;
+}
+
+function app_find_customer_pending_order_payment(Mysql_ks $db, int $customerId, ?string $now = null): ?array
+{
+    if ($customerId <= 0 || !schema_object_exists($db, 'orders')) {
+        return null;
+    }
+
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+    $customerId = (int)$customerId;
+    $candidates = [];
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoRows = $db->select_full_user(
+            "SELECT
+                crypto_deposit_requests.id AS payment_request_id,
+                crypto_deposit_requests.order_id,
+                'crypto' AS payment_type,
+                COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS request_created_at,
+                crypto_deposit_requests.status AS payment_status,
+                products.name AS product_name
+             FROM crypto_deposit_requests
+             INNER JOIN orders
+               ON orders.id = crypto_deposit_requests.order_id
+              AND orders.customer_id = {$customerId}
+             LEFT JOIN products ON products.id = orders.product_id
+             WHERE crypto_deposit_requests.customer_id = {$customerId}
+               AND crypto_deposit_requests.order_id IS NOT NULL
+               AND crypto_deposit_requests.order_id > 0
+               AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+               AND (crypto_deposit_requests.expires_at IS NULL OR crypto_deposit_requests.expires_at > '{$safeNowSql}')"
+        );
+        if (is_array($cryptoRows)) {
+            $candidates = array_merge($candidates, $cryptoRows);
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankRows = $db->select_full_user(
+            "SELECT
+                bank_transfer_requests.id AS payment_request_id,
+                bank_transfer_requests.order_id,
+                'bank' AS payment_type,
+                COALESCE(bank_transfer_requests.requested_at, bank_transfer_requests.expires_at) AS request_created_at,
+                bank_transfer_requests.status AS payment_status,
+                products.name AS product_name
+             FROM bank_transfer_requests
+             INNER JOIN orders
+               ON orders.id = bank_transfer_requests.order_id
+              AND orders.customer_id = {$customerId}
+             LEFT JOIN products ON products.id = orders.product_id
+             WHERE bank_transfer_requests.customer_id = {$customerId}
+               AND bank_transfer_requests.order_id IS NOT NULL
+               AND bank_transfer_requests.order_id > 0
+               AND bank_transfer_requests.status IN ('pending_payment', 'awaiting_review')
+               AND (bank_transfer_requests.expires_at IS NULL OR bank_transfer_requests.expires_at > '{$safeNowSql}')"
+        );
+        if (is_array($bankRows)) {
+            $candidates = array_merge($candidates, $bankRows);
+        }
+    }
+
+    if (!$candidates) {
+        return null;
+    }
+
+    usort($candidates, static function (array $left, array $right): int {
+        $leftTime = !empty($left['request_created_at']) ? strtotime((string)$left['request_created_at']) : 0;
+        $rightTime = !empty($right['request_created_at']) ? strtotime((string)$right['request_created_at']) : 0;
+        if ($leftTime !== $rightTime) {
+            return $rightTime <=> $leftTime;
+        }
+
+        return (int)($right['payment_request_id'] ?? 0) <=> (int)($left['payment_request_id'] ?? 0);
+    });
+
+    $selected = $candidates[0];
+    $selected['order_id'] = (int)($selected['order_id'] ?? 0);
+    $selected['payment_request_id'] = (int)($selected['payment_request_id'] ?? 0);
+    $selected['payment_url'] = $selected['order_id'] > 0 ? '/order-payment-' . $selected['order_id'] : '';
+
+    return $selected['order_id'] > 0 ? $selected : null;
+}
+
+function app_find_customer_pending_balance_topup_payment(Mysql_ks $db, int $customerId, ?string $now = null): ?array
+{
+    if ($customerId <= 0) {
+        return null;
+    }
+
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+    $customerId = (int)$customerId;
+    $candidates = [];
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoRows = $db->select_full_user(
+            "SELECT
+                crypto_deposit_requests.id AS payment_request_id,
+                'crypto' AS payment_type,
+                COALESCE(crypto_deposit_requests.requested_at, crypto_deposit_requests.expires_at) AS request_created_at,
+                crypto_deposit_requests.status AS payment_status,
+                crypto_assets.name AS asset_name,
+                crypto_assets.code AS asset_code
+             FROM crypto_deposit_requests
+             LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+             WHERE crypto_deposit_requests.customer_id = {$customerId}
+               AND (crypto_deposit_requests.order_id IS NULL OR crypto_deposit_requests.order_id = 0)
+               AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+               AND (crypto_deposit_requests.expires_at IS NULL OR crypto_deposit_requests.expires_at > '{$safeNowSql}')"
+        );
+        if (is_array($cryptoRows)) {
+            $candidates = array_merge($candidates, $cryptoRows);
+        }
+    }
+
+    if (schema_object_exists($db, 'crypto_topups')) {
+        $cryptoTopupsReadTable = schema_read_target($db, 'crypto_topups');
+        $cryptoTopupCreatedAtColumn = schema_read_column($db, 'crypto_topups', 'created_at', 'date');
+        $cryptoTopupStatusColumn = schema_read_column($db, 'crypto_topups', 'is_active', 'status');
+        $legacyRows = $db->select_full_user(
+            "SELECT
+                {$cryptoTopupsReadTable}.id AS payment_request_id,
+                'legacy_crypto' AS payment_type,
+                {$cryptoTopupsReadTable}.{$cryptoTopupCreatedAtColumn} AS request_created_at,
+                {$cryptoTopupsReadTable}.{$cryptoTopupStatusColumn} AS payment_status,
+                cryptocurrency.name AS asset_name,
+                cryptocurrency.symbol AS asset_code
+             FROM {$cryptoTopupsReadTable}
+             LEFT JOIN cryptocurrency ON cryptocurrency.id = {$cryptoTopupsReadTable}.crypto_id
+             WHERE {$cryptoTopupsReadTable}.user_id = {$customerId}
+               AND {$cryptoTopupsReadTable}.{$cryptoTopupStatusColumn} = 0"
+        );
+        if (is_array($legacyRows)) {
+            $candidates = array_merge($candidates, $legacyRows);
+        }
+    }
+
+    if (!$candidates) {
+        return null;
+    }
+
+    usort($candidates, static function (array $left, array $right): int {
+        $leftTime = !empty($left['request_created_at']) ? strtotime((string)$left['request_created_at']) : 0;
+        $rightTime = !empty($right['request_created_at']) ? strtotime((string)$right['request_created_at']) : 0;
+        if ($leftTime !== $rightTime) {
+            return $rightTime <=> $leftTime;
+        }
+
+        return (int)($right['payment_request_id'] ?? 0) <=> (int)($left['payment_request_id'] ?? 0);
+    });
+
+    $selected = $candidates[0];
+    $selected['payment_request_id'] = (int)($selected['payment_request_id'] ?? 0);
+    $selected['payment_url'] = '/cryptocurrency';
+
+    return $selected;
 }
 
 function app_chat_card_prefix(): string
@@ -2117,6 +2326,489 @@ function app_order_status_visual(array $order): array
         'label' => 'Status',
         'label_key' => 'orders_status_default',
     ];
+}
+
+function app_ensure_order_renewal_runtime_columns(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'order_renewals')) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_column_exists($db, 'order_renewals', 'product_id')) {
+        @$db->query(
+            "ALTER TABLE order_renewals
+             ADD COLUMN product_id INT UNSIGNED DEFAULT NULL
+             AFTER customer_id"
+        );
+        schema_forget_column_cache('order_renewals', 'product_id');
+    }
+
+    if (!schema_column_exists($db, 'order_renewals', 'duration_hours')) {
+        @$db->query(
+            "ALTER TABLE order_renewals
+             ADD COLUMN duration_hours INT UNSIGNED NOT NULL DEFAULT 0
+             AFTER currency_id"
+        );
+        schema_forget_column_cache('order_renewals', 'duration_hours');
+    }
+
+    if (!schema_column_exists($db, 'order_renewals', 'target_expires_at')) {
+        @$db->query(
+            "ALTER TABLE order_renewals
+             ADD COLUMN target_expires_at DATETIME DEFAULT NULL
+             AFTER applied_at"
+        );
+        schema_forget_column_cache('order_renewals', 'target_expires_at');
+    }
+
+    if (!schema_column_exists($db, 'order_renewals', 'payment_request_type')) {
+        @$db->query(
+            "ALTER TABLE order_renewals
+             ADD COLUMN payment_request_type VARCHAR(20) DEFAULT NULL
+             AFTER target_expires_at"
+        );
+        schema_forget_column_cache('order_renewals', 'payment_request_type');
+    }
+
+    if (!schema_column_exists($db, 'order_renewals', 'payment_request_id')) {
+        @$db->query(
+            "ALTER TABLE order_renewals
+             ADD COLUMN payment_request_id BIGINT UNSIGNED DEFAULT NULL
+             AFTER payment_request_type"
+        );
+        schema_forget_column_cache('order_renewals', 'payment_request_id');
+    }
+
+    if (!schema_column_exists($db, 'order_renewals', 'renewal_note')) {
+        @$db->query(
+            "ALTER TABLE order_renewals
+             ADD COLUMN renewal_note VARCHAR(255) DEFAULT NULL
+             AFTER payment_request_id"
+        );
+        schema_forget_column_cache('order_renewals', 'renewal_note');
+    }
+}
+
+function app_order_product_can_extend(array $product): bool
+{
+    if (empty($product['id']) || empty($product['is_active'])) {
+        return false;
+    }
+
+    if (strtolower(trim((string)($product['product_type'] ?? 'subscription'))) !== 'subscription') {
+        return false;
+    }
+
+    if (!empty($product['is_trial']) || !empty($product['trial'])) {
+        return false;
+    }
+
+    return (int)($product['duration_hours'] ?? $product['duration'] ?? 0) > 24;
+}
+
+function app_order_can_self_extend(array $order): bool
+{
+    $status = strtolower(trim((string)($order['status_raw'] ?? $order['status_name'] ?? $order['status'] ?? '')));
+    $paymentStatus = strtolower(trim((string)($order['payment_status_raw'] ?? $order['payment_status_name'] ?? $order['payment_status'] ?? '')));
+    $productType = strtolower(trim((string)($order['product_type'] ?? 'subscription')));
+
+    if ($productType !== 'subscription') {
+        return false;
+    }
+
+    if (!empty($order['trial'])) {
+        return false;
+    }
+
+    if ((int)($order['provider_id'] ?? 0) <= 0) {
+        return false;
+    }
+
+    return in_array($status, ['active', 'expired'], true) && $paymentStatus === 'paid';
+}
+
+function app_order_extension_target_expiry(array $order, array $product): ?string
+{
+    if (!app_order_product_can_extend($product)) {
+        return null;
+    }
+
+    $currentExpiry = !empty($order['date_end'])
+        ? strtotime((string)$order['date_end'])
+        : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
+    $baseTimestamp = $currentExpiry > time() ? $currentExpiry : time();
+    $durationHours = (int)($product['duration_hours'] ?? $product['duration'] ?? 0);
+    if ($durationHours <= 0) {
+        return null;
+    }
+
+    return date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
+}
+
+function app_order_find_pending_renewal(
+    Mysql_ks $db,
+    int $orderId,
+    string $paymentRequestType = '',
+    int $paymentRequestId = 0,
+    bool $includeCancelled = false
+): ?array {
+    if ($orderId <= 0 || !schema_object_exists($db, 'order_renewals')) {
+        return null;
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $allowedStatuses = $includeCancelled
+        ? "'pending_payment', 'paid_pending_activation', 'cancelled'"
+        : "'pending_payment', 'paid_pending_activation'";
+    $where = "order_id = {$orderId} AND status IN ({$allowedStatuses})";
+    if ($paymentRequestType !== '' && $paymentRequestId > 0) {
+        $where .= " AND payment_request_type = '" . $db->escape($paymentRequestType) . "' AND payment_request_id = {$paymentRequestId}";
+    }
+
+    $row = $db->select_user(
+        "SELECT *
+         FROM order_renewals
+         WHERE {$where}
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
+function app_order_upsert_pending_renewal(Mysql_ks $db, array $order, array $product, string $note = ''): array
+{
+    if (!schema_object_exists($db, 'order_renewals')) {
+        return ['ok' => false, 'message' => 'Order renewals table is unavailable.'];
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $orderId = (int)($order['id'] ?? 0);
+    $customerId = (int)($order['customer_id'] ?? $order['user_id'] ?? 0);
+    $productId = (int)($product['id'] ?? 0);
+    $providerId = (int)($order['provider_id'] ?? 0);
+    $productProviderId = (int)($product['provider_id'] ?? $providerId);
+    if ($orderId <= 0 || $customerId <= 0 || $productId <= 0) {
+        return ['ok' => false, 'message' => 'Order or product is invalid.'];
+    }
+    if ($providerId > 0 && $productProviderId > 0 && $providerId !== $productProviderId) {
+        return ['ok' => false, 'message' => 'You can only extend the same subscription within the same provider.'];
+    }
+    if (!app_order_can_self_extend($order)) {
+        return ['ok' => false, 'message' => 'This order cannot be extended in place.'];
+    }
+    if (!app_order_product_can_extend($product)) {
+        return ['ok' => false, 'message' => 'Selected package cannot be used for subscription extension.'];
+    }
+
+    $targetExpiry = app_order_extension_target_expiry($order, $product);
+    if ($targetExpiry === null) {
+        return ['ok' => false, 'message' => 'Unable to calculate the new subscription expiry date.'];
+    }
+
+    $durationHours = (int)($product['duration_hours'] ?? $product['duration'] ?? 0);
+    $priceAmount = round((float)($product['price_amount'] ?? $product['price'] ?? 0), 2);
+    $currencyId = (int)($product['currency_id'] ?? $order['currency_id'] ?? 0);
+    $renewalNote = trim($note);
+
+    $existing = app_order_find_pending_renewal($db, $orderId);
+    if ($existing) {
+        $updated = $db->update_using_id(
+            ['product_id', 'price_amount', 'currency_id', 'duration_hours', 'target_expires_at', 'status', 'requested_at', 'payment_request_type', 'payment_request_id', 'renewal_note'],
+            [$productId, $priceAmount, $currencyId, $durationHours, $targetExpiry, 'pending_payment', date('Y-m-d H:i:s'), null, null, $renewalNote !== '' ? $renewalNote : null],
+            'order_renewals',
+            (int)$existing['id']
+        );
+
+        return [
+            'ok' => (bool)$updated,
+            'message' => $updated ? 'Pending renewal updated.' : 'Unable to update pending renewal.',
+            'renewal_id' => (int)$existing['id'],
+            'target_expires_at' => $targetExpiry,
+        ];
+    }
+
+    $inserted = $db->insert(
+        ['order_id', 'customer_id', 'product_id', 'price_amount', 'currency_id', 'duration_hours', 'status', 'requested_at', 'target_expires_at', 'renewal_note'],
+        [$orderId, $customerId, $productId, $priceAmount, $currencyId, $durationHours, 'pending_payment', date('Y-m-d H:i:s'), $targetExpiry, $renewalNote !== '' ? $renewalNote : null],
+        'order_renewals'
+    );
+
+    return [
+        'ok' => (bool)$inserted,
+        'message' => $inserted ? 'Pending renewal created.' : 'Unable to create pending renewal.',
+        'renewal_id' => $inserted ? (int)$db->id() : 0,
+        'target_expires_at' => $targetExpiry,
+    ];
+}
+
+function app_order_attach_renewal_payment_request(Mysql_ks $db, int $renewalId, string $paymentRequestType, int $paymentRequestId): void
+{
+    if ($renewalId <= 0 || $paymentRequestId <= 0 || !schema_object_exists($db, 'order_renewals')) {
+        return;
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $db->update_using_id(
+        ['payment_request_type', 'payment_request_id'],
+        [trim($paymentRequestType) !== '' ? trim($paymentRequestType) : null, $paymentRequestId],
+        'order_renewals',
+        $renewalId
+    );
+}
+
+function app_order_cancel_pending_renewal(
+    Mysql_ks $db,
+    int $orderId,
+    string $reason = '',
+    string $paymentRequestType = '',
+    int $paymentRequestId = 0
+): void {
+    if ($orderId <= 0 || !schema_object_exists($db, 'order_renewals')) {
+        return;
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $where = "order_id = {$orderId} AND status IN ('pending_payment', 'paid_pending_activation')";
+    if ($paymentRequestType !== '' && $paymentRequestId > 0) {
+        $where .= " AND payment_request_type = '" . $db->escape($paymentRequestType) . "' AND payment_request_id = {$paymentRequestId}";
+    }
+
+    $reasonSql = trim($reason) !== ''
+        ? "'" . $db->escape(trim($reason)) . "'"
+        : 'NULL';
+
+    @$db->query(
+        "UPDATE order_renewals
+         SET status = 'cancelled',
+             renewal_note = CONCAT(
+                 COALESCE(NULLIF(renewal_note, ''), ''),
+                 CASE
+                     WHEN {$reasonSql} IS NULL THEN ''
+                     WHEN COALESCE(renewal_note, '') = '' THEN {$reasonSql}
+                     ELSE CONCAT('\n', {$reasonSql})
+                 END
+             )
+         WHERE {$where}"
+    );
+}
+
+function app_apply_pending_order_renewal(
+    Mysql_ks $db,
+    int $renewalId,
+    string $actorType = 'system',
+    int $adminUserId = 0,
+    string $ipAddress = '',
+    bool $skipBalanceDebit = false
+): array {
+    if ($renewalId <= 0 || !schema_object_exists($db, 'order_renewals') || !schema_object_exists($db, 'orders')) {
+        return ['ok' => false, 'message' => 'Renewal record not found.'];
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $renewal = $db->select_user(
+        "SELECT *
+         FROM order_renewals
+         WHERE id = {$renewalId}
+         LIMIT 1"
+    );
+    if (!is_array($renewal) || empty($renewal['id'])) {
+        return ['ok' => false, 'message' => 'Renewal record not found.'];
+    }
+
+    if ((string)($renewal['status'] ?? '') === 'applied') {
+        return ['ok' => true, 'already_applied' => true, 'order_id' => (int)($renewal['order_id'] ?? 0)];
+    }
+
+    $order = $db->select_user(
+        "SELECT orders.*, products.provider_id, products.product_type, products.is_trial, products.duration_hours
+         FROM orders
+         LEFT JOIN products ON products.id = orders.product_id
+         WHERE orders.id = " . (int)$renewal['order_id'] . "
+         LIMIT 1"
+    );
+    if (!is_array($order) || empty($order['id'])) {
+        return ['ok' => false, 'message' => 'Order not found for this renewal.'];
+    }
+
+    $product = $db->select_user(
+        "SELECT id, provider_id, name, duration_hours, price_amount, currency_id, is_active, product_type, is_trial
+         FROM products
+         WHERE id = " . (int)($renewal['product_id'] ?? 0) . "
+         LIMIT 1"
+    );
+    if (!is_array($product) || empty($product['id']) || !app_order_product_can_extend($product)) {
+        return ['ok' => false, 'message' => 'Renewal product is unavailable.'];
+    }
+
+    if ((int)($product['provider_id'] ?? 0) !== (int)($order['provider_id'] ?? 0)) {
+        return ['ok' => false, 'message' => 'Renewal product does not belong to the same provider.'];
+    }
+
+    $targetExpiry = trim((string)($renewal['target_expires_at'] ?? ''));
+    if ($targetExpiry === '') {
+        $targetExpiry = (string)app_order_extension_target_expiry($order, $product);
+    }
+    if ($targetExpiry === '') {
+        return ['ok' => false, 'message' => 'Renewal expiry date is missing.'];
+    }
+
+    $renewalAmount = round((float)($renewal['price_amount'] ?? $product['price_amount'] ?? 0), 2);
+    if ($renewalAmount <= 0) {
+        return ['ok' => false, 'message' => 'Renewal amount is invalid.'];
+    }
+
+    if (!$skipBalanceDebit) {
+        $balanceDebitResult = app_apply_customer_balance_runtime_event(
+            $db,
+            (int)($order['customer_id'] ?? 0),
+            $renewalAmount,
+            'debit',
+            'order_extension',
+            'renewal:' . $renewalId,
+            'Extended order #' . (int)$order['id'] . ' using renewal #' . $renewalId,
+            $actorType,
+            $adminUserId,
+            $ipAddress
+        );
+        if (empty($balanceDebitResult['ok'])) {
+            return $balanceDebitResult;
+        }
+    }
+
+    $currentFulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+    $nextFulfillmentStatus = in_array($currentFulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)
+        ? (string)($order['fulfillment_status'] ?? 'delivered')
+        : 'pending';
+    $previousStatus = strtolower(trim((string)($order['status'] ?? '')));
+    $nextStatus = strtotime($targetExpiry) > time() ? 'active' : 'expired';
+    $paidAt = trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s');
+
+    $updated = $db->update_using_id(
+        ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
+        [
+            (int)$product['id'],
+            number_format((float)$renewalAmount, 2, '.', ''),
+            (int)($renewal['currency_id'] ?? $product['currency_id'] ?? $order['currency_id'] ?? 0),
+            $targetExpiry,
+            'paid',
+            $nextFulfillmentStatus,
+            $paidAt,
+            $nextStatus,
+        ],
+        'orders',
+        (int)$order['id']
+    );
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to apply renewal to the order.'];
+    }
+
+    $db->update_using_id(
+        ['status', 'applied_at'],
+        ['applied', date('Y-m-d H:i:s')],
+        'order_renewals',
+        $renewalId
+    );
+
+    if (schema_object_exists($db, 'order_status_events')) {
+        $db->insert(
+            ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
+            [
+                (int)$order['id'],
+                $adminUserId > 0 ? $adminUserId : null,
+                (string)($order['status'] ?? ''),
+                $nextStatus,
+                'Subscription extended in the same order to ' . $targetExpiry,
+            ],
+            'order_status_events'
+        );
+    }
+
+    app_customer_activity_log(
+        $db,
+        (int)($order['customer_id'] ?? 0),
+        'order_extended',
+        'Subscription in order #' . (int)$order['id'] . ' was extended until ' . $targetExpiry . '.',
+        $actorType,
+        $adminUserId,
+        $ipAddress
+    );
+
+    app_queue_order_extended_notification($db, (int)$order['id']);
+
+    return [
+        'ok' => true,
+        'order_id' => (int)$order['id'],
+        'status_changed' => $previousStatus !== $nextStatus,
+        'target_expires_at' => $targetExpiry,
+    ];
+}
+
+function app_load_order_renewal_history_map(Mysql_ks $db, array $orderIds, int $limitPerOrder = 20): array
+{
+    if (!$orderIds || !schema_object_exists($db, 'order_renewals')) {
+        return [];
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $safeIds = [];
+    foreach ($orderIds as $orderId) {
+        $orderId = (int)$orderId;
+        if ($orderId > 0) {
+            $safeIds[$orderId] = $orderId;
+        }
+    }
+
+    if (!$safeIds) {
+        return [];
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT
+            id,
+            order_id,
+            status,
+            requested_at,
+            applied_at,
+            target_expires_at
+         FROM order_renewals
+         WHERE order_id IN (" . implode(',', $safeIds) . ")
+           AND status = 'applied'
+         ORDER BY COALESCE(applied_at, requested_at) DESC, id DESC"
+    );
+
+    $history = [];
+    foreach ($rows as $row) {
+        $orderId = (int)($row['order_id'] ?? 0);
+        if ($orderId <= 0) {
+            continue;
+        }
+        if (!isset($history[$orderId])) {
+            $history[$orderId] = [];
+        }
+        if (count($history[$orderId]) >= $limitPerOrder) {
+            continue;
+        }
+
+        $timestamp = trim((string)($row['applied_at'] ?? $row['requested_at'] ?? ''));
+        $history[$orderId][] = [
+            'id' => (int)($row['id'] ?? 0),
+            'date' => $timestamp,
+            'target_expires_at' => (string)($row['target_expires_at'] ?? ''),
+        ];
+    }
+
+    return $history;
 }
 
 function app_history_badge(string $label, string $modifier = ''): string

@@ -53,6 +53,7 @@
                 </thead>
                 <tbody>
                     {section name=i loop=$wygrane}
+                        {assign var="showInlineRenewPaymentButton" value=($wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].status == 1 && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days <= 7)}
                         <tr>
                             <td data-label="{$t.history_badge_order|default:'Order'}">
                                 <span class="badge badge-secondary">#{$wygrane[i].id}</span>
@@ -60,7 +61,14 @@
                             <td data-label="{$t.orders_product|default:'Product'}" class="{if $wygrane[i].status == 0}orders-user-cell-muted{/if}">
                                 <div class="orders-user-summary">
                                     <div class="orders-user-summary__title-row">
-                                        <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
+                                        {if $wygrane[i].extend}
+                                            <button type="button" class="orders-user-summary__history-toggle collapsed" data-toggle="collapse" data-target="#orderExtendInline{$wygrane[i].id}" aria-expanded="false" aria-controls="orderExtendInline{$wygrane[i].id}">
+                                                <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
+                                                <i class="fa fa-angle-down" aria-hidden="true"></i>
+                                            </button>
+                                        {else}
+                                            <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
+                                        {/if}
                                         {if $wygrane[i].payment_waiting_activation}
                                             <span class="orders-user-new-badge orders-user-new-badge--success">{$t.orders_status_payment_confirmed_short|default:'PAID'}</span>
                                         {elseif $wygrane[i].status == 0}
@@ -103,6 +111,13 @@
                                             </div>
                                         </div>
                                     {/if}
+                                    {if $wygrane[i].extend}
+                                        <div id="orderExtendInline{$wygrane[i].id}" class="collapse orders-user-summary__extend-list">
+                                            {foreach from=$wygrane[i].extend item=foo}
+                                                <div class="orders-user-summary__extend-item">{$t.orders_extension_entry_prefix|default:'Extend'}: {$foo.date}</div>
+                                            {/foreach}
+                                        </div>
+                                    {/if}
                                     {/if}
                                 </div>
                             </td>
@@ -122,8 +137,8 @@
                                     {/if}
                             </td>
                             <td data-label="{$t.orders_actions|default:'Actions'}" class="orders-user-table__actions-col">
-                                {if $wygrane[i].status != 1}
-                                <a href="/order-payment-{$wygrane[i].id}" class="btn btn-danger" aria-label="Pay" style="width: 40px;">
+                                {if $wygrane[i].status != 1 || $wygrane[i].show_inline_extend_payment || $showInlineRenewPaymentButton}
+                                <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-danger" aria-label="Pay" style="width: 40px;">
                                     <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
                                 </a>
                                 {/if}
@@ -162,6 +177,12 @@
                             <span class="user-order-modal__summary-chip btn-outline-dark">#{$wygrane[i].id}</span>
                             <span class="user-order-modal__summary-chip btn-outline-dark">{$wygrane[i].price_label|default:$wygrane[i].price}</span>
                         </div>
+                        {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days < 7}
+                            <div class="alert alert-warning user-order-modal__header-alert">
+                                <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+                                <span>{$t.orders_expiring_soon_warning|default:'This subscription will expire very soon. Renew it now to avoid interruption.'}</span>
+                            </div>
+                        {/if}
                     </div>
                     <div class="modal-body">
                         <ul class="nav nav-tabs user-order-modal__tabs" role="tablist">
@@ -277,12 +298,20 @@
                                             </a>
                                         {/if}
                                         {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' neq 'credits'}
-                                            <a href="orders?order_extend={$wygrane[i].id}" class="btn btn-success btn-lg btn-block">
+                                            <div class="user-order-modal__action-copy">
+                                                <strong>{$t.orders_action_extend|default:'Extend'}</strong>
+                                                <p>{$t.orders_action_extend_intro|default:'Your current subscription is still active. Extend it now to keep the same service without interruption.'}</p>
+                                            </div>
+                                            <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-success btn-lg btn-block">
                                                 <i class="fa fa-history" aria-hidden="true"></i> {$t.orders_action_extend|default:'Extend'}
                                             </a>
                                         {/if}
                                         {if $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' neq 'credits'}
-                                            <a href="orders?order_renew={$wygrane[i].id}" class="btn btn-danger btn-lg btn-block">
+                                            <div class="user-order-modal__action-copy user-order-modal__action-copy--danger">
+                                                <strong>{$t.orders_action_renew|default:'Renew'}</strong>
+                                                <p>{$t.orders_action_renew_intro|default:'This subscription has already expired. Create a new payment request to renew access and restore service.'}</p>
+                                            </div>
+                                            <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-danger btn-lg btn-block">
                                                 <i class="fa fa-refresh" aria-hidden="true"></i> {$t.orders_action_renew|default:'Renew'}
                                             </a>
                                         {/if}
@@ -290,7 +319,7 @@
                                             <div class="user-order-modal__extend-history">
                                                 <strong>{$t.orders_extensions|default:'Extensions'}</strong>
                                                 {foreach from=$wygrane[i].extend item=foo}
-                                                    <p><i class="fa fa-history" aria-hidden="true"></i> {$foo.date}</p>
+                                                    <p><i class="fa fa-history" aria-hidden="true"></i> {$t.orders_extension_entry_prefix|default:'Extend'}: {$foo.date}</p>
                                                 {/foreach}
                                             </div>
                                         {/if}

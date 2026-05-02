@@ -1122,6 +1122,7 @@ return [
     'payment_action_renew' => 'Renew',
     'payment_cancelled_renew_hint' => 'Click Renew to recalculate the amount and create a new payment request.',
     'payment_action_archive' => 'Move to archive',
+    'payment_action_accept_late' => 'Approve received payment',
     'payment_action_reopen' => 'Reopen',
     'payment_action_delete' => 'Delete',
     'payment_action_preview' => 'Preview',

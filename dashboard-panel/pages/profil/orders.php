@@ -68,7 +68,8 @@ switch ($site) {
 						products.price_amount,
 						products.currency_id,
 						products.is_trial,
-						products.product_type
+						products.product_type,
+						products.provider_id
 					 FROM orders
 					 LEFT JOIN products ON products.id = orders.product_id
 					 WHERE orders.id = {$sourceOrderId}
@@ -88,46 +89,17 @@ switch ($site) {
 				} elseif (!empty($sourceOrder["is_trial"]) && (int)($settings["active_trials"] ?? 0) !== 1) {
 					$smarty->assign("alert_error", localization_translate($t, 'trials_disabled_notice', 'Trial subscriptions are currently disabled.'));
 					$smarty->display("alert.tpl");
-				} else {
-					$productDurationHours = isset($sourceOrder["duration_hours"]) ? (int)$sourceOrder["duration_hours"] : 0;
-					$productPrice = isset($sourceOrder["price_amount"]) ? (float)$sourceOrder["price_amount"] : (float)$sourceOrder["total_amount"];
-					$currencyId = isset($sourceOrder["currency_id"]) ? (int)$sourceOrder["currency_id"] : (int)$sourceOrder["currency_id"];
-					if ($currencyId <= 0) {
-						$currencyId = 2;
-					}
-
-					$newExpiry = date("Y-m-d H:i:s", time() + (3600 * max(1, $productDurationHours)));
-					$notePrefix = isset($_GET["order_extend"]) ? 'Extended from order #' : 'Renewed from order #';
-					$note = trim($notePrefix . $sourceOrderId . '. ' . (string)($sourceOrder["customer_note"] ?? ''));
-
-					$db->insert(
-						[
-							'customer_id',
-							'product_id',
-							'total_amount',
-							'currency_id',
-							'status',
-							'payment_status',
-							'fulfillment_status',
-							'customer_note',
-							'expires_at',
-						],
-						[
-							$user['id'],
-							(int)$sourceOrder["product_id"],
-							$productPrice,
-							$currencyId,
-							'pending_payment',
-							'unpaid',
-							'pending',
-							$note,
-							$newExpiry,
-						],
-						'orders'
-					);
-
-					$smarty->assign("alert", isset($_GET["order_extend"]) ? "Extension order created." : "Renewal order created.");
+				} elseif (!app_order_can_self_extend($sourceOrder)) {
+					$smarty->assign("alert_error", localization_translate($t, 'orders_extend_same_order_unavailable', 'This order cannot be extended in place right now.'));
 					$smarty->display("alert.tpl");
+				} else {
+					$redirectUrl = '/order-payment-' . $sourceOrderId . '?renewal=1';
+					if (!headers_sent()) {
+						header('Location: ' . $redirectUrl);
+						exit;
+					}
+					$_GET['payment'] = $sourceOrderId;
+					unset($_GET['order_extend'], $_GET['order_renew']);
 				}
 			}
 			 
@@ -143,7 +115,7 @@ switch ($site) {
 				unset($_POST['add_product']);
 			}
 			
-			if((isset($_POST["order_add"])) || (isset($_GET["order_extend"]))){
+			if((isset($_POST["order_add"])) || (!app_uses_v2_schema($db) && isset($_GET["order_extend"]))){
 				
 				/////// ADD ORDER //////////////////////////////////////////////////////////////////////////////////
 				

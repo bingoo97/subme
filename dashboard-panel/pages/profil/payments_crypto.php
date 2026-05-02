@@ -46,6 +46,7 @@ switch ($site) {
         $paymentRedirectUrl = '';
         $activeV2CryptoRequest = null;
         $activeV2CryptoRequestRemainingSeconds = 0;
+        $balanceTopupPendingOrderPayment = null;
         $topupCurrencyId = (int)($reseller['currency_id'] ?? $reseller['currency'] ?? 0);
         $topupCurrencyCode = strtoupper(trim((string)($reseller['currency_short'] ?? 'USD')));
         if ($topupCurrencyCode === '') {
@@ -68,7 +69,10 @@ switch ($site) {
         }
 
         if ($v2CryptoRequestsEnabled && !empty($settings['crypto_payments_enabled'])) {
-            $topupCryptoAssets = app_load_customer_crypto_assets($db, (int)$user['id'], $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
+            $balanceTopupPendingOrderPayment = app_find_customer_pending_order_payment($db, (int)$user['id'], $safeNow);
+            if (!$balanceTopupPendingOrderPayment) {
+                $topupCryptoAssets = app_load_customer_crypto_assets($db, (int)$user['id'], $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
+            }
         }
 
         if ($v2CryptoRequestsEnabled) {
@@ -179,6 +183,8 @@ switch ($site) {
             } elseif (!$v2CryptoRequestsEnabled || empty($settings['crypto_payments_enabled'])) {
                 $smarty->assign('alert_error', localization_translate($t, 'balance_topup_unavailable', 'Balance top-up is currently unavailable.'));
                 $smarty->display('alert.tpl');
+            } elseif ($balanceTopupPendingOrderPayment && !empty($balanceTopupPendingOrderPayment['payment_url'])) {
+                $paymentRedirectUrl = (string)$balanceTopupPendingOrderPayment['payment_url'];
             } elseif ($activePayment > 0) {
                 $paymentRedirectUrl = '/cryptocurrency';
             } else {
@@ -480,6 +486,7 @@ switch ($site) {
         $smarty->assign('payment_redirect_url', $paymentRedirectUrl);
         $smarty->assign('balance_topup_enabled', $v2CryptoRequestsEnabled && !empty($settings['crypto_payments_enabled']));
         $smarty->assign('balance_topup_crypto_assets', $topupCryptoAssets);
+        $smarty->assign('balance_topup_pending_order_payment', $balanceTopupPendingOrderPayment);
         $smarty->assign('balance_topup_action_url', '/cryptocurrency');
         $smarty->display('profil/payments_crypto.tpl');
         break;

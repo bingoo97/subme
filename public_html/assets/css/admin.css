@@ -6463,6 +6463,14 @@ body.admin-login-page .alert.alert-danger::before{
     color:#0f766e;
 }
 
+.admin-order-summary__note--warning{
+    padding:8px 10px;
+    border-radius:6px;
+    background:#fff3cd;
+    border:1px solid #f6d779;
+    color:#7c4a03;
+}
+
 .admin-order-progress{
     display:grid;
     grid-template-columns:48px minmax(0, 1fr);

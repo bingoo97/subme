@@ -51,6 +51,7 @@ if (app_uses_v2_schema($db)) {
               currencies.code AS currency_code,
               currencies.symbol AS currency_symbol,
               1 AS status_product,
+              products.duration_hours AS duration_hours,
               products.duration_hours AS duration,
               products.is_trial AS trial,
               products.provider_id AS provider_id,
@@ -88,10 +89,23 @@ $str->set_strona($strona);
 $generator = $str->generator('orders-site_');
 $wygrane = $str->get_wartosci();
 
+$renewalHistoryMap = [];
+if (app_uses_v2_schema($db) && $wygrane) {
+    $orderIds = [];
+    foreach ($wygrane as $orderRow) {
+        $orderId = (int)($orderRow['id'] ?? 0);
+        if ($orderId > 0) {
+            $orderIds[] = $orderId;
+        }
+    }
+    $renewalHistoryMap = app_load_order_renewal_history_map($db, $orderIds, 20);
+}
+
 if ($wygrane) {
     for ($i = 0; $i < count($wygrane); $i++) {
         if (app_uses_v2_schema($db)) {
-            $wygrane[$i]['extend'] = [];
+            $orderId = (int)($wygrane[$i]['id'] ?? 0);
+            $wygrane[$i]['extend'] = $renewalHistoryMap[$orderId] ?? [];
             $wygrane[$i]['test'] = 1;
             $deliveryPayload = app_order_delivery_payload($wygrane[$i]);
             $wygrane[$i]['link_url'] = (string)$deliveryPayload['url'];
@@ -129,6 +143,12 @@ if ($wygrane) {
         );
         $wygrane[$i]['progress'] = app_order_progress_data($wygrane[$i]);
         $wygrane[$i]['status_visual'] = app_order_status_visual($wygrane[$i]);
+        $wygrane[$i]['can_self_extend_same_order'] = app_order_can_self_extend($wygrane[$i]) ? 1 : 0;
+        $wygrane[$i]['show_inline_extend_payment'] = (
+            !empty($wygrane[$i]['can_self_extend_same_order'])
+            && !empty($wygrane[$i]['progress']['has_expiry'])
+            && (int)($wygrane[$i]['progress']['remaining_days'] ?? 0) <= 7
+        ) ? 1 : 0;
         $wygrane[$i]['payment_waiting_activation'] = (
             (int)($wygrane[$i]['status'] ?? 0) === 0
             && strtolower(trim((string)($wygrane[$i]['payment_status'] ?? ''))) === 'paid'

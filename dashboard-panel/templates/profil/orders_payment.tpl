@@ -46,7 +46,17 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                 <p>{$t.payment_choose_method_intro|default:'Available methods depend on the active payment data configured by the admin.'}</p>
             </div>
 
-            {if $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance}
+            {if $payment_pending_topup_request}
+                <div class="alert alert-warning payment-support-alert">
+                    <strong>{$t.payment_pending_topup_block_title|default:'You already have a pending balance top-up payment.'}</strong><br />
+                    {$t.payment_pending_topup_block_text|default:'Finish or cancel the pending balance top-up payment before creating a new payment for this order.'}
+                </div>
+                <div class="payment-request-actions">
+                    <a href="{$payment_pending_topup_request.payment_url|default:'/cryptocurrency'}" class="btn btn-danger btn-lg">
+                        <i class="fa fa-search" aria-hidden="true"></i> {$t.payment_pending_topup_block_button|default:'Go to top-up payment'}
+                    </a>
+                </div>
+            {elseif $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance}
                 <div class="payment-method-start{if $payment_selected_method neq ''} is-hidden{/if}" data-payment-start>
                     <div class="payment-method-start__buttons">
                     {if $payment_can_use_crypto}

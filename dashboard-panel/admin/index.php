@@ -5496,6 +5496,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </div>
                                                                         </div>
                                                                     <?php endif; ?>
+                                                                    <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                                        <div class="admin-order-summary__note admin-order-summary__note--warning">
+                                                                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                                        </div>
+                                                                    <?php endif; ?>
                                                                 </div>
                                                             </td>
                                                             <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
@@ -5674,6 +5680,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </div>
                                                                         </div>
                                                                     </div>
+                                                                    <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                                        <div class="admin-order-summary__note admin-order-summary__note--warning">
+                                                                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                                        </div>
+                                                                    <?php endif; ?>
                                                                 </div>
                                                             </td>
                                                             <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
@@ -9152,6 +9164,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <i class="bi bi-box-arrow-up-right ms-1" aria-hidden="true"></i>
                                                                                 <?php endif; ?>
                                                                             </a>
+                                                                            <?php if ($paymentType !== 'crypto_topup'): ?>
+                                                                                <form method="post" class="admin-topbar-notifications__inline-form">
+                                                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                                    <input type="hidden" name="admin_payment_quick_action" value="1">
+                                                                                    <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
+                                                                                    <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($row['id'] ?? 0)); ?>">
+                                                                                    <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
+                                                                                    <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
+                                                                                    <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
+                                                                                    <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="accept">
+                                                                                        <span><?php echo admin_e(admin_t($messages, 'payment_action_accept_late', 'Approve received payment')); ?></span>
+                                                                                    </button>
+                                                                                </form>
+                                                                            <?php endif; ?>
                                                                             <div class="admin-topbar-notifications__decision-row">
                                                                                 <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-primary btn-sm admin-topbar-notifications__block-btn">
                                                                                     <span><?php echo admin_e(admin_t($messages, 'payment_action_preview', 'Preview')); ?></span>

@@ -16,7 +16,16 @@
                 {/if}
                 <p class="balance-topup-modal__intro">{$t.balance_topup_modal_intro|default:'Choose the payment method, cryptocurrency and top-up amount.'}</p>
 
-                {if $balance_topup_crypto_assets|@count gt 0}
+                {if $balance_topup_pending_order_payment}
+                <div class="alert alert-warning payment-support-alert">
+                    <strong>{$t.balance_topup_order_payment_blocked_title|default:'You already have a pending payment.'}</strong><br />
+                    {$t.balance_topup_order_payment_blocked_text|default:'Complete or cancel the pending payment request for your order before generating a balance top-up payment.'}
+                </div>
+
+                <a href="{$balance_topup_pending_order_payment.payment_url|default:'/orders'}" class="btn btn-danger btn-lg payment-support-button">
+                    <i class="fa fa-search" aria-hidden="true"></i> {$t.balance_topup_order_payment_blocked_button|default:'Go to payment'}
+                </a>
+                {elseif $balance_topup_crypto_assets|@count gt 0}
                 <form action="{$balance_topup_action_url|default:'/cryptocurrency'}" method="post" data-balance-topup-form>
                     <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
                     <input type="hidden" name="create_topup_payment" value="1" />

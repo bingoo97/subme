@@ -17,6 +17,7 @@ if(isset($_GET["wybierz"])){
 		$balanceTopupEnabled = false;
 		$balanceTopupCryptoAssets = [];
 		$balanceTopupActionUrl = '/cryptocurrency';
+		$balanceTopupPendingOrderPayment = null;
 		$homepageOnboardingEnabled = false;
 
 		if ((int)($settings['active_sale'] ?? 0) === 1 && app_uses_v2_schema($db) && !empty($settings['crypto_payments_enabled'])) {
@@ -26,7 +27,10 @@ if(isset($_GET["wybierz"])){
 				$topupCurrencyCode = 'USD';
 			}
 
-			$balanceTopupCryptoAssets = app_load_customer_crypto_assets($db, (int)($user['id'] ?? 0), $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
+			$balanceTopupPendingOrderPayment = app_find_customer_pending_order_payment($db, (int)($user['id'] ?? 0));
+			if (!$balanceTopupPendingOrderPayment) {
+				$balanceTopupCryptoAssets = app_load_customer_crypto_assets($db, (int)($user['id'] ?? 0), $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
+			}
 		}
 
 		if ((int)($settings['active_sale'] ?? 0) === 1) {
@@ -58,6 +62,7 @@ if(isset($_GET["wybierz"])){
 		$smarty->assign('balance_topup_enabled', $balanceTopupEnabled);
 		$smarty->assign('balance_topup_crypto_assets', $balanceTopupCryptoAssets);
 		$smarty->assign('balance_topup_action_url', $balanceTopupActionUrl);
+		$smarty->assign('balance_topup_pending_order_payment', $balanceTopupPendingOrderPayment);
 		$smarty->assign('homepage_onboarding_enabled', $homepageOnboardingEnabled);
 		$groupChatCreationState = chat_customer_group_creation_state($db, $user, is_array($settings ?? null) ? $settings : []);
 		$smarty->assign('group_chat_pending_invites', chat_customer_can_use_groups($user) ? chat_customer_group_pending_invites($db, (int)$user['id']) : []);
