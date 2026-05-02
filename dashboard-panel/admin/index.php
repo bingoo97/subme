@@ -3811,7 +3811,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div class="admin-topbar-notifications__steps-label"><?php echo admin_e(admin_t($messages, 'topbar_payment_steps', 'Steps to verify')); ?></div>
                                                         <div class="admin-topbar-notifications__task-list">
                                                             <span>1. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_explorer', 'Check whether the payment has arrived.')); ?></span>
-                                                            <span>2. <?php echo admin_e(admin_t($messages, 'topbar_payment_step_decide', 'Approve the payment or move it to verification.')); ?></span>
+                                                            <span>2. <?php echo admin_e(admin_t($messages, 'payment_open_info_line_2', 'Approve the payment, open details or cancel the request if the customer wants to stop.')); ?></span>
                                                         </div>
                                                         <div class="admin-topbar-notifications__payment-actions">
                                                             <a href="<?php echo admin_e($paymentExplorerUrl !== '' ? $paymentExplorerUrl : $paymentDetailsUrl); ?>"<?php echo $paymentExplorerUrl !== '' ? ' target="_blank" rel="noopener noreferrer"' : ''; ?> class="btn btn-outline-dark btn-sm admin-topbar-notifications__block-btn">
@@ -3841,13 +3841,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <input type="hidden" name="admin_payment_quick_action" value="1">
                                                                         <input type="hidden" name="payment_type" value="<?php echo admin_e($paymentType); ?>">
                                                                         <input type="hidden" name="payment_id" value="<?php echo admin_e((string)($paymentRow['id'] ?? 0)); ?>">
-                                                                        <input type="hidden" name="quick_action" value="review">
+                                                                        <input type="hidden" name="quick_action" value="cancel">
                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
                                                                         <input type="hidden" name="redirect_to" value="<?php echo admin_e((string)($_SERVER['REQUEST_URI'] ?? '/admin/')); ?>">
-                                                                        <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" data-admin-topbar-payment-submit title="<?php echo admin_e(admin_t($messages, 'payment_action_review', 'Move to review')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_review', 'Move to review')); ?>">
-                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_review_short', 'Review')); ?></span>
+                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" data-admin-topbar-payment-submit title="<?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?>">
+                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
                                                                         </button>
                                                                     </form>
                                                                 </div>
