@@ -4493,7 +4493,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <i class="bi bi-image" aria-hidden="true"></i>
                                         </button>
                                         <input type="file" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif" data-admin-chat-file hidden>
-                                        <input type="text" class="form-control admin-chat-inbox__composer-input" data-admin-chat-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_write_message', 'Write message...')); ?>" autocomplete="off">
+                                        <input type="text" class="form-control admin-chat-inbox__composer-input" data-admin-chat-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_write_message', 'Write message...')); ?>" autocomplete="off" enterkeyhint="send">
                                         <button type="button" class="admin-chat-inbox__composer-send" data-admin-chat-send title="<?php echo admin_e(admin_t($messages, 'chat_send_button', 'Send message')); ?>">
                                             <i class="bi bi-send-fill" aria-hidden="true"></i>
                                         </button>

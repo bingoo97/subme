@@ -2,7 +2,15 @@
 <div class="messanger" id="messanger">
         <div class="panel">
                 <div class="panel-heading" id="panel-heading" data-user-id="{$user.id}" role="button" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle onclick="return toggleMessengerPanel();">
-                    <span class="messenger-heading-title"><i class="fa fa-envelope-o" aria-hidden="true"></i> {if $user.customer_type|default:'client' eq 'reseller'}Messenger{else}Technical Support{/if}</span>
+                    <span class="messenger-heading-title">
+                        <i class="fa fa-envelope-o" aria-hidden="true"></i>
+                        <span>{if $user.customer_type|default:'client' eq 'reseller'}Messenger{else}Technical Support{/if}</span>
+                        {if $chat_nieprzeczytane > 0}
+                            <span class="messenger-unread-pill messenger-unread-badge">{$chat_nieprzeczytane}</span>
+                        {else}
+                            <span class="messenger-unread-pill messenger-unread-badge" style="display:none;">0</span>
+                        {/if}
+                    </span>
                     <div class="btn-group pull-right">
                         {if $chat_customer_can_create_groups|default:false}
                         <button type="button" class="btn btn-default btn-xs messenger-group-action" data-messenger-group-open title="{$t.group_chat_create|default:'Create group'}">
@@ -73,7 +81,7 @@
                             <button type="button" class="messenger-compose__action btn btn-default" data-messenger-upload-open onclick="return openMessengerUpload();" title="{$t.chat_upload|default:'Upload image'}">
                                 <i class="fa fa-file-image-o" aria-hidden="true"></i>
                             </button>
-                            <input type="text" class="form-control input-sm messenger-compose__input" id="tresc" name="tresc" placeholder="{$t.chat_write_message|default:'Write message...'}" autocomplete="off" />
+                            <input type="text" class="form-control input-sm messenger-compose__input" id="tresc" name="tresc" placeholder="{$t.chat_write_message|default:'Write message...'}" autocomplete="off" enterkeyhint="send" />
                             <button type="button" class="messenger-compose__send btn btn-primary" id="btn-chat" data-user-id="{$user.id}">
                                 <i class="fa fa-paper-plane" aria-hidden="true"></i>
                             </button>

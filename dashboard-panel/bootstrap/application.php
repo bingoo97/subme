@@ -101,6 +101,51 @@ function app_format_crypto_rate($value): string
     return number_format($rate, $precision, '.', '');
 }
 
+function app_crypto_wallet_explorer_url(?string $assetCode, ?string $networkName, ?string $address): string
+{
+    $address = trim((string)$address);
+    if ($address === '') {
+        return '';
+    }
+
+    $assetCode = strtoupper(trim((string)$assetCode));
+    $networkName = strtolower(trim((string)$networkName));
+
+    if ($assetCode === 'BTC' || $networkName === 'bitcoin') {
+        return 'https://www.blockchain.com/explorer/addresses/btc/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'tron' || $networkName === 'trx' || $assetCode === 'TRX') {
+        return 'https://tronscan.org/#/address/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'dogecoin' || $assetCode === 'DOGE') {
+        return 'https://blockchair.com/dogecoin/address/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'litecoin' || $assetCode === 'LTC') {
+        return 'https://blockchair.com/litecoin/address/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'solana' || $assetCode === 'SOL') {
+        return 'https://solscan.io/account/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'erc20' || $networkName === 'ethereum' || $assetCode === 'ETH') {
+        return 'https://etherscan.io/address/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'bep20' || $networkName === 'bsc' || $assetCode === 'BNB') {
+        return 'https://bscscan.com/address/' . rawurlencode($address);
+    }
+
+    if ($networkName === 'polygon' || $networkName === 'matic' || $assetCode === 'MATIC' || $assetCode === 'POL') {
+        return 'https://polygonscan.com/address/' . rawurlencode($address);
+    }
+
+    return '';
+}
+
 function app_format_money_value($amount, string $currencySymbol = '', string $currencyCode = ''): string
 {
     $formattedAmount = number_format((float)$amount, 2, '.', '');

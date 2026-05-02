@@ -220,7 +220,10 @@ $(function () {
 {else}
 <div class="col-md-12">
 	{if !$active_payment}
-    <p>Aby zapłacić kryptowalutami <strong class="pink">dodaj płatność.</strong></p>
+    <p>
+		{$t.payment_crypto_add_prompt_prefix|default:'Aby zapłacić kryptowalutami'}
+		<a href="/orders" class="pink"><strong>{$t.payment_crypto_add_prompt_link|default:'dodaj płatność'}</strong></a>.
+	</p>
 	{else}
 	<h4 class="strong"><i class="fa fa-circle-o-notch spin" style="margin-right: 5px;" aria-hidden="true"></i> Pending...</h4>
 	{/if}
@@ -235,6 +238,10 @@ $(function () {
           <i class="fa fa-minus-circle"></i> No payments.
         </div>
     {else}
+	<p class="desc payment-crypto-history-intro">
+		{$t.payment_crypto_history_intro_line_1|default:'Poniżej znajdziesz historię swoich requestów płatności krypto i ich aktualne statusy.'}<br />
+		{$t.payment_crypto_history_intro_line_2|default:'Możesz tutaj szybko sprawdzić, które płatności zostały opłacone, anulowane albo wygasły.'}
+	</p>
 	<div id="tickets">
 		{section name=i loop=$crypto_payments}
 		{if $crypto_payments[i].status == 0}
@@ -248,7 +255,7 @@ $(function () {
 					<input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
 					<input type="hidden" name="del_crypto" value="{$crypto_payments[i].id}" />
 					<input type="hidden" name="del_crypto_kind" value="{$crypto_payments[i].request_kind|default:'legacy'}" />
-					<button type="submit" class="remove" title="Remove">
+					<button type="submit" class="remove" title="{$t.orders_action_remove|default:'Remove'}">
 						<i class="fa fa-times-circle" aria-hidden="true"></i>
 					</button>
 				</form>
@@ -279,19 +286,36 @@ $(function () {
 					<input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
 					<input type="hidden" name="del_crypto" value="{$crypto_payments[i].id}" />
 					<input type="hidden" name="del_crypto_kind" value="{$crypto_payments[i].request_kind|default:'legacy'}" />
-					<button type="submit" class="remove" title="Remove">
+					<button type="submit" class="remove" title="{$t.orders_action_remove|default:'Remove'}">
 						<i class="fa fa-times" aria-hidden="true"></i>
 					</button>
 				</form>
 				{/if}
 				<p class="amount"><i class="fa fa-long-arrow-right" aria-hidden="true"></i> {$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol} <span>{$crypto_payments[i].discount_price} €</span></p>
-				<p class="desc">{if $crypto_payments[i].status == 1}No payment{else}{$crypto_payments[i].date}{/if}</p>
+				<p class="desc">{$crypto_payments[i].date}</p>
 				<p class="status">
 					{if $crypto_payments[i].status == 2}
-					<span class="success">Paid</span>
+					<span class="success">{$t.payment_ticket_status_paid|default:'Paid'}</span>
+					{if $crypto_payments[i].address_code}
+					<br />
+					{if $crypto_payments[i].explorer_url|default:''}
+						<a href="{$crypto_payments[i].explorer_url}" target="_blank" rel="noopener noreferrer" class="table-ticket__wallet-link">{$crypto_payments[i].address_code}</a>
+						<a href="{$crypto_payments[i].explorer_url}" target="_blank" rel="noopener noreferrer" class="table-ticket__explorer-link" aria-label="Open explorer">
+							<i class="fa fa-external-link" aria-hidden="true"></i>
+						</a>
+					{else}
+						<span class="table-ticket__wallet-link table-ticket__wallet-link--plain">{$crypto_payments[i].address_code}</span>
+					{/if}
+					{/if}
 					{/if}
 					{if $crypto_payments[i].status == 1}
-					<span class="danger">Expired</span>
+					<span class="danger">
+						{if $crypto_payments[i].status_label_key}
+							{$t[$crypto_payments[i].status_label_key]|default:'Cancelled'}
+						{else}
+							{$t.payment_ticket_status_cancelled|default:'Cancelled'}
+						{/if}
+					</span>
 					{/if}
 				</p>
 			</div>

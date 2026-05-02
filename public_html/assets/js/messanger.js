@@ -286,6 +286,10 @@
 			return this.widget().hasClass('is-open');
 		},
 
+		isDesktopDocked: function () {
+			return !!(window.matchMedia && window.matchMedia('(min-width: 1200px)').matches);
+		},
+
 		storageAvailable: function () {
 			try {
 				return !!window.localStorage;
@@ -305,6 +309,9 @@
 		},
 
 		savePanelState: function (isOpen) {
+			if (this.isDesktopDocked()) {
+				return;
+			}
 			if (!this.storageAvailable()) {
 				return;
 			}
@@ -316,6 +323,9 @@
 		},
 
 		restorePanelState: function () {
+			if (this.isDesktopDocked()) {
+				return true;
+			}
 			if (!this.storageAvailable()) {
 				return false;
 			}
@@ -408,6 +418,38 @@
 			}
 		},
 
+		syncDesktopDockedState: function () {
+			var docked = this.isDesktopDocked();
+			var $widget = this.widget();
+			var $panel = this.panel();
+			var $body = $('body');
+
+			$body.toggleClass('messenger-desktop-docked', docked);
+			$widget.toggleClass('messenger-desktop-docked', docked);
+
+			if (!docked) {
+				if (!this.isOpen()) {
+					this.heading().attr('aria-expanded', 'false');
+					$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
+					this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
+				}
+				return;
+			}
+
+			if (this.hasResellerInboxLayout()) {
+				if (this.activeConversationId > 0) {
+					this.showConversationView();
+				} else {
+					this.showConversationList();
+				}
+			}
+
+			$widget.addClass('is-open');
+			this.heading().attr('aria-expanded', 'true');
+			$panel.attr('aria-hidden', 'false').addClass('in is-visible').show();
+			this.icon().removeClass('fa-angle-down').addClass('fa-angle-up');
+		},
+
 		refreshOpenLayout: function (stickToBottom) {
 			var self = this;
 			var raf = window.requestAnimationFrame || function (callback) {
@@ -415,6 +457,7 @@
 			};
 
 			this.updateViewportMetrics();
+			this.syncDesktopDockedState();
 
 			if (!this.isOpen()) {
 				return;
@@ -1566,6 +1609,16 @@
 
 		open: function () {
 			var self = this;
+			if (this.isDesktopDocked()) {
+				this.syncDesktopDockedState();
+				this.refreshOpenLayout(true);
+				this.markRead();
+				this.fetch({
+					force: true,
+					scrollToBottom: true
+				});
+				return false;
+			}
 			if (this.hasResellerInboxLayout()) {
 				if (this.activeConversationId > 0) {
 					this.showConversationView();
@@ -1596,6 +1649,10 @@
 		},
 
 		close: function () {
+			if (this.isDesktopDocked()) {
+				this.syncDesktopDockedState();
+				return false;
+			}
 			this.widget().removeClass('is-open');
 			this.heading().attr('aria-expanded', 'false');
 			this.panel().attr('aria-hidden', 'true').removeClass('in is-visible').stop(true, true).slideUp(180);
@@ -1605,6 +1662,10 @@
 		},
 
 		toggle: function () {
+			if (this.isDesktopDocked()) {
+				this.syncDesktopDockedState();
+				return false;
+			}
 			return this.isOpen() ? this.close() : this.open();
 		},
 
@@ -2608,6 +2669,7 @@
 			shouldRestoreOpenState = this.restorePanelState();
 			this.restoreOpenScrollToBottomPending = !!shouldRestoreOpenState;
 			this.updateViewportMetrics();
+			this.syncDesktopDockedState();
 			this.syncConversationStateFromMarkup(true);
 			if (this.hasResellerInboxLayout()) {
 				this.restoreActiveConversationState();
@@ -2619,7 +2681,7 @@
 			}
 			this.resetGroupModal();
 			this.bind();
-			if (shouldRestoreOpenState) {
+			if (shouldRestoreOpenState || this.isDesktopDocked()) {
 				this.open();
 			} else {
 				this.fetch({ force: true });
