@@ -10857,16 +10857,37 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
 
     if (!$sharedEnabled && $activeAssignments) {
         foreach ($activeAssignments as $assignment) {
-            if ((int)$assignment['customer_id'] === $customerId) {
+            $assignedCustomerId = (int)($assignment['customer_id'] ?? 0);
+            if ($assignedCustomerId === $customerId) {
                 continue;
             }
 
-            if (admin_crypto_wallet_assignment_has_payment_history($db, $walletId, (int)($assignment['customer_id'] ?? 0))) {
-                $otherCustomerEmail = trim((string)($assignment['customer_email'] ?? ''));
-                return ['ok' => false, 'message' => 'This wallet already has payment history for ' . ($otherCustomerEmail !== '' ? $otherCustomerEmail : 'another customer') . ' and cannot be reassigned.'];
+            $releaseNote = 'Released from admin wallet editor';
+            if (admin_crypto_wallet_assignment_has_payment_history($db, $walletId, $assignedCustomerId)) {
+                $otherCustomerAssignments = admin_customer_active_crypto_assignments(
+                    $db,
+                    $assignedCustomerId,
+                    strtoupper(trim((string)($wallet['asset_code'] ?? '')))
+                );
+
+                $hasReplacementWallet = false;
+                foreach ($otherCustomerAssignments as $otherCustomerAssignment) {
+                    $otherWalletId = (int)($otherCustomerAssignment['wallet_address_id'] ?? 0);
+                    if ($otherWalletId > 0 && $otherWalletId !== $walletId) {
+                        $hasReplacementWallet = true;
+                        break;
+                    }
+                }
+
+                if (!$hasReplacementWallet) {
+                    $otherCustomerEmail = trim((string)($assignment['customer_email'] ?? ''));
+                    return ['ok' => false, 'message' => 'This wallet already has payment history for ' . ($otherCustomerEmail !== '' ? $otherCustomerEmail : 'another customer') . ' and cannot be reassigned.'];
+                }
+
+                $releaseNote = 'Released from admin wallet editor after customer was moved to another active wallet of this coin';
             }
 
-            $releaseOk = admin_release_crypto_wallet_assignment($db, (int)$assignment['id'], $adminUserId, 'Released from admin wallet editor');
+            $releaseOk = admin_release_crypto_wallet_assignment($db, (int)$assignment['id'], $adminUserId, $releaseNote);
 
             if (!$releaseOk) {
                 $db->query('ROLLBACK');
