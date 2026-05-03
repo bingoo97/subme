@@ -619,6 +619,11 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $creditsSalesEnabled = isset($_POST['credits_sales_enabled']) ? 1 : 0;
         $trialsEnabled = isset($_POST['trials_enabled']) ? 1 : 0;
         $supportChatEnabled = isset($_POST['support_chat_enabled']) ? 1 : 0;
+        $customerMessengerEnabled = isset($_POST['customer_messenger_enabled']) ? 1 : 0;
+        $customerDirectChatEnabled = isset($_POST['customer_direct_chat_enabled']) ? 1 : 0;
+        $customerGroupChatEnabled = isset($_POST['customer_group_chat_enabled']) ? 1 : 0;
+        $customerGlobalGroupEnabled = isset($_POST['customer_global_group_enabled']) ? 1 : 0;
+        $messengerVoiceEnabled = isset($_POST['messenger_voice_enabled']) ? 1 : 0;
         $resellerGroupChatLimit = (int)($_POST['reseller_group_chat_limit'] ?? 10);
         if ($resellerGroupChatLimit < 0) {
             $resellerGroupChatLimit = 0;
@@ -657,6 +662,11 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 'credits_sales_enabled',
                 'trials_enabled',
                 'support_chat_enabled',
+                'customer_messenger_enabled',
+                'customer_direct_chat_enabled',
+                'customer_group_chat_enabled',
+                'customer_global_group_enabled',
+                'messenger_voice_enabled',
                 'reseller_group_chat_limit',
                 'support_chat_retention_hours',
                 'support_chat_retention_days',
@@ -682,6 +692,11 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $creditsSalesEnabled,
                 $trialsEnabled,
                 $supportChatEnabled,
+                $customerMessengerEnabled,
+                $customerDirectChatEnabled,
+                $customerGroupChatEnabled,
+                $customerGlobalGroupEnabled,
+                $messengerVoiceEnabled,
                 $resellerGroupChatLimit,
                 $supportChatRetentionHours,
                 max(1, (int)ceil($supportChatRetentionHours / 24)),
@@ -2066,7 +2081,7 @@ if ($route === 'live-chat') {
             if ($chatSelectedConversationId > 0) {
                 admin_mark_chat_conversation_read($db, $chatSelectedConversationId);
                 $chatSelectedConversationRow = admin_chat_conversation_row($db, $chatSelectedConversationId);
-                $chatSelectedMessages = admin_chat_conversation_messages($db, $chatSelectedConversationId);
+                $chatSelectedMessages = admin_chat_conversation_messages($db, $chatSelectedConversationId, 0, (int)($adminUser['id'] ?? 0));
                 $chatSelectedPresence = admin_chat_customer_presence(
                     $db,
                     $chatSelectedUserId,
@@ -3322,10 +3337,13 @@ $chatOnlineCount = 0;
 $chatActiveCount = 0;
 
 foreach ($chatInboxRows as $chatRow) {
-    if ((string)($chatRow['conversation_type'] ?? 'live_chat') === 'group_chat') {
+    $chatConversationType = (string)($chatRow['conversation_type'] ?? 'live_chat');
+    if (function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type($chatConversationType)) {
         $chatPresence = [
             'key' => (string)($chatRow['summary_presence_key'] ?? 'offline'),
-            'label' => (string)($chatRow['summary_presence_label'] ?? admin_t($messages, 'group_chat_badge', 'Group chat')),
+            'label' => (string)($chatRow['summary_presence_label'] ?? ($chatConversationType === 'global_group'
+                ? admin_t($messages, 'chat_global_group_badge', 'Global Chat')
+                : admin_t($messages, 'group_chat_badge', 'Group chat'))),
             'class_name' => (string)($chatRow['summary_presence_class_name'] ?? 'admin-chat-presence admin-chat-presence--offline'),
         ];
     } else {
@@ -4244,6 +4262,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-search-empty="<?php echo admin_e(admin_t($messages, 'chat_search_empty', 'No users found.')); ?>"
                         data-chat-search-error="<?php echo admin_e(admin_t($messages, 'chat_search_error', 'Search failed.')); ?>"
                         data-chat-unread-label="<?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>"
+                        data-chat-new-label="<?php echo admin_e(admin_t($messages, 'chat_new_label', 'Nowe')); ?>"
                         data-chat-start-error="<?php echo admin_e(admin_t($messages, 'chat_start_error', 'Unable to start conversation.')); ?>"
                         data-chat-delete-message-confirm="<?php echo admin_e(admin_t($messages, 'chat_delete_message_confirm', 'Delete this message?')); ?>"
                         data-chat-delete-message-error="<?php echo admin_e(admin_t($messages, 'chat_delete_message_error', 'Unable to delete this message.')); ?>"
@@ -4285,6 +4304,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-group-retention-title="<?php echo admin_e(admin_t($messages, 'group_chat_retention_modal_title', 'Auto-delete settings')); ?>"
                         data-chat-group-retention-intro="<?php echo admin_e(admin_t($messages, 'group_chat_retention_modal_intro', 'Choose how long messages in this group should stay visible before they are removed automatically.')); ?>"
                         data-chat-group-retention-save-error="<?php echo admin_e(admin_t($messages, 'group_chat_retention_save_error', 'Unable to update auto-delete settings.')); ?>"
+                        data-chat-group-retention-hint-template="<?php echo admin_e(admin_t($messages, 'group_chat_retention_hint_after', 'Auto-delete after {hours}h')); ?>"
                         data-chat-create-user-success="<?php echo admin_e(admin_t($messages, 'chat_create_user_success', 'User created successfully.')); ?>"
                         data-chat-create-user-error="<?php echo admin_e(admin_t($messages, 'chat_create_user_error', 'Unable to create the user.')); ?>"
                         data-chat-create-user-email-queued="<?php echo admin_e(admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')); ?>"
@@ -4355,14 +4375,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $isUnread = !empty($chatEntry['is_unread']);
                                             $chatTimeLabel = (string)($chatEntry['time_label'] ?? '');
                                             $presence = (array)($chatEntry['presence'] ?? []);
-                                            $chatTitleLabel = trim((string)($chatRow['conversation_type'] ?? '')) === 'group_chat'
+                                            $chatConversationType = trim((string)($chatRow['conversation_type'] ?? ''));
+                                            $chatIsGroupLike = function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type($chatConversationType);
+                                            $chatIsGlobalGroup = $chatConversationType === 'global_group';
+                                            $chatTitleLabel = $chatIsGroupLike
                                                 ? $displayName
                                                 : (string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'));
                                             $chatHandleLabel = trim((string)($chatRow['customer_public_handle'] ?? ''));
-                                            $chatPrimaryLabel = $chatHandleLabel !== '' && trim((string)($chatRow['conversation_type'] ?? '')) !== 'group_chat'
+                                            $chatPrimaryLabel = $chatHandleLabel !== '' && !$chatIsGroupLike
                                                 ? '@' . $chatHandleLabel
                                                 : $displayName;
-                                            $chatSecondaryLabel = $chatHandleLabel !== '' && trim((string)($chatRow['conversation_type'] ?? '')) !== 'group_chat'
+                                            $chatSecondaryLabel = $chatHandleLabel !== '' && !$chatIsGroupLike
                                                 ? trim((string)($chatRow['customer_email'] ?? ''))
                                                 : '';
                                             ?>
@@ -4384,8 +4407,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <span class="admin-chat-inbox__item-title-copy">
                                                             <span class="admin-chat-inbox__item-title-line">
                                                                 <strong title="<?php echo admin_e($chatPrimaryLabel); ?>"><?php echo admin_e($chatPrimaryLabel); ?></strong>
+                                                                <?php if ($chatIsGlobalGroup): ?>
+                                                                    <span class="admin-chat-inbox__conversation-badge"><?php echo admin_e(admin_t($messages, 'group_chat_badge', 'Grupa')); ?></span>
+                                                                <?php endif; ?>
                                                                 <?php if ($isUnread): ?>
-                                                                    <span class="admin-chat-inbox__unread"><?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>: <?php echo admin_e((string)$chatRow['unread_count']); ?></span>
+                                                                    <span class="messenger-inbox__type-badge messenger-inbox__type-badge--new"><?php echo admin_e(admin_t($messages, 'chat_new_label', 'Nowe')); ?>: <?php echo admin_e((string)$chatRow['unread_count']); ?></span>
                                                                 <?php endif; ?>
                                                             </span>
                                                             <?php if ($chatSecondaryLabel !== ''): ?>
@@ -4432,6 +4458,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <a href="#" class="admin-chat-inbox__conversation-title" data-admin-chat-conversation-title><?php echo admin_e(admin_t($messages, 'chat_inbox_title', 'Live chat inbox')); ?></a>
                                             <span class="admin-chat-inbox__conversation-handle" data-admin-chat-conversation-handle hidden></span>
                                             <span class="admin-chat-inbox__conversation-badge" data-admin-chat-conversation-badge hidden><?php echo admin_e(admin_t($messages, 'chat_group_header_badge', 'Admin group')); ?></span>
+                                            <span class="admin-chat-inbox__conversation-retention" data-admin-chat-conversation-retention hidden></span>
                                         </span>
                                     </div>
                                     <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-group-invite-open title="<?php echo admin_e(admin_t($messages, 'group_chat_invite_members_title', 'Add members')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_invite_members_title', 'Add members')); ?>" hidden>
@@ -4488,15 +4515,39 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 <div class="admin-chat-inbox__composer">
                                     <div class="admin-chat-inbox__composer-alert" data-admin-chat-alert hidden></div>
                                     <div class="admin-chat-inbox__composer-preview" data-admin-chat-link-preview hidden></div>
+                                    <div class="admin-chat-inbox__composer-reply" data-admin-chat-reply-preview hidden>
+                                        <button type="button" class="admin-chat-inbox__composer-reply-close" data-admin-chat-reply-clear aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
+                                            <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                        </button>
+                                        <div class="admin-chat-inbox__composer-reply-label"><?php echo admin_e(admin_t($messages, 'chat_reply_label', 'Replying to message')); ?></div>
+                                        <div class="admin-chat-inbox__composer-reply-sender" data-admin-chat-reply-sender></div>
+                                        <div class="admin-chat-inbox__composer-reply-text" data-admin-chat-reply-text></div>
+                                    </div>
                                     <div class="admin-chat-inbox__composer-row">
-                                        <button type="button" class="admin-chat-inbox__composer-action" data-admin-chat-upload-button title="<?php echo admin_e(admin_t($messages, 'chat_upload_button', 'Upload image')); ?>">
-                                            <i class="bi bi-image" aria-hidden="true"></i>
-                                        </button>
                                         <input type="file" accept=".jpg,.jpeg,.png,.gif,image/jpeg,image/png,image/gif" data-admin-chat-file hidden>
-                                        <input type="text" class="form-control admin-chat-inbox__composer-input" data-admin-chat-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_write_message', 'Write message...')); ?>" autocomplete="off" enterkeyhint="send">
-                                        <button type="button" class="admin-chat-inbox__composer-send" data-admin-chat-send title="<?php echo admin_e(admin_t($messages, 'chat_send_button', 'Send message')); ?>">
-                                            <i class="bi bi-send-fill" aria-hidden="true"></i>
-                                        </button>
+                                        <div class="admin-chat-inbox__composer-field">
+                                            <input type="text" class="form-control admin-chat-inbox__composer-input" data-admin-chat-input placeholder="<?php echo admin_e(admin_t($messages, 'chat_write_message', 'Write message...')); ?>" autocomplete="off" enterkeyhint="send">
+                                            <div class="admin-chat-inbox__composer-actions">
+                                                <button type="button" class="admin-chat-inbox__composer-send btn btn-primary" data-admin-chat-send title="<?php echo admin_e(admin_t($messages, 'chat_send_button', 'Send message')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_send_button', 'Send message')); ?>">
+                                                    <i class="bi bi-send-fill" aria-hidden="true"></i>
+                                                </button>
+                                                <button type="button" class="admin-chat-inbox__composer-action btn btn-default" data-admin-chat-upload-button title="<?php echo admin_e(admin_t($messages, 'chat_upload_button', 'Upload image')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_upload_button', 'Upload image')); ?>">
+                                                    <i class="bi bi-paperclip" aria-hidden="true"></i>
+                                                </button>
+                                                <?php if (admin_messenger_voice_enabled($appSettings)): ?>
+                                                    <button
+                                                        type="button"
+                                                        class="admin-chat-inbox__composer-voice btn btn-primary is-disabled"
+                                                        data-disabled-tooltip="<?php echo admin_e(admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
+                                                        title="<?php echo admin_e(admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
+                                                        aria-label="<?php echo admin_e(admin_t($messages, 'chat_voice_button', 'Voice message')); ?>"
+                                                        aria-disabled="true"
+                                                    >
+                                                        <i class="bi bi-mic-fill" aria-hidden="true"></i>
+                                                    </button>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="admin-chat-inbox__quick-modal" data-admin-chat-quick-modal hidden>
@@ -10445,7 +10496,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <?php echo admin_e(ucfirst(str_replace('_', ' ', $chatStatus !== '' ? $chatStatus : 'open'))); ?>
                                                                         </span>
                                                                         <?php if ($isUnread): ?>
-                                                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'chat_unread_label', 'Unread')); ?>: <?php echo admin_e((string)($chatRow['unread_count'] ?? 0)); ?></span>
+                                                                            <span class="messenger-inbox__type-badge messenger-inbox__type-badge--new"><?php echo admin_e(admin_t($messages, 'chat_new_label', 'Nowe')); ?>: <?php echo admin_e((string)($chatRow['unread_count'] ?? 0)); ?></span>
                                                                         <?php endif; ?>
                                                                         <span class="admin-live-chat-item__presence-label"><?php echo admin_e((string)($presence['label'] ?? '')); ?></span>
                                                                     </div>
@@ -11478,6 +11529,41 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-check-label" for="support_chat_enabled"><?php echo admin_e(admin_t($messages, 'settings_support_chat_enabled', 'Support chat ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_support_chat_enabled_help', 'If OFF, the live chat widget and chat shortcuts are hidden for users.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_messenger_enabled" name="customer_messenger_enabled"<?php echo admin_customer_messenger_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="customer_messenger_enabled"><?php echo admin_e(admin_t($messages, 'settings_customer_messenger_enabled', 'Customer messenger ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_messenger_enabled_help', 'If ON, normal client accounts can use the expanded Messenger shell like resellers. Support chat still has to stay enabled.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_direct_chat_enabled" name="customer_direct_chat_enabled"<?php echo admin_customer_direct_chat_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="customer_direct_chat_enabled"><?php echo admin_e(admin_t($messages, 'settings_customer_direct_chat_enabled', 'Customer direct chat ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_direct_chat_enabled_help', 'If ON, messenger-enabled clients can invite only other eligible client accounts into 1:1 conversations. Admins stay available only in support chat and the optional global group.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_group_chat_enabled" name="customer_group_chat_enabled"<?php echo admin_customer_group_chat_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="customer_group_chat_enabled"><?php echo admin_e(admin_t($messages, 'settings_customer_group_chat_enabled', 'Customer group chat ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_group_chat_enabled_help', 'If ON, messenger-enabled clients can create their own groups and invite other eligible client accounts. Admins cannot be invited into private client groups.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_global_group_enabled" name="customer_global_group_enabled"<?php echo admin_customer_global_group_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="customer_global_group_enabled"><?php echo admin_e(admin_t($messages, 'settings_customer_global_group_enabled', 'Customer global group ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_global_group_enabled_help', 'If ON, a permanent global group should include active admins, resellers and messenger-enabled clients. This switch prepares and controls that shared conversation.')); ?></small>
+                                                </div>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="messenger_voice_enabled" name="messenger_voice_enabled"<?php echo admin_messenger_voice_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="messenger_voice_enabled"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_enabled', 'Messenger voice UI ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_enabled_help', 'If ON, the Messenger shows a preview microphone button in the composer. The button stays inactive for now and only presents the planned UI.')); ?></small>
                                                 </div>
                                                 <div class="col-12">
                                                     <label class="form-label" for="reseller_group_chat_limit"><?php echo admin_e(admin_t($messages, 'settings_reseller_group_chat_limit', 'Max reseller group chats')); ?></label>

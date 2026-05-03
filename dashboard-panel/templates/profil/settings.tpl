@@ -7,7 +7,7 @@
         <div class="settings-card">
             <form action="" method="POST" class="settings-form">
                 <input type="hidden" name="_csrf" value="{$csrf_token|default:''}">
-                {if $user.customer_type|default:'client' eq 'reseller'}
+                {if $settings_can_edit_messenger_identity|default:false}
                 <div class="settings-form__field">
                     <div
                         class="settings-avatar-editor"

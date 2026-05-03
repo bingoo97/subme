@@ -3301,6 +3301,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var conversationAvatar = q('[data-admin-chat-conversation-avatar]', root);
         var status = q('[data-admin-chat-conversation-status]', root);
         var conversationBadge = q('[data-admin-chat-conversation-badge]', root);
+        var conversationRetention = q('[data-admin-chat-conversation-retention]', root);
         var conversationMeta = q('[data-admin-chat-conversation-meta]', root);
         var conversationMembersCount = q('[data-admin-chat-members-count]', root);
         var conversationMembersToggle = q('[data-admin-chat-members-toggle]', root);
@@ -3313,6 +3314,9 @@ document.addEventListener('DOMContentLoaded', function () {
         var composerAlert = q('[data-admin-chat-alert]', root);
         var composerInput = q('[data-admin-chat-input]', root);
         var composerPreview = q('[data-admin-chat-link-preview]', root);
+        var composerReplyPreview = q('[data-admin-chat-reply-preview]', root);
+        var composerReplySender = q('[data-admin-chat-reply-sender]', root);
+        var composerReplyText = q('[data-admin-chat-reply-text]', root);
         var uploadInput = q('[data-admin-chat-file]', root);
         var ordersLinkButton = q('[data-admin-chat-orders-link]', root);
         var cryptoOpenButton = q('[data-admin-chat-crypto-open]', root);
@@ -3321,6 +3325,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var bankOpenButton = q('[data-admin-chat-bank-open]', root);
         var csrfToken = root.getAttribute('data-csrf-token') || '';
         var chatStateUrl = root.getAttribute('data-admin-chat-state-url') || '/admin/chat.php?action=inbox_state';
+        var retentionHintTemplate = root.getAttribute('data-chat-group-retention-hint-template') || 'Auto-delete after {hours}h';
         var activeConversationId = 0;
         var activeCustomerId = 0;
         var activeConversationType = 'live_chat';
@@ -3382,8 +3387,10 @@ document.addEventListener('DOMContentLoaded', function () {
         var linkPreviewData = null;
         var linkPreviewDismissedUrl = '';
         var linkPreviewLoading = false;
+        var replyToMessageId = 0;
         var linkPreviewRequestId = 0;
         var linkPreviewTimer = 0;
+        var messageActionTouchTimer = 0;
         var paymentModals = {
             crypto: buildPaymentModalState('crypto'),
             bank: buildPaymentModalState('bank')
@@ -3421,6 +3428,120 @@ document.addEventListener('DOMContentLoaded', function () {
             composerAlert.classList.toggle('alert-danger', !!isError);
             composerAlert.classList.toggle('alert-success', !isError && !!message);
             setHidden(composerAlert, !message);
+        }
+
+        function clearReplyTarget() {
+            replyToMessageId = 0;
+            if (composerReplySender) {
+                composerReplySender.textContent = '';
+            }
+            if (composerReplyText) {
+                composerReplyText.textContent = '';
+            }
+            if (composerReplyPreview) {
+                composerReplyPreview.setAttribute('hidden', 'hidden');
+                composerReplyPreview.setAttribute('data-reply-to-message-id', '0');
+            }
+        }
+
+        function setReplyTarget(messageId, sender, text) {
+            var safeMessageId = parseInt(messageId || 0, 10) || 0;
+            if (!safeMessageId) {
+                clearReplyTarget();
+                return;
+            }
+
+            replyToMessageId = safeMessageId;
+            if (composerReplySender) {
+                composerReplySender.textContent = String(sender || '').trim();
+            }
+            if (composerReplyText) {
+                composerReplyText.textContent = String(text || '').trim();
+            }
+            if (composerReplyPreview) {
+                composerReplyPreview.setAttribute('data-reply-to-message-id', String(safeMessageId));
+                composerReplyPreview.removeAttribute('hidden');
+            }
+        }
+
+        function closeMessageActions() {
+            qa('[data-admin-chat-message].is-actions-open', body || root).forEach(function (node) {
+                node.classList.remove('is-actions-open');
+            });
+        }
+
+        function toggleMessageActions(messageId, forceOpen) {
+            var safeMessageId = parseInt(messageId || 0, 10) || 0;
+            var itemNode;
+            var shouldOpen;
+
+            if (!safeMessageId || !body) {
+                closeMessageActions();
+                return;
+            }
+
+            itemNode = q('[data-admin-chat-message][data-message-id="' + String(safeMessageId) + '"]', body);
+            if (!itemNode) {
+                return;
+            }
+
+            shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : !itemNode.classList.contains('is-actions-open');
+            closeMessageActions();
+            if (shouldOpen) {
+                itemNode.classList.add('is-actions-open');
+            }
+        }
+
+        function flashConversationMessage(messageNode) {
+            if (!messageNode) {
+                return;
+            }
+
+            messageNode.classList.add('is-focused');
+            window.setTimeout(function () {
+                messageNode.classList.remove('is-focused');
+            }, 1800);
+        }
+
+        function scrollConversationToMessage(messageId, attempt) {
+            var safeMessageId = parseInt(messageId || 0, 10) || 0;
+            var tries = parseInt(attempt || 0, 10) || 0;
+            var messageNode;
+            var nextLimit;
+
+            if (!safeMessageId || !body) {
+                return;
+            }
+
+            messageNode = q('[data-admin-chat-message][data-message-id="' + String(safeMessageId) + '"]', body);
+            if (messageNode) {
+                body.scrollTo({
+                    top: Math.max(0, messageNode.offsetTop - 40),
+                    behavior: 'smooth'
+                });
+                flashConversationMessage(messageNode);
+                return;
+            }
+
+            if (!activeConversationHasMoreMessages || !activeConversationId || tries >= 6 || conversationFetchInFlight) {
+                return;
+            }
+
+            nextLimit = Math.max(activeConversationMessageLimit + 15, 10);
+            if (activeConversationTotalMessages > 0) {
+                nextLimit = Math.min(nextLimit, activeConversationTotalMessages);
+            }
+
+            fetchConversation(activeConversationId, {
+                messageLimit: nextLimit,
+                preservePrependOffset: true,
+                scrollToBottom: false,
+                silent: true
+            });
+
+            window.setTimeout(function () {
+                scrollConversationToMessage(safeMessageId, tries + 1);
+            }, 180);
         }
 
         function renderConversationMembers(items) {
@@ -3615,7 +3736,7 @@ document.addEventListener('DOMContentLoaded', function () {
         function updateChatInboxItems(items) {
             var itemMap = {};
             var orderedIds = [];
-            var unreadLabel = root.getAttribute('data-chat-unread-label') || 'Unread';
+            var newLabel = root.getAttribute('data-chat-new-label') || 'Nowe';
             var listNode = q('.admin-chat-inbox__list', root);
 
             (Array.isArray(items) ? items : []).forEach(function (item) {
@@ -3628,24 +3749,29 @@ document.addEventListener('DOMContentLoaded', function () {
                 var conversationId = String(parseInt(itemNode.getAttribute('data-conversation-id') || '0', 10) || 0);
                 var payload = itemMap[conversationId] || null;
                 var unreadCount = payload ? Math.max(0, parseInt(payload.unread_count || 0, 10) || 0) : 0;
-                var meta = q('.admin-chat-inbox__meta', itemNode);
-                var unreadNode = q('.admin-chat-inbox__unread', itemNode);
+                var titleLine = q('.admin-chat-inbox__item-title-line', itemNode);
+                var unreadNode = q('.messenger-inbox__type-badge--new', itemNode);
+                var legacyUnreadNode = q('.admin-chat-inbox__unread', itemNode);
                 var presenceNode = q('[data-admin-chat-presence-dot]', itemNode);
 
                 itemNode.classList.toggle('is-unread', unreadCount > 0);
+
+                if (legacyUnreadNode) {
+                    legacyUnreadNode.remove();
+                }
 
                 if (presenceNode && payload && payload.presence) {
                     presenceNode.innerHTML = renderPresenceDot(payload.presence);
                 }
 
                 if (unreadCount > 0) {
-                    if (!unreadNode && meta) {
+                    if (!unreadNode && titleLine) {
                         unreadNode = document.createElement('span');
-                        unreadNode.className = 'admin-chat-inbox__unread';
-                        meta.insertBefore(unreadNode, meta.firstChild || null);
+                        unreadNode.className = 'messenger-inbox__type-badge messenger-inbox__type-badge--new';
+                        titleLine.appendChild(unreadNode);
                     }
                     if (unreadNode) {
-                        unreadNode.textContent = unreadLabel + ': ' + String(unreadCount);
+                        unreadNode.textContent = newLabel + ': ' + String(unreadCount);
                     }
                 } else if (unreadNode) {
                     unreadNode.remove();
@@ -4689,6 +4815,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 normalized = 'https://' + normalized;
             }
 
+            if (!/^https?:\/\//i.test(normalized) && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/.*)?$/i.test(normalized)) {
+                normalized = 'https://' + normalized;
+            }
+
             if (!/^https?:\/\//i.test(normalized) || /\s/.test(normalized)) {
                 return '';
             }
@@ -4697,12 +4827,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function extractFirstUrl(value) {
-            var match = String(value || '').match(/(?:https?:\/\/|www\.)[^\s<]+/i);
-            if (!match || !match[0]) {
+            var match = String(value || '').match(/(?:^|[^\w@])((?:https?:\/\/|www\.)[^\s<]+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/[^\s<]*)?)/i);
+            if (!match || !match[1]) {
                 return '';
             }
 
-            return normalizePreviewUrl(match[0]);
+            return normalizePreviewUrl(match[1]);
         }
 
         function buildPreviewCardHtml(preview) {
@@ -4869,6 +4999,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function showList() {
+            clearReplyTarget();
+            closeMessageActions();
             if (listView) {
                 setHidden(listView, false);
             }
@@ -4972,6 +5104,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function renderConversation(payload, options) {
             var previousMetrics = getConversationScrollMetrics();
+            var previousConversationId = activeConversationId;
             var previousScrollHeight = previousMetrics ? previousMetrics.scrollHeight : 0;
             var previousScrollTop = previousMetrics ? previousMetrics.scrollTop : 0;
             var keepBottom = false;
@@ -5006,6 +5139,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (body && shouldReplaceBody) {
                 body.innerHTML = payload.html || '';
                 lastRenderedConversationHtml = String(payload.html || '');
+                closeMessageActions();
             }
             if (body) {
                 body.classList.remove('is-loading-older');
@@ -5063,6 +5197,15 @@ document.addEventListener('DOMContentLoaded', function () {
             if (conversationMeta) {
                 setHidden(conversationMeta, activeConversationType !== 'group_chat');
             }
+            if (conversationRetention) {
+                var retentionHoursValue = parseInt(payload.retention_hours || '0', 10) || 0;
+                var retentionLabel = '';
+                if (activeConversationType === 'global_group' && retentionHoursValue > 0) {
+                    retentionLabel = String(retentionHintTemplate || 'Auto-delete after {hours}h').replace('{hours}', String(retentionHoursValue));
+                }
+                conversationRetention.textContent = retentionLabel;
+                setHidden(conversationRetention, retentionLabel === '');
+            }
             if (conversationMembersCount) {
                 conversationMembersCount.textContent = payload.member_count_label || '';
             }
@@ -5085,6 +5228,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 composerInput.value = '';
             }
             if (!preserveTransientUi) {
+                if (previousConversationId !== activeConversationId) {
+                    clearReplyTarget();
+                }
                 resetLinkPreview();
                 closeAllPaymentModals();
             }
@@ -5772,6 +5918,13 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        qa('[data-admin-chat-reply-clear]', root).forEach(function (button) {
+            button.addEventListener('click', function (event) {
+                event.preventDefault();
+                clearReplyTarget();
+            });
+        });
+
         if (q('[data-admin-chat-send]', root)) {
             q('[data-admin-chat-send]', root).addEventListener('click', function () {
                 var message = composerInput ? composerInput.value.trim() : '';
@@ -5784,6 +5937,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 postConversation('send', {
                     message: message,
+                    reply_to_message_id: replyToMessageId || 0,
                     link_preview_url: previewUrl,
                     link_preview_removed: previewRemoved
                 }, false).then(function (payload) {
@@ -5794,6 +5948,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (composerInput) {
                         composerInput.value = '';
                     }
+                    clearReplyTarget();
                     resetLinkPreview();
                     showComposerAlert('', false);
                     renderConversation(payload, { scrollToBottom: true });
@@ -5816,6 +5971,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 var formData = new FormData();
                 formData.append('action', 'upload');
                 formData.append('conversation_id', String(activeConversationId));
+                formData.append('reply_to_message_id', String(replyToMessageId || 0));
                 formData.append('_csrf', csrfToken);
                 formData.append('file', uploadInput.files[0]);
 
@@ -5825,6 +5981,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
                     uploadInput.value = '';
+                    clearReplyTarget();
                     showComposerAlert('', false);
                     renderConversation(payload, { scrollToBottom: true });
                 }).catch(function () {
@@ -5976,6 +6133,47 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            var replyOpen = closest(event.target, '[data-admin-chat-reply-open]');
+            if (replyOpen) {
+                event.preventDefault();
+                setReplyTarget(
+                    parseInt(replyOpen.getAttribute('data-message-id') || '0', 10) || 0,
+                    replyOpen.getAttribute('data-reply-sender') || '',
+                    replyOpen.getAttribute('data-reply-text') || ''
+                );
+                closeMessageActions();
+                if (composerInput) {
+                    composerInput.focus();
+                }
+                return;
+            }
+
+            var reactionToggle = closest(event.target, '[data-admin-chat-reaction-toggle]');
+            if (reactionToggle) {
+                event.preventDefault();
+                postConversation('toggle_reaction', {
+                    message_id: parseInt(reactionToggle.getAttribute('data-message-id') || '0', 10) || 0,
+                    reaction_code: reactionToggle.getAttribute('data-admin-chat-reaction-toggle') || ''
+                }, false).then(function (payload) {
+                    if (!payload.ok) {
+                        showComposerAlert(payload.message || 'Unable to save reaction.', true);
+                        return;
+                    }
+                    renderConversation(payload, { preserveScroll: true, preserveTransientUi: true });
+                }).catch(function () {
+                    showComposerAlert('Unable to save reaction.', true);
+                });
+                closeMessageActions();
+                return;
+            }
+
+            var replyScrollTarget = closest(event.target, '[data-admin-chat-scroll-to-message]');
+            if (replyScrollTarget) {
+                event.preventDefault();
+                scrollConversationToMessage(parseInt(replyScrollTarget.getAttribute('data-admin-chat-scroll-to-message') || '0', 10) || 0);
+                return;
+            }
+
             var editMessage = closest(event.target, '[data-admin-chat-edit-message]');
             if (editMessage) {
                 event.preventDefault();
@@ -6053,6 +6251,43 @@ document.addEventListener('DOMContentLoaded', function () {
                 }).catch(function () {
                     saveMessage.disabled = false;
                     showComposerAlert(root.getAttribute('data-chat-edit-message-error') || 'Unable to save this message.', true);
+                });
+                return;
+            }
+
+            var blockCustomer = closest(event.target, '[data-admin-chat-toggle-customer-block]');
+            if (blockCustomer) {
+                event.preventDefault();
+                var blockConversationId = parseInt(blockCustomer.getAttribute('data-conversation-id') || '0', 10) || 0;
+                var blockCustomerId = parseInt(blockCustomer.getAttribute('data-customer-id') || '0', 10) || 0;
+                var isBlocked = String(blockCustomer.getAttribute('data-blocked') || '0') === '1';
+                if (!blockConversationId || !blockCustomerId || blockCustomer.disabled) {
+                    return;
+                }
+
+                blockCustomer.disabled = true;
+                jsonFetch(chatUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: toQuery({
+                        action: 'set_customer_block_status',
+                        conversation_id: blockConversationId,
+                        customer_id: blockCustomerId,
+                        blocked: isBlocked ? '0' : '1',
+                        message_limit: activeConversationMessageLimit,
+                        _csrf: csrfToken
+                    })
+                }).then(function (payload) {
+                    blockCustomer.disabled = false;
+                    if (!payload.ok) {
+                        showComposerAlert(payload.message || (isBlocked ? 'Unable to unblock customer.' : 'Unable to block customer.'), true);
+                        return;
+                    }
+                    renderConversation(payload, { preserveScroll: true });
+                    showComposerAlert(payload.message || '', false);
+                }).catch(function () {
+                    blockCustomer.disabled = false;
+                    showComposerAlert(isBlocked ? 'Unable to unblock customer.' : 'Unable to block customer.', true);
                 });
                 return;
             }
@@ -6292,6 +6527,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            if (!closest(event.target, '[data-admin-chat-message]')) {
+                closeMessageActions();
+            }
+
             if (conversationMembersPopover && !conversationMembersPopover.hasAttribute('hidden')) {
                 if (!closest(event.target, '[data-admin-chat-members-toggle]') && !closest(event.target, '[data-admin-chat-members-popover]')) {
                     closeMembersPopover();
@@ -6309,6 +6548,52 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
         });
+
+        doc.addEventListener('click', function (event) {
+            var bubble = closest(event.target, '[data-admin-chat-message-bubble]');
+            var messageNode;
+            var messageId;
+            if (!bubble || closest(event.target, 'a, button, input, textarea, label')) {
+                return;
+            }
+            messageNode = closest(bubble, '[data-admin-chat-message]');
+            messageId = messageNode ? parseInt(messageNode.getAttribute('data-message-id') || '0', 10) || 0 : 0;
+            if (!messageId) {
+                return;
+            }
+            event.preventDefault();
+            toggleMessageActions(messageId);
+        });
+
+        doc.addEventListener('touchstart', function (event) {
+            var bubble = closest(event.target, '[data-admin-chat-message-bubble]');
+            var messageNode;
+            var messageId;
+            if (!bubble || closest(event.target, 'a, button, input, textarea, label')) {
+                return;
+            }
+            messageNode = closest(bubble, '[data-admin-chat-message]');
+            messageId = messageNode ? parseInt(messageNode.getAttribute('data-message-id') || '0', 10) || 0 : 0;
+            if (!messageId) {
+                return;
+            }
+            window.clearTimeout(messageActionTouchTimer);
+            messageActionTouchTimer = window.setTimeout(function () {
+                toggleMessageActions(messageId, true);
+            }, 360);
+        }, { passive: true });
+
+        doc.addEventListener('touchend', function () {
+            window.clearTimeout(messageActionTouchTimer);
+        }, { passive: true });
+
+        doc.addEventListener('touchmove', function () {
+            window.clearTimeout(messageActionTouchTimer);
+        }, { passive: true });
+
+        doc.addEventListener('touchcancel', function () {
+            window.clearTimeout(messageActionTouchTimer);
+        }, { passive: true });
     }
 
     initSensitiveRouteProtection();

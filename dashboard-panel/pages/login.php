@@ -47,6 +47,9 @@ switch ($site) {
                 $_SESSION['lang'] = isset($account['locale_code'])
                     ? localization_normalize_locale($account['locale_code'])
                     : localization_from_legacy_value($account['lang'] ?? 0);
+                $_SESSION['customer_login_state_needs_sync'] = 1;
+                $_SESSION['customer_login_state_customer_id'] = (int)$account['id'];
+                $_SESSION['customer_last_seen_touch_ts'] = time();
 
                 $account['logged'] = 1;
                 $smarty->assign('user', $account);

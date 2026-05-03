@@ -26,6 +26,11 @@ INSERT INTO `app_settings` (
   `credits_sales_enabled`,
   `trials_enabled`,
   `support_chat_enabled`,
+  `customer_messenger_enabled`,
+  `customer_direct_chat_enabled`,
+  `customer_group_chat_enabled`,
+  `customer_global_group_enabled`,
+  `messenger_voice_enabled`,
   `contact_form_enabled`,
   `referrals_enabled`,
   `apps_page_enabled`,
@@ -67,6 +72,11 @@ INSERT INTO `app_settings` (
   1,
   NULL,
   0,
+  0,
+  0,
+  0,
+  0,
+  0,
   NULL,
   NULL,
   0,
@@ -100,6 +110,11 @@ ON DUPLICATE KEY UPDATE
   `default_currency_id` = VALUES(`default_currency_id`),
   `default_locale_code` = VALUES(`default_locale_code`),
   `support_chat_enabled` = VALUES(`support_chat_enabled`),
+  `customer_messenger_enabled` = VALUES(`customer_messenger_enabled`),
+  `customer_direct_chat_enabled` = VALUES(`customer_direct_chat_enabled`),
+  `customer_group_chat_enabled` = VALUES(`customer_group_chat_enabled`),
+  `customer_global_group_enabled` = VALUES(`customer_global_group_enabled`),
+  `messenger_voice_enabled` = VALUES(`messenger_voice_enabled`),
   `credits_sales_enabled` = VALUES(`credits_sales_enabled`),
   `contact_form_enabled` = VALUES(`contact_form_enabled`),
   `referrals_enabled` = VALUES(`referrals_enabled`),
@@ -260,7 +275,8 @@ INSERT INTO `email_templates` (`template_key`, `name`, `subject`, `body_html`, `
   ('live-chat-customer-notify', 'Live chat customer notification', 'You have a new message [Support]', 'Hello,\n\nYou received a new message in {site_name}.\n\nLog in to your account to check Live Chat:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}\n\nThis message was generated automatically.', 1, 1),
   ('news-broadcast', 'News notification', 'New important information', 'Hello,\n\nA new important message was published in {site_name}.\n\nLog in to your account and open News:\n{news_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
   ('account-blocked', 'Account blocked notification', 'Your account was blocked', 'Hello,\n\nYour account in {site_name} has been blocked.\n\nIf you need help, contact support through the website:\n{site_url}\n\nRegards,\n{site_name}', 1, 1),
-  ('support-payment-request-notify', 'Support payment request notification', 'Customer started payment [Support]', 'Hello,\n\nA customer started the payment process in {site_name}.\n\nCustomer: {customer_email}\nPayment type: {payment_type}\n\nOpen the admin panel:\n{admin_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1)
+  ('support-payment-request-notify', 'Support payment request notification', 'Customer started payment [Support]', 'Hello,\n\nA customer started the payment process in {site_name}.\n\nCustomer: {customer_email}\nPayment type: {payment_type}\n\nOpen the admin panel:\n{admin_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
+  ('messenger-invite-notify', 'Messenger invitation notification', 'You received a new messenger invitation', 'Hello,\n\n{sender_label} sent you a messenger invitation in {site_name}.\n\nConversation: {conversation_title}\n\nLog in to your account to accept or reject the invitation:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1)
 ON DUPLICATE KEY UPDATE
   `name` = VALUES(`name`),
   `subject` = VALUES(`subject`),
@@ -279,6 +295,7 @@ SELECT et.id, 'en',
     WHEN 'news-broadcast' THEN 'New important information'
     WHEN 'account-blocked' THEN 'Your account was blocked'
     WHEN 'support-payment-request-notify' THEN 'Customer started payment [Support]'
+    WHEN 'messenger-invite-notify' THEN 'You received a new messenger invitation'
   END,
   CASE et.template_key
     WHEN 'account-activation' THEN 'Hello,\n\nYour account in {site_name} is ready.\n\nLog in here:\n{login_url}\n\nRegards,\n{site_name}\n{site_url}'
@@ -291,6 +308,7 @@ SELECT et.id, 'en',
     WHEN 'news-broadcast' THEN 'Hello,\n\nA new important message was published in {site_name}.\n\nLog in to your account and open News:\n{news_url}\n\nRegards,\n{site_name}\n{site_url}'
     WHEN 'account-blocked' THEN 'Hello,\n\nYour account in {site_name} has been blocked.\n\nIf you need help, contact support through the website:\n{site_url}\n\nRegards,\n{site_name}'
     WHEN 'support-payment-request-notify' THEN 'Hello,\n\nA customer started the payment process in {site_name}.\n\nCustomer: {customer_email}\nPayment type: {payment_type}\n\nOpen the admin panel:\n{admin_url}\n\nRegards,\n{site_name}\n{site_url}'
+    WHEN 'messenger-invite-notify' THEN 'Hello,\n\n{sender_label} sent you a messenger invitation in {site_name}.\n\nConversation: {conversation_title}\n\nLog in to your account to accept or reject the invitation:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}'
   END
 FROM `email_templates` et
 WHERE et.template_key IN (
@@ -303,7 +321,8 @@ WHERE et.template_key IN (
   'live-chat-customer-notify',
   'news-broadcast',
   'account-blocked',
-  'support-payment-request-notify'
+  'support-payment-request-notify',
+  'messenger-invite-notify'
 )
 ON DUPLICATE KEY UPDATE
   `subject` = VALUES(`subject`),
@@ -322,6 +341,7 @@ SELECT et.id, 'pl',
     WHEN 'news-broadcast' THEN 'Nowa ważna informacja'
     WHEN 'account-blocked' THEN 'Twoje konto zostało zablokowane'
     WHEN 'support-payment-request-notify' THEN 'Klient rozpoczął płatność [Support]'
+    WHEN 'messenger-invite-notify' THEN 'Masz nowe zaproszenie do rozmowy'
   END,
   CASE et.template_key
     WHEN 'account-activation' THEN 'Witaj,\n\nTwoje konto w {site_name} jest gotowe.\n\nZaloguj się tutaj:\n{login_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
@@ -334,6 +354,7 @@ SELECT et.id, 'pl',
     WHEN 'news-broadcast' THEN 'Witaj,\n\nW {site_name} została opublikowana nowa ważna informacja.\n\nZaloguj się na swoje konto i otwórz News:\n{news_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
     WHEN 'account-blocked' THEN 'Witaj,\n\nTwoje konto w {site_name} zostało zablokowane.\n\nJeśli potrzebujesz pomocy, skontaktuj się ze wsparciem przez stronę:\n{site_url}\n\nPozdrawiamy,\n{site_name}'
     WHEN 'support-payment-request-notify' THEN 'Witaj,\n\nKlient rozpoczął proces płatności w {site_name}.\n\nKlient: {customer_email}\nTyp płatności: {payment_type}\n\nOtwórz panel admina:\n{admin_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
+    WHEN 'messenger-invite-notify' THEN 'Witaj,\n\n{sender_label} wysłał Ci zaproszenie do messengera w {site_name}.\n\nRozmowa: {conversation_title}\n\nZaloguj się na swoje konto, aby zaakceptować albo odrzucić zaproszenie:\n{chat_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
   END
 FROM `email_templates` et
 WHERE et.template_key IN (
@@ -346,7 +367,8 @@ WHERE et.template_key IN (
   'live-chat-customer-notify',
   'news-broadcast',
   'account-blocked',
-  'support-payment-request-notify'
+  'support-payment-request-notify',
+  'messenger-invite-notify'
 )
 ON DUPLICATE KEY UPDATE
   `subject` = VALUES(`subject`),

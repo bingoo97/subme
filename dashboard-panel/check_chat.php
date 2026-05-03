@@ -95,14 +95,16 @@ function chat_find_or_create_conversation(Mysql_ks $db, int $customerId): int
     return (int)$db->id();
 }
 
-function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $attachmentPath = null): void
+function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null): void
 {
+    chat_ensure_message_interactions_runtime($db);
     $conversationId = chat_find_or_create_conversation($db, $customerId);
     $currentTime = function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s');
+    $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
 
     $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'is_read', 'created_at'],
-        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, 0, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
+        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, 0, $currentTime],
         'support_messages'
     );
 
@@ -116,15 +118,17 @@ function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $mes
     app_queue_live_chat_admin_notification($db, $conversationId, $customerId, $messageBody, $attachmentPath);
 }
 
-function chat_insert_support_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $createdAt = null): void
+function chat_insert_support_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $createdAt = null, ?int $replyToMessageId = null): void
 {
+    chat_ensure_message_interactions_runtime($db);
     $conversationId = chat_find_or_create_conversation($db, $customerId);
     $currentTime = $createdAt !== null && $createdAt !== '' ? $createdAt : (function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s'));
     $adminId = chat_first_admin_id($db);
+    $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
 
     $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'is_read', 'created_at'],
-        [$conversationId, 'admin', $customerId, $adminId, $messageBody, null, 1, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
+        [$conversationId, 'admin', $customerId, $adminId, $messageBody, null, $replyToMessageId, 1, $currentTime],
         'support_messages'
     );
 
@@ -136,17 +140,24 @@ function chat_insert_support_message(Mysql_ks $db, int $customerId, string $mess
     );
 }
 
-function chat_insert_customer_group_message(Mysql_ks $db, int $conversationId, int $customerId, string $messageBody, ?string $attachmentPath = null): bool
+function chat_insert_customer_group_message(Mysql_ks $db, int $conversationId, int $customerId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null): bool
 {
+    chat_ensure_message_interactions_runtime($db);
     $conversation = chat_group_accessible_for_customer($db, $customerId, $conversationId);
-    if (!$conversation || !empty($conversation['is_group_read_only'])) {
+    if (
+        !$conversation
+        || !empty($conversation['is_group_read_only'])
+        || (int)($conversation['can_post'] ?? 1) === 0
+        || chat_group_conversation_has_pending_invites($db, $conversationId)
+    ) {
         return false;
     }
 
     $currentTime = chat_current_datetime();
+    $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
     $inserted = $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'is_read', 'created_at'],
-        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, 0, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
+        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, 0, $currentTime],
         'support_messages'
     );
 
@@ -224,7 +235,7 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
                         AND support_conversations.customer_id = {$customerId}
                     )
                     OR (
-                        support_conversations.conversation_type = 'group_chat'
+                        support_conversations.conversation_type IN ('group_chat', 'global_group')
                         AND support_conversation_members.invite_status = 'accepted'
                         AND (
                             support_messages.customer_id = {$customerId}
@@ -239,18 +250,26 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
             return false;
         }
 
-        if ((string)($row['conversation_type'] ?? '') === 'group_chat') {
+        if (chat_is_group_like_conversation_type((string)($row['conversation_type'] ?? ''))) {
             chat_delete_uploaded_file(isset($row['attachment_path']) ? (string)$row['attachment_path'] : '');
+            if (schema_object_exists($db, 'support_message_reactions')) {
+                $db->query("DELETE FROM support_message_reactions WHERE message_id = {$messageId}");
+            }
             $db->query("DELETE FROM support_messages WHERE id = {$messageId} LIMIT 1");
             return true;
         }
 
-        $createdAtTimestamp = strtotime((string)$row['created_at']);
-        if ($createdAtTimestamp === false || (time() - $createdAtTimestamp) > 10) {
-            return false;
+        if (trim((string)($row['conversation_type'] ?? '')) !== 'live_chat') {
+            $createdAtTimestamp = strtotime((string)$row['created_at']);
+            if ($createdAtTimestamp === false || (time() - $createdAtTimestamp) > 10) {
+                return false;
+            }
         }
 
         chat_delete_uploaded_file(isset($row['attachment_path']) ? (string)$row['attachment_path'] : '');
+        if (schema_object_exists($db, 'support_message_reactions')) {
+            $db->query("DELETE FROM support_message_reactions WHERE message_id = {$messageId}");
+        }
         $db->query("DELETE FROM support_messages WHERE id = {$messageId} LIMIT 1");
         return true;
     }
@@ -532,6 +551,13 @@ $chatLocaleCode = isset($user['locale_code']) && (string)$user['locale_code'] !=
     ? (string)$user['locale_code']
     : (isset($currentLocale) ? (string)$currentLocale : (isset($user['lang_code']) ? (string)$user['lang_code'] : 'en'));
 $chatLocaleCode = localization_normalize_locale($chatLocaleCode);
+$currentCustomerRow = $db->select_user(
+    "SELECT id, status
+     FROM customers
+     WHERE id = {$currentCustomerId}
+     LIMIT 1"
+);
+$customerHasFullMessenger = chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : []);
 $responseMessage = '';
 
 chat_purge_expired_messages($db, chat_retention_days($settings));
@@ -541,14 +567,18 @@ if (
     || $action === 'send'
     || $action === 'link_preview'
     || $action === 'upload'
+    || $action === 'toggle_reaction'
     || $action === 'delete_message'
     || $action === 'faq_prompt'
     || $action === 'faq_reply'
     || $action === 'create_group'
     || $action === 'validate_group_email'
+    || $action === 'participant_profile'
+    || $action === 'start_direct_chat'
     || $action === 'invite_to_group'
     || $action === 'respond_group_invite'
     || $action === 'leave_group'
+    || $action === 'remove_group'
     || $action === 'delete_group'
     || $action === 'set_group_email_notifications'
     || $action === 'set_group_retention'
@@ -568,7 +598,38 @@ if ($action === 'link_preview') {
     ]);
 }
 
+$requestedGroupConversation = null;
+if ($requestedConversationId > 0 && function_exists('chat_group_accessible_for_customer')) {
+    $requestedGroupConversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
+}
+
+$currentCustomerIsGlobalChatBlocked = $requestedGroupConversation
+    && function_exists('chat_is_global_group_conversation_type')
+    && chat_is_global_group_conversation_type((string)($requestedGroupConversation['conversation_type'] ?? ''))
+    && function_exists('chat_global_group_customer_blocked')
+    && chat_global_group_customer_blocked($db, $currentCustomerId);
+
+if (
+    $currentCustomerIsGlobalChatBlocked
+    && (
+        $action === 'send'
+        || $action === 'upload'
+        || $action === 'toggle_reaction'
+        || !empty($_FILES['file']['tmp_name'])
+    )
+) {
+    $blockedMessage = localization_translate(isset($t) && is_array($t) ? $t : [], 'chat_global_blocked_notice', 'You cannot send messages in Global Chat right now.');
+    if ($responseFormat === 'json') {
+        chat_json_response(['ok' => false, 'message' => $blockedMessage]);
+    }
+    echo '<p>' . htmlspecialchars($blockedMessage, ENT_QUOTES, 'UTF-8') . '</p>';
+    exit;
+}
+
 if ($action === 'validate_group_email') {
+    if ($requestedConversationId > 0 && !$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     if ($requestedConversationId > 0) {
         $conversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
         if (!$conversation || !chat_group_can_customer_manage($conversation, $currentCustomerId)) {
@@ -580,7 +641,10 @@ if ($action === 'validate_group_email') {
             if (!empty($groupCreationState['blocked_by_limit'])) {
                 chat_json_response(['ok' => false, 'message' => 'Group chat creation is disabled for reseller accounts.']);
             }
-            chat_json_response(['ok' => false, 'message' => 'You reached the maximum number of group chats for your account.']);
+            if (!empty($groupCreationState['reached_limit'])) {
+                chat_json_response(['ok' => false, 'message' => 'You reached the maximum number of group chats for your account.']);
+            }
+            chat_json_response(['ok' => false, 'message' => 'Conversation creation is disabled for this account.']);
         }
     }
 
@@ -588,18 +652,59 @@ if ($action === 'validate_group_email') {
         $db,
         (string)($_POST['email'] ?? $_GET['email'] ?? ''),
         ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
-        $requestedConversationId
+        $requestedConversationId,
+        is_array($settings ?? null) ? $settings : [],
+        isset($t) && is_array($t) ? $t : []
     );
     chat_json_response($validation);
 }
 
+if ($action === 'participant_profile') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
+
+    $participantType = trim((string)($_POST['participant_type'] ?? $_GET['participant_type'] ?? 'customer'));
+    if ($participantType !== 'customer') {
+        chat_json_response(['ok' => false, 'message' => 'User not found.']);
+    }
+
+    $targetCustomerId = isset($_POST['target_customer_id']) ? (int)$_POST['target_customer_id'] : (int)($_GET['target_customer_id'] ?? 0);
+    $contextConversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (int)($_GET['conversation_id'] ?? 0);
+    $result = chat_customer_participant_profile_payload($db, $user, $targetCustomerId, is_array($settings ?? null) ? $settings : [], $contextConversationId);
+    chat_json_response($result);
+}
+
+if ($action === 'start_direct_chat') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
+
+    $targetCustomerId = isset($_POST['target_customer_id']) ? (int)$_POST['target_customer_id'] : (int)($_GET['target_customer_id'] ?? 0);
+    $result = chat_start_customer_direct_conversation($db, $user, $targetCustomerId, is_array($settings ?? null) ? $settings : []);
+    if (empty($result['ok'])) {
+        chat_json_response($result);
+    }
+
+    if (!empty($result['conversation_id'])) {
+        $requestedConversationId = (int)$result['conversation_id'];
+    }
+    $responseMessage = (string)($result['message'] ?? '');
+}
+
 if ($action === 'create_group') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     $groupCreationState = chat_customer_group_creation_state($db, $user, is_array($settings ?? null) ? $settings : []);
     if (empty($groupCreationState['allowed'])) {
         if (!empty($groupCreationState['blocked_by_limit'])) {
             chat_json_response(['ok' => false, 'message' => 'Group chat creation is disabled for reseller accounts.']);
         }
-        chat_json_response(['ok' => false, 'message' => 'You reached the maximum number of group chats for your account.']);
+        if (!empty($groupCreationState['reached_limit'])) {
+            chat_json_response(['ok' => false, 'message' => 'You reached the maximum number of group chats for your account.']);
+        }
+        chat_json_response(['ok' => false, 'message' => 'Conversation creation is disabled for this account.']);
     }
 
     $emailsJson = (string)($_POST['participant_emails_json'] ?? '[]');
@@ -625,6 +730,9 @@ if ($action === 'create_group') {
 }
 
 if ($action === 'invite_to_group') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     $emailsJson = (string)($_POST['participant_emails_json'] ?? '[]');
     $emails = json_decode($emailsJson, true);
     $emails = is_array($emails) ? $emails : [];
@@ -642,7 +750,7 @@ if ($action === 'invite_to_group') {
 }
 
 if ($action === 'respond_group_invite') {
-    if (!chat_customer_can_use_groups($user)) {
+    if (!chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : [])) {
         chat_json_response(['ok' => false, 'message' => 'Access denied.']);
     }
     $decision = trim((string)($_POST['decision'] ?? 'reject'));
@@ -662,6 +770,9 @@ if ($action === 'respond_group_invite') {
 }
 
 if ($action === 'leave_group') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     $result = chat_leave_group_conversation(
         $db,
         $requestedConversationId,
@@ -674,7 +785,26 @@ if ($action === 'leave_group') {
     $requestedConversationId = 0;
 }
 
+if ($action === 'remove_group') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
+    $result = chat_remove_group_conversation_for_participant(
+        $db,
+        $requestedConversationId,
+        chat_participant_key_for_customer($currentCustomerId)
+    );
+    if (empty($result['ok'])) {
+        chat_json_response($result);
+    }
+
+    $requestedConversationId = 0;
+}
+
 if ($action === 'delete_group') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     $result = chat_delete_group_conversation(
         $db,
         $requestedConversationId,
@@ -688,9 +818,15 @@ if ($action === 'delete_group') {
 }
 
 if ($action === 'set_group_email_notifications') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     $conversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
     if (!$conversation) {
         chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
+    }
+    if (chat_is_global_group_conversation_type((string)($conversation['conversation_type'] ?? ''))) {
+        chat_json_response(['ok' => false, 'message' => 'Email notifications are not available for the global chat.']);
     }
 
     $enabled = (string)($_POST['enabled'] ?? $_GET['enabled'] ?? '1') !== '0';
@@ -707,6 +843,9 @@ if ($action === 'set_group_email_notifications') {
 }
 
 if ($action === 'set_group_retention') {
+    if (!$customerHasFullMessenger) {
+        chat_json_response(['ok' => false, 'message' => 'Access denied.']);
+    }
     $conversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
     if (!$conversation) {
         chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
@@ -737,7 +876,7 @@ if ($faqKey !== '') {
 
 if (app_uses_v2_schema($db)) {
     if (isset($_POST['user']) || $action === 'read') {
-        if ($requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
+        if ($customerHasFullMessenger && $requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
             chat_mark_group_read_for_customer($db, $currentCustomerId, $requestedConversationId);
         } else {
             chat_mark_admin_messages_read($db, $currentCustomerId);
@@ -754,22 +893,51 @@ if (app_uses_v2_schema($db)) {
         }
     }
 
+    if ($action === 'toggle_reaction') {
+        $reactionCode = trim((string)($_POST['reaction_code'] ?? ''));
+        $targetMessageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : 0;
+        $targetConversationId = $requestedConversationId;
+        if ($targetConversationId <= 0) {
+            $targetConversationId = chat_find_or_create_conversation($db, $currentCustomerId);
+        }
+        $validMessageId = chat_validate_reply_target($db, $targetConversationId, $targetMessageId);
+        if ($validMessageId === null) {
+            chat_json_response(['ok' => false, 'message' => 'Message not found.']);
+        }
+        $reactionResult = chat_toggle_message_reaction(
+            $db,
+            $validMessageId,
+            [
+                'participant_type' => 'customer',
+                'customer_id' => $currentCustomerId,
+                'admin_user_id' => 0,
+                'participant_key' => chat_participant_key_for_customer($currentCustomerId),
+            ],
+            $reactionCode
+        );
+        if (empty($reactionResult['ok'])) {
+            chat_json_response(['ok' => false, 'message' => (string)($reactionResult['message'] ?? 'Unable to update reaction.')]);
+        }
+    }
+
     if ((isset($_POST['id_usera'], $_POST['tresc']) && (int)$_POST['id_usera'] === $currentCustomerId) || $action === 'send') {
         $messageBody = trim((string)($_POST['tresc'] ?? ''));
         if ($messageBody !== '') {
             chat_require_rate_limit_slot($responseFormat);
+            $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
             $messageBody = chat_prepare_message_with_link_preview(
                 $messageBody,
                 $chatLocaleCode,
                 empty($_POST['link_preview_removed']),
                 trim((string)($_POST['link_preview_url'] ?? ''))
             );
-            if ($requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
-                if (!chat_insert_customer_group_message($db, $requestedConversationId, $currentCustomerId, $messageBody)) {
+            if ($customerHasFullMessenger && $requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
+                $replyToMessageId = chat_validate_reply_target($db, $requestedConversationId, $replyToMessageId) ?? 0;
+                if (!chat_insert_customer_group_message($db, $requestedConversationId, $currentCustomerId, $messageBody, null, $replyToMessageId > 0 ? $replyToMessageId : null)) {
                     if ($responseFormat === 'json') {
-                        chat_json_response(['ok' => false, 'message' => 'This group is read only.']);
+                        chat_json_response(['ok' => false, 'message' => 'You cannot send messages in this conversation right now.']);
                     }
-                    echo '<p>This group is read only.</p>';
+                    echo '<p>You cannot send messages in this conversation right now.</p>';
                     exit;
                 }
                 chat_queue_group_customer_notifications_if_offline(
@@ -780,7 +948,9 @@ if (app_uses_v2_schema($db)) {
                 );
                 chat_register_customer_message_sent();
             } else {
-                chat_insert_customer_message($db, $currentCustomerId, $messageBody);
+                $supportConversationId = chat_find_or_create_conversation($db, $currentCustomerId);
+                $replyToMessageId = chat_validate_reply_target($db, $supportConversationId, $replyToMessageId) ?? 0;
+                chat_insert_customer_message($db, $currentCustomerId, $messageBody, null, $replyToMessageId > 0 ? $replyToMessageId : null);
                 chat_register_customer_message_sent();
             }
         }
@@ -790,12 +960,14 @@ if (app_uses_v2_schema($db)) {
         chat_require_rate_limit_slot($responseFormat);
         $publicPath = chat_store_uploaded_image($_FILES['file'], $currentCustomerId);
         if ($publicPath !== null) {
-            if ($requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
-                if (!chat_insert_customer_group_message($db, $requestedConversationId, $currentCustomerId, '', $publicPath)) {
+            $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
+            if ($customerHasFullMessenger && $requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
+                $replyToMessageId = chat_validate_reply_target($db, $requestedConversationId, $replyToMessageId) ?? 0;
+                if (!chat_insert_customer_group_message($db, $requestedConversationId, $currentCustomerId, '', $publicPath, $replyToMessageId > 0 ? $replyToMessageId : null)) {
                     if ($responseFormat === 'json') {
-                        chat_json_response(['ok' => false, 'message' => 'This group is read only.']);
+                        chat_json_response(['ok' => false, 'message' => 'You cannot send messages in this conversation right now.']);
                     }
-                    echo '<p>This group is read only.</p>';
+                    echo '<p>You cannot send messages in this conversation right now.</p>';
                     exit;
                 }
                 chat_queue_group_customer_notifications_if_offline(
@@ -806,7 +978,9 @@ if (app_uses_v2_schema($db)) {
                     $publicPath
                 );
             } else {
-                chat_insert_customer_message($db, $currentCustomerId, '', $publicPath);
+                $supportConversationId = chat_find_or_create_conversation($db, $currentCustomerId);
+                $replyToMessageId = chat_validate_reply_target($db, $supportConversationId, $replyToMessageId) ?? 0;
+                chat_insert_customer_message($db, $currentCustomerId, '', $publicPath, $replyToMessageId > 0 ? $replyToMessageId : null);
             }
             chat_register_customer_message_sent();
         } elseif ($responseFormat === 'json') {
@@ -894,7 +1068,7 @@ $payload = chat_render_payload(
 $rateLimitState = chat_rate_limit_state();
 
 if ($responseFormat === 'json') {
-    $groupInvites = chat_customer_can_use_groups($user) ? chat_customer_group_pending_invites($db, $currentCustomerId) : [];
+    $groupInvites = chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : []) ? chat_customer_group_pending_invites($db, $currentCustomerId) : [];
     $smarty->assign('group_chat_pending_invites', $groupInvites);
     $responsePayload = [
         'ok' => true,

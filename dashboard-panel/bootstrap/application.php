@@ -3229,6 +3229,51 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('app_settings', 'customer_type_switch_enabled');
     }
+
+    if (!schema_column_exists($db, 'app_settings', 'customer_messenger_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN customer_messenger_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER support_chat_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'customer_messenger_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'customer_direct_chat_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN customer_direct_chat_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER customer_messenger_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'customer_direct_chat_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'customer_group_chat_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN customer_group_chat_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER customer_direct_chat_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'customer_group_chat_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'customer_global_group_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN customer_global_group_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER customer_group_chat_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'customer_global_group_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'messenger_voice_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN messenger_voice_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER customer_global_group_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'messenger_voice_enabled');
+    }
 }
 
 function app_ensure_customer_runtime_columns(Mysql_ks $db): void
@@ -3895,6 +3940,11 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['referrals_enabled'] = (int)($settings['referrals_enabled'] ?? 1);
     $settings['apps_page_enabled'] = (int)($settings['apps_page_enabled'] ?? 1);
     $settings['customer_type_switch_enabled'] = (int)($settings['customer_type_switch_enabled'] ?? 0);
+    $settings['customer_messenger_enabled'] = (int)($settings['customer_messenger_enabled'] ?? 0);
+    $settings['customer_direct_chat_enabled'] = (int)($settings['customer_direct_chat_enabled'] ?? 0);
+    $settings['customer_group_chat_enabled'] = (int)($settings['customer_group_chat_enabled'] ?? 0);
+    $settings['customer_global_group_enabled'] = (int)($settings['customer_global_group_enabled'] ?? 0);
+    $settings['messenger_voice_enabled'] = (int)($settings['messenger_voice_enabled'] ?? 0);
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
     $settings['page_guidance_enabled'] = (int)($settings['page_guidance_enabled'] ?? 1);
     $settings['payment_test_mode_notice_enabled'] = (int)($settings['payment_test_mode_notice_enabled'] ?? 0);
@@ -4159,6 +4209,12 @@ function app_email_builtin_templates(): array
             'body' => app_email_builtin_templates_localized('en')['reseller-chat-customer-notify']['body'],
             'placeholders' => ['conversation_title', 'sender_label', 'message_preview', 'chat_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
         ],
+        'messenger-invite-notify' => [
+            'name' => 'Messenger invitation notification',
+            'subject' => 'You received a new messenger invitation',
+            'body' => app_email_builtin_templates_localized('en')['messenger-invite-notify']['body'],
+            'placeholders' => ['conversation_title', 'sender_label', 'chat_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
     ];
 }
 
@@ -4188,6 +4244,7 @@ function app_email_active_template_keys(): array
         'account-blocked',
         'support-payment-request-notify',
         'reseller-chat-customer-notify',
+        'messenger-invite-notify',
     ];
 }
 
@@ -4210,6 +4267,7 @@ function app_email_builtin_templates_localized(string $localeCode): array
             'account-blocked' => ['subject' => 'Twoje konto zostało zablokowane', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że Twoje konto w <strong>%pagename%</strong> zostało zablokowane.</p>\n<p>Jeśli potrzebujesz pomocy, skontaktuj się z nami przez stronę.</p>\n{$footer}"],
             'support-payment-request-notify' => ['subject' => 'Klient rozpoczął płatność [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Klient rozpoczął proces płatności dla zamówienia nr <strong>#%order_id%</strong>.</p>\n<p>Login klienta: <strong>%customer_email%</strong></p>\n<p>Przejdź do panelu administracyjnego, aby sprawdzić szczegóły.</p>\n{$footer}"],
             'reseller-chat-customer-notify' => ['subject' => 'Masz nową wiadomość w messengerze', 'body' => "<h3>Witaj,</h3>\n<p>Otrzymałeś nową wiadomość od <strong>%sender_label%</strong>.</p>\n<p>Rozmowa: <strong>%conversation_title%</strong></p>\n<p>Podgląd wiadomości: <strong>%message_preview%</strong></p>\n<p>Zaloguj się do swojego konta, aby otworzyć messenger.</p>\n{$footer}"],
+            'messenger-invite-notify' => ['subject' => 'Masz nowe zaproszenie do rozmowy', 'body' => "<h3>Witaj,</h3>\n<p><strong>%sender_label%</strong> wysłał Ci zaproszenie do messengera.</p>\n<p>Rozmowa: <strong>%conversation_title%</strong></p>\n<p>Zaloguj się na swoje konto, aby zaakceptować albo odrzucić zaproszenie.</p>\n{$footer}"],
         ];
     }
 
@@ -4226,6 +4284,7 @@ function app_email_builtin_templates_localized(string $localeCode): array
         'account-blocked' => ['subject' => 'Your account was blocked', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that your account in <strong>%pagename%</strong> has been blocked.</p>\n<p>If you need help, contact us through the website.</p>\n{$footer}"],
         'support-payment-request-notify' => ['subject' => 'Customer started payment [Support]', 'body' => "<h3>Hello,</h3>\n<p>A customer started the payment process for order <strong>#%order_id%</strong>.</p>\n<p>Customer login: <strong>%customer_email%</strong></p>\n<p>Open the admin panel to review the details.</p>\n{$footer}"],
         'reseller-chat-customer-notify' => ['subject' => 'You have a new messenger message', 'body' => "<h3>Hello,</h3>\n<p>You received a new message from <strong>%sender_label%</strong>.</p>\n<p>Conversation: <strong>%conversation_title%</strong></p>\n<p>Message preview: <strong>%message_preview%</strong></p>\n<p>Log in to your account to open messenger.</p>\n{$footer}"],
+        'messenger-invite-notify' => ['subject' => 'You received a new messenger invitation', 'body' => "<h3>Hello,</h3>\n<p><strong>%sender_label%</strong> sent you a messenger invitation.</p>\n<p>Conversation: <strong>%conversation_title%</strong></p>\n<p>Log in to your account to accept or reject the invitation.</p>\n{$footer}"],
     ];
 }
 
@@ -7943,7 +8002,35 @@ function app_update_customer_locale(Mysql_ks $db, int $customerId, string $local
 function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $currentTime, string $clientIp): void
 {
     if (app_uses_v2_schema($db)) {
-        $db->update_using_id(['last_login_at', 'ip_address'], [$currentTime, $clientIp], 'customers', $customerId);
+        $sessionCustomerId = isset($_SESSION['customer_login_state_customer_id']) ? (int)$_SESSION['customer_login_state_customer_id'] : 0;
+        $needsLoginSync = !empty($_SESSION['customer_login_state_needs_sync']) || $sessionCustomerId !== $customerId;
+
+        if ($needsLoginSync) {
+            $db->update_using_id(['last_login_at', 'ip_address'], [$currentTime, $clientIp], 'customers', $customerId);
+            if (
+                $customerId > 0
+                && function_exists('app_fetch_settings')
+                && function_exists('chat_sync_global_group_members')
+                && function_exists('chat_customer_can_use_groups')
+            ) {
+                $settings = app_fetch_settings($db);
+                if (!empty($settings['customer_global_group_enabled'])) {
+                    $customerRow = $db->select_user(
+                        "SELECT id, email, public_handle, avatar_url, customer_type, status, last_login_at
+                         FROM customers
+                         WHERE id = {$customerId}
+                         LIMIT 1"
+                    );
+                    if (is_array($customerRow) && !empty($customerRow['id']) && chat_customer_can_use_groups($customerRow, is_array($settings) ? $settings : [])) {
+                        chat_sync_global_group_members($db, is_array($settings) ? $settings : []);
+                    }
+                }
+            }
+        }
+
+        $_SESSION['customer_login_state_needs_sync'] = 0;
+        $_SESSION['customer_login_state_customer_id'] = $customerId;
+        $_SESSION['customer_last_seen_touch_ts'] = time();
         return;
     }
 

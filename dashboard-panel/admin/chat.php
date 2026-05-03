@@ -23,7 +23,7 @@ $messages = admin_load_messages($currentLocale);
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $messageLimit = admin_chat_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0);
-$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
+$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'toggle_reaction', 'set_customer_block_status', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $mutatingActions, true) && !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
     http_response_code(419);
@@ -297,7 +297,7 @@ if ($action === 'update_quick_reply_message') {
 }
 
 if ($action === 'inbox_state') {
-    $rows = admin_chat_inbox_rows($db);
+    $rows = admin_chat_inbox_rows($db, 12, (int)($adminUser['id'] ?? 0));
     $pendingCryptoPayment = false;
     if ($conversationId > 0) {
         $conversationRow = admin_chat_conversation_row($db, $conversationId);
@@ -310,12 +310,21 @@ if ($action === 'inbox_state') {
         'badge_count' => admin_chat_inbox_unread_count($rows),
         'pending_crypto_payment' => $pendingCryptoPayment,
         'items' => array_map(static function (array $row) use ($db, $messages): array {
-            $presence = admin_chat_customer_presence(
-                $db,
-                (int)($row['customer_id'] ?? 0),
-                (string)($row['customer_last_login_at'] ?? ''),
-                $messages
-            );
+            $conversationType = trim((string)($row['conversation_type'] ?? 'live_chat'));
+            if (function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type($conversationType)) {
+                $presence = [
+                    'key' => (string)($row['summary_presence_key'] ?? 'offline'),
+                    'label' => (string)($row['summary_presence_label'] ?? 'Offline'),
+                    'class_name' => (string)($row['summary_presence_class_name'] ?? 'admin-chat-presence admin-chat-presence--offline'),
+                ];
+            } else {
+                $presence = admin_chat_customer_presence(
+                    $db,
+                    (int)($row['customer_id'] ?? 0),
+                    (string)($row['customer_last_login_at'] ?? ''),
+                    $messages
+                );
+            }
 
             return [
                 'conversation_id' => (int)($row['id'] ?? 0),
@@ -366,7 +375,7 @@ if (!is_array($conversationRow) || empty($conversationRow['id'])) {
     exit;
 }
 
-if ((string)($conversationRow['conversation_type'] ?? 'live_chat') === 'group_chat' && !chat_group_accessible_for_admin($db, (int)$adminUser['id'], $conversationId)) {
+if (chat_is_group_like_conversation_type((string)($conversationRow['conversation_type'] ?? 'live_chat')) && !chat_group_accessible_for_admin($db, (int)$adminUser['id'], $conversationId)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'message' => 'Access denied.']);
     exit;
@@ -374,7 +383,7 @@ if ((string)($conversationRow['conversation_type'] ?? 'live_chat') === 'group_ch
 
 $conversationType = (string)($conversationRow['conversation_type'] ?? 'live_chat');
 
-if ($conversationType === 'group_chat') {
+if (chat_is_group_like_conversation_type($conversationType)) {
     chat_mark_group_read_for_admin($db, (int)$adminUser['id'], $conversationId);
 } else {
     admin_mark_chat_conversation_read($db, $conversationId);
@@ -389,7 +398,7 @@ $presence = admin_chat_customer_presence(
 );
 $avatarHtml = admin_chat_avatar_html($conversationRow, $messages, 'admin-chat-inbox__avatar--sm');
 
-if ($conversationType === 'group_chat') {
+if (chat_is_group_like_conversation_type($conversationType)) {
     $summary = chat_group_conversation_summary(
         $db,
         $conversationId,
@@ -460,7 +469,9 @@ if ($action === 'link_preview') {
 if ($action === 'send') {
     $messageBody = trim((string)($_POST['message'] ?? ''));
     if ($messageBody !== '') {
-        if ((string)($conversationRow['conversation_type'] ?? 'live_chat') === 'group_chat') {
+        $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
+        $replyToMessageId = chat_validate_reply_target($db, $conversationId, $replyToMessageId) ?? 0;
+        if (chat_is_group_like_conversation_type((string)($conversationRow['conversation_type'] ?? 'live_chat'))) {
             chat_mark_group_read_for_admin($db, (int)$adminUser['id'], $conversationId);
         }
         $messageBody = chat_prepare_message_with_link_preview(
@@ -469,7 +480,34 @@ if ($action === 'send') {
             empty($_POST['link_preview_removed']),
             trim((string)($_POST['link_preview_url'] ?? ''))
         );
-        admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], $messageBody);
+        admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], $messageBody, null, $replyToMessageId > 0 ? $replyToMessageId : null);
+    }
+}
+
+if ($action === 'toggle_reaction') {
+    $reactionCode = trim((string)($_POST['reaction_code'] ?? ''));
+    $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : 0;
+    $messageId = chat_validate_reply_target($db, $conversationId, $messageId) ?? 0;
+    if ($messageId <= 0) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Message not found.']);
+        exit;
+    }
+    $reactionResult = chat_toggle_message_reaction(
+        $db,
+        $messageId,
+        [
+            'participant_type' => 'admin',
+            'customer_id' => 0,
+            'admin_user_id' => (int)$adminUser['id'],
+            'participant_key' => chat_participant_key_for_admin((int)$adminUser['id']),
+        ],
+        $reactionCode
+    );
+    if (empty($reactionResult['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($reactionResult['message'] ?? 'Unable to update reaction.')]);
+        exit;
     }
 }
 
@@ -518,7 +556,9 @@ if ($action === 'upload' && !empty($_FILES['file']['tmp_name'])) {
         exit;
     }
 
-    admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], '', $attachmentPath);
+    $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
+    $replyToMessageId = chat_validate_reply_target($db, $conversationId, $replyToMessageId) ?? 0;
+    admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], '', $attachmentPath, $replyToMessageId > 0 ? $replyToMessageId : null);
 }
 
 if ($action === 'delete_message') {
@@ -538,6 +578,17 @@ if ($action === 'edit_message') {
     if (!$updated) {
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => 'Unable to save message.']);
+        exit;
+    }
+}
+
+if ($action === 'set_customer_block_status') {
+    $customerId = isset($_POST['customer_id']) ? (int)$_POST['customer_id'] : 0;
+    $shouldBlock = (string)($_POST['blocked'] ?? '1') !== '0';
+    $result = admin_set_customer_block_status_from_chat($db, $customerId, (int)$adminUser['id'], $shouldBlock, admin_request_ip());
+    if (empty($result['ok'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? ($shouldBlock ? 'Unable to block customer.' : 'Unable to unblock customer.'))]);
         exit;
     }
 }
@@ -602,7 +653,7 @@ if ($action === 'set_group_email_notifications') {
     }
 }
 
-$messageRows = admin_chat_conversation_messages($db, $conversationId, $messageLimit);
+$messageRows = admin_chat_conversation_messages($db, $conversationId, $messageLimit, (int)$adminUser['id']);
 $totalMessageCount = admin_chat_conversation_message_count($db, $conversationId);
 $loadedMessageCount = count($messageRows);
 $hasMoreMessages = $totalMessageCount > $loadedMessageCount;
@@ -617,7 +668,7 @@ if (!empty($conversationRow['customer_id'])) {
     $pendingCryptoPayment = admin_customer_has_pending_crypto_payment($db, (int)$conversationRow['customer_id']);
     $customerOrdersTotal = admin_order_count($db, (int)$conversationRow['customer_id']);
 }
-if ($conversationType === 'group_chat') {
+if (chat_is_group_like_conversation_type($conversationType)) {
     $groupMemberSettings = chat_group_member_row($db, $conversationId, chat_participant_key_for_admin((int)$adminUser['id']));
     $groupMemberSummaries = chat_group_member_summaries($db, $conversationId, ['accepted']);
     $groupMemberCountLabel = chat_group_member_count_label($db, $conversationId, ['accepted']);
@@ -633,10 +684,10 @@ echo json_encode([
     'customer_public_handle' => (string)($conversationRow['customer_public_handle'] ?? ''),
     'is_group_read_only' => !empty($conversationRow['is_group_read_only']),
     'retention_hours' => chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null),
-    'email_notifications_enabled' => $conversationType === 'group_chat'
+    'email_notifications_enabled' => chat_is_group_like_conversation_type($conversationType)
         ? chat_group_member_email_notifications_enabled(is_array($groupMemberSettings) ? $groupMemberSettings : [])
         : true,
-    'can_manage_group' => $conversationType === 'group_chat'
+    'can_manage_group' => chat_is_group_like_conversation_type($conversationType)
         ? chat_group_can_admin_manage((array)$conversationRow, (int)($adminUser['id'] ?? 0))
         : false,
     'member_count_label' => $groupMemberCountLabel,

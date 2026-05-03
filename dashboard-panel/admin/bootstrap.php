@@ -150,6 +150,31 @@ function admin_customer_type_switch_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'customer_type_switch_enabled', false);
 }
 
+function admin_customer_messenger_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'customer_messenger_enabled', false);
+}
+
+function admin_customer_direct_chat_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'customer_direct_chat_enabled', false);
+}
+
+function admin_customer_group_chat_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'customer_group_chat_enabled', false);
+}
+
+function admin_customer_global_group_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'customer_global_group_enabled', false);
+}
+
+function admin_messenger_voice_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'messenger_voice_enabled', false);
+}
+
 function admin_application_instructions_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'application_instructions_enabled', true);
@@ -405,6 +430,15 @@ function admin_ensure_user_runtime_columns(Mysql_ks $db): void
                 OR TRIM(public_handle) = ''"
         );
     }
+
+    if (!schema_column_exists($db, 'admin_users', 'personal_notes_html')) {
+        @$db->query(
+            "ALTER TABLE admin_users
+             ADD COLUMN personal_notes_html LONGTEXT DEFAULT NULL
+             AFTER public_handle"
+        );
+        schema_forget_column_cache('admin_users', 'personal_notes_html');
+    }
 }
 
 function admin_normalize_public_handle(string $value): string
@@ -486,6 +520,8 @@ function admin_public_handle_label(array $adminUser): string
 
 function admin_personal_notes_available(Mysql_ks $db): bool
 {
+    admin_ensure_user_runtime_columns($db);
+
     return schema_object_exists($db, 'admin_users')
         && schema_column_exists($db, 'admin_users', 'personal_notes_html');
 }
@@ -500,6 +536,8 @@ function admin_save_personal_notes(
     int $adminUserId,
     string $personalNotesHtml
 ): array {
+    admin_ensure_user_runtime_columns($db);
+
     if ($adminUserId <= 0) {
         return ['ok' => false, 'message' => 'Administrator account not found.'];
     }
@@ -519,8 +557,13 @@ function admin_save_personal_notes(
         return ['ok' => false, 'message' => 'Unable to save administrator notes.'];
     }
 
+    $selectColumns = ['id', 'personal_notes_html'];
+    if (schema_column_exists($db, 'admin_users', 'updated_at')) {
+        $selectColumns[] = 'updated_at';
+    }
+
     $row = $db->select_user(
-        "SELECT id, personal_notes_html, updated_at
+        "SELECT " . implode(', ', $selectColumns) . "
          FROM admin_users
          WHERE id = {$adminUserId}
          LIMIT 1"
@@ -536,7 +579,9 @@ function admin_save_personal_notes(
         'admin_user' => [
             'id' => (int)($row['id'] ?? 0),
             'personal_notes_html' => (string)($row['personal_notes_html'] ?? ''),
-            'updated_at' => (string)($row['updated_at'] ?? ''),
+            'updated_at' => schema_column_exists($db, 'admin_users', 'updated_at')
+                ? (string)($row['updated_at'] ?? '')
+                : date('Y-m-d H:i:s'),
         ],
     ];
 }
@@ -12089,6 +12134,12 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     }
 
     app_ensure_customer_runtime_columns($db);
+    if ($adminUserId > 0 && function_exists('app_fetch_settings') && function_exists('chat_sync_global_group_members')) {
+        $settings = app_fetch_settings($db);
+        if (!empty($settings['customer_global_group_enabled'])) {
+            chat_sync_global_group_members($db, is_array($settings) ? $settings : []);
+        }
+    }
 
     $limit = max(1, min(20, $limit));
     $safeChatEpoch = '1970-01-01 00:00:00';
@@ -12162,6 +12213,12 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     }
 
     usort($rows, static function (array $left, array $right): int {
+        $leftIsGlobal = trim((string)($left['conversation_type'] ?? '')) === 'global_group';
+        $rightIsGlobal = trim((string)($right['conversation_type'] ?? '')) === 'global_group';
+        if ($leftIsGlobal !== $rightIsGlobal) {
+            return $leftIsGlobal ? -1 : 1;
+        }
+
         $leftTime = max(
             strtotime((string)($left['last_customer_message_at'] ?? '')) ?: 0,
             strtotime((string)($left['last_admin_message_at'] ?? '')) ?: 0,
@@ -12191,6 +12248,9 @@ function admin_chat_inbox_unread_count(array $rows): int
 {
     $total = 0;
     foreach ($rows as $row) {
+        if (trim((string)($row['conversation_type'] ?? '')) === 'global_group') {
+            continue;
+        }
         $total += (int)($row['unread_count'] ?? 0);
     }
 
@@ -12461,7 +12521,10 @@ function admin_chat_message_preview(array $row, array $messages): string
     if (is_array($cardPayload) && !empty($cardPayload['title'])) {
         $body = trim((string)$cardPayload['title']);
     } else {
-        $body = trim(html_entity_decode(strip_tags($rawBody), ENT_QUOTES, 'UTF-8'));
+        $systemNoticeText = function_exists('chat_system_notice_text') ? chat_system_notice_text($rawBody) : '';
+        $body = $systemNoticeText !== ''
+            ? trim($systemNoticeText)
+            : trim(html_entity_decode(strip_tags($rawBody), ENT_QUOTES, 'UTF-8'));
     }
     if ($body === '' && trim((string)($row['last_attachment_path'] ?? '')) !== '') {
         $body = admin_t($messages, 'chat_preview_image', 'Image attachment');
@@ -12812,7 +12875,7 @@ function admin_string_truncate(string $value, int $maxLength = 20): string
 
 function admin_chat_display_name(array $row, array $messages, int $maxLength = 20): string
 {
-    if (trim((string)($row['conversation_type'] ?? '')) === 'group_chat') {
+    if (function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type((string)($row['conversation_type'] ?? ''))) {
         $title = trim((string)($row['summary_title'] ?? ''));
         if ($title === '') {
             $title = chat_group_conversation_title($row, admin_t($messages, 'group_chat_badge', 'Group chat'));
@@ -12830,7 +12893,7 @@ function admin_chat_display_name(array $row, array $messages, int $maxLength = 2
 
 function admin_chat_avatar_payload(array $row, array $messages = []): array
 {
-    if (trim((string)($row['conversation_type'] ?? '')) === 'group_chat') {
+    if (function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type((string)($row['conversation_type'] ?? ''))) {
         $avatarUrl = trim((string)($row['avatar_url'] ?? ''));
         $avatarText = trim((string)($row['avatar_text'] ?? 'G'));
         $avatarTheme = trim((string)($row['avatar_theme'] ?? 'theme-6'));
@@ -12887,7 +12950,7 @@ function admin_chat_avatar_text(array $row, array $messages): string
 
 function admin_chat_avatar_theme(array $row): string
 {
-    if (trim((string)($row['conversation_type'] ?? '')) === 'group_chat') {
+    if (function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type((string)($row['conversation_type'] ?? ''))) {
         $theme = trim((string)($row['avatar_theme'] ?? 'theme-6'));
         return $theme !== '' ? $theme : 'theme-6';
     }
@@ -12940,13 +13003,29 @@ function admin_chat_conversation_message_count(Mysql_ks $db, int $conversationId
     return (int)($row['total'] ?? 0);
 }
 
-function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId, int $messageLimit = 0): array
+function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId, int $messageLimit = 0, int $adminUserId = 0): array
 {
     if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
         return [];
     }
 
+    chat_ensure_message_interactions_runtime($db);
     $safeLimit = admin_chat_normalize_message_limit($messageLimit);
+    $readSelect = 'support_messages.is_read';
+    if (schema_object_exists($db, 'support_conversation_members')) {
+        $readSelect = "CASE
+            WHEN support_messages.sender_type <> 'admin' THEN support_messages.is_read
+            WHEN EXISTS (
+                SELECT 1
+                FROM support_conversation_members AS receipt_members
+                WHERE receipt_members.conversation_id = support_messages.conversation_id
+                  AND receipt_members.invite_status = 'accepted'
+                  AND receipt_members.participant_key LIKE 'customer:%'
+                  AND COALESCE(receipt_members.last_read_message_id, 0) >= support_messages.id
+            ) THEN 1
+            ELSE support_messages.is_read
+        END";
+    }
     $baseQuery = "SELECT
             support_messages.id,
             support_messages.sender_type,
@@ -12954,24 +13033,40 @@ function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId, int
             support_messages.admin_user_id,
             support_messages.message_body,
             support_messages.attachment_path,
-            support_messages.is_read,
+            support_messages.reply_to_message_id,
+            {$readSelect} AS is_read,
             support_messages.created_at,
             NULLIF(TRIM(admin_users.public_handle), '') AS admin_public_handle,
             admin_users.login_name AS admin_login_name,
-            customers.email AS customer_email
+            customers.email AS customer_email,
+            NULLIF(TRIM(customers.public_handle), '') AS customer_display_name,
+            customers.status AS customer_status,
+            COALESCE(global_customer_member.global_chat_blocked, 0) AS customer_global_chat_blocked
          FROM support_messages
          LEFT JOIN admin_users ON admin_users.id = support_messages.admin_user_id
          LEFT JOIN customers ON customers.id = support_messages.customer_id
+         LEFT JOIN support_conversation_members AS global_customer_member
+            ON global_customer_member.conversation_id = support_messages.conversation_id
+           AND global_customer_member.customer_id = support_messages.customer_id
+           AND global_customer_member.participant_type = 'customer'
          WHERE support_messages.conversation_id = {$conversationId}";
 
-    return $db->select_full_user(
+    $rows = $db->select_full_user(
         "SELECT *
          FROM (
             {$baseQuery}
-            ORDER BY support_messages.id DESC
+            ORDER BY support_messages.created_at DESC, support_messages.id DESC
             LIMIT {$safeLimit}
          ) AS recent_messages
-         ORDER BY id ASC"
+         ORDER BY created_at ASC, id ASC"
+    );
+
+    return chat_enrich_support_message_rows(
+        $db,
+        $rows,
+        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId, 'participant_key' => chat_participant_key_for_admin($adminUserId)],
+        [],
+        admin_t([], 'chat_inbox_title', 'Live chat inbox')
     );
 }
 
@@ -13753,6 +13848,9 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
         return false;
     }
 
+    if (schema_object_exists($db, 'support_message_reactions')) {
+        $db->query("DELETE FROM support_message_reactions WHERE message_id = {$messageId}");
+    }
     $deleted = $db->delete_using_id('support_messages', $messageId);
     if (!$deleted) {
         return false;
@@ -13773,7 +13871,11 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
 
 function admin_render_chat_conversation_html(array $conversationRow, array $messageRows, array $messages): string
 {
-    $isGroupConversation = (string)($conversationRow['conversation_type'] ?? '') === 'group_chat';
+    $conversationType = (string)($conversationRow['conversation_type'] ?? '');
+    $isGroupConversation = $conversationType === 'group_chat';
+    $isGlobalGroupConversation = function_exists('chat_is_global_group_conversation_type')
+        ? chat_is_global_group_conversation_type($conversationType)
+        : $conversationType === 'global_group';
     $retentionHours = $isGroupConversation ? chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null) : null;
     $previousAnchor = null;
     ob_start();
@@ -13797,13 +13899,16 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                 <?php foreach ($messageRows as $messageRow): ?>
                     <?php
                     $isCustomer = (string)($messageRow['sender_type'] ?? '') === 'customer';
-                    $bubbleClass = $isCustomer ? 'is-customer' : 'is-admin';
                     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
                     $messageBodyRaw = (string)($messageRow['message_body'] ?? '');
+                    $systemNoticeText = chat_system_notice_text($messageBodyRaw);
+                    $isSystemNotice = $systemNoticeText !== '';
+                    $bubbleClass = $isSystemNotice ? 'is-system' : ($isCustomer ? 'is-customer' : 'is-admin');
                     $messageHtml = chat_format_message_html((string)($messageRow['message_body'] ?? ''));
                     $isStructuredCard = admin_chat_message_is_structured_card($messageBodyRaw);
-                    $canEdit = !$isCustomer && trim($messageBodyRaw) !== '' && !$isStructuredCard;
+                    $canEdit = !$isSystemNotice && trim($messageBodyRaw) !== '' && !$isStructuredCard;
                     $canDelete = true;
+                    $canInteract = !$isSystemNotice;
                     $showActionRow = $canEdit || $canDelete;
                     $anchorLabel = function_exists('chat_time_anchor_label') ? chat_time_anchor_label((string)($messageRow['created_at'] ?? '')) : '';
                     $showAnchor = $anchorLabel !== '' && $anchorLabel !== $previousAnchor;
@@ -13815,6 +13920,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                             'sender_type' => (string)($messageRow['sender_type'] ?? ''),
                             'admin_public_handle' => (string)($messageRow['admin_public_handle'] ?? ''),
                             'admin_login_name' => (string)($messageRow['admin_login_name'] ?? ''),
+                            'customer_display_name' => (string)($messageRow['customer_display_name'] ?? ''),
                             'customer_email' => (string)($messageRow['customer_email'] ?? ''),
                         ],
                         [],
@@ -13822,11 +13928,18 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     );
                     $senderBadgeLabel = '';
                     $senderBadgeClass = '';
+                    $senderNameClass = !$isCustomer && $isGlobalGroupConversation ? ' admin-chat-conversation__sender-name--admin' : '';
                     if ($isGroupConversation) {
                         if (!$isCustomer) {
                             $senderBadgeLabel = admin_t($messages, 'chat_group_sender_admin_badge', 'Admin');
                             $senderBadgeClass = 'admin-chat-conversation__sender-badge--admin';
                         }
+                    }
+                    $customerStatus = strtolower(trim((string)($messageRow['customer_status'] ?? '')));
+                    $customerGlobalChatBlocked = (int)($messageRow['customer_global_chat_blocked'] ?? 0) !== 0;
+                    if ($isGlobalGroupConversation && $isCustomer && $customerGlobalChatBlocked) {
+                        $senderBadgeLabel = admin_t($messages, 'status_blocked', 'Blocked');
+                        $senderBadgeClass = 'admin-chat-conversation__sender-badge--blocked';
                     }
                     $isRead = (int)($messageRow['is_read'] ?? 0) === 1;
                     $receiptClass = $isRead ? 'is-read' : 'is-pending';
@@ -13836,8 +13949,18 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                         : admin_t($messages, 'chat_read_receipt_pending', 'Waiting for customer to read');
                     $deleteLabel = admin_t($messages, 'chat_message_delete_button', 'Delete message');
                     $editLabel = admin_t($messages, 'chat_message_edit_button', 'Edit');
+                    $blockCustomerLabel = $customerGlobalChatBlocked
+                        ? admin_t($messages, 'chat_message_unblock_customer_button', 'Unblock user')
+                        : admin_t($messages, 'chat_message_block_customer_button', 'Block user');
                     $saveLabel = admin_t($messages, 'chat_message_save_button', 'Save');
                     $savedLabel = admin_t($messages, 'chat_message_saved_label', 'Saved');
+                    $canToggleCustomerBlock = $isGlobalGroupConversation && !$isSystemNotice && $isCustomer && (int)($messageRow['customer_id'] ?? 0) > 0;
+                    $replyPreviewSender = (string)($messageRow['reply_preview_sender'] ?? '');
+                    $replyPreviewText = (string)($messageRow['reply_preview_text'] ?? '');
+                    $replyToMessageId = (int)($messageRow['reply_to_message_id'] ?? 0);
+                    $reactionItems = isset($messageRow['reactions']) && is_array($messageRow['reactions']) ? $messageRow['reactions'] : [];
+                    $replyActionLabel = admin_t($messages, 'chat_reply_action', 'Reply');
+                    $isEmojiOnlyMessage = chat_message_is_emoji_only((string)($messageRow['message_body'] ?? ''));
                     ?>
                     <?php if ($showAnchor): ?>
                         <div class="messenger-time-anchor admin-chat-conversation__time-anchor">
@@ -13845,71 +13968,137 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                         </div>
                     <?php endif; ?>
                     <div class="admin-chat-conversation__message <?php echo admin_e($bubbleClass); ?>" data-admin-chat-message data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
-                        <div class="admin-chat-conversation__bubble">
-                            <div class="admin-chat-conversation__sender">
-                                <span class="admin-chat-conversation__sender-name"><?php echo admin_e($senderLabel); ?></span>
-                                <?php if ($senderBadgeLabel !== ''): ?>
-                                    <span class="admin-chat-conversation__sender-badge <?php echo admin_e($senderBadgeClass); ?>"><?php echo admin_e($senderBadgeLabel); ?></span>
+                        <div class="admin-chat-conversation__bubble"<?php if ($canInteract): ?> data-admin-chat-message-bubble<?php endif; ?>>
+                            <?php if ($isSystemNotice): ?>
+                                <?php if ($messageHtml !== ''): ?>
+                                    <div class="admin-chat-conversation__text<?php echo $isEmojiOnlyMessage ? ' admin-chat-conversation__text--emoji-only' : ''; ?>"><?php echo $messageHtml; ?></div>
                                 <?php endif; ?>
-                            </div>
-                            <?php if ($attachmentPath !== ''): ?>
-                                <?php app_chat_attachment_absolute_path($attachmentPath, true); ?>
-                                <a href="<?php echo admin_e($attachmentPath); ?>" target="_blank" rel="noopener noreferrer" class="admin-chat-conversation__image-link">
-                                    <img src="<?php echo admin_e($attachmentPath); ?>" alt="attachment" class="admin-chat-conversation__image">
-                                </a>
-                            <?php endif; ?>
-                            <?php if ($messageHtml !== ''): ?>
-                                <div class="admin-chat-conversation__text"><?php echo $messageHtml; ?></div>
-                            <?php endif; ?>
-                            <?php if ($canEdit): ?>
-                                <div class="admin-chat-conversation__editor" data-admin-chat-editor hidden>
-                                    <label class="visually-hidden" for="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"><?php echo admin_e($editLabel); ?></label>
-                                    <textarea
-                                        class="form-control admin-chat-conversation__editor-input"
-                                        id="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
-                                        rows="4"
-                                        data-admin-chat-edit-input><?php echo admin_e($messageBodyRaw); ?></textarea>
-                                    <div class="admin-chat-conversation__editor-actions">
+                            <?php else: ?>
+                                <div class="admin-chat-conversation__sender">
+                                    <span class="admin-chat-conversation__sender-name<?php echo admin_e($senderNameClass); ?>"><?php if (!$isCustomer && $isGlobalGroupConversation): ?><span class="admin-chat-conversation__sender-admin-badge" aria-hidden="true">★</span><?php endif; ?><?php echo admin_e($senderLabel); ?></span>
+                                    <?php if ($senderBadgeLabel !== ''): ?>
+                                        <span class="admin-chat-conversation__sender-badge <?php echo admin_e($senderBadgeClass); ?>"><?php echo admin_e($senderBadgeLabel); ?></span>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if ($replyToMessageId > 0 && $replyPreviewText !== ''): ?>
+                                    <button type="button" class="admin-chat-conversation__reply-preview" data-admin-chat-scroll-to-message="<?php echo admin_e((string)$replyToMessageId); ?>">
+                                        <span class="admin-chat-conversation__reply-preview-sender"><?php echo admin_e($replyPreviewSender !== '' ? $replyPreviewSender : admin_t($messages, 'chat_reply_unknown', 'Message')); ?></span>
+                                        <span class="admin-chat-conversation__reply-preview-text"><?php echo admin_e($replyPreviewText); ?></span>
+                                    </button>
+                                <?php endif; ?>
+                                <?php if ($attachmentPath !== ''): ?>
+                                    <?php app_chat_attachment_absolute_path($attachmentPath, true); ?>
+                                    <a href="<?php echo admin_e($attachmentPath); ?>" target="_blank" rel="noopener noreferrer" class="admin-chat-conversation__image-link">
+                                        <img src="<?php echo admin_e($attachmentPath); ?>" alt="attachment" class="admin-chat-conversation__image">
+                                    </a>
+                                <?php endif; ?>
+                                <?php if ($messageHtml !== ''): ?>
+                                    <div class="admin-chat-conversation__text"><?php echo $messageHtml; ?></div>
+                                <?php endif; ?>
+                                <?php if ($reactionItems): ?>
+                                    <div class="admin-chat-conversation__reactions">
+                                        <?php foreach ($reactionItems as $reactionItem): ?>
+                                            <?php $reactionCode = trim((string)($reactionItem['code'] ?? '')); ?>
+                                            <?php $reactionEmoji = trim((string)($reactionItem['emoji'] ?? '')); ?>
+                                            <?php if ($reactionCode === '' || $reactionEmoji === '') { continue; } ?>
+                                            <button
+                                                type="button"
+                                                class="admin-chat-conversation__reaction<?php echo !empty($reactionItem['is_selected']) ? ' is-selected' : ''; ?>"
+                                                data-admin-chat-reaction-toggle="<?php echo admin_e($reactionCode); ?>"
+                                                data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                                <span class="admin-chat-conversation__reaction-emoji"><?php echo admin_e($reactionEmoji); ?></span>
+                                                <?php if ((int)($reactionItem['count'] ?? 0) > 1): ?>
+                                                    <span class="admin-chat-conversation__reaction-count"><?php echo admin_e((string)((int)($reactionItem['count'] ?? 0))); ?></span>
+                                                <?php endif; ?>
+                                            </button>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
+                                <?php if ($canInteract): ?>
+                                    <div class="admin-chat-conversation__message-actions" data-admin-chat-message-actions>
                                         <button
                                             type="button"
-                                            class="btn btn-dark btn-sm"
-                                            data-admin-chat-save-message
-                                            data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
-                                            <i class="bi bi-save" aria-hidden="true"></i>
-                                            <span><?php echo admin_e($saveLabel); ?></span>
+                                            class="admin-chat-conversation__message-action"
+                                            data-admin-chat-reply-open
+                                            data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
+                                            data-reply-sender="<?php echo admin_e($senderLabel); ?>"
+                                            data-reply-text="<?php echo admin_e(chat_message_preview_excerpt($messageBodyRaw, $attachmentPath)); ?>">
+                                            <i class="bi bi-reply" aria-hidden="true"></i>
                                         </button>
+                                        <?php foreach (chat_message_reaction_catalog() as $reactionCode => $reactionEmoji): ?>
+                                            <button
+                                                type="button"
+                                                class="admin-chat-conversation__message-action admin-chat-conversation__message-action--emoji"
+                                                data-admin-chat-reaction-toggle="<?php echo admin_e($reactionCode); ?>"
+                                                data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                                <?php echo admin_e($reactionEmoji); ?>
+                                            </button>
+                                        <?php endforeach; ?>
                                     </div>
-                                </div>
-                            <?php endif; ?>
-                            <div class="admin-chat-conversation__footer">
-                                <?php if (!$isCustomer): ?>
-                                    <span class="admin-chat-read-receipt <?php echo admin_e($receiptClass); ?>" title="<?php echo admin_e($receiptLabel); ?>" aria-label="<?php echo admin_e($receiptLabel); ?>">
-                                        <i class="<?php echo admin_e($receiptIcon); ?>" aria-hidden="true"></i>
-                                    </span>
                                 <?php endif; ?>
                                 <?php if ($canEdit): ?>
-                                    <button
-                                        type="button"
-                                        class="admin-chat-conversation__edit-link"
-                                        data-admin-chat-edit-message
-                                        data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
-                                        <?php echo admin_e($editLabel); ?>
-                                    </button>
+                                    <div class="admin-chat-conversation__editor" data-admin-chat-editor hidden>
+                                        <label class="visually-hidden" for="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"><?php echo admin_e($editLabel); ?></label>
+                                        <textarea
+                                            class="form-control admin-chat-conversation__editor-input"
+                                            id="admin_chat_edit_<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
+                                            rows="4"
+                                            data-admin-chat-edit-input><?php echo admin_e($messageBodyRaw); ?></textarea>
+                                        <div class="admin-chat-conversation__editor-actions">
+                                            <button
+                                                type="button"
+                                                class="btn btn-dark btn-sm"
+                                                data-admin-chat-save-message
+                                                data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                                <i class="bi bi-save" aria-hidden="true"></i>
+                                                <span><?php echo admin_e($saveLabel); ?></span>
+                                            </button>
+                                        </div>
+                                    </div>
                                 <?php endif; ?>
-                                <span class="admin-chat-conversation__edit-saved" data-admin-chat-edit-saved hidden><?php echo admin_e($savedLabel); ?></span>
-                                <?php if ($canDelete): ?>
-                                    <button
-                                        type="button"
-                                        class="admin-chat-conversation__delete"
-                                        data-admin-chat-delete-message
-                                        data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>"
-                                        data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
-                                        title="<?php echo admin_e($deleteLabel); ?>"
-                                        aria-label="<?php echo admin_e($deleteLabel); ?>">
-                                        <i class="bi bi-trash3" aria-hidden="true"></i>
-                                    </button>
-                                <?php endif; ?>
-                            </div>
+                                <div class="admin-chat-conversation__footer">
+                                    <?php if (!$isCustomer): ?>
+                                        <span class="admin-chat-read-receipt <?php echo admin_e($receiptClass); ?>" title="<?php echo admin_e($receiptLabel); ?>" aria-label="<?php echo admin_e($receiptLabel); ?>">
+                                            <i class="<?php echo admin_e($receiptIcon); ?>" aria-hidden="true"></i>
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($canEdit): ?>
+                                        <button
+                                            type="button"
+                                            class="admin-chat-conversation__edit-link"
+                                            data-admin-chat-edit-message
+                                            data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
+                                            <?php echo admin_e($editLabel); ?>
+                                        </button>
+                                    <?php endif; ?>
+                                    <?php if ($canToggleCustomerBlock): ?>
+                                        <button
+                                            type="button"
+                                            class="admin-chat-conversation__edit-link admin-chat-conversation__block-link<?php if ($customerGlobalChatBlocked) { echo ' is-unblock'; } ?>"
+                                            data-admin-chat-toggle-customer-block
+                                            data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>"
+                                            data-customer-id="<?php echo admin_e((string)($messageRow['customer_id'] ?? 0)); ?>"
+                                            data-blocked="<?php echo $customerGlobalChatBlocked ? '1' : '0'; ?>"
+                                            title="<?php echo admin_e($blockCustomerLabel); ?>"
+                                            aria-label="<?php echo admin_e($blockCustomerLabel); ?>">
+                                            <?php echo admin_e($blockCustomerLabel); ?>
+                                        </button>
+                                    <?php endif; ?>
+                                    <span class="admin-chat-conversation__edit-saved" data-admin-chat-edit-saved hidden><?php echo admin_e($savedLabel); ?></span>
+                                    <?php if ($canDelete): ?>
+                                        <button
+                                            type="button"
+                                            class="admin-chat-conversation__delete"
+                                            data-admin-chat-delete-message
+                                            data-conversation-id="<?php echo admin_e((string)($conversationRow['id'] ?? 0)); ?>"
+                                            data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
+                                            title="<?php echo admin_e($deleteLabel); ?>"
+                                            aria-label="<?php echo admin_e($deleteLabel); ?>">
+                                            <i class="bi bi-trash3" aria-hidden="true"></i>
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -13944,13 +14133,19 @@ function admin_update_chat_message(Mysql_ks $db, int $conversationId, int $messa
     if (
         !is_array($messageRow)
         || empty($messageRow['id'])
-        || (string)($messageRow['sender_type'] ?? '') !== 'admin'
-        || (int)($messageRow['admin_user_id'] ?? 0) !== $adminUserId
     ) {
         return false;
     }
 
-    if (admin_chat_message_is_structured_card((string)($messageRow['message_body'] ?? ''))) {
+    $senderType = (string)($messageRow['sender_type'] ?? '');
+    if (!in_array($senderType, ['admin', 'customer'], true)) {
+        return false;
+    }
+
+    if (
+        admin_chat_message_is_structured_card((string)($messageRow['message_body'] ?? ''))
+        || chat_system_notice_text((string)($messageRow['message_body'] ?? '')) !== ''
+    ) {
         return false;
     }
 
@@ -13968,8 +14163,29 @@ function admin_update_chat_message(Mysql_ks $db, int $conversationId, int $messa
     return true;
 }
 
-function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $adminUserId, string $messageBody, ?string $attachmentPath = null): bool
+function admin_set_customer_block_status_from_chat(Mysql_ks $db, int $customerId, int $adminUserId, bool $blocked, string $ipAddress = ''): array
 {
+    if ($customerId <= 0) {
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+    $settings = function_exists('app_fetch_settings') ? app_fetch_settings($db) : [];
+    if (!function_exists('chat_set_global_group_customer_block_status')) {
+        return ['ok' => false, 'message' => 'Global Chat runtime unavailable.'];
+    }
+
+    return chat_set_global_group_customer_block_status(
+        $db,
+        $customerId,
+        $adminUserId,
+        $blocked,
+        is_array($settings) ? $settings : [],
+        $ipAddress
+    );
+}
+
+function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $adminUserId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null): bool
+{
+    chat_ensure_message_interactions_runtime($db);
     $messageBody = trim($messageBody);
     $attachmentPath = trim((string)$attachmentPath);
     $currentTime = function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s');
@@ -13988,9 +14204,10 @@ function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $admin
     $customerId = isset($conversationRow['customer_id']) ? (int)$conversationRow['customer_id'] : 0;
     $conversationType = trim((string)($conversationRow['conversation_type'] ?? 'live_chat'));
 
+    $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
     $inserted = $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'is_read', 'created_at'],
-        [$conversationId, 'admin', $customerId > 0 ? $customerId : null, $adminUserId, $messageBody, $attachmentPath !== '' ? $attachmentPath : null, 0, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
+        [$conversationId, 'admin', $customerId > 0 ? $customerId : null, $adminUserId, $messageBody, $attachmentPath !== '' ? $attachmentPath : null, $replyToMessageId, 0, $currentTime],
         'support_messages'
     );
 

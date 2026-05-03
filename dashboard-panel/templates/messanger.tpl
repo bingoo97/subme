@@ -4,7 +4,7 @@
                 <div class="panel-heading" id="panel-heading" data-user-id="{$user.id}" role="button" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle onclick="return toggleMessengerPanel();">
                     <span class="messenger-heading-title">
                         <i class="fa fa-envelope-o" aria-hidden="true"></i>
-                        <span>{if $user.customer_type|default:'client' eq 'reseller'}Messenger{else}Technical Support{/if}</span>
+                        <span>{if $chat_customer_full_messenger_enabled|default:false}Messenger{else}Technical Support{/if}</span>
                         {if $chat_nieprzeczytane > 0}
                             <span class="messenger-unread-pill messenger-unread-pill--desktop messenger-unread-badge">{$chat_nieprzeczytane}</span>
                         {else}
@@ -14,7 +14,7 @@
                     <div class="btn-group pull-right">
                         {if $chat_customer_can_create_groups|default:false}
                         <button type="button" class="btn btn-default btn-xs messenger-group-action" data-messenger-group-open title="{$t.group_chat_create|default:'Create group'}">
-                            <i class="fa fa-plus" aria-hidden="true"></i>
+                            <i class="fa fa-search" aria-hidden="true"></i>
                         </button>
                         {/if}
                         <button type="button" class="btn btn-default btn-xs messenger-toggle-action{if $chat_nieprzeczytane > 0} is-unread is-attention{/if}" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle-button onclick="event.stopPropagation(); return toggleMessengerPanel();">
@@ -42,34 +42,45 @@
                         window.MESSENGER_BOOTSTRAP.linkPreviewRemove = '{$t.chat_link_preview_remove|default:"Send without preview"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.linkPreviewOpen = '{$t.chat_link_preview_open|default:"Open link"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.writeMessagePlaceholder = '{$t.chat_write_message|default:"Write message..."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.blockedPlaceholder = '{$t.chat_global_blocked_placeholder|default:"Pisanie w Global Chat jest zablokowane."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateEnabled = {if $chat_customer_can_create_groups|default:false}true{else}false{/if};
+                        window.MESSENGER_BOOTSTRAP.groupDirectEnabled = {if $chat_customer_can_start_direct_chats|default:false}true{else}false{/if};
+                        window.MESSENGER_BOOTSTRAP.groupNamedEnabled = {if $chat_customer_can_create_named_groups|default:false}true{else}false{/if};
                         window.MESSENGER_BOOTSTRAP.groupDirectTitle = '{$t.group_chat_direct_title|default:"Start direct conversation"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectSubmit = '{$t.group_chat_direct_submit|default:"Start conversation"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateTitle = '{$t.group_chat_create|default:"Create group chat"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateSubmit = '{$t.group_chat_create_submit|default:"Create group"|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupDirectToggle = '{$t.group_chat_direct_toggle|default:"Find reseller"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectToggle = '{$t.group_chat_direct_toggle|default:"Find user"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupGroupToggle = '{$t.group_chat_group_toggle|default:"Create group"|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel = '{$t.group_chat_direct_email_label|default:"Add reseller by email"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel = '{$t.group_chat_direct_email_label|default:"Add user by email"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel = '{$t.group_chat_add_by_email|default:"Add participant by email"|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupDirectHint = '{$t.group_chat_direct_hint|default:"Add one reseller email to start a direct conversation right away."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectHint = '{$t.group_chat_direct_hint|default:"Add one user email to start a direct conversation right away."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupGroupHint = '{$t.group_chat_invite_expiry_note|default:"You can already see this conversation in your inbox. If you do not want to stay in it, you can reject the invite."|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupDirectLimit = '{$t.group_chat_direct_limit|default:"Direct conversation allows only one reseller."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectLimit = '{$t.group_chat_direct_limit|default:"Direct conversation allows only one user."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder = '{$t.group_chat_read_only_placeholder|default:"This group is read only."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectPendingPlaceholder = '{$t.group_chat_direct_pending_placeholder|default:"This conversation is waiting for invite acceptance."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateError = '{$t.group_chat_create_error|default:"Unable to create the group chat."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteError = '{$t.group_chat_invite_error|default:"Unable to update the invitation."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupLeaveError = '{$t.group_chat_leave_error|default:"Unable to leave the group chat."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupRemoveError = '{$t.group_chat_remove_local_error|default:"Unable to remove the conversation from the inbox."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDeleteError = '{$t.group_chat_delete_error|default:"Unable to remove the group chat."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupNameRequired = '{$t.group_chat_name_required|default:"Group name is required."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupParticipantsRequired = '{$t.group_chat_participants_required|default:"Add at least one participant."|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupEmailInvalid = '{$t.group_chat_email_invalid|default:"Enter a valid email address."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupEmailInvalid = '{$t.group_chat_email_invalid|default:"Enter a valid email address or handle starting with @"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupEmailDuplicate = '{$t.group_chat_email_duplicate|default:"This invitation is already added."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupEmailChecking = '{$t.group_chat_email_checking|default:"Checking user..."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupEmailAdded = '{$t.group_chat_email_added|default:"Invitation prepared. It will expire after 24 hours if not accepted."|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupEmailNotFound = '{$t.group_chat_email_not_found|default:"No reseller or admin account was found for this email."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupEmailNotFound = '{$t.group_chat_email_not_found|default:"No user with Messenger access was found for this email or handle."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteSubmit = '{$t.group_chat_invite_submit|default:"Send invitations"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteTitle = '{$t.group_chat_invite_title|default:"Add members to group"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteNameLabel = '{$t.group_chat_invite_name_label|default:"Group"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteSuccess = '{$t.group_chat_invite_success|default:"Invitations sent."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileInviteMessagePrefix = '{$t.group_chat_invite_message|default:"You were invited to a conversation by"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileInviteHint = '{$t.group_chat_invite_expiry_note|default:"You can already see this conversation in your inbox. If you do not want to stay in it, you can reject the invite."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileInvitePendingSuffix = '{$t.group_chat_direct_invited_by_note|default:"invited you to this conversation. Accept or reject the invite below."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileAcceptLabel = '{$t.group_chat_invite_accept|default:"Accept"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileRejectLabel = '{$t.group_chat_invite_reject|default:"Reject"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupRemoveConfirm = '{$t.group_chat_remove_local_confirm|default:"Remove this conversation only from your inbox?"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDeleteConfirm = '{$t.group_chat_delete_confirm|default:"Remove this group for all participants?"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupSettingsError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupRetentionError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
@@ -77,14 +88,39 @@
                     <div class="messenger-alert" id="messenger_alert" style="display:none;"></div>
                     <div class="messenger-compose">
                         <div class="messenger-compose__preview" id="messenger_link_preview" style="display:none;"></div>
+                        <div class="messenger-compose__reply" id="messenger_reply_preview" style="display:none;">
+                            <button type="button" class="messenger-compose__reply-close" data-chat-reply-clear aria-label="{$t.close|default:'Close'}">
+                                <i class="fa fa-times" aria-hidden="true"></i>
+                            </button>
+                            <div class="messenger-compose__reply-label">{$t.chat_reply_label|default:'Odpowiadasz na wiadomość'}</div>
+                            <div class="messenger-compose__reply-sender" id="messenger_reply_sender"></div>
+                            <div class="messenger-compose__reply-text" id="messenger_reply_text"></div>
+                        </div>
                         <div class="messenger-compose__row">
-                            <button type="button" class="messenger-compose__action btn btn-default" data-messenger-upload-open onclick="return openMessengerUpload();" title="{$t.chat_upload|default:'Upload image'}">
-                                <i class="fa fa-file-image-o" aria-hidden="true"></i>
-                            </button>
-                            <input type="text" class="form-control input-sm messenger-compose__input" id="tresc" name="tresc" placeholder="{$t.chat_write_message|default:'Write message...'}" autocomplete="off" enterkeyhint="send" />
-                            <button type="button" class="messenger-compose__send btn btn-primary" id="btn-chat" data-user-id="{$user.id}">
-                                <i class="fa fa-paper-plane" aria-hidden="true"></i>
-                            </button>
+                            <div class="messenger-compose__field">
+                                <input type="text" class="form-control input-sm messenger-compose__input" id="tresc" name="tresc" placeholder="{$t.chat_write_message|default:'Write message...'}" autocomplete="off" enterkeyhint="send" />
+                                <div class="messenger-compose__actions">
+                                    <button type="button" class="messenger-compose__send btn btn-primary" id="btn-chat" data-user-id="{$user.id}" title="{$t.send|default:'Send'}" aria-label="{$t.send|default:'Send'}">
+                                        <i class="fa fa-paper-plane" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="messenger-compose__action btn btn-default" data-messenger-upload-open onclick="return openMessengerUpload();" title="{$t.chat_attachment|default:'Załącznik'}" aria-label="{$t.chat_attachment|default:'Załącznik'}">
+                                        <i class="fa fa-paperclip" aria-hidden="true"></i>
+                                    </button>
+                                    {if $settings.messenger_voice_enabled|default:0}
+                                    <button
+                                        type="button"
+                                        class="messenger-compose__voice btn btn-primary is-disabled"
+                                        data-messenger-voice-preview
+                                        data-disabled-tooltip="{$t.chat_voice_disabled_tooltip|default:'Opcja nagrywania wiadomości głosowych jest obecnie wyłączona.'|escape:'html'}"
+                                        title="{$t.chat_voice_disabled_tooltip|default:'Opcja nagrywania wiadomości głosowych jest obecnie wyłączona.'|escape:'html'}"
+                                        aria-label="{$t.chat_voice_button|default:'Wiadomość głosowa'}"
+                                        aria-disabled="true"
+                                    >
+                                        <i class="fa fa-microphone" aria-hidden="true"></i>
+                                    </button>
+                                    {/if}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div> 
@@ -102,7 +138,7 @@
                             <div class="messenger-group-body">
                                 <div class="messenger-alert" id="messenger_group_alert" style="display:none;"></div>
                                 <div class="messenger-group-mode" id="messenger_group_mode_switch">
-                                    <button type="button" class="messenger-group-mode__toggle is-active" data-messenger-group-kind="direct" aria-pressed="true">{$t.group_chat_direct_toggle|default:'Znajdź resellera'}</button>
+                                    <button type="button" class="messenger-group-mode__toggle is-active" data-messenger-group-kind="direct" aria-pressed="true">{$t.group_chat_direct_toggle|default:'Znajdź użytkownika'}</button>
                                     <button type="button" class="messenger-group-mode__toggle" data-messenger-group-kind="group" aria-pressed="false">{$t.group_chat_group_toggle|default:'Stwórz grupę'}</button>
                                 </div>
                                 <label class="messenger-group-field" id="messenger_group_name_field">
@@ -114,12 +150,12 @@
                                     <div class="messenger-group-context" id="messenger_group_context_title"></div>
                                 </div>
                                 <div class="messenger-group-field">
-                                    <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Dodaj resellera po emailu lub @nicku'}</span>
+                                    <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Dodaj użytkownika po emailu lub @nicku'}</span>
                                     <div class="messenger-group-add-row">
-                                        <input type="text" class="form-control" id="messenger_group_email" placeholder="name@example.com lub @nick">
+                                        <input type="text" class="form-control" id="messenger_group_email" placeholder="@username">
                                         <button type="button" class="btn btn-default" data-messenger-group-add>{$t.add|default:'Add'}</button>
                                     </div>
-                                    <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email resellera lub wpisz @nick, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
+                                    <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email użytkownika lub wpisz @nick, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
                                 </div>
                                 <label class="messenger-group-field" id="messenger_group_retention_field" style="display:none;">
                                     <span>{$t.group_chat_retention_label|default:'Auto-usuwanie'}</span>

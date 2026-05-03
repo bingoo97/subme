@@ -7,6 +7,9 @@ switch ($site) {
             break;
         }
 
+        $canEditMessengerIdentity = chat_customer_can_edit_messenger_identity($user, is_array($settings ?? null) ? $settings : []);
+        $smarty->assign('settings_can_edit_messenger_identity', $canEditMessengerIdentity);
+
         $smarty->assign('settings_open_password_modal', false);
         $sendSettingsJson = static function (array $payload): void {
             $jsonPrefix = '__SETTINGS_JSON__';
@@ -31,8 +34,7 @@ switch ($site) {
                 ]);
             }
 
-            $isReseller = app_normalize_customer_type((string)($user['customer_type'] ?? 'client')) === 'reseller';
-            if (!$isReseller) {
+            if (!$canEditMessengerIdentity) {
                 $sendSettingsJson([
                     'ok' => false,
                     'message' => localization_translate($t, 'settings_avatar_upload_error'),
@@ -141,14 +143,13 @@ switch ($site) {
 
             $selectedLocale = isset($_POST['lang']) ? localization_normalize_locale($_POST['lang']) : 'en';
             $emailNotificationEnabled = isset($_POST['email_notification']) && (string)($_POST['email_notification'] ?? '') === '1';
-            $isReseller = app_normalize_customer_type((string)($user['customer_type'] ?? 'client')) === 'reseller';
             $resolvedHandle = [
                 'ok' => true,
                 'handle' => (string)($user['public_handle'] ?? ''),
             ];
             $avatarUrl = app_customer_avatar_url((string)($user['avatar_url'] ?? ''));
 
-            if ($isReseller) {
+            if ($canEditMessengerIdentity) {
                 $resolvedHandle = app_resolve_customer_public_handle(
                     $db,
                     (string)($_POST['public_handle'] ?? ''),
@@ -180,14 +181,14 @@ switch ($site) {
             $user['locale_code'] = $selectedLocale;
             $user['email_notification'] = $emailNotificationEnabled ? 1 : 0;
             $user['is_newsletter_subscribed'] = $user['email_notification'];
-            if ($isReseller) {
+            if ($canEditMessengerIdentity) {
                 $user['public_handle'] = (string)($resolvedHandle['handle'] ?? '');
                 $user['avatar_url'] = $avatarUrl;
             }
 
             app_update_customer_locale($db, (int)$user['id'], $selectedLocale);
             app_update_customer_email_notification($db, (int)$user['id'], $emailNotificationEnabled);
-            if ($isReseller) {
+            if ($canEditMessengerIdentity) {
                 $db->update_using_id(
                     ['public_handle', 'avatar_url'],
                     [(string)($resolvedHandle['handle'] ?? ''), $avatarUrl !== '' ? $avatarUrl : null],

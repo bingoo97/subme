@@ -65,7 +65,7 @@ if(isset($_GET["wybierz"])){
 		$smarty->assign('balance_topup_pending_order_payment', $balanceTopupPendingOrderPayment);
 		$smarty->assign('homepage_onboarding_enabled', $homepageOnboardingEnabled);
 		$groupChatCreationState = chat_customer_group_creation_state($db, $user, is_array($settings ?? null) ? $settings : []);
-		$smarty->assign('group_chat_pending_invites', chat_customer_can_use_groups($user) ? chat_customer_group_pending_invites($db, (int)$user['id']) : []);
+		$smarty->assign('group_chat_pending_invites', chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : []) ? chat_customer_group_pending_invites($db, (int)$user['id']) : []);
 		$smarty->assign('group_chat_can_create', !empty($groupChatCreationState['allowed']));
 		$smarty->assign('group_chat_creation_state', $groupChatCreationState);
 	

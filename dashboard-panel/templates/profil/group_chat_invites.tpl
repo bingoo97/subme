@@ -1,8 +1,16 @@
 {if isset($group_chat_pending_invites) && $group_chat_pending_invites|@count gt 0}
 <div class="group-chat-invites-home" id="group_chat_invites_home">
     {foreach from=$group_chat_pending_invites item=groupInvite}
-        {assign var=groupInviteTitle value=$groupInvite.group_name|default:$groupInvite.subject|default:'Group chat'}
-        {assign var=groupInviteSender value=$groupInvite.invited_by_customer_email|default:$groupInvite.invited_by_admin_handle|default:$groupInvite.invited_by_admin_login|default:'Support'}
+        {if $groupInvite.is_direct_conversation|default:0}
+            {assign var=groupInviteTitle value=$t.group_chat_direct_invite_title|default:'Zaproszenie do rozmowy...'}
+        {else}
+            {assign var=groupInviteTitle value=$groupInvite.group_name|default:$groupInvite.subject|default:'Group chat'}
+        {/if}
+        {if $groupInvite.invited_by_customer_handle|default:'' ne ''}
+            {assign var=groupInviteSender value="@"|cat:$groupInvite.invited_by_customer_handle}
+        {else}
+            {assign var=groupInviteSender value=$groupInvite.invited_by_admin_handle|default:$groupInvite.invited_by_admin_login|default:'Support'}
+        {/if}
         <div class="group-chat-invite-card" data-group-chat-invite-card data-conversation-id="{$groupInvite.conversation_id}">
             <div class="group-chat-invite-card__main">
                 <strong>{$groupInviteTitle|escape:'html'}</strong>
