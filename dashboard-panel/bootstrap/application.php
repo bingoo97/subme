@@ -5422,8 +5422,13 @@ function app_email_process_queue(Mysql_ks $db, int $limit = 10, ?int $forcedQueu
             $mail = app_email_mailer($settings);
             $mail->addAddress((string)$row['to_email']);
             $mail->Subject = app_email_subject((string)($row['subject'] ?? 'Notification'));
-            $mail->Body = (string)($row['body_html'] ?? '');
-            $mail->AltBody = app_email_plain_text((string)($row['body_html'] ?? ''));
+            $mailBody = app_email_wrap_html(
+                $settings,
+                (string)($row['body_html'] ?? ''),
+                (string)($settings['default_locale_code'] ?? 'en')
+            );
+            $mail->Body = $mailBody;
+            $mail->AltBody = app_email_plain_text($mailBody);
             $mail->send();
 
             $db->update_using_id(
