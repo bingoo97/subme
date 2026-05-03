@@ -5059,6 +5059,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             <form method="post"
                                   class="admin-settings-access__form"
                                   data-admin-personal-notes-form
+                                  data-save-url="/admin/notes.php?action=save_personal_notes"
                                   data-autosave-interval="15000"
                                   data-save-success="<?php echo admin_e(admin_t($messages, 'settings_notes_saved', 'Your administrator notes have been saved automatically.')); ?>"
                                   data-save-error="<?php echo admin_e(admin_t($messages, 'settings_notes_save_error', 'Unable to save administrator notes.')); ?>"

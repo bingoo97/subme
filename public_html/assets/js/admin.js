@@ -716,11 +716,12 @@ document.addEventListener('DOMContentLoaded', function () {
             var csrfInput = q('input[name="_csrf"]', form);
             var statusNode = q('[data-admin-personal-notes-status]', form);
             var saveButton = q('[data-admin-personal-notes-save]', form);
-            var saveUrl = window.location.href;
+            var saveUrl = form.getAttribute('data-save-url') || window.location.href;
             var autosaveIntervalMs = parseInt(form.getAttribute('data-autosave-interval') || '15000', 10);
             var lastSavedValue = textarea ? String(textarea.value || '') : '';
             var isSaving = false;
             var heartbeatTimer = 0;
+            var rateLimitUntil = 0;
 
             if (!textarea || !csrfInput || !statusNode) {
                 return;
@@ -788,8 +789,14 @@ document.addEventListener('DOMContentLoaded', function () {
             function runSave(force) {
                 var currentValue = String(textarea.value || '');
                 var requestBody;
+                var now = Date.now();
 
                 if (isSaving) {
+                    return;
+                }
+
+                if (rateLimitUntil > now) {
+                    setStatus(form.getAttribute('data-save-rate-limit') || 'Too many save attempts. Wait a moment and use Save.', 'error');
                     return;
                 }
 
@@ -818,6 +825,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }).then(function (payload) {
                     if (!payload || !payload.ok) {
                         if (payload && payload.__status === 429) {
+                            rateLimitUntil = Date.now() + 30000;
                             setStatus(form.getAttribute('data-save-rate-limit') || 'Too many save attempts. Wait a moment and use Save.', 'error');
                             return;
                         }
@@ -827,6 +835,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     lastSavedValue = currentValue;
+                    rateLimitUntil = 0;
                     setStatus(savedAtLabel(payload.updated_at || ''), 'success');
                 }).catch(function () {
                     setStatus(form.getAttribute('data-save-error') || 'Unable to save administrator notes.', 'error');
