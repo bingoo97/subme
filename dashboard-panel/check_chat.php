@@ -303,9 +303,11 @@ function chat_render_payload(
     array $user,
     array $reseller,
     array $settings,
-    string $currentLocale = 'en'
+    string $currentLocale = 'en',
+    ?int $forcedConversationId = null
 ): array
 {
+    $chatRenderConversationId = $forcedConversationId;
     include __DIR__ . '/config/chat_config.php';
 
     return [
@@ -547,6 +549,9 @@ $responseFormat = isset($_POST['format']) ? (string)$_POST['format'] : (isset($_
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $faqKey = isset($_POST['faq_key']) ? trim((string)$_POST['faq_key']) : (isset($_GET['faq_key']) ? trim((string)$_GET['faq_key']) : '');
 $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : (isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0);
+$groupActionConversationId = 0;
+$groupActionConversationTitle = '';
+$groupActionAvatarUrl = '';
 $chatLocaleCode = isset($user['locale_code']) && (string)$user['locale_code'] !== ''
     ? (string)$user['locale_code']
     : (isset($currentLocale) ? (string)$currentLocale : (isset($user['lang_code']) ? (string)$user['lang_code'] : 'en'));
@@ -711,7 +716,20 @@ if ($action === 'create_group') {
     $emails = json_decode($emailsJson, true);
     $emails = is_array($emails) ? $emails : [];
     $requestedRetention = trim((string)($_POST['retention_hours'] ?? ''));
-    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : (int)$requestedRetention;
+    $groupKind = strtolower(trim((string)($_POST['group_kind'] ?? 'direct')));
+    $isNamedGroup = $groupKind === 'group';
+    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : $requestedRetention;
+    $groupAvatarUrl = '';
+    if ($isNamedGroup && !empty($_FILES['group_avatar_file']['tmp_name'])) {
+        $groupAvatarUpload = chat_store_group_avatar_upload($_FILES['group_avatar_file'], $currentCustomerId);
+        if (empty($groupAvatarUpload['ok'])) {
+            chat_json_response([
+                'ok' => false,
+                'message' => localization_translate(isset($t) && is_array($t) ? $t : [], 'group_chat_logo_upload_failed', 'Group logo upload failed.')
+            ]);
+        }
+        $groupAvatarUrl = (string)($groupAvatarUpload['url'] ?? '');
+    }
     $result = chat_create_group_conversation(
         $db,
         ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
@@ -719,14 +737,22 @@ if ($action === 'create_group') {
         $emails,
         false,
         is_array($settings ?? null) ? $settings : [],
-        $retentionHours
+        $retentionHours,
+        $groupAvatarUrl,
+        $isNamedGroup
     );
 
     if (empty($result['ok'])) {
+        if ($groupAvatarUrl !== '') {
+            chat_delete_group_avatar_file($groupAvatarUrl);
+        }
         chat_json_response($result);
     }
 
     $requestedConversationId = (int)($result['conversation_id'] ?? 0);
+    $groupActionConversationId = $requestedConversationId;
+    $groupActionConversationTitle = (string)($result['title'] ?? '');
+    $groupActionAvatarUrl = (string)($result['avatar_url'] ?? '');
 }
 
 if ($action === 'invite_to_group') {
@@ -747,6 +773,10 @@ if ($action === 'invite_to_group') {
     if (empty($result['ok'])) {
         chat_json_response($result);
     }
+    $groupActionConversationId = $requestedConversationId;
+    $conversationRow = chat_group_conversation_row($db, $requestedConversationId);
+    $groupActionConversationTitle = $conversationRow ? chat_group_conversation_title($conversationRow) : '';
+    $groupActionAvatarUrl = $conversationRow ? chat_group_avatar_url((string)($conversationRow['group_avatar_url'] ?? '')) : '';
 }
 
 if ($action === 'respond_group_invite') {
@@ -851,8 +881,11 @@ if ($action === 'set_group_retention') {
         chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
     }
 
-    $requestedRetention = trim((string)($_POST['retention_hours'] ?? $_GET['retention_hours'] ?? ''));
-    $retentionHours = $requestedRetention === '' ? null : (int)$requestedRetention;
+    $requestedRetentionToken = trim((string)($_POST['retention_token'] ?? $_GET['retention_token'] ?? ''));
+    $requestedRetention = $requestedRetentionToken !== ''
+        ? $requestedRetentionToken
+        : trim((string)($_POST['retention_hours'] ?? $_GET['retention_hours'] ?? ''));
+    $retentionHours = $requestedRetention === '' ? null : $requestedRetention;
     $result = chat_update_group_retention_hours(
         $db,
         $requestedConversationId,
@@ -1063,7 +1096,8 @@ $payload = chat_render_payload(
     $user,
     $reseller,
     is_array($settings ?? null) ? $settings : [],
-    isset($currentLocale) ? (string)$currentLocale : 'en'
+    isset($currentLocale) ? (string)$currentLocale : 'en',
+    $requestedConversationId > 0 ? $requestedConversationId : null
 );
 $rateLimitState = chat_rate_limit_state();
 
@@ -1086,6 +1120,14 @@ if ($responseFormat === 'json') {
     ];
     if ($responseMessage !== '') {
         $responsePayload['message'] = $responseMessage;
+    }
+
+    if ($groupActionConversationId > 0) {
+        $responsePayload['conversation_id'] = $groupActionConversationId;
+        $responsePayload['conversation_title'] = $groupActionConversationTitle;
+        if ($groupActionAvatarUrl !== '') {
+            $responsePayload['conversation_avatar_url'] = $groupActionAvatarUrl;
+        }
     }
 
     if ($action === 'faq_prompt' && isset($selectedFaqPrompt)) {

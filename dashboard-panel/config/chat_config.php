@@ -27,7 +27,9 @@ $smarty->assign('chat_faq_prompts', $chatFaqPrompts);
 $chatSupportLabel = localization_translate(isset($t) && is_array($t) ? $t : [], 'support', 'Support');
 $smarty->assign('chat_support_label', $chatSupportLabel);
 $chatCustomerIsBlocked = false;
-$requestedConversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
+$requestedConversationId = isset($chatRenderConversationId) && $chatRenderConversationId !== null
+    ? (int)$chatRenderConversationId
+    : (isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0));
 $chatMessageLimit = function_exists('chat_customer_normalize_message_limit')
     ? chat_customer_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0)
     : 10;
@@ -68,8 +70,13 @@ if (app_uses_v2_schema($db)) {
     $activeConversationPresence = function_exists('chat_support_presence_payload') ? chat_support_presence_payload($db) : ['key' => 'offline', 'label' => 'Offline', 'class_name' => 'admin-chat-presence admin-chat-presence--offline'];
     $activeMemberEmailNotificationsEnabled = true;
     $activeConversationRetentionHours = null;
+    $activeConversationRetentionLabel = '';
+    $activeConversationRetentionInputValue = '24h';
     $activeConversationIsDirect = false;
+    $activeConversationDirectStatus = 'none';
+    $activeConversationDirectTargetCustomerId = 0;
     $activeConversationHasPendingInvite = false;
+    $activeConversationPendingMemberCount = 0;
     if (chat_is_group_like_conversation_type($activeConversationType) && !empty($activeConversationRow['is_group_read_only'])) {
         $activeCanSend = false;
     }
@@ -93,9 +100,14 @@ if (app_uses_v2_schema($db)) {
         $activeConversationAvatarText = (string)($summary['avatar_text'] ?? 'G');
         $activeConversationAvatarTheme = (string)($summary['avatar_theme'] ?? 'theme-6');
         $activeConversationIsDirect = !empty($summary['is_direct']);
+        $activeConversationDirectStatus = (string)($summary['direct_status'] ?? 'none');
+        $activeConversationDirectTargetCustomerId = (int)($summary['direct_target_customer_id'] ?? 0);
         $activeConversationHasPendingInvite = !empty($summary['has_pending_invite']);
+        $activeConversationPendingMemberCount = max(0, (int)($summary['pending_member_count'] ?? 0));
         $activeConversationPresence = is_array($summary['presence'] ?? null) ? $summary['presence'] : $activeConversationPresence;
-        $activeConversationRetentionHours = chat_group_normalize_retention_hours($activeConversationRow['message_retention_hours'] ?? null);
+        $activeConversationRetentionHours = chat_group_retention_minutes_from_row($activeConversationRow);
+        $activeConversationRetentionLabel = chat_group_retention_label($activeConversationRetentionHours);
+        $activeConversationRetentionInputValue = chat_group_retention_input_value($activeConversationRetentionHours);
         $activeMemberRow = chat_group_member_row($db, $activeConversationId, chat_participant_key_for_customer((int)$user['id']));
         if (is_array($activeMemberRow) && array_key_exists('email_notifications_enabled', $activeMemberRow)) {
             $activeMemberEmailNotificationsEnabled = (int)($activeMemberRow['email_notifications_enabled'] ?? 1) !== 0;
@@ -133,19 +145,49 @@ if (app_uses_v2_schema($db)) {
                 }
             }
         } elseif (!empty($summary['subtitle'])) {
+            if (!$activeConversationIsDirect) {
+                $activeConversationMembers = isset($summary['members_with_pending']) && is_array($summary['members_with_pending'])
+                    ? $summary['members_with_pending']
+                    : $activeConversationMembers;
+                $activeConversationMemberCount = (int)($summary['member_count_with_pending'] ?? count($activeConversationMembers));
+            }
             $activeConversationSubtitle = (string)$summary['subtitle'];
-            $activeConversationMemberCountLabel = $activeConversationMemberCount === 1
+            $baseMemberCountLabel = $activeConversationMemberCount === 1
                 ? localization_translate(isset($t) && is_array($t) ? $t : [], 'chat_group_member_count_single', '1 member')
                 : localization_translate(
                     isset($t) && is_array($t) ? $t : [],
                     'chat_group_member_count_many',
                     ['count' => $activeConversationMemberCount]
                 );
-            if ($activeConversationMemberCount !== 1 && $activeConversationMemberCountLabel === 'chat_group_member_count_many') {
-                $activeConversationMemberCountLabel = $activeConversationMemberCount . ' members';
+            if ($activeConversationMemberCount !== 1 && $baseMemberCountLabel === 'chat_group_member_count_many') {
+                $baseMemberCountLabel = $activeConversationMemberCount . ' members';
+            }
+            $activeConversationMemberCountLabel = $baseMemberCountLabel;
+            if ($activeConversationPendingMemberCount > 0) {
+                $pendingMemberCountLabel = $activeConversationPendingMemberCount === 1
+                    ? localization_translate(isset($t) && is_array($t) ? $t : [], 'chat_group_pending_count_single', '1 pending')
+                    : localization_translate(
+                        isset($t) && is_array($t) ? $t : [],
+                        'chat_group_pending_count_many',
+                        ['count' => $activeConversationPendingMemberCount]
+                    );
+                if ($activeConversationPendingMemberCount !== 1 && $pendingMemberCountLabel === 'chat_group_pending_count_many') {
+                    $pendingMemberCountLabel = $activeConversationPendingMemberCount . ' pending';
+                }
+                $activeConversationMemberCountLabel .= ' · ' . $pendingMemberCountLabel;
             }
         }
-        if ((int)($activeMemberRow['can_post'] ?? 1) === 0 || !empty($summary['has_pending_invite'])) {
+        $activeMemberInviteStatus = trim((string)($activeMemberRow['invite_status'] ?? ''));
+        if ((int)($activeMemberRow['can_post'] ?? 1) === 0 || $activeMemberInviteStatus !== 'accepted' || !empty($summary['has_pending_invite']) || in_array($activeConversationDirectStatus, ['pending', 'rejected'], true)) {
+            $activeCanSend = false;
+        }
+        $activeConversationOwnedByCustomer = (int)($activeConversationRow['group_created_by_customer_id'] ?? 0) === (int)$user['id'];
+        if (
+            !$activeConversationIsDirect
+            && $activeConversationOwnedByCustomer
+            && $activeConversationPendingMemberCount > 0
+            && $activeConversationMemberCount <= 1
+        ) {
             $activeCanSend = false;
         }
         if (chat_is_global_group_conversation_type($activeConversationType) && (int)($activeMemberRow['global_chat_blocked'] ?? 0) !== 0) {
@@ -191,7 +233,10 @@ if (app_uses_v2_schema($db)) {
     $smarty->assign('chat_active_conversation_subtitle', $activeConversationSubtitle);
     $smarty->assign('chat_active_conversation_is_group', chat_is_group_like_conversation_type($activeConversationType));
     $smarty->assign('chat_active_conversation_is_direct', $activeConversationIsDirect);
+    $smarty->assign('chat_active_conversation_direct_status', $activeConversationDirectStatus);
+    $smarty->assign('chat_active_conversation_direct_target_customer_id', $activeConversationDirectTargetCustomerId);
     $smarty->assign('chat_active_conversation_has_pending_invite', $activeConversationHasPendingInvite);
+    $smarty->assign('chat_active_conversation_pending_member_count', $activeConversationPendingMemberCount);
     $smarty->assign('chat_active_conversation_is_global_group', chat_is_global_group_conversation_type($activeConversationType));
     $smarty->assign('chat_active_conversation_is_read_only', chat_is_group_like_conversation_type($activeConversationType) && !empty($activeConversationRow['is_group_read_only']));
     $smarty->assign('chat_active_conversation_can_send', $activeCanSend);
@@ -218,6 +263,8 @@ if (app_uses_v2_schema($db)) {
     $smarty->assign('chat_active_conversation_presence_class_name', (string)($activeConversationPresence['class_name'] ?? 'admin-chat-presence admin-chat-presence--offline'));
     $smarty->assign('chat_active_member_email_notifications_enabled', $activeMemberEmailNotificationsEnabled);
     $smarty->assign('chat_active_conversation_retention_hours', $activeConversationRetentionHours);
+    $smarty->assign('chat_active_conversation_retention_label', $activeConversationRetentionLabel);
+    $smarty->assign('chat_active_conversation_retention_input_value', $activeConversationRetentionInputValue);
     $chatGroupCreationState = chat_customer_group_creation_state($db, $user, is_array($settings ?? null) ? $settings : []);
     $smarty->assign('chat_customer_full_messenger_enabled', $chatCustomerFullMessenger);
     $smarty->assign('chat_customer_can_create_groups', !empty($chatGroupCreationState['allowed']));

@@ -3361,6 +3361,7 @@ function admin_customer_activity_rows(Mysql_ks $db, int $customerId, int $limit 
 function admin_customer_group_chat_rows(Mysql_ks $db, int $customerId, int $limit = 20): array
 {
     chat_ensure_group_chat_runtime($db);
+    chat_expire_stale_group_invites($db);
     if (
         $customerId <= 0
         || $limit <= 0
@@ -3379,11 +3380,13 @@ function admin_customer_group_chat_rows(Mysql_ks $db, int $customerId, int $limi
             support_conversation_members.conversation_id,
             support_conversation_members.role_code,
             support_conversation_members.invite_status,
+            support_conversation_members.created_at AS invited_at,
             support_conversation_members.responded_at,
             support_conversation_members.joined_at,
             support_conversation_members.left_at,
             support_conversations.group_name,
             support_conversations.subject,
+            support_conversations.is_direct_conversation,
             support_conversations.status AS conversation_status,
             support_conversations.is_group_read_only,
             support_conversations.group_created_by_customer_id,
@@ -7454,6 +7457,20 @@ function admin_bank_account_rows(Mysql_ks $db, int $limit = 20, int $offset = 0)
     );
 }
 
+function admin_bank_account_currency_rows(Mysql_ks $db): array
+{
+    if (!schema_object_exists($db, 'currencies')) {
+        return [];
+    }
+
+    return $db->select_full_user(
+        "SELECT id, code, name
+         FROM currencies
+         WHERE is_active = 1
+         ORDER BY code ASC"
+    );
+}
+
 function admin_crypto_wallet_count(Mysql_ks $db): int
 {
     if (!schema_object_exists($db, 'crypto_wallet_addresses')) {
@@ -10789,16 +10806,92 @@ function admin_bank_account_status_options(): array
 
 function admin_random_wallet_owner_name(): string
 {
-    $firstNames = [
-        'Oliver', 'Liam', 'Noah', 'Ethan', 'Lucas', 'Mason', 'Henry', 'Leo',
-        'Mia', 'Emma', 'Sofia', 'Luna', 'Amelia', 'Chloe', 'Ava', 'Nina',
-    ];
-    $lastNames = [
-        'Bennett', 'Foster', 'Hayes', 'Carter', 'Walker', 'Coleman', 'Meyer', 'Fischer',
-        'Nowak', 'Kowalski', 'Wagner', 'Hoffmann', 'Mercer', 'Abbott', 'Quinn', 'Brooks',
+    $fullNames = [
+        'Adam Kowalski',
+        'Adrian Nowak',
+        'Alan Wisniewski',
+        'Aleksander Wozniak',
+        'Amelia Kowalczyk',
+        'Anna Zielinska',
+        'Antoni Lewandowski',
+        'Barbara Szymanska',
+        'Bartosz Kaminski',
+        'Celina Dombrowska',
+        'Damian Kaczmarek',
+        'Daniel Piotrowski',
+        'Daria Krupa',
+        'Dawid Jankowski',
+        'Dominika Mazur',
+        'Emilia Wojcik',
+        'Filip Zajac',
+        'Gabriela Krawczyk',
+        'Hubert Pawlak',
+        'Igor Michalski',
+        'Jakub Wrobel',
+        'Jan Malinowski',
+        'Joanna Sikora',
+        'Julia Dudek',
+        'Karol Wieczorek',
+        'Katarzyna Ostrowska',
+        'Klaudia Tomaszewska',
+        'Krzysztof Sobczak',
+        'Laura Baran',
+        'Lena Czerwinska',
+        'Lukasz Adamek',
+        'Magdalena Gorska',
+        'Marcin Walczak',
+        'Maria Zalewska',
+        'Mateusz Rutkowski',
+        'Michal Sokolowski',
+        'Natalia Jaworska',
+        'Nikodem Witkowski',
+        'Oliwia Wlodarczyk',
+        'Patryk Kozlowski',
+        'Paulina Marciniak',
+        'Piotr Grabowski',
+        'Sandra Zawadzka',
+        'Sebastian Lis',
+        'Tomasz Kubiak',
+        'Wiktoria Chmielewska',
+        'Zuzanna Kucharska',
+        'Ava Bennett',
+        'Benjamin Foster',
+        'Charlotte Brooks',
+        'Chloe Hayes',
+        'Daniel Abbott',
+        'Eleanor Mercer',
+        'Elijah Walker',
+        'Emily Carter',
+        'Emma Quinn',
+        'Ethan Coleman',
+        'Grace Hudson',
+        'Hannah Porter',
+        'Harper Reed',
+        'Henry Parker',
+        'Isabella Turner',
+        'Jack Sullivan',
+        'James Bennett',
+        'Leo Foster',
+        'Liam Carter',
+        'Logan Hayes',
+        'Lucas Walker',
+        'Lucy Morgan',
+        'Mason Brooks',
+        'Mia Collins',
+        'Natalie Perry',
+        'Noah Abbott',
+        'Nora Simmons',
+        'Oliver Coleman',
+        'Olivia Parker',
+        'Oscar Hayes',
+        'Sofia Bennett',
+        'Sophia Turner',
+        'Theo Sullivan',
+        'William Brooks',
+        'Zoe Collins',
     ];
 
-    return $firstNames[array_rand($firstNames)] . ' ' . $lastNames[array_rand($lastNames)];
+    return $fullNames[array_rand($fullNames)];
 }
 
 function admin_crypto_wallet_explorer_url(?string $assetCode, ?string $networkName, ?string $address): string
@@ -11498,11 +11591,13 @@ function admin_bank_account_active_assignments(Mysql_ks $db, int $accountId): ar
 
 function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, int $adminUserId, string $ipAddress = ''): array
 {
-    $account = admin_bank_account_find($db, $accountId);
-    if (!is_array($account) || empty($account['id'])) {
+    $isCreate = $accountId <= 0;
+    $account = $isCreate ? null : admin_bank_account_find($db, $accountId);
+    if (!$isCreate && (!is_array($account) || empty($account['id']))) {
         return ['ok' => false, 'message' => 'Bank account not found.'];
     }
 
+    $currencyId = (int)($payload['currency_id'] ?? 0);
     $label = trim((string)($payload['label'] ?? ''));
     $accountHolderName = trim((string)($payload['account_holder_name'] ?? ''));
     $bankName = trim((string)($payload['bank_name'] ?? ''));
@@ -11529,13 +11624,80 @@ function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, i
         return ['ok' => false, 'message' => 'IBAN or account number is required.'];
     }
 
+    if ($isCreate) {
+        $currencyRow = $currencyId > 0
+            ? $db->select_user("SELECT id FROM currencies WHERE id = {$currencyId} LIMIT 1")
+            : null;
+        if ($currencyId <= 0 || !is_array($currencyRow)) {
+            return ['ok' => false, 'message' => 'Choose a valid currency first.'];
+        }
+    }
+
     if (!in_array($statusChoice, array_keys(admin_bank_account_status_options()), true)) {
         $statusChoice = 'available';
     }
 
-    $activeAssignmentCount = count(admin_bank_account_active_assignments($db, $accountId));
+    $activeAssignmentCount = $isCreate ? 0 : count(admin_bank_account_active_assignments($db, $accountId));
     $finalStatus = $activeAssignmentCount > 0 ? 'assigned' : ($statusChoice === 'disabled' ? 'disabled' : 'available');
     $disabledAtValue = $finalStatus === 'disabled' ? $db->expr('NOW()') : null;
+
+    if ($isCreate) {
+        $insertOk = $db->insert(
+            [
+                'currency_id',
+                'label',
+                'account_holder_name',
+                'bank_name',
+                'bank_address',
+                'country_code',
+                'iban',
+                'account_number',
+                'routing_number',
+                'swift_bic',
+                'payment_reference_template',
+                'transfer_instructions',
+                'status',
+                'notes',
+                'disabled_at',
+                'created_by_admin_user_id',
+            ],
+            [
+                $currencyId,
+                $label !== '' ? $label : null,
+                $accountHolderName,
+                $bankName,
+                $bankAddress !== '' ? $bankAddress : null,
+                $countryCode !== '' ? $countryCode : null,
+                $iban !== '' ? $iban : null,
+                $accountNumber !== '' ? $accountNumber : null,
+                $routingNumber !== '' ? $routingNumber : null,
+                $swiftBic !== '' ? $swiftBic : null,
+                $paymentReferenceTemplate !== '' ? $paymentReferenceTemplate : null,
+                $transferInstructions !== '' ? $transferInstructions : null,
+                $finalStatus,
+                $notes !== '' ? $notes : null,
+                $disabledAtValue,
+                $adminUserId,
+            ],
+            'bank_accounts'
+        );
+
+        if (!$insertOk) {
+            return ['ok' => false, 'message' => 'Unable to save bank account.'];
+        }
+
+        $newAccountId = (int)$db->last_insert_id;
+        admin_activity_log(
+            $db,
+            0,
+            $adminUserId,
+            'bank_account_created',
+            'Bank account #' . $newAccountId . ' created: ' . ($label !== '' ? $label : $bankName) . '.',
+            $ipAddress
+        );
+
+        return ['ok' => true, 'message' => 'Bank account saved successfully.', 'bank_account_id' => $newAccountId];
+    }
 
     $updateOk = $db->update_using_id(
         [
@@ -13086,10 +13248,12 @@ function admin_chat_conversation_row(Mysql_ks $db, int $conversationId): ?array
             support_conversations.status,
             support_conversations.subject,
             support_conversations.group_name,
+            support_conversations.group_avatar_url,
             support_conversations.is_group_read_only,
             support_conversations.group_created_by_customer_id,
             support_conversations.group_created_by_admin_user_id,
             support_conversations.message_retention_hours,
+            support_conversations.message_retention_minutes,
             support_conversations.created_at,
             support_conversations.updated_at,
             customers.email AS customer_email,
@@ -13209,7 +13373,16 @@ function admin_chat_group_pending_invites(Mysql_ks $db, int $adminUserId): array
     return chat_admin_group_pending_invites($db, $adminUserId);
 }
 
-function admin_chat_create_group_conversation(Mysql_ks $db, int $adminUserId, string $groupName, array $emails, bool $readOnly = false, ?int $retentionHours = null): array
+function admin_chat_create_group_conversation(
+    Mysql_ks $db,
+    int $adminUserId,
+    string $groupName,
+    array $emails,
+    bool $readOnly = false,
+    $retentionHours = null,
+    string $groupAvatarUrl = '',
+    bool $forceNamedGroup = true
+): array
 {
     return chat_create_group_conversation(
         $db,
@@ -13218,7 +13391,9 @@ function admin_chat_create_group_conversation(Mysql_ks $db, int $adminUserId, st
         $emails,
         $readOnly,
         [],
-        $retentionHours
+        $retentionHours,
+        $groupAvatarUrl,
+        $forceNamedGroup
     );
 }
 
@@ -13243,19 +13418,42 @@ function admin_chat_toggle_group_read_only(Mysql_ks $db, int $conversationId, in
     return ['ok' => true];
 }
 
-function admin_chat_set_group_retention(Mysql_ks $db, int $conversationId, int $adminUserId, ?int $retentionHours): array
+function admin_chat_set_group_retention(Mysql_ks $db, int $conversationId, int $adminUserId, $retentionHours): array
 {
     $conversation = chat_group_accessible_for_admin($db, $adminUserId, $conversationId);
     if (!$conversation) {
         return ['ok' => false, 'message' => 'Group conversation not found.'];
     }
 
-    return chat_update_group_retention_hours(
-        $db,
-        $conversationId,
-        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
-        $retentionHours
+    $rawRetentionValue = trim((string)$retentionHours);
+    $normalizedRetention = chat_group_normalize_retention_hours($retentionHours);
+
+    if ($rawRetentionValue !== '' && $rawRetentionValue !== '0' && $normalizedRetention === null) {
+        return ['ok' => false, 'message' => 'Invalid auto-delete value.'];
+    }
+
+    $updated = $db->update_using_id(
+        ['message_retention_hours', 'message_retention_minutes'],
+        [chat_group_retention_storage_hours($normalizedRetention), $normalizedRetention],
+        'support_conversations',
+        $conversationId
     );
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to update auto-delete settings.'];
+    }
+
+    $actor = ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId];
+    $actorLabel = chat_group_participant_label($db, ['admin_user_id' => $adminUserId]);
+    $noticeText = $actorLabel . ' zmienil czas auto-usuwania wiadomosci na ' . chat_group_retention_label($normalizedRetention) . '.';
+    chat_insert_group_system_notice($db, $conversationId, $noticeText, $adminUserId);
+    chat_mark_group_read_for_actor($db, $conversationId, $actor);
+
+    return [
+        'ok' => true,
+        'message' => 'Auto-delete updated for this conversation.',
+        'retention_hours' => chat_group_retention_input_value($normalizedRetention),
+        'retention_label' => chat_group_retention_label($normalizedRetention),
+    ];
 }
 
 function admin_chat_set_group_email_notifications(Mysql_ks $db, int $conversationId, int $adminUserId, bool $enabled): array
@@ -13872,11 +14070,11 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
 function admin_render_chat_conversation_html(array $conversationRow, array $messageRows, array $messages): string
 {
     $conversationType = (string)($conversationRow['conversation_type'] ?? '');
-    $isGroupConversation = $conversationType === 'group_chat';
+    $isGroupConversation = chat_is_group_like_conversation_type($conversationType);
     $isGlobalGroupConversation = function_exists('chat_is_global_group_conversation_type')
         ? chat_is_global_group_conversation_type($conversationType)
         : $conversationType === 'global_group';
-    $retentionHours = $isGroupConversation ? chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null) : null;
+    $retentionLabel = $isGroupConversation ? chat_group_retention_label(chat_group_retention_minutes_from_row($conversationRow)) : '';
     $previousAnchor = null;
     ob_start();
     ?>
@@ -13884,8 +14082,8 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
         <div class="admin-chat-conversation__messages">
             <?php if ($isGroupConversation): ?>
                 <div class="admin-chat-conversation__retention-hint">
-                    <?php if ($retentionHours !== null): ?>
-                        <?php echo admin_e(str_replace('{hours}', (string)$retentionHours, admin_t($messages, 'group_chat_retention_hint_after', 'Auto-delete after {hours}h'))); ?>
+                    <?php if ($retentionLabel !== ''): ?>
+                        <?php echo admin_e('Auto-delete after ' . $retentionLabel); ?>
                     <?php else: ?>
                         <?php echo admin_e(admin_t($messages, 'group_chat_retention_hint_off', 'Auto-delete disabled')); ?>
                     <?php endif; ?>

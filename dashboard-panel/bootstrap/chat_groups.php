@@ -21,6 +21,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             'group_created_by_admin_user_id' => "ALTER TABLE support_conversations ADD COLUMN group_created_by_admin_user_id INT UNSIGNED DEFAULT NULL AFTER group_created_by_customer_id",
             'is_direct_conversation' => "ALTER TABLE support_conversations ADD COLUMN is_direct_conversation TINYINT(1) NOT NULL DEFAULT 0 AFTER group_created_by_admin_user_id",
             'message_retention_hours' => "ALTER TABLE support_conversations ADD COLUMN message_retention_hours SMALLINT UNSIGNED DEFAULT NULL AFTER group_created_by_admin_user_id",
+            'message_retention_minutes' => "ALTER TABLE support_conversations ADD COLUMN message_retention_minutes SMALLINT UNSIGNED DEFAULT NULL AFTER message_retention_hours",
+            'group_avatar_url' => "ALTER TABLE support_conversations ADD COLUMN group_avatar_url VARCHAR(255) DEFAULT NULL AFTER group_name",
         ];
 
         foreach ($conversationColumns as $columnName => $alterSql) {
@@ -89,22 +91,119 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
     function chat_group_retention_allowed_hours(): array
     {
-        return [1, 6, 12, 24];
+        return [5, 15, 30, 60, 720, 1440];
     }
 
     function chat_group_normalize_retention_hours($value): ?int
     {
         if ($value === null) {
-            return 1;
+            return 60;
         }
 
         $normalized = trim((string)$value);
         if ($normalized === '' || $normalized === '0' || strtolower($normalized) === 'off' || strtolower($normalized) === 'none') {
-            return 1;
+            return 60;
         }
 
-        $hours = (int)$normalized;
-        return in_array($hours, chat_group_retention_allowed_hours(), true) ? $hours : null;
+        $normalizedLower = strtolower($normalized);
+        if (substr($normalizedLower, -1) === 'm') {
+            $minutes = (int)substr($normalizedLower, 0, -1);
+            if ($minutes === 1) {
+                $minutes = 5;
+            }
+            return in_array($minutes, chat_group_retention_allowed_hours(), true) ? $minutes : null;
+        }
+
+        if (substr($normalizedLower, -1) === 'h') {
+            $hoursValue = (int)substr($normalizedLower, 0, -1);
+            $minutes = $hoursValue * 60;
+            return in_array($minutes, chat_group_retention_allowed_hours(), true) ? $minutes : null;
+        }
+
+        $numeric = (int)$normalizedLower;
+        if (in_array($numeric, [1, 6, 12, 24], true)) {
+            $legacyMinutes = $numeric * 60;
+            return in_array($legacyMinutes, chat_group_retention_allowed_hours(), true) ? $legacyMinutes : null;
+        }
+
+        return in_array($numeric, chat_group_retention_allowed_hours(), true) ? $numeric : null;
+    }
+
+    function chat_group_retention_minutes_from_row(array $conversation): int
+    {
+        $rawMinutes = isset($conversation['message_retention_minutes']) ? (int)$conversation['message_retention_minutes'] : 0;
+        if ($rawMinutes > 0) {
+            if ($rawMinutes === 1) {
+                return 5;
+            }
+
+            $minutes = chat_group_normalize_retention_hours($rawMinutes);
+            if ($minutes !== null) {
+                return $minutes;
+            }
+        }
+
+        $legacy = trim((string)($conversation['message_retention_hours'] ?? ''));
+        if ($legacy !== '') {
+            $legacyMinutes = chat_group_normalize_retention_hours($legacy . 'h');
+            if ($legacyMinutes !== null) {
+                return $legacyMinutes;
+            }
+        }
+
+        return 60;
+    }
+
+    function chat_group_retention_storage_hours(?int $minutes): ?int
+    {
+        $minutes = chat_group_normalize_retention_hours($minutes);
+        if ($minutes === null) {
+            return null;
+        }
+
+        if ($minutes === 60) {
+            return 1;
+        }
+        if ($minutes === 720) {
+            return 12;
+        }
+        if ($minutes === 1440) {
+            return 24;
+        }
+
+        return null;
+    }
+
+    function chat_group_retention_label(?int $minutes): string
+    {
+        $minutes = chat_group_normalize_retention_hours($minutes);
+        if ($minutes === null) {
+            $minutes = 60;
+        }
+
+        if ($minutes < 60) {
+            return $minutes . ' min';
+        }
+
+        if ($minutes % 60 === 0) {
+            return (int)($minutes / 60) . 'h';
+        }
+
+        return $minutes . ' min';
+    }
+
+    function chat_group_retention_input_value(?int $minutes): string
+    {
+        $minutes = chat_group_normalize_retention_hours($minutes);
+        if ($minutes === null) {
+            $minutes = 60;
+        }
+
+        if ($minutes < 60) {
+            return (string)$minutes . 'm';
+        }
+
+        return (string)((int)($minutes / 60)) . 'h';
     }
 
     function chat_group_member_email_notifications_enabled(array $member): bool
@@ -188,7 +287,148 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
     function chat_global_group_retention_hours(): int
     {
-        return 24;
+        return 1440;
+    }
+
+    function chat_group_avatar_upload_directory(): string
+    {
+        return app_public_path('uploads/chat/groups');
+    }
+
+    function chat_group_avatar_url(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        if (preg_match('~^https?://~i', $value) === 1) {
+            return $value;
+        }
+
+        return '/' . ltrim($value, '/');
+    }
+
+    function chat_store_group_avatar_upload(array $file, int $customerId): array
+    {
+        $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+        $tmpPath = (string)($file['tmp_name'] ?? '');
+        $maxBytes = 5 * 1024 * 1024;
+
+        if ($customerId <= 0 || $uploadError !== UPLOAD_ERR_OK || $tmpPath === '' || !is_uploaded_file($tmpPath)) {
+            return ['ok' => false, 'code' => 'upload_error'];
+        }
+
+        $fileSize = @filesize($tmpPath);
+        if (!is_int($fileSize) || $fileSize <= 0) {
+            $fileSize = isset($file['size']) ? (int)$file['size'] : 0;
+        }
+
+        if ($fileSize <= 0 || $fileSize > $maxBytes) {
+            return ['ok' => false, 'code' => 'too_large'];
+        }
+
+        $imageInfo = @getimagesize($tmpPath);
+        $mimeType = strtolower(trim((string)($imageInfo['mime'] ?? '')));
+        $allowedMimeTypes = [
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+        ];
+
+        if (!isset($allowedMimeTypes[$mimeType])) {
+            return ['ok' => false, 'code' => 'invalid_type'];
+        }
+
+        $uploadDirectory = chat_group_avatar_upload_directory();
+        if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+            return ['ok' => false, 'code' => 'upload_error'];
+        }
+
+        $extension = $allowedMimeTypes[$mimeType];
+        $fileName = 'group_avatar_' . $customerId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $extension;
+        $destinationPath = $uploadDirectory . '/' . $fileName;
+        $saved = false;
+
+        if (
+            function_exists('imagecreatetruecolor')
+            && function_exists('imagecopyresampled')
+            && function_exists('imagedestroy')
+            && function_exists('app_customer_avatar_create_image_resource')
+        ) {
+            $sourceImage = app_customer_avatar_create_image_resource($tmpPath, $mimeType);
+            if ($sourceImage) {
+                $width = imagesx($sourceImage);
+                $height = imagesy($sourceImage);
+
+                if ($width > 0 && $height > 0) {
+                    $maxDimension = 640;
+                    $scale = min($maxDimension / $width, $maxDimension / $height, 1);
+                    $targetWidth = max(1, (int)round($width * $scale));
+                    $targetHeight = max(1, (int)round($height * $scale));
+                    $targetImage = imagecreatetruecolor($targetWidth, $targetHeight);
+
+                    if ($targetImage) {
+                        if ($mimeType === 'image/png' || $mimeType === 'image/webp') {
+                            imagealphablending($targetImage, false);
+                            imagesavealpha($targetImage, true);
+                            $transparent = imagecolorallocatealpha($targetImage, 0, 0, 0, 127);
+                            imagefilledrectangle($targetImage, 0, 0, $targetWidth, $targetHeight, $transparent);
+                        } else {
+                            $background = imagecolorallocate($targetImage, 255, 255, 255);
+                            imagefilledrectangle($targetImage, 0, 0, $targetWidth, $targetHeight, $background);
+                        }
+
+                        imagecopyresampled($targetImage, $sourceImage, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
+
+                        if ($mimeType === 'image/png') {
+                            $saved = function_exists('imagepng') ? imagepng($targetImage, $destinationPath, 6) : false;
+                        } elseif ($mimeType === 'image/webp') {
+                            $saved = function_exists('imagewebp') ? imagewebp($targetImage, $destinationPath, 82) : false;
+                        } else {
+                            $saved = function_exists('imagejpeg') ? imagejpeg($targetImage, $destinationPath, 82) : false;
+                        }
+
+                        imagedestroy($targetImage);
+                    }
+                }
+
+                imagedestroy($sourceImage);
+            }
+        }
+
+        if (!$saved) {
+            $saved = move_uploaded_file($tmpPath, $destinationPath);
+        }
+
+        if (!$saved) {
+            return ['ok' => false, 'code' => 'upload_error'];
+        }
+
+        return [
+            'ok' => true,
+            'url' => '/uploads/chat/groups/' . $fileName,
+        ];
+    }
+
+    function chat_delete_group_avatar_file(string $publicPath): bool
+    {
+        $publicPath = trim($publicPath);
+        if ($publicPath === '' || strpos($publicPath, '/uploads/chat/groups/') !== 0) {
+            return false;
+        }
+
+        $publicRoot = realpath(app_public_path());
+        if ($publicRoot === false) {
+            return false;
+        }
+
+        $absolutePath = realpath($publicRoot . '/' . ltrim($publicPath, '/'));
+        if ($absolutePath === false || strpos($absolutePath, $publicRoot) !== 0 || !is_file($absolutePath)) {
+            return false;
+        }
+
+        return @unlink($absolutePath);
     }
 
     function chat_reseller_group_chat_limit(array $settings = []): int
@@ -514,19 +754,105 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         );
     }
 
-    function chat_expire_stale_group_invites(Mysql_ks $db, int $expiryHours = 24): void
+    function chat_cleanup_direct_conversation_if_lonely(Mysql_ks $db, int $conversationId): bool
+    {
+        chat_ensure_group_chat_runtime($db);
+        if ($conversationId <= 0) {
+            return false;
+        }
+
+        $conversation = chat_group_conversation_row($db, $conversationId);
+        if (!$conversation || empty($conversation['is_direct_conversation'])) {
+            return false;
+        }
+
+        $remainingRow = $db->select_user(
+            "SELECT COUNT(*) AS total
+             FROM support_conversation_members
+             WHERE conversation_id = {$conversationId}
+               AND invite_status IN ('accepted', 'pending')"
+        );
+        $remainingCount = (int)($remainingRow['total'] ?? 0);
+        if ($remainingCount > 1) {
+            return false;
+        }
+
+        if (schema_object_exists($db, 'support_messages')) {
+            $attachments = $db->select_full_user(
+                "SELECT attachment_path
+                 FROM support_messages
+                 WHERE conversation_id = {$conversationId}
+                   AND attachment_path IS NOT NULL
+                   AND attachment_path != ''"
+            );
+            foreach ($attachments as $attachmentRow) {
+                chat_delete_group_attachment_file((string)($attachmentRow['attachment_path'] ?? ''));
+            }
+            @$db->query("DELETE FROM support_messages WHERE conversation_id = {$conversationId}");
+        }
+
+        @$db->query("DELETE FROM support_conversation_members WHERE conversation_id = {$conversationId}");
+        $deletedConversation = @$db->query(
+            "DELETE FROM support_conversations
+             WHERE id = {$conversationId}
+               AND conversation_type = 'group_chat'
+               AND is_direct_conversation = 1
+             LIMIT 1"
+        );
+
+        return (bool)$deletedConversation && (int)$db->affected_rows > 0;
+    }
+
+    function chat_expire_stale_group_invites(Mysql_ks $db, int $expiryHours = 24): array
     {
         chat_ensure_group_chat_runtime($db);
         if (!schema_object_exists($db, 'support_conversation_members')) {
-            return;
+            return ['ok' => true, 'deleted_invites' => 0, 'deleted_direct_conversations' => 0];
         }
 
         $expiryHours = max(1, $expiryHours);
-        @$db->query(
-            "DELETE FROM support_conversation_members
+        $staleRows = $db->select_full_user(
+            "SELECT id, conversation_id
+             FROM support_conversation_members
              WHERE invite_status = 'pending'
                AND created_at < DATE_SUB(NOW(), INTERVAL {$expiryHours} HOUR)"
         );
+
+        if (!$staleRows) {
+            return ['ok' => true, 'deleted_invites' => 0, 'deleted_direct_conversations' => 0];
+        }
+
+        $deletedInvites = 0;
+        $affectedConversationIds = [];
+
+        foreach ($staleRows as $staleRow) {
+            $memberId = (int)($staleRow['id'] ?? 0);
+            $conversationId = (int)($staleRow['conversation_id'] ?? 0);
+            if ($memberId <= 0) {
+                continue;
+            }
+
+            $result = @$db->query("DELETE FROM support_conversation_members WHERE id = {$memberId} LIMIT 1");
+            if ($result) {
+                $deletedInvites += (int)$db->affected_rows;
+                if ($conversationId > 0) {
+                    $affectedConversationIds[$conversationId] = $conversationId;
+                }
+            }
+        }
+
+        $deletedDirectConversations = 0;
+        foreach (array_values($affectedConversationIds) as $conversationId) {
+            if (chat_cleanup_direct_conversation_if_lonely($db, $conversationId)) {
+                $deletedDirectConversations++;
+            }
+        }
+
+        return [
+            'ok' => true,
+            'deleted_invites' => $deletedInvites,
+            'deleted_direct_conversations' => $deletedDirectConversations,
+        ];
     }
 
     function chat_resolve_group_invitee_by_email(Mysql_ks $db, string $email, array $settings = []): ?array
@@ -1178,10 +1504,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
         $existing = chat_global_group_conversation_row($db);
         if ($existing) {
-            if ((int)($existing['message_retention_hours'] ?? 0) !== chat_global_group_retention_hours()) {
+            if (chat_group_retention_minutes_from_row($existing) !== chat_global_group_retention_hours()) {
                 $db->update_using_id(
-                    ['message_retention_hours'],
-                    [chat_global_group_retention_hours()],
+                    ['message_retention_hours', 'message_retention_minutes'],
+                    [chat_group_retention_storage_hours(chat_global_group_retention_hours()), chat_global_group_retention_hours()],
                     'support_conversations',
                     (int)($existing['id'] ?? 0)
                 );
@@ -1193,8 +1519,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $seedAdminUserId = chat_global_group_admin_seed_id($db);
         $currentTime = chat_current_datetime();
         $inserted = $db->insert(
-            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'message_retention_hours', 'status', 'priority', 'created_at', 'updated_at'],
-            ['global_group', null, $seedAdminUserId > 0 ? $seedAdminUserId : null, chat_global_group_system_subject(), chat_global_group_title(), 0, null, $seedAdminUserId > 0 ? $seedAdminUserId : null, chat_global_group_retention_hours(), 'open', 'normal', $currentTime, $currentTime],
+            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'message_retention_hours', 'message_retention_minutes', 'status', 'priority', 'created_at', 'updated_at'],
+            ['global_group', null, $seedAdminUserId > 0 ? $seedAdminUserId : null, chat_global_group_system_subject(), chat_global_group_title(), 0, null, $seedAdminUserId > 0 ? $seedAdminUserId : null, chat_group_retention_storage_hours(chat_global_group_retention_hours()), chat_global_group_retention_hours(), 'open', 'normal', $currentTime, $currentTime],
             'support_conversations'
         );
         if (!$inserted) {
@@ -1453,7 +1779,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         Mysql_ks $db,
         int $conversationId,
         array $actor,
-        ?int $retentionHours
+        $retentionHours
     ): array {
         chat_ensure_group_chat_runtime($db);
         $conversation = chat_group_conversation_row($db, $conversationId);
@@ -1465,14 +1791,23 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return ['ok' => false, 'message' => 'You cannot update auto-delete settings for this conversation.'];
         }
 
-        $normalizedHours = chat_group_normalize_retention_hours($retentionHours);
-        if ($retentionHours !== null && $retentionHours > 0 && $normalizedHours === null) {
+        $normalizedHours = null;
+        $rawRetentionValue = trim((string)$retentionHours);
+        $actorType = trim((string)($actor['participant_type'] ?? ''));
+
+        if ($actorType === 'customer' && in_array($rawRetentionValue, ['1', '5', '15', '30'], true)) {
+            $normalizedHours = $rawRetentionValue === '1' ? 5 : (int)$rawRetentionValue;
+        } else {
+            $normalizedHours = chat_group_normalize_retention_hours($retentionHours);
+        }
+
+        if ($retentionHours !== null && trim((string)$retentionHours) !== '' && trim((string)$retentionHours) !== '0' && $normalizedHours === null) {
             return ['ok' => false, 'message' => 'Invalid auto-delete value.'];
         }
 
         $updated = $db->update_using_id(
-            ['message_retention_hours'],
-            [$normalizedHours],
+            ['message_retention_hours', 'message_retention_minutes'],
+            [chat_group_retention_storage_hours($normalizedHours), $normalizedHours],
             'support_conversations',
             $conversationId
         );
@@ -1484,8 +1819,9 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $actorLabel = trim((string)($actor['participant_type'] ?? '')) === 'admin'
             ? chat_group_participant_label($db, ['admin_user_id' => (int)($actor['admin_user_id'] ?? 0)])
             : chat_group_participant_label($db, ['customer_id' => (int)($actor['customer_id'] ?? 0)]);
-        $noticeText = $actorLabel . ' zmienił czas auto-usuwania wiadomości na ' . $normalizedHours . 'h.';
+        $noticeText = $actorLabel . ' zmienil czas auto-usuwania wiadomosci na ' . chat_group_retention_label($normalizedHours) . '.';
         chat_insert_group_system_notice($db, $conversationId, $noticeText, (int)($actor['admin_user_id'] ?? 0));
+        chat_mark_group_read_for_actor($db, $conversationId, $actor);
 
         return [
             'ok' => true,
@@ -1660,9 +1996,28 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
              FROM support_messages
              INNER JOIN support_conversations
                 ON support_conversations.id = support_messages.conversation_id
-             WHERE support_conversations.conversation_type = 'group_chat'
-               AND support_conversations.message_retention_hours IN ({$allowed})
-               AND support_messages.created_at < DATE_SUB('{$db->escape($safeNow)}', INTERVAL support_conversations.message_retention_hours HOUR)
+             WHERE support_conversations.conversation_type IN ('group_chat', 'global_group')
+               AND CASE
+                    WHEN support_conversations.message_retention_minutes = 1
+                        THEN 5
+                    WHEN support_conversations.message_retention_minutes IS NOT NULL
+                        THEN support_conversations.message_retention_minutes
+                    WHEN support_conversations.message_retention_hours IN (1, 6, 12, 24)
+                        THEN support_conversations.message_retention_hours * 60
+                    ELSE NULL
+               END IN ({$allowed})
+               AND support_messages.created_at < DATE_SUB(
+                    '{$db->escape($safeNow)}',
+                    INTERVAL CASE
+                        WHEN support_conversations.message_retention_minutes = 1
+                            THEN 5
+                        WHEN support_conversations.message_retention_minutes IS NOT NULL
+                            THEN support_conversations.message_retention_minutes
+                        WHEN support_conversations.message_retention_hours IN (1, 6, 12, 24)
+                            THEN support_conversations.message_retention_hours * 60
+                        ELSE 60
+                    END MINUTE
+               )
              ORDER BY support_messages.id ASC"
         );
 
@@ -1745,6 +2100,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 support_conversation_members.participant_type,
                 support_conversation_members.customer_id,
                 support_conversation_members.admin_user_id,
+                support_conversation_members.invite_status,
                 support_conversation_members.email_notifications_enabled,
                 customers.email AS customer_email,
                 customers.public_handle AS customer_public_handle,
@@ -1777,10 +2133,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 ];
                 $avatar = chat_admin_avatar_payload_from_row($adminRow);
                 $members[] = [
-                    'participant_type' => 'admin',
-                    'customer_id' => 0,
-                    'admin_user_id' => (int)($row['admin_user_id'] ?? 0),
-                    'label' => chat_admin_display_label($adminRow),
+                'participant_type' => 'admin',
+                'customer_id' => 0,
+                'admin_user_id' => (int)($row['admin_user_id'] ?? 0),
+                'invite_status' => (string)($row['invite_status'] ?? ''),
+                'label' => chat_admin_display_label($adminRow),
                     'email' => (string)($row['admin_email'] ?? ''),
                     'public_handle' => (string)($row['admin_public_handle'] ?? ''),
                     'avatar_url' => $avatar['avatar_url'],
@@ -1802,6 +2159,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 'participant_type' => 'customer',
                 'customer_id' => (int)($row['customer_id'] ?? 0),
                 'admin_user_id' => 0,
+                'invite_status' => (string)($row['invite_status'] ?? ''),
                 'label' => chat_customer_display_label_from_row($customerRow),
                 'email' => (string)($row['customer_email'] ?? ''),
                 'public_handle' => (string)($row['customer_public_handle'] ?? ''),
@@ -1898,12 +2256,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         $members = chat_group_member_summaries($db, $conversationId, ['accepted']);
         $membersWithPending = chat_group_member_summaries($db, $conversationId, ['accepted', 'pending']);
+        $membersForDirectState = chat_group_member_summaries($db, $conversationId, ['accepted', 'pending', 'rejected']);
         $participantType = trim((string)($actor['participant_type'] ?? ''));
         $actorCustomerId = (int)($actor['customer_id'] ?? 0);
         $actorAdminUserId = (int)($actor['admin_user_id'] ?? 0);
         $actorParticipantKey = '';
         $otherMembers = [];
         $otherMembersWithPending = [];
+        $otherMembersForDirectState = [];
 
         if ($participantType === 'customer' && $actorCustomerId > 0) {
             $actorParticipantKey = chat_participant_key_for_customer($actorCustomerId);
@@ -1931,26 +2291,57 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $otherMembersWithPending[] = $member;
         }
 
+        foreach ($membersForDirectState as $member) {
+            if ($participantType === 'customer' && (string)($member['participant_type'] ?? '') === 'customer' && (int)($member['customer_id'] ?? 0) === $actorCustomerId) {
+                continue;
+            }
+            if ($participantType === 'admin' && (string)($member['participant_type'] ?? '') === 'admin' && (int)($member['admin_user_id'] ?? 0) === $actorAdminUserId) {
+                continue;
+            }
+            $otherMembersForDirectState[] = $member;
+        }
+
         $title = chat_group_conversation_title($conversation);
         $subtitle = chat_is_global_group_conversation_type((string)($conversation['conversation_type'] ?? '')) ? 'Global' : 'Group';
-        $avatarUrl = '';
+        $avatarUrl = chat_group_avatar_url((string)($conversation['group_avatar_url'] ?? ''));
         $avatarText = 'G';
         $avatarTheme = 'theme-6';
-        $isDirect = !empty($conversation['is_direct_conversation']) || count($otherMembersWithPending) === 1;
+        $isDirect = !empty($conversation['is_direct_conversation']);
         $actorMember = $actorParticipantKey !== '' ? chat_group_member_row($db, $conversationId, $actorParticipantKey) : null;
         $actorInviteStatus = trim((string)($actorMember['invite_status'] ?? ''));
         $hasPendingInvite = $isDirect && $actorInviteStatus === 'pending';
+        $directStatus = 'none';
+        $directTargetCustomerId = 0;
         $presence = chat_aggregate_presence_payload($otherMembersWithPending);
 
         if ($isDirect) {
-            $counterpart = $otherMembersWithPending[0];
-            $title = (string)($counterpart['label'] ?? $title);
-            $subtitle = $hasPendingInvite ? 'Invite pending' : '1 on 1';
-            $avatarUrl = (string)($counterpart['avatar_url'] ?? '');
-            $avatarText = (string)($counterpart['avatar_text'] ?? 'U');
-            $avatarTheme = (string)($counterpart['avatar_theme'] ?? 'theme-1');
-            $presence = chat_presence_payload((string)($counterpart['presence_key'] ?? 'offline'));
+            $counterpart = $otherMembersForDirectState ? $otherMembersForDirectState[0] : [];
+            $counterpartInviteStatus = trim((string)($counterpart['invite_status'] ?? ''));
+            $directTargetCustomerId = (int)($counterpart['customer_id'] ?? 0);
+
+            if ($counterpart) {
+                $title = (string)($counterpart['label'] ?? $title);
+                $avatarUrl = (string)($counterpart['avatar_url'] ?? '');
+                $avatarText = (string)($counterpart['avatar_text'] ?? 'U');
+                $avatarTheme = (string)($counterpart['avatar_theme'] ?? 'theme-1');
+                $presence = chat_presence_payload((string)($counterpart['presence_key'] ?? 'offline'));
+            }
+
+            if ($hasPendingInvite) {
+                $directStatus = 'pending_invited';
+                $subtitle = 'Invite pending';
+            } elseif ($counterpartInviteStatus === 'rejected' && $actorInviteStatus === 'accepted') {
+                $directStatus = 'rejected';
+                $subtitle = 'Invite rejected';
+            } elseif ($counterpartInviteStatus === 'pending') {
+                $directStatus = 'pending';
+                $subtitle = 'Invite pending';
+            } else {
+                $directStatus = 'accepted';
+                $subtitle = '1:1';
+            }
         } elseif (chat_is_global_group_conversation_type((string)($conversation['conversation_type'] ?? ''))) {
+            $avatarUrl = '';
             $avatarText = '★';
             $avatarTheme = 'theme-global';
         }
@@ -1959,9 +2350,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             'title' => $title,
             'subtitle' => $subtitle,
             'is_direct' => $isDirect,
+            'direct_status' => $directStatus,
+            'direct_target_customer_id' => $directTargetCustomerId,
             'has_pending_invite' => $hasPendingInvite,
             'member_count' => count($members),
+            'member_count_with_pending' => count($membersWithPending),
+            'pending_member_count' => max(0, count($membersWithPending) - count($members)),
             'members' => $members,
+            'members_with_pending' => $membersWithPending,
             'other_members' => $otherMembersWithPending,
             'avatar_url' => $avatarUrl,
             'avatar_text' => $avatarText,
@@ -1985,14 +2381,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
              INNER JOIN support_conversation_members AS member_a
                 ON member_a.conversation_id = support_conversations.id
                AND member_a.participant_key = '{$participantKeyA}'
-               AND member_a.invite_status IN ('accepted', 'pending')
+               AND member_a.invite_status IN ('accepted', 'pending', 'rejected', 'left', 'removed')
              INNER JOIN support_conversation_members AS member_b
                 ON member_b.conversation_id = support_conversations.id
                AND member_b.participant_key = '{$participantKeyB}'
-               AND member_b.invite_status IN ('accepted', 'pending')
+               AND member_b.invite_status IN ('accepted', 'pending', 'rejected', 'left', 'removed')
              WHERE support_conversations.conversation_type = 'group_chat'
                AND support_conversations.is_direct_conversation = 1
-             ORDER BY support_conversations.id DESC
+             ORDER BY COALESCE(support_conversations.updated_at, support_conversations.created_at) DESC, support_conversations.id DESC
              LIMIT 1"
         );
 
@@ -2016,6 +2412,36 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         return date('d.m.Y H:i', $timestamp);
+    }
+
+    function chat_group_invite_status_notice_text(string $participantLabel, bool $isDirectConversation, string $status): string
+    {
+        $participantLabel = trim($participantLabel);
+        if ($participantLabel === '') {
+            $participantLabel = 'Użytkownik';
+        }
+
+        if ($status === 'accepted') {
+            return $isDirectConversation
+                ? $participantLabel . ' zaakceptował zaproszenie do rozmowy.'
+                : $participantLabel . ' zaakceptował zaproszenie do grupy.';
+        }
+
+        return $isDirectConversation
+            ? $participantLabel . ' odrzucił zaproszenie do rozmowy.'
+            : $participantLabel . ' odrzucił zaproszenie do grupy.';
+    }
+
+    function chat_group_leave_notice_text(string $participantLabel, bool $isDirectConversation): string
+    {
+        $participantLabel = trim($participantLabel);
+        if ($participantLabel === '') {
+            $participantLabel = 'Użytkownik';
+        }
+
+        return $isDirectConversation
+            ? $participantLabel . ' opuścił rozmowę.'
+            : $participantLabel . ' opuścił grupę.';
     }
 
     function chat_customer_participant_profile_payload(Mysql_ks $db, array $viewer, int $targetCustomerId, array $settings = [], int $contextConversationId = 0): array
@@ -2053,12 +2479,13 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 && !empty($contextConversation['id'])
                 && !empty($contextConversation['is_direct_conversation'])
             ) {
-                $contextMembers = chat_group_member_summaries($db, (int)$contextConversation['id'], ['accepted', 'pending']);
-                foreach ($contextMembers as $contextMember) {
-                    if ((string)($contextMember['participant_type'] ?? '') === 'customer' && (int)($contextMember['customer_id'] ?? 0) === $targetCustomerId) {
-                        $directConversation = $contextConversation;
-                        break;
-                    }
+                $contextTargetMember = chat_group_member_row($db, (int)$contextConversation['id'], chat_participant_key_for_customer($targetCustomerId));
+                if (
+                    is_array($contextTargetMember)
+                    && (string)($contextTargetMember['participant_type'] ?? 'customer') === 'customer'
+                    && (int)($contextTargetMember['customer_id'] ?? 0) === $targetCustomerId
+                ) {
+                    $directConversation = $contextConversation;
                 }
             }
         }
@@ -2071,8 +2498,24 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $targetMember = $conversationId > 0 ? chat_group_member_row($db, $conversationId, chat_participant_key_for_customer($targetCustomerId)) : null;
         $viewerStatus = trim((string)($viewerMember['invite_status'] ?? ''));
         $targetStatus = trim((string)($targetMember['invite_status'] ?? ''));
+        $hasExistingConversation = $conversationId > 0;
         $isAccepted = $targetStatus === 'accepted';
-        $isPendingInviteForViewer = $conversationId > 0 && $viewerStatus === 'pending';
+        $isPendingInviteForViewer = $hasExistingConversation && $viewerStatus === 'pending';
+        $isRejectedInviteForTarget = $hasExistingConversation && $viewerStatus === 'accepted' && $targetStatus === 'rejected';
+        $directStatus = $isPendingInviteForViewer
+            ? 'pending_invited'
+            : ($isRejectedInviteForTarget
+                ? 'rejected'
+                : ($isAccepted
+                    ? 'accepted'
+                    : ($targetStatus === 'pending'
+                        ? 'pending'
+                        : ($hasExistingConversation ? 'inactive' : 'none'))));
+        $actionKind = $isPendingInviteForViewer
+            ? 'respond_invite'
+            : (($directStatus === 'rejected' || $directStatus === 'inactive')
+                ? 'reinvite'
+                : ($hasExistingConversation ? 'open' : 'invite'));
 
         return [
             'ok' => true,
@@ -2085,8 +2528,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             'public_handle' => chat_normalize_public_handle((string)($target['public_handle'] ?? '')),
             'last_seen_label' => chat_participant_last_seen_label((string)($target['last_login_at'] ?? '')),
             'conversation_id' => $conversationId,
-            'direct_status' => $isPendingInviteForViewer ? 'pending_invited' : ($isAccepted ? 'accepted' : ($targetStatus === 'pending' ? 'pending' : 'none')),
-            'action_kind' => $isPendingInviteForViewer ? 'respond_invite' : ($conversationId > 0 ? 'open' : 'invite'),
+            'direct_status' => $directStatus,
+            'action_kind' => $actionKind,
         ];
     }
 
@@ -2098,6 +2541,68 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         if (!empty($profile['conversation_id'])) {
+            if (in_array((string)($profile['direct_status'] ?? ''), ['rejected', 'inactive'], true)) {
+                $conversationId = (int)$profile['conversation_id'];
+                $viewerCustomerId = (int)($viewer['id'] ?? 0);
+                $viewerMember = chat_group_member_row($db, $conversationId, chat_participant_key_for_customer($viewerCustomerId));
+                $targetMember = chat_group_member_row($db, $conversationId, chat_participant_key_for_customer($targetCustomerId));
+                $target = $db->select_user(
+                    "SELECT id, email, public_handle, locale_code
+                     FROM customers
+                     WHERE id = {$targetCustomerId}
+                     LIMIT 1"
+                );
+                if (!$viewerMember || !$targetMember || !is_array($target) || empty($target['id'])) {
+                    return ['ok' => false, 'message' => 'User not found.'];
+                }
+
+                $db->update_using_id(
+                    ['invite_status', 'responded_at', 'joined_at', 'left_at', 'can_post'],
+                    ['accepted', chat_current_datetime(), chat_current_datetime(), null, 1],
+                    'support_conversation_members',
+                    (int)$viewerMember['id']
+                );
+                $db->update_using_id(
+                    ['invite_status', 'responded_at', 'joined_at', 'left_at', 'can_post'],
+                    ['pending', null, null, null, 1],
+                    'support_conversation_members',
+                    (int)$targetMember['id']
+                );
+
+                $conversation = chat_group_conversation_row($db, $conversationId);
+                $title = chat_group_conversation_title((array)$conversation);
+                $identifier = trim((string)($target['public_handle'] ?? '')) !== ''
+                    ? '@' . trim((string)$target['public_handle'])
+                    : trim((string)($target['email'] ?? ''));
+
+                chat_insert_group_system_notice(
+                    $db,
+                    $conversationId,
+                    'Ponowiono zaproszenie do rozmowy dla ' . $identifier . '.'
+                );
+
+                chat_log_customer_activity(
+                    $db,
+                    $targetCustomerId,
+                    'group_chat_invited',
+                    'You were invited to group chat "' . $title . '" by ' . chat_customer_display_label_from_row($viewer) . '.'
+                );
+                chat_queue_group_invitation_email(
+                    $db,
+                    $target,
+                    $title,
+                    chat_customer_display_label_from_row($viewer),
+                    $settings
+                );
+
+                return [
+                    'ok' => true,
+                    'conversation_id' => $conversationId,
+                    'action_kind' => 'reinvite',
+                    'message' => 'Invitation sent again.',
+                ];
+            }
+
             return [
                 'ok' => true,
                 'conversation_id' => (int)$profile['conversation_id'],
@@ -2171,7 +2676,9 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         array $inviteEmails,
         bool $readOnly = false,
         array $settings = [],
-        ?int $retentionHours = null
+        $retentionHours = null,
+        string $groupAvatarUrl = '',
+        bool $forceNamedGroup = false
     ): array {
         chat_ensure_group_chat_runtime($db);
         chat_expire_stale_group_invites($db);
@@ -2242,11 +2749,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $invitees[] = $invitee;
         }
 
-        if (!$invitees) {
+        if (!$invitees && !$forceNamedGroup) {
             return ['ok' => false, 'message' => 'Add at least one eligible user email or handle to create a conversation.'];
         }
 
-        $isDirectConversation = count($invitees) === 1;
+        $isDirectConversation = !$forceNamedGroup && count($invitees) === 1;
         $directInvitee = $isDirectConversation ? (array)$invitees[0] : [];
 
         if ($creatorType === 'customer') {
@@ -2275,27 +2782,31 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return ['ok' => false, 'message' => 'Group name can be up to 20 characters.'];
         }
 
-        if ($retentionHours === null || $retentionHours <= 0) {
-            $retentionHours = 1;
+        if ($retentionHours === null || trim((string)$retentionHours) === '' || trim((string)$retentionHours) === '0') {
+            $normalizedRetentionHours = 1440;
+        } else {
+            $normalizedRetentionHours = chat_group_normalize_retention_hours($retentionHours);
         }
-        $normalizedRetentionHours = chat_group_normalize_retention_hours($retentionHours);
-        if ($retentionHours !== null && $retentionHours > 0 && $normalizedRetentionHours === null) {
+        if ($normalizedRetentionHours === null) {
             return ['ok' => false, 'message' => 'Invalid auto-delete value.'];
         }
+        $groupAvatarUrl = trim($groupAvatarUrl);
 
         $currentTime = chat_current_datetime();
         $inserted = $db->insert(
-            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'is_direct_conversation', 'message_retention_hours', 'status', 'priority', 'created_at', 'updated_at'],
+            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'group_avatar_url', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'is_direct_conversation', 'message_retention_hours', 'message_retention_minutes', 'status', 'priority', 'created_at', 'updated_at'],
             [
                 'group_chat',
                 $creatorCustomerId > 0 ? $creatorCustomerId : null,
                 $creatorAdminUserId > 0 ? $creatorAdminUserId : null,
                 $groupName,
                 $groupName,
+                $groupAvatarUrl !== '' ? $groupAvatarUrl : null,
                 $readOnly ? 1 : 0,
                 $creatorCustomerId > 0 ? $creatorCustomerId : null,
                 $creatorAdminUserId > 0 ? $creatorAdminUserId : null,
                 $isDirectConversation ? 1 : 0,
+                chat_group_retention_storage_hours($normalizedRetentionHours),
                 $normalizedRetentionHours,
                 'open',
                 'normal',
@@ -2377,14 +2888,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $creatorCustomerId
         );
 
-        if ($normalizedRetentionHours !== null) {
-            chat_insert_group_system_notice($db, $conversationId, 'Auto-usuwanie wiadomości ustawiono na ' . $normalizedRetentionHours . 'h.', $creatorAdminUserId);
-        }
-
         return [
             'ok' => true,
             'conversation_id' => $conversationId,
             'title' => $groupName,
+            'avatar_url' => chat_group_avatar_url($groupAvatarUrl),
             'retention_hours' => $normalizedRetentionHours,
         ];
     }
@@ -2402,6 +2910,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             "SELECT
                 support_conversation_members.conversation_id,
                 support_conversations.group_name,
+                support_conversations.group_avatar_url,
                 support_conversations.subject,
                 support_conversations.is_direct_conversation,
                 support_conversations.is_group_read_only,
@@ -2436,6 +2945,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             "SELECT
                 support_conversation_members.conversation_id,
                 support_conversations.group_name,
+                support_conversations.group_avatar_url,
                 support_conversations.subject,
                 support_conversations.is_direct_conversation,
                 inviter_customers.email AS invited_by_customer_email,
@@ -2477,9 +2987,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             (int)$member['id']
         );
 
-        $conversation = $db->select_user("SELECT group_name, subject FROM support_conversations WHERE id = {$conversationId} LIMIT 1");
+        $conversation = $db->select_user("SELECT group_name, subject, is_direct_conversation FROM support_conversations WHERE id = {$conversationId} LIMIT 1");
         $title = chat_group_conversation_title((array)$conversation);
         $memberLabel = chat_group_participant_label($db, $member);
+        $isDirectConversation = !empty($conversation['is_direct_conversation']);
 
         if (!empty($member['customer_id'])) {
             chat_log_customer_activity(
@@ -2492,12 +3003,27 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             );
         }
 
+        chat_insert_group_system_notice(
+            $db,
+            $conversationId,
+            chat_group_invite_status_notice_text($memberLabel, $isDirectConversation, $status)
+        );
+
         if ($status === 'accepted') {
             chat_log_group_activity_for_customers(
                 $db,
                 $conversationId,
                 'group_chat_activity',
                 $memberLabel . ' joined group chat "' . $title . '".',
+                (int)($member['invited_by_admin_user_id'] ?? 0),
+                (int)($member['customer_id'] ?? 0)
+            );
+        } else {
+            chat_log_group_activity_for_customers(
+                $db,
+                $conversationId,
+                'group_chat_activity',
+                $memberLabel . ' rejected invitation to group chat "' . $title . '".',
                 (int)($member['invited_by_admin_user_id'] ?? 0),
                 (int)($member['customer_id'] ?? 0)
             );
@@ -2653,6 +3179,12 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             chat_log_customer_activity($db, (int)$member['customer_id'], 'group_chat_left', 'You left group chat "' . $title . '".');
         }
 
+        chat_insert_group_system_notice(
+            $db,
+            $conversationId,
+            chat_group_leave_notice_text($memberLabel, $isDirectConversation)
+        );
+
         chat_log_group_activity_for_customers(
             $db,
             $conversationId,
@@ -2752,7 +3284,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $actorLabel . ' removed group chat "' . $title . '".',
             $actorAdminUserId,
             $actorCustomerId,
-            ['accepted', 'pending']
+            ['accepted']
         );
 
         if (schema_object_exists($db, 'support_messages')) {
@@ -2865,6 +3397,25 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
     }
 
+    function chat_mark_group_read_for_actor(Mysql_ks $db, int $conversationId, array $actor): void
+    {
+        $actorType = trim((string)($actor['participant_type'] ?? ''));
+        if ($actorType === 'customer') {
+            $customerId = (int)($actor['customer_id'] ?? 0);
+            if ($customerId > 0) {
+                chat_mark_group_read_for_customer($db, $customerId, $conversationId);
+            }
+            return;
+        }
+
+        if ($actorType === 'admin') {
+            $adminUserId = (int)($actor['admin_user_id'] ?? 0);
+            if ($adminUserId > 0) {
+                chat_mark_group_read_for_admin($db, $adminUserId, $conversationId);
+            }
+        }
+    }
+
     function chat_customer_group_conversation_rows(Mysql_ks $db, int $customerId): array
     {
         chat_ensure_group_chat_runtime($db);
@@ -2878,6 +3429,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 support_conversations.id,
                 support_conversations.conversation_type,
                 support_conversations.group_name,
+                support_conversations.group_avatar_url,
                 support_conversations.subject,
                 support_conversations.is_group_read_only,
                 support_conversations.is_direct_conversation,
@@ -2934,6 +3486,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 support_conversations.conversation_type,
                 support_conversations.customer_id,
                 support_conversations.group_name,
+                support_conversations.group_avatar_url,
                 support_conversations.subject,
                 support_conversations.status,
                 support_conversations.is_group_read_only,
@@ -3141,6 +3694,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         ];
 
         if (chat_customer_can_use_groups($customer, $settings)) {
+            $seenDirectCounterpartIds = [];
             foreach (chat_customer_group_conversation_rows($db, $customerId) as $row) {
                 $summary = chat_group_conversation_summary(
                     $db,
@@ -3148,6 +3702,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     ['participant_type' => 'customer', 'customer_id' => $customerId, 'admin_user_id' => 0],
                     $row
                 );
+                $isDirectConversation = !empty($summary['is_direct']);
+                $directTargetCustomerId = (int)($summary['direct_target_customer_id'] ?? 0);
+                if ($isDirectConversation && $directTargetCustomerId > 0) {
+                    if (isset($seenDirectCounterpartIds[$directTargetCustomerId])) {
+                        continue;
+                    }
+                    $seenDirectCounterpartIds[$directTargetCustomerId] = true;
+                }
                 $entries[] = [
                     'id' => (int)($row['id'] ?? 0),
                     'type' => (string)($row['conversation_type'] ?? 'group_chat'),
@@ -3208,6 +3770,21 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         if ($conversationId > 0 && $fullMessengerEnabled) {
             $groupConversation = chat_group_accessible_for_customer($db, $customerId, $conversationId);
             if ($groupConversation) {
+                if (!empty($groupConversation['is_direct_conversation'])) {
+                    $summary = chat_group_conversation_summary(
+                        $db,
+                        (int)$groupConversation['id'],
+                        ['participant_type' => 'customer', 'customer_id' => $customerId, 'admin_user_id' => 0],
+                        $groupConversation
+                    );
+                    $directTargetCustomerId = (int)($summary['direct_target_customer_id'] ?? 0);
+                    if ($directTargetCustomerId > 0) {
+                        $canonicalConversation = chat_find_customer_direct_conversation_between($db, $customerId, $directTargetCustomerId);
+                        if (is_array($canonicalConversation) && !empty($canonicalConversation['id'])) {
+                            $groupConversation = chat_group_accessible_for_customer($db, $customerId, (int)$canonicalConversation['id']) ?: $groupConversation;
+                        }
+                    }
+                }
                 return [
                     'id' => (int)$groupConversation['id'],
                     'type' => (string)($groupConversation['conversation_type'] ?? 'group_chat'),

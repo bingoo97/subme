@@ -1,5 +1,5 @@
 {if $user.logged}
-	<div id="content_chat_profil" data-chat-last-id="{$chat_last_message_id|default:0}" data-chat-oldest-id="{$chat_oldest_message_id|default:0}" data-chat-message-limit="{$chat_message_limit|default:10}" data-chat-loaded-message-count="{$chat_loaded_message_count|default:0}" data-chat-total-message-count="{$chat_total_message_count|default:0}" data-chat-has-more-messages="{if $chat_has_more_messages|default:false}1{else}0{/if}" data-chat-active-conversation-id="{$chat_active_conversation_id|default:0}" data-chat-active-conversation-type="{$chat_active_conversation_type|default:'live_chat'}" data-chat-active-conversation-title="{$chat_active_conversation_title|default:''|escape:'html'}" data-chat-active-conversation-subtitle="{$chat_active_conversation_subtitle|default:''|escape:'html'}" data-chat-can-send="{if $chat_active_conversation_can_send|default:true}1{else}0{/if}" data-chat-can-manage-group="{if $chat_active_conversation_can_manage|default:false}1{else}0{/if}" data-chat-is-global-group="{if $chat_active_conversation_is_global_group|default:false}1{else}0{/if}" data-chat-customer-is-blocked="{if $chat_customer_is_blocked|default:false}1{else}0{/if}">
+	<div id="content_chat_profil" data-chat-last-id="{$chat_last_message_id|default:0}" data-chat-oldest-id="{$chat_oldest_message_id|default:0}" data-chat-message-limit="{$chat_message_limit|default:10}" data-chat-loaded-message-count="{$chat_loaded_message_count|default:0}" data-chat-total-message-count="{$chat_total_message_count|default:0}" data-chat-has-more-messages="{if $chat_has_more_messages|default:false}1{else}0{/if}" data-chat-active-conversation-id="{$chat_active_conversation_id|default:0}" data-chat-active-conversation-type="{$chat_active_conversation_type|default:'live_chat'}" data-chat-active-conversation-title="{$chat_active_conversation_title|default:''|escape:'html'}" data-chat-active-conversation-subtitle="{$chat_active_conversation_subtitle|default:''|escape:'html'}" data-chat-active-conversation-is-direct="{if $chat_active_conversation_is_direct|default:false}1{else}0{/if}" data-chat-active-conversation-direct-status="{$chat_active_conversation_direct_status|default:'none'|escape:'html'}" data-chat-active-conversation-direct-target-customer-id="{$chat_active_conversation_direct_target_customer_id|default:0}" data-chat-active-conversation-pending-member-count="{$chat_active_conversation_pending_member_count|default:0}" data-chat-can-send="{if $chat_active_conversation_can_send|default:true}1{else}0{/if}" data-chat-can-manage-group="{if $chat_active_conversation_can_manage|default:false}1{else}0{/if}" data-chat-is-global-group="{if $chat_active_conversation_is_global_group|default:false}1{else}0{/if}" data-chat-customer-is-blocked="{if $chat_customer_is_blocked|default:false}1{else}0{/if}">
         <div class="messenger-group-invites-slot" data-group-chat-invites-slot>
             {include file='profil/group_chat_invites.tpl'}
         </div>
@@ -75,7 +75,7 @@
                         <span class="{$chat_active_conversation_presence_class_name|default:'admin-chat-presence admin-chat-presence--offline'} messenger-avatar-stack__presence" title="{$chat_active_conversation_presence_label|default:'Offline'|escape:'html'}" aria-label="{$chat_active_conversation_presence_label|default:'Offline'|escape:'html'}"></span>
                     </span>
                     <div class="messenger-conversation-header__copy">
-                        {if $chat_active_conversation_is_group|default:false && $chat_active_conversation_members|@count gt 0 && !$chat_active_conversation_is_global_group|default:false}
+                        {if ($chat_active_conversation_is_group|default:false) && ($chat_active_conversation_is_direct|default:false) && $chat_active_conversation_members|@count gt 0 && !$chat_active_conversation_is_global_group|default:false}
                         {assign var="chatProfileTitleRendered" value=false}
                         {foreach from=$chat_active_conversation_members item=chatProfileMember}
                             {if $chatProfileMember.participant_type|default:'' eq 'customer' && $chatProfileMember.customer_id|default:0 ne $user.id}
@@ -84,6 +84,7 @@
                                 type="button"
                                 class="messenger-conversation-title-button messenger-conversation-title-button--handle"
                                 data-chat-profile-open
+                                data-chat-profile-context="direct-title"
                                 data-participant-type="customer"
                                 data-target-customer-id="{$chatProfileMember.customer_id|default:0}"
                                 title="{$chat_active_conversation_title|default:$t.support|default:'Support'|escape:'html'}"
@@ -124,6 +125,7 @@
                                             class="messenger-conversation-members__badge{if $chatGroupMember.participant_type|default:'' eq 'customer'} is-customer{/if}"
                                             {if $chatGroupMember.participant_type|default:'' eq 'customer' && $chatGroupMember.customer_id|default:0 ne $user.id}
                                             data-chat-profile-open
+                                            data-chat-profile-context="group-member"
                                             data-participant-type="customer"
                                             data-target-customer-id="{$chatGroupMember.customer_id|default:0}"
                                             {/if}
@@ -147,19 +149,30 @@
                     </button>
                     <div class="messenger-conversation-meta__menu messenger-conversation-meta__menu--settings" data-chat-group-settings-menu>
                         {if !$chat_active_conversation_is_global_group|default:false}
-                        <label class="messenger-conversation-meta__setting-toggle">
-                            <input type="checkbox" data-chat-email-notifications-toggle {if $chat_active_member_email_notifications_enabled|default:true}checked{/if}>
-                            <span>{$t.group_chat_email_notifications|default:'Powiadomienia email dla tej rozmowy'}</span>
+                        <label class="messenger-conversation-meta__setting-row messenger-conversation-meta__setting-row--toggle">
+                            <span class="messenger-conversation-meta__setting-copy">
+                                <strong>{$t.group_chat_email_notifications|default:'Powiadomienia email dla tej rozmowy'}</strong>
+                                <small>{$t.group_chat_email_notifications_hint|default:'Tylko nowe wiadomości w tej rozmowie.'}</small>
+                            </span>
+                            <span class="messenger-conversation-meta__switch">
+                                <input class="settings-toggle__input" type="checkbox" data-chat-email-notifications-toggle {if $chat_active_member_email_notifications_enabled|default:true}checked{/if}>
+                                <span class="settings-toggle__slider" aria-hidden="true"></span>
+                            </span>
                         </label>
                         {/if}
                         {if ($chat_active_conversation_can_manage|default:false) || ($chat_active_conversation_type|default:'' eq 'group_chat')}
-                        <label class="messenger-conversation-meta__setting-field">
-                            <span>{$t.group_chat_retention_label|default:'Auto-usuwanie wiadomości'}</span>
+                        <label class="messenger-conversation-meta__setting-row messenger-conversation-meta__setting-row--select">
+                            <span class="messenger-conversation-meta__setting-copy">
+                                <strong>{$t.group_chat_retention_label|default:'Auto-usuwanie wiadomości'}</strong>
+                                <small>{$t.group_chat_retention_hint|default:'Nowe wiadomości znikną po wybranym czasie.'}</small>
+                            </span>
                             <select class="form-control input-sm" data-chat-retention-select>
-                                <option value="1"{if $chat_active_conversation_retention_hours|default:1 eq 1 || $chat_active_conversation_retention_hours|default:'' eq ''} selected{/if}>1h</option>
-                                <option value="6"{if $chat_active_conversation_retention_hours|default:'' eq 6} selected{/if}>6h</option>
-                                <option value="12"{if $chat_active_conversation_retention_hours|default:'' eq 12} selected{/if}>12h</option>
-                                <option value="24"{if $chat_active_conversation_retention_hours|default:'' eq 24} selected{/if}>24h</option>
+                                <option value="5m"{if $chat_active_conversation_retention_input_value|default:'' eq '5m'} selected{/if}>5 min</option>
+                                <option value="15m"{if $chat_active_conversation_retention_input_value|default:'' eq '15m'} selected{/if}>15 min</option>
+                                <option value="30m"{if $chat_active_conversation_retention_input_value|default:'' eq '30m'} selected{/if}>30 min</option>
+                                <option value="1h"{if $chat_active_conversation_retention_input_value|default:'1h' eq '1h'} selected{/if}>1h</option>
+                                <option value="12h"{if $chat_active_conversation_retention_input_value|default:'' eq '12h'} selected{/if}>12h</option>
+                                <option value="24h"{if $chat_active_conversation_retention_input_value|default:'' eq '24h'} selected{/if}>24h</option>
                             </select>
                         </label>
                         {/if}
@@ -185,7 +198,7 @@
                             {if $chat_active_conversation_is_direct|default:false}{$t.group_chat_leave_direct|default:'Opuść rozmowę'}{else}{$t.group_chat_leave|default:'Opuść grupę'}{/if}
                         </button>
                         {/if}
-                        {if !$chat_active_conversation_is_global_group|default:false}
+                        {if !$chat_active_conversation_is_global_group|default:false && (!($chat_active_conversation_is_owned|default:false) || ($chat_active_conversation_is_direct|default:false))}
                         <button
                             type="button"
                             class="messenger-conversation-meta__menu-item"
@@ -249,13 +262,41 @@
                 {if $chat_active_conversation_type|default:'live_chat' ne 'live_chat'}
                 <li class="messenger-retention-hint">
                     <span>
-                        Auto-usuwanie po {$chat_active_conversation_retention_hours|default:1}h
+                        Auto-usuwanie po {$chat_active_conversation_retention_label|default:'1h'}
                     </span>
                 </li>
                 {/if}
-                {if ($chat_active_conversation_is_direct|default:false) && ($chat_active_conversation_has_pending_invite|default:false)}
+                {if ($chat_active_conversation_is_direct|default:false) && (($chat_active_conversation_has_pending_invite|default:false) || ($chat_active_conversation_direct_status|default:'' eq 'pending'))}
+                <li class="messenger-retention-hint messenger-retention-hint--pending">
+                    <span>{$t.group_chat_direct_pending_hint|default:'Zaproszenie oczekuje na potwierdzenie. Auto-usuwanie po 24h.'}</span>
+                </li>
+                {elseif ($chat_active_conversation_is_direct|default:false) && ($chat_active_conversation_direct_status|default:'' eq 'rejected')}
+                <li class="messenger-retention-hint messenger-retention-hint--pending messenger-retention-hint--action">
+                    <span>{$t.group_chat_direct_rejected_hint|default:'Zaproszenie zostało odrzucone. Możesz wysłać je ponownie.'}</span>
+                    {if $chat_active_conversation_direct_target_customer_id|default:0 gt 0}
+                    <button type="button" class="messenger-retention-hint__action" data-chat-direct-reinvite data-target-customer-id="{$chat_active_conversation_direct_target_customer_id|default:0}">
+                        {$t.group_chat_reinvite_action|default:'Wyślij zaproszenie ponownie'}
+                    </button>
+                    {/if}
+                </li>
+                {/if}
+                {if ($chat_active_conversation_is_direct|default:false) && (($chat_active_conversation_has_pending_invite|default:false) || ($chat_active_conversation_direct_status|default:'' eq 'pending'))}
                 <li class="messenger-item messenger-item--system">
                     <div class="messenger-system-note__text">{$t.group_chat_direct_pending_notice|default:'Oczekiwanie na zatwierdzenie zaproszenia do rozmowy.'}</div>
+                </li>
+                {elseif ($chat_active_conversation_is_direct|default:false) && ($chat_active_conversation_direct_status|default:'' eq 'rejected')}
+                <li class="messenger-item messenger-item--system">
+                    <div class="messenger-system-note__text">{$t.group_chat_direct_rejected_notice|default:'Zaproszenie do rozmowy zostało odrzucone.'}</div>
+                </li>
+                {elseif ($chat_active_conversation_is_group|default:false) && !($chat_active_conversation_is_direct|default:false) && ($chat_active_conversation_pending_member_count|default:0 gt 0) && !($chat_active_conversation_is_global_group|default:false)}
+                <li class="messenger-item messenger-item--system">
+                    <div class="messenger-system-note__text">
+                        {if $chat_active_conversation_pending_member_count|default:0 eq 1}
+                            {$t.group_chat_group_pending_notice_single|default:'Zaproszenie zostało wysłane i czeka na potwierdzenie.'}
+                        {else}
+                            {$t.group_chat_group_pending_notice_many|default:'Zaproszenia zostały wysłane i czekają na potwierdzenie.'}
+                        {/if}
+                    </div>
                 </li>
                 {/if}
                 {section name=i loop=$chat}

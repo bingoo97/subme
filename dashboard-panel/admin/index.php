@@ -2565,9 +2565,11 @@ if ($route === 'crypto-wallets') {
 
 if ($route === 'bank-accounts') {
     $bankAccountEditorId = isset($_GET['edit_account']) ? (int)$_GET['edit_account'] : 0;
+    $bankAccountCreateMode = isset($_GET['create_account']) && (int)$_GET['create_account'] === 1;
     $bankAccountListPage = max(1, (int)($_GET['account_list_page'] ?? 1));
     $bankAccountListTotal = admin_bank_account_count($db);
     $bankAccountListTotalPages = max(1, (int)ceil($bankAccountListTotal / $bankAccountListPerPage));
+    $bankAccountCurrencyOptions = admin_bank_account_currency_rows($db);
     if ($bankAccountListPage > $bankAccountListTotalPages) {
         $bankAccountListPage = $bankAccountListTotalPages;
     }
@@ -2582,6 +2584,10 @@ if ($route === 'bank-accounts') {
             $saveResult = admin_save_bank_account($db, $bankAccountEditorId, $_POST, (int)$adminUser['id'], $requestIp);
             $pageAlert = (string)($saveResult['message'] ?? '');
             $pageAlertType = !empty($saveResult['ok']) ? 'success' : 'danger';
+            if (!empty($saveResult['ok']) && !empty($saveResult['bank_account_id'])) {
+                $bankAccountEditorId = (int)$saveResult['bank_account_id'];
+                $bankAccountCreateMode = false;
+            }
         }
     }
 
@@ -2633,6 +2639,27 @@ if ($route === 'bank-accounts') {
         $bankAccountEditor = admin_bank_account_find($db, $bankAccountEditorId);
         $bankAccountAssignments = admin_bank_account_active_assignments($db, $bankAccountEditorId);
         $bankAccountDeleteSummary = admin_bank_account_delete_summary($db, $bankAccountEditorId);
+    } elseif ($bankAccountCreateMode) {
+        $bankAccountEditor = [
+            'id' => 0,
+            'currency_id' => (int)($bankAccountCurrencyOptions[0]['id'] ?? 0),
+            'currency_code' => (string)($bankAccountCurrencyOptions[0]['code'] ?? ''),
+            'label' => '',
+            'account_holder_name' => '',
+            'bank_name' => '',
+            'bank_address' => '',
+            'country_code' => '',
+            'iban' => '',
+            'account_number' => '',
+            'routing_number' => '',
+            'swift_bic' => '',
+            'payment_reference_template' => '',
+            'transfer_instructions' => '',
+            'status' => 'available',
+            'notes' => '',
+        ];
+        $bankAccountAssignments = [];
+        $bankAccountDeleteSummary = ['active_assignments_total' => 0, 'assignments_total' => 0, 'payments_total' => 0, 'can_delete' => false];
     }
 }
 
@@ -4319,7 +4346,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-group-retention-title="<?php echo admin_e(admin_t($messages, 'group_chat_retention_modal_title', 'Auto-delete settings')); ?>"
                         data-chat-group-retention-intro="<?php echo admin_e(admin_t($messages, 'group_chat_retention_modal_intro', 'Choose how long messages in this group should stay visible before they are removed automatically.')); ?>"
                         data-chat-group-retention-save-error="<?php echo admin_e(admin_t($messages, 'group_chat_retention_save_error', 'Unable to update auto-delete settings.')); ?>"
-                        data-chat-group-retention-hint-template="<?php echo admin_e(admin_t($messages, 'group_chat_retention_hint_after', 'Auto-delete after {hours}h')); ?>"
+                        data-chat-group-retention-hint-template="<?php echo admin_e(admin_t($messages, 'group_chat_retention_hint_after', 'Auto-delete after {label}')); ?>"
                         data-chat-create-user-success="<?php echo admin_e(admin_t($messages, 'chat_create_user_success', 'User created successfully.')); ?>"
                         data-chat-create-user-error="<?php echo admin_e(admin_t($messages, 'chat_create_user_error', 'Unable to create the user.')); ?>"
                         data-chat-create-user-email-queued="<?php echo admin_e(admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')); ?>"
@@ -4480,7 +4507,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <i class="bi bi-person-plus" aria-hidden="true"></i>
                                     </button>
                                     <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
-                                        <button type="button" class="admin-chat-inbox__header-action" data-admin-converter-open title="<?php echo admin_e(admin_t($messages, 'topbar_converter_title', 'Quick crypto converter')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_converter_title', 'Quick crypto converter')); ?>">
+                                        <button type="button" class="admin-chat-inbox__header-action" data-admin-converter-open title="<?php echo admin_e(admin_t($messages, 'topbar_converter_title', 'Quick crypto converter')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_converter_title', 'Quick crypto converter')); ?>" hidden>
                                             <i class="bi bi-calculator" aria-hidden="true"></i>
                                         </button>
                                     <?php endif; ?>
@@ -4512,7 +4539,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-readonly-toggle hidden>
                                         <i class="bi bi-lock" aria-hidden="true"></i>
                                     </button>
-                                    <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-quick-open title="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>">
+                                    <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-quick-open title="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>" hidden>
                                         <i class="bi bi-lightning-charge" aria-hidden="true"></i>
                                     </button>
                                 </div>
@@ -4661,43 +4688,78 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <div class="admin-chat-inbox__quick-header">
                                         <div>
                                             <strong><?php echo admin_e(admin_t($messages, 'group_chat_create', 'Create group')); ?></strong>
-                                            <p><?php echo admin_e(admin_t($messages, 'group_chat_create_intro', 'Add reseller or admin email, or start typing a handle with @, to create a compact group chat. Invitations expire automatically after 24 hours if they are not accepted.')); ?></p>
+                                            <p><?php echo admin_e(admin_t($messages, 'group_chat_create_intro', 'Set the group name, logo and auto-delete first. Then add members and send invitations that expire automatically after 24 hours if they are not accepted.')); ?></p>
                                         </div>
                                         <button type="button" class="admin-chat-inbox__quick-close" data-admin-chat-group-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
                                             <i class="bi bi-x-lg" aria-hidden="true"></i>
                                         </button>
                                     </div>
-                                        <div class="admin-chat-group-modal">
+                                        <div class="admin-chat-group-modal admin-chat-group-wizard">
                                             <div class="admin-chat-inbox__composer-alert" data-admin-chat-group-alert hidden></div>
-                                            <label class="form-label">
-                                                <span><?php echo admin_e(admin_t($messages, 'group_chat_name', 'Group name')); ?></span>
-                                            <input type="text" class="form-control" data-admin-chat-group-name maxlength="20" placeholder="<?php echo admin_e(admin_t($messages, 'group_chat_name_placeholder', 'Example: Reseller briefing')); ?>">
-                                            </label>
-                                        <label class="form-label">
-                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_add_by_email', 'Add participant by email or @handle')); ?></span>
-                                            <div class="admin-chat-group-modal__add-row">
-                                                <input type="text" class="form-control" data-admin-chat-group-email placeholder="name@example.com lub @nick">
-                                                <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-group-add><?php echo admin_e(admin_t($messages, 'add', 'Add')); ?></button>
+                                            <div class="admin-chat-group-step admin-chat-group-step--setup" data-admin-chat-group-setup-step>
+                                                <p class="admin-chat-group-step__lead" data-admin-chat-group-create-lead><?php echo admin_e(admin_t($messages, 'group_chat_create_lead', 'Set the group name, logo and auto-delete time first.')); ?></p>
+                                                <div class="admin-chat-group-field admin-chat-group-field--avatar">
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_logo_label', 'Group logo')); ?></span>
+                                                    <div class="admin-chat-group-avatar-picker">
+                                                        <div class="admin-chat-group-avatar-preview" data-admin-chat-group-avatar-preview aria-hidden="true">
+                                                            <span><i class="bi bi-camera" aria-hidden="true"></i></span>
+                                                        </div>
+                                                        <div class="admin-chat-group-avatar-actions">
+                                                            <input type="file" data-admin-chat-group-avatar-file accept="image/png,image/jpeg,image/webp" hidden>
+                                                            <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-group-avatar-open><?php echo admin_e(admin_t($messages, 'group_chat_logo_add', 'Add logo')); ?></button>
+                                                            <button type="button" class="btn btn-link btn-sm" data-admin-chat-group-avatar-clear style="display:none;"><?php echo admin_e(admin_t($messages, 'group_chat_logo_remove', 'Remove logo')); ?></button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <label class="form-label admin-chat-group-field">
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_name', 'Group name')); ?></span>
+                                                    <input type="text" class="form-control" data-admin-chat-group-name maxlength="20" placeholder="<?php echo admin_e(admin_t($messages, 'group_chat_name_placeholder', 'Example: Reseller briefing')); ?>">
+                                                </label>
+                                                <label class="form-label admin-chat-group-field" data-admin-chat-group-retention-field>
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_retention_label', 'Auto-delete')); ?></span>
+                                                    <select class="form-select" data-admin-chat-group-retention-create>
+                                                        <option value="5m">5 min</option>
+                                                        <option value="15m">15 min</option>
+                                                        <option value="30m">30 min</option>
+                                                        <option value="1h">1h</option>
+                                                        <option value="12h">12h</option>
+                                                        <option value="24h" selected>24h</option>
+                                                    </select>
+                                                </label>
+                                                <label class="admin-chat-group-modal__checkbox">
+                                                    <input type="checkbox" data-admin-chat-group-readonly>
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_read_only_toggle', 'Resellers can only read after creation')); ?></span>
+                                                </label>
                                             </div>
-                                            <div class="admin-chat-group-modal__search-results" data-admin-chat-group-search-results hidden></div>
-                                            <small class="admin-chat-group-modal__hint"><?php echo admin_e(admin_t($messages, 'group_chat_invite_expiry_note', 'Each invitation is valid for 24 hours. If it is not accepted in time, it is removed automatically.')); ?></small>
-                                        </label>
-                                        <div class="admin-chat-group-modal__members" data-admin-chat-group-members></div>
-                                        <label class="form-label admin-chat-group-modal__retention-field" data-admin-chat-group-retention-field>
-                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_retention_label', 'Auto-delete')); ?></span>
-                                            <select class="form-select" data-admin-chat-group-retention-create>
-                                                <option value="0"><?php echo admin_e(admin_t($messages, 'group_chat_retention_off', 'Disabled')); ?></option>
-                                                <option value="1">1h</option>
-                                                <option value="6">6h</option>
-                                                <option value="12">12h</option>
-                                                <option value="24">24h</option>
-                                            </select>
-                                        </label>
-                                        <label class="admin-chat-group-modal__checkbox">
-                                            <input type="checkbox" data-admin-chat-group-readonly>
-                                            <span><?php echo admin_e(admin_t($messages, 'group_chat_read_only_toggle', 'Resellers can only read after creation')); ?></span>
-                                        </label>
-                                        <button type="button" class="btn btn-dark btn-lg w-100" data-admin-chat-group-submit><?php echo admin_e(admin_t($messages, 'group_chat_create_submit', 'Create group')); ?></button>
+                                            <div class="admin-chat-group-step admin-chat-group-step--invite" data-admin-chat-group-invite-step hidden>
+                                                <p class="admin-chat-group-step__lead" data-admin-chat-group-invite-lead><?php echo admin_e(admin_t($messages, 'group_chat_invite_members_intro', 'Add a reseller or admin email, or start typing a handle with @, to invite more people to this group.')); ?></p>
+                                                <div class="admin-chat-group-field admin-chat-group-field--context" data-admin-chat-group-context hidden>
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_invite_name_label', 'Group')); ?></span>
+                                                    <div class="admin-chat-group-context">
+                                                        <div class="admin-chat-group-context__avatar" data-admin-chat-group-context-avatar aria-hidden="true">
+                                                            <span>G</span>
+                                                        </div>
+                                                        <div class="admin-chat-group-context__copy">
+                                                            <div class="admin-chat-group-context__title" data-admin-chat-group-context-title></div>
+                                                            <div class="admin-chat-group-context__meta"><?php echo admin_e(admin_t($messages, 'group_chat_invite_context_hint', 'Now add members. Invitations work just like in 1:1 conversations and require acceptance.')); ?></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <label class="form-label admin-chat-group-field">
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_add_by_email', 'Add participant by email or @handle')); ?></span>
+                                                    <div class="admin-chat-group-modal__add-row">
+                                                        <input type="text" class="form-control" data-admin-chat-group-email placeholder="@username">
+                                                        <button type="button" class="btn btn-outline-dark btn-sm" data-admin-chat-group-add><?php echo admin_e(admin_t($messages, 'add', 'Add')); ?></button>
+                                                    </div>
+                                                    <div class="admin-chat-group-modal__search-results" data-admin-chat-group-search-results hidden></div>
+                                                    <small class="admin-chat-group-modal__hint"><?php echo admin_e(admin_t($messages, 'group_chat_invite_expiry_note', 'Each invitation is valid for 24 hours. If it is not accepted in time, it is removed automatically.')); ?></small>
+                                                </label>
+                                                <div class="admin-chat-group-modal__members" data-admin-chat-group-members></div>
+                                            </div>
+                                            <div class="admin-chat-group-wizard__actions">
+                                                <button type="button" class="btn btn-dark btn-lg w-100" data-admin-chat-group-submit><?php echo admin_e(admin_t($messages, 'group_chat_create_submit', 'Create group')); ?></button>
+                                                <button type="button" class="btn btn-outline-dark btn-lg w-100" data-admin-chat-group-open-created hidden><?php echo admin_e(admin_t($messages, 'group_chat_open_group', 'Go to group')); ?></button>
+                                            </div>
                                     </div>
                                 </div>
                             </div>
@@ -4712,22 +4774,34 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <i class="bi bi-x-lg" aria-hidden="true"></i>
                                             </button>
                                         </div>
-                                        <div class="admin-chat-group-modal">
+                                        <div class="admin-chat-group-modal admin-chat-group-settings">
                                             <div class="admin-chat-inbox__composer-alert" data-admin-chat-group-settings-alert hidden></div>
-                                            <label class="admin-chat-group-modal__checkbox">
-                                                <input type="checkbox" data-admin-chat-email-notifications-toggle>
-                                                <span><?php echo admin_e(admin_t($messages, 'group_chat_email_notifications', 'Email notifications')); ?></span>
-                                            </label>
-                                            <label class="form-label">
-                                                <span><?php echo admin_e(admin_t($messages, 'group_chat_retention_label', 'Auto-delete')); ?></span>
-                                                <select class="form-select" data-admin-chat-retention-select-inline>
-                                                    <option value="0"><?php echo admin_e(admin_t($messages, 'group_chat_retention_off', 'Disabled')); ?></option>
-                                                    <option value="1">1h</option>
-                                                    <option value="6">6h</option>
-                                                    <option value="12">12h</option>
-                                                    <option value="24">24h</option>
-                                                </select>
-                                            </label>
+                                            <div class="admin-chat-group-settings__row">
+                                                <div class="admin-chat-group-settings__copy">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'group_chat_email_notifications', 'Email notifications')); ?></strong>
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_email_notifications_help', 'Emails are sent only for 1:1 conversations and private groups when this switch is enabled.')); ?></span>
+                                                </div>
+                                                <label class="admin-chat-group-settings__switch" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_email_notifications', 'Email notifications')); ?>">
+                                                    <input type="checkbox" data-admin-chat-email-notifications-toggle>
+                                                    <span></span>
+                                                </label>
+                                            </div>
+                                            <div class="admin-chat-group-settings__row">
+                                                <div class="admin-chat-group-settings__copy">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'group_chat_retention_label', 'Auto-delete')); ?></strong>
+                                                    <span><?php echo admin_e(admin_t($messages, 'group_chat_retention_modal_intro', 'Choose how long messages in this group should stay visible before they are removed automatically.')); ?></span>
+                                                </div>
+                                                <div class="admin-chat-group-settings__control">
+                                                    <select class="form-select" data-admin-chat-retention-select-inline>
+                                                        <option value="5m">5 min</option>
+                                                        <option value="15m">15 min</option>
+                                                        <option value="30m">30 min</option>
+                                                        <option value="1h">1h</option>
+                                                        <option value="12h">12h</option>
+                                                        <option value="24h">24h</option>
+                                                    </select>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -7743,7 +7817,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                                 <section class="admin-user-detail__section">
                                                     <div class="admin-section-title">
-                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_group_chats_title', 'Messenger groups')); ?></h4>
+                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_group_chats_title', 'Messenger conversations and invites')); ?></h4>
                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerGroupChats ?? [])); ?></span>
                                                     </div>
                                                     <?php if (!empty($selectedCustomerGroupChats)): ?>
@@ -7765,8 +7839,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         if ($groupTitle === '') {
                                                                             $groupTitle = trim((string)($row['subject'] ?? ''));
                                                                         }
+                                                                        $groupIsDirectConversation = !empty($row['is_direct_conversation']);
                                                                         if ($groupTitle === '') {
-                                                                            $groupTitle = admin_t($messages, 'group_chat_badge', 'Group chat');
+                                                                            $groupTitle = $groupIsDirectConversation
+                                                                                ? admin_t($messages, 'customer_group_chat_direct_title', 'Direct conversation')
+                                                                                : admin_t($messages, 'group_chat_badge', 'Group chat');
                                                                         }
                                                                         $groupInviteStatus = strtolower(trim((string)($row['invite_status'] ?? 'pending')));
                                                                         $groupStatusLabel = $groupInviteStatus === 'accepted'
@@ -7783,7 +7860,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         if ($groupInvitedBy === '') {
                                                                             $groupInvitedBy = $groupCreatedBy;
                                                                         }
-                                                                        $groupDateLabel = admin_compact_datetime_label((string)($row['responded_at'] ?? $row['joined_at'] ?? $row['updated_at'] ?? $row['created_at'] ?? ''));
+                                                                        $groupDateLabel = admin_compact_datetime_label((string)($row['responded_at'] ?? $row['joined_at'] ?? $row['invited_at'] ?? $row['updated_at'] ?? $row['created_at'] ?? ''));
                                                                         $groupReadOnly = !empty($row['is_group_read_only']);
                                                                         $groupIsOwner = (int)($row['group_created_by_customer_id'] ?? 0) === (int)$selectedCustomer['id'];
                                                                         $groupConversationId = (int)($row['conversation_id'] ?? 0);
@@ -7793,7 +7870,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-user-detail-table__cell">
                                                                                     <strong><?php echo admin_e($groupTitle); ?></strong>
                                                                                     <span class="admin-user-detail-table__muted">
-                                                                                        <?php echo admin_e($groupReadOnly ? admin_t($messages, 'customer_group_chat_read_only', 'Read only for reseller') : admin_t($messages, 'group_chat_badge', 'Group chat')); ?>
+                                                                                        <?php
+                                                                                        if ($groupIsDirectConversation) {
+                                                                                            echo admin_e(admin_t($messages, 'customer_group_chat_type_direct', '1:1 conversation'));
+                                                                                        } else {
+                                                                                            echo admin_e($groupReadOnly ? admin_t($messages, 'customer_group_chat_read_only', 'Read only for reseller') : admin_t($messages, 'customer_group_chat_type_group', 'Group'));
+                                                                                        }
+                                                                                        ?>
                                                                                         <?php if ($groupIsOwner): ?>
                                                                                             · <?php echo admin_e(admin_t($messages, 'customer_group_chat_role_owner', 'Owner')); ?>
                                                                                         <?php endif; ?>
@@ -7860,7 +7943,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </table>
                                                         </div>
                                                     <?php else: ?>
-                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'customer_group_chat_empty_state', 'This customer is not in any messenger groups right now.')); ?></div>
+                                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'customer_group_chat_empty_state', 'This customer has no active messenger conversations or pending invites right now.')); ?></div>
                                                     <?php endif; ?>
                                                 </section>
 
@@ -9351,7 +9434,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     break;
 
                                 case 'bank-accounts':
-                                    if ($bankAccountEditorId > 0 && is_array($bankAccountEditor) && !empty($bankAccountEditor['id'])):
+                                    if (($bankAccountCreateMode || $bankAccountEditorId > 0) && is_array($bankAccountEditor) && (!empty($bankAccountEditor['id']) || $bankAccountCreateMode)):
                                         $bankEditorStatus = strtolower(trim((string)($bankAccountEditor['status'] ?? '')));
                                         if ($bankEditorStatus !== 'disabled') {
                                             $bankEditorStatus = 'available';
@@ -9366,19 +9449,21 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <aside class="admin-wallet-editor">
                                                 <div class="admin-wallet-editor__header">
                                                     <div>
-                                                        <h3><?php echo admin_e(admin_t($messages, 'bank_editor_title', 'Edit bank account')); ?></h3>
+                                                        <h3><?php echo admin_e(admin_t($messages, $bankAccountCreateMode ? 'bank_create_title' : 'bank_editor_title', $bankAccountCreateMode ? 'Add bank account' : 'Edit bank account')); ?></h3>
                                                         <p><?php echo admin_e($bankEditorIdentity !== '' ? $bankEditorIdentity : admin_t($messages, 'nav_bank_accounts', 'Bank accounts')); ?></p>
                                                     </div>
                                                     <div class="admin-wallet-editor__header-actions">
-                                                        <form method="post" class="d-inline">
-                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                            <input type="hidden" name="bank_account_id" value="<?php echo admin_e((string)$bankAccountEditor['id']); ?>">
-                                                            <input type="hidden" name="account_list_page" value="<?php echo admin_e((string)$bankAccountListPage); ?>">
-                                                            <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_bank_account" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'bank_delete_confirm', 'Delete this bank account completely? This cannot be undone.')); ?>');"<?php echo !empty($bankEditorDeleteSummary['can_delete']) ? '' : ' disabled'; ?>>
-                                                                <i class="bi bi-trash" aria-hidden="true"></i>
-                                                                <span><?php echo admin_e(admin_t($messages, 'bank_delete_button', 'Delete bank account')); ?></span>
-                                                            </button>
-                                                        </form>
+                                                        <?php if (!$bankAccountCreateMode && !empty($bankAccountEditor['id'])): ?>
+                                                            <form method="post" class="d-inline">
+                                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                <input type="hidden" name="bank_account_id" value="<?php echo admin_e((string)$bankAccountEditor['id']); ?>">
+                                                                <input type="hidden" name="account_list_page" value="<?php echo admin_e((string)$bankAccountListPage); ?>">
+                                                                <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_bank_account" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'bank_delete_confirm', 'Delete this bank account completely? This cannot be undone.')); ?>');"<?php echo !empty($bankEditorDeleteSummary['can_delete']) ? '' : ' disabled'; ?>>
+                                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'bank_delete_button', 'Delete bank account')); ?></span>
+                                                                </button>
+                                                            </form>
+                                                        <?php endif; ?>
                                                         <a href="/admin/?page=bank-accounts&amp;account_list_page=<?php echo admin_e((string)$bankAccountListPage); ?>" class="btn btn-outline-dark btn-sm">
                                                             <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'back_to_bank_accounts', 'Back to bank accounts')); ?></span>
@@ -9432,7 +9517,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-md-4">
                                                             <label class="form-label" for="bank_currency_code"><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></label>
-                                                            <input type="text" class="form-control" id="bank_currency_code" value="<?php echo admin_e((string)($bankAccountEditor['currency_code'] ?? '')); ?>" readonly>
+                                                            <?php if ($bankAccountCreateMode): ?>
+                                                                <select class="form-select" id="bank_currency_code" name="currency_id" required>
+                                                                    <?php foreach ($bankAccountCurrencyOptions as $currencyOption): ?>
+                                                                        <option value="<?php echo admin_e((string)($currencyOption['id'] ?? 0)); ?>"<?php echo (int)($currencyOption['id'] ?? 0) === (int)($bankAccountEditor['currency_id'] ?? 0) ? ' selected' : ''; ?>>
+                                                                            <?php echo admin_e((string)($currencyOption['code'] ?? '')); ?>
+                                                                        </option>
+                                                                    <?php endforeach; ?>
+                                                                </select>
+                                                            <?php else: ?>
+                                                                <input type="text" class="form-control" id="bank_currency_code" value="<?php echo admin_e((string)($bankAccountEditor['currency_code'] ?? '')); ?>" readonly>
+                                                            <?php endif; ?>
                                                         </div>
                                                         <div class="col-md-4">
                                                             <label class="form-label" for="bank_country_code"><?php echo admin_e(admin_t($messages, 'bank_country_code', 'Country code')); ?></label>
@@ -9472,6 +9567,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                     </div>
 
+                                                    <?php if (!$bankAccountCreateMode && !empty($bankAccountEditor['id'])): ?>
                                                     <div class="admin-wallet-customer-picker"
                                                          data-admin-wallet-customer-picker
                                                          data-submit-name="admin_assign_bank_account_customer"
@@ -9518,6 +9614,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <span class="admin-wallet-editor__hint"><?php echo admin_e(admin_t($messages, 'wallet_click_result_hint', 'Click a search result to assign the user immediately.')); ?></span>
                                                         </div>
                                                     </div>
+                                                    <?php endif; ?>
 
                                                     <div class="admin-wallet-editor__actions">
                                                         <button type="submit" class="btn btn-dark btn-lg" name="admin_save_bank_account">
@@ -9545,13 +9642,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     endif;
 
                                     $accountRows = admin_bank_account_rows($db, $bankAccountListPerPage, ($bankAccountListPage - 1) * $bankAccountListPerPage);
-                                    if (!$accountRows) {
-                                        echo '<div class="admin-empty-state">' . admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')) . '</div>';
-                                        break;
-                                    }
                                     ?>
                                     <div class="admin-wallet-workspace">
                                         <div class="admin-wallet-workspace__list">
+                                            <div class="admin-wallet-workspace__list-actions mb-3 text-end">
+                                                <a href="/admin/?page=bank-accounts&amp;account_list_page=<?php echo admin_e((string)$bankAccountListPage); ?>&amp;create_account=1" class="btn btn-primary btn-sm">
+                                                    <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'bank_add_button', 'Add bank account')); ?></span>
+                                                </a>
+                                            </div>
+                                            <?php if (!$accountRows): ?>
+                                                <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                            <?php else: ?>
                                             <div class="table-responsive">
                                                 <table class="table admin-table admin-wallet-table align-middle">
                                                     <thead>
@@ -9612,6 +9714,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </tbody>
                                                 </table>
                                             </div>
+                                            <?php endif; ?>
                                             <?php if ($bankAccountListTotalPages > 1): ?>
                                                 <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'bank_pagination', 'Bank account pages')); ?>">
                                                     <ul class="pagination admin-pagination">

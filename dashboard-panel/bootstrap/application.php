@@ -7377,6 +7377,10 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
 
 function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
 {
+    if (!function_exists('chat_expire_stale_group_invites') && is_file(__DIR__ . '/chat_groups.php')) {
+        require_once __DIR__ . '/chat_groups.php';
+    }
+
     $safeNow = trim((string)($options['now'] ?? ''));
     if ($safeNow === '') {
         $safeNow = date('Y-m-d H:i:s');
@@ -7395,6 +7399,9 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $staleOrders = app_delete_stale_unpaid_orders($db, $safeNow);
     $expire = app_expire_overdue_orders($db, $safeNow);
     $chat = app_prune_support_chat_messages($db, $safeNow);
+    $expiredInvites = function_exists('chat_expire_stale_group_invites')
+        ? chat_expire_stale_group_invites($db, 24)
+        : ['ok' => true, 'deleted_invites' => 0, 'deleted_direct_conversations' => 0, 'message' => 'Group invite cleanup skipped.'];
     $messenger = function_exists('chat_prune_group_chat_messages')
         ? chat_prune_group_chat_messages($db, $safeNow)
         : ['ok' => true, 'deleted_messages' => 0, 'deleted_files' => 0, 'message' => 'Group messenger cleanup skipped.'];
@@ -7409,6 +7416,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         'stale_unpaid_orders' => $staleOrders,
         'expire_orders' => $expire,
         'live_chat_cleanup' => $chat,
+        'group_chat_invites_cleanup' => $expiredInvites,
         'group_chat_cleanup' => $messenger,
         'retention_cleanup' => $prune,
     ];
@@ -7443,6 +7451,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'deleted_chat_messages' => (int)($chat['deleted_messages'] ?? 0),
             'deleted_chat_conversations' => (int)($chat['deleted_empty_conversations'] ?? 0),
             'deleted_chat_files' => (int)($chat['deleted_files'] ?? 0),
+            'deleted_group_chat_invites' => (int)($expiredInvites['deleted_invites'] ?? 0),
+            'deleted_group_direct_conversations' => (int)($expiredInvites['deleted_direct_conversations'] ?? 0),
             'deleted_group_chat_messages' => (int)($messenger['deleted_messages'] ?? 0),
             'deleted_group_chat_files' => (int)($messenger['deleted_files'] ?? 0),
             'deleted_history_logs' => (int)($prune['deleted_history_logs'] ?? 0),

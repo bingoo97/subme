@@ -74,17 +74,32 @@ if ($action === 'validate_group_email') {
 if ($action === 'create_group') {
     $emails = json_decode((string)($_POST['participant_emails_json'] ?? '[]'), true);
     $emails = is_array($emails) ? $emails : [];
-    $requestedRetention = trim((string)($_POST['retention_hours'] ?? ''));
-    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : (int)$requestedRetention;
+    $requestedRetention = trim((string)($_POST['retention_value'] ?? $_POST['retention_hours'] ?? ''));
+    $retentionValue = $requestedRetention === '' || $requestedRetention === '0' ? null : $requestedRetention;
+    $groupAvatarUrl = '';
+    if (!empty($_FILES['group_avatar_file']['tmp_name'])) {
+        $uploadResult = chat_store_group_avatar_upload($_FILES['group_avatar_file'], (int)$adminUser['id']);
+        if (empty($uploadResult['ok']) || empty($uploadResult['url'])) {
+            http_response_code(422);
+            echo json_encode(['ok' => false, 'message' => 'Group logo upload failed.']);
+            exit;
+        }
+        $groupAvatarUrl = (string)$uploadResult['url'];
+    }
     $result = admin_chat_create_group_conversation(
         $db,
         (int)$adminUser['id'],
         trim((string)($_POST['group_name'] ?? '')),
         $emails,
         !empty($_POST['is_group_read_only']),
-        $retentionHours
+        $retentionValue,
+        $groupAvatarUrl,
+        true
     );
     if (empty($result['ok'])) {
+        if ($groupAvatarUrl !== '') {
+            chat_delete_group_avatar_file($groupAvatarUrl);
+        }
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to create group chat.')]);
         exit;
@@ -356,6 +371,7 @@ $conversationRow = $db->select_user(
         support_conversations.group_created_by_customer_id,
         support_conversations.group_created_by_admin_user_id,
         support_conversations.message_retention_hours,
+        support_conversations.message_retention_minutes,
         support_conversations.created_at,
         support_conversations.updated_at,
         customers.email AS customer_email,
@@ -521,9 +537,9 @@ if ($action === 'toggle_group_read_only') {
 }
 
 if ($action === 'set_group_retention') {
-    $requestedRetention = trim((string)($_POST['retention_hours'] ?? $_GET['retention_hours'] ?? ''));
-    $retentionHours = $requestedRetention === '' || $requestedRetention === '0' ? null : (int)$requestedRetention;
-    $result = admin_chat_set_group_retention($db, $conversationId, (int)$adminUser['id'], $retentionHours);
+    $requestedRetention = trim((string)($_POST['retention_value'] ?? $_POST['retention_hours'] ?? $_GET['retention_value'] ?? $_GET['retention_hours'] ?? ''));
+    $retentionValue = $requestedRetention === '' || $requestedRetention === '0' ? null : $requestedRetention;
+    $result = admin_chat_set_group_retention($db, $conversationId, (int)$adminUser['id'], $retentionValue);
     if (empty($result['ok'])) {
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => (string)($result['message'] ?? 'Unable to update auto-delete settings.')]);
@@ -653,6 +669,40 @@ if ($action === 'set_group_email_notifications') {
     }
 }
 
+$conversationRow = admin_chat_conversation_row($db, $conversationId);
+if (!is_array($conversationRow) || empty($conversationRow['id'])) {
+    http_response_code(404);
+    echo json_encode(['ok' => false, 'message' => 'Conversation not found.']);
+    exit;
+}
+$conversationType = (string)($conversationRow['conversation_type'] ?? 'live_chat');
+$conversationTitle = admin_chat_display_name($conversationRow, $messages, 20);
+$presence = admin_chat_customer_presence(
+    $db,
+    (int)($conversationRow['customer_id'] ?? 0),
+    (string)($conversationRow['customer_last_login_at'] ?? ''),
+    $messages
+);
+$avatarHtml = admin_chat_avatar_html($conversationRow, $messages, 'admin-chat-inbox__avatar--sm');
+
+if (chat_is_group_like_conversation_type($conversationType)) {
+    $summary = chat_group_conversation_summary(
+        $db,
+        $conversationId,
+        ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => (int)$adminUser['id']],
+        $conversationRow
+    );
+    if ($summary) {
+        $conversationRow['summary_title'] = (string)($summary['title'] ?? '');
+        $conversationRow['avatar_url'] = (string)($summary['avatar_url'] ?? '');
+        $conversationRow['avatar_text'] = (string)($summary['avatar_text'] ?? 'G');
+        $conversationRow['avatar_theme'] = (string)($summary['avatar_theme'] ?? 'theme-6');
+        $conversationTitle = admin_chat_display_name($conversationRow, $messages, 20);
+        $presence = is_array($summary['presence'] ?? null) ? $summary['presence'] : $presence;
+        $avatarHtml = admin_chat_avatar_html($conversationRow, $messages, 'admin-chat-inbox__avatar--sm');
+    }
+}
+
 $messageRows = admin_chat_conversation_messages($db, $conversationId, $messageLimit, (int)$adminUser['id']);
 $totalMessageCount = admin_chat_conversation_message_count($db, $conversationId);
 $loadedMessageCount = count($messageRows);
@@ -683,7 +733,15 @@ echo json_encode([
     'conversation_type' => $conversationType,
     'customer_public_handle' => (string)($conversationRow['customer_public_handle'] ?? ''),
     'is_group_read_only' => !empty($conversationRow['is_group_read_only']),
-    'retention_hours' => chat_group_normalize_retention_hours($conversationRow['message_retention_hours'] ?? null),
+    'retention_hours' => chat_is_group_like_conversation_type($conversationType)
+        ? chat_group_retention_input_value(chat_group_retention_minutes_from_row($conversationRow))
+        : '',
+    'retention_minutes' => chat_is_group_like_conversation_type($conversationType)
+        ? chat_group_retention_minutes_from_row($conversationRow)
+        : 0,
+    'retention_label' => chat_is_group_like_conversation_type($conversationType)
+        ? chat_group_retention_label(chat_group_retention_minutes_from_row($conversationRow))
+        : '',
     'email_notifications_enabled' => chat_is_group_like_conversation_type($conversationType)
         ? chat_group_member_email_notifications_enabled(is_array($groupMemberSettings) ? $groupMemberSettings : [])
         : true,
@@ -709,6 +767,9 @@ echo json_encode([
         ];
     }, $groupMemberSummaries),
     'title' => $conversationTitle,
+    'avatar_url' => chat_is_group_like_conversation_type($conversationType)
+        ? chat_group_avatar_url((string)($conversationRow['group_avatar_url'] ?? ''))
+        : '',
     'presence' => $presence,
     'avatar_html' => $avatarHtml,
     'pending_crypto_payment' => $pendingCryptoPayment,

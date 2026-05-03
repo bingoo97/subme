@@ -14,7 +14,7 @@
                     <div class="btn-group pull-right">
                         {if $chat_customer_can_create_groups|default:false}
                         <button type="button" class="btn btn-default btn-xs messenger-group-action" data-messenger-group-open title="{$t.group_chat_create|default:'Create group'}">
-                            <i class="fa fa-search" aria-hidden="true"></i>
+                            <i class="fa fa-plus" aria-hidden="true"></i>
                         </button>
                         {/if}
                         <button type="button" class="btn btn-default btn-xs messenger-toggle-action{if $chat_nieprzeczytane > 0} is-unread is-attention{/if}" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle-button onclick="event.stopPropagation(); return toggleMessengerPanel();">
@@ -53,12 +53,14 @@
                         window.MESSENGER_BOOTSTRAP.groupDirectToggle = '{$t.group_chat_direct_toggle|default:"Find user"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupGroupToggle = '{$t.group_chat_group_toggle|default:"Create group"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel = '{$t.group_chat_direct_email_label|default:"Add user by email"|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel = '{$t.group_chat_add_by_email|default:"Add participant by email"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel = '{$t.group_chat_group_email_label|default:"Dodaj uczestnika po emailu lub @handle"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectHint = '{$t.group_chat_direct_hint|default:"Add one user email to start a direct conversation right away."|escape:'javascript'}';
-                        window.MESSENGER_BOOTSTRAP.groupGroupHint = '{$t.group_chat_invite_expiry_note|default:"You can already see this conversation in your inbox. If you do not want to stay in it, you can reject the invite."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupGroupHint = '{$t.group_chat_group_hint|default:"Wyszukaj po emailu lub @handle. Zaproszenia będą oczekiwały na akceptację."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectLimit = '{$t.group_chat_direct_limit|default:"Direct conversation allows only one user."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder = '{$t.group_chat_read_only_placeholder|default:"This group is read only."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDirectPendingPlaceholder = '{$t.group_chat_direct_pending_placeholder|default:"This conversation is waiting for invite acceptance."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupDirectRejectedPlaceholder = '{$t.group_chat_direct_rejected_placeholder|default:"Invitation rejected."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupPendingPlaceholder = '{$t.group_chat_group_pending_placeholder|default:"Waiting for invite confirmation..."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupCreateError = '{$t.group_chat_create_error|default:"Unable to create the group chat."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteError = '{$t.group_chat_invite_error|default:"Unable to update the invitation."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupLeaveError = '{$t.group_chat_leave_error|default:"Unable to leave the group chat."|escape:'javascript'}';
@@ -75,11 +77,20 @@
                         window.MESSENGER_BOOTSTRAP.groupInviteTitle = '{$t.group_chat_invite_title|default:"Add members to group"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteNameLabel = '{$t.group_chat_invite_name_label|default:"Group"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupInviteSuccess = '{$t.group_chat_invite_success|default:"Invitations sent."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupCreateSuccess = '{$t.group_chat_create_success|default:"Group created. Now you can invite members."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupCreateLead = '{$t.group_chat_create_lead|default:"Set the group name, logo and auto-delete time first."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupInviteLead = '{$t.group_chat_invite_lead|default:"Now add members. Invitations work just like in 1:1 conversations and require acceptance."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupOpenConversation = '{$t.group_chat_open_group|default:"Go to group"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupLogoAdd = '{$t.group_chat_logo_add|default:"Add logo"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupLogoRemove = '{$t.group_chat_logo_remove|default:"Remove logo"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.groupLogoUploadFailed = '{$t.group_chat_logo_upload_failed|default:"Group logo upload failed."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.profileInviteMessagePrefix = '{$t.group_chat_invite_message|default:"You were invited to a conversation by"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.profileInviteHint = '{$t.group_chat_invite_expiry_note|default:"You can already see this conversation in your inbox. If you do not want to stay in it, you can reject the invite."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.profileInvitePendingSuffix = '{$t.group_chat_direct_invited_by_note|default:"invited you to this conversation. Accept or reject the invite below."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.profileAcceptLabel = '{$t.group_chat_invite_accept|default:"Accept"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.profileRejectLabel = '{$t.group_chat_invite_reject|default:"Reject"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileReinviteLabel = '{$t.group_chat_reinvite_action|default:"Wyślij zaproszenie ponownie"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.profileReinviteHint = '{$t.group_chat_reinvite_hint|default:"To zaproszenie zostało odrzucone. Możesz wysłać je ponownie."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupRemoveConfirm = '{$t.group_chat_remove_local_confirm|default:"Remove this conversation only from your inbox?"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupDeleteConfirm = '{$t.group_chat_delete_confirm|default:"Remove this group for all participants?"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupSettingsError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
@@ -141,35 +152,64 @@
                                     <button type="button" class="messenger-group-mode__toggle is-active" data-messenger-group-kind="direct" aria-pressed="true">{$t.group_chat_direct_toggle|default:'Znajdź użytkownika'}</button>
                                     <button type="button" class="messenger-group-mode__toggle" data-messenger-group-kind="group" aria-pressed="false">{$t.group_chat_group_toggle|default:'Stwórz grupę'}</button>
                                 </div>
-                                <label class="messenger-group-field" id="messenger_group_name_field">
-                                    <span>{$t.group_chat_name|default:'Group name'}</span>
-                                    <input type="text" class="form-control" id="messenger_group_name" maxlength="20" placeholder="{$t.group_chat_name_placeholder|default:'Example: Team access'}">
-                                </label>
-                                <div class="messenger-group-field messenger-group-field--context" id="messenger_group_context" style="display:none;">
-                                    <span id="messenger_group_context_label">{$t.group_chat_invite_name_label|default:'Group'}</span>
-                                    <div class="messenger-group-context" id="messenger_group_context_title"></div>
-                                </div>
-                                <div class="messenger-group-field">
-                                    <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Dodaj użytkownika po emailu lub @nicku'}</span>
-                                    <div class="messenger-group-add-row">
-                                        <input type="text" class="form-control" id="messenger_group_email" placeholder="@username">
-                                        <button type="button" class="btn btn-default" data-messenger-group-add>{$t.add|default:'Add'}</button>
+                                <div class="messenger-group-step messenger-group-step--setup" id="messenger_group_setup_step" hidden>
+                                    <p class="messenger-group-step__lead" id="messenger_group_create_lead">{$t.group_chat_create_lead|default:'Najpierw ustaw nazwę grupy, logo i czas auto-usuwania.'}</p>
+                                    <div class="messenger-group-field messenger-group-field--avatar" id="messenger_group_avatar_field">
+                                        <span>{$t.group_chat_logo_label|default:'Logo grupy'}</span>
+                                        <div class="messenger-group-avatar-picker">
+                                            <div class="messenger-group-avatar-preview" id="messenger_group_avatar_preview" aria-hidden="true">
+                                                <span><i class="fa fa-camera" aria-hidden="true"></i></span>
+                                            </div>
+                                            <div class="messenger-group-avatar-actions">
+                                                <input type="file" id="messenger_group_avatar_file" accept="image/png,image/jpeg,image/webp" hidden>
+                                                <button type="button" class="btn btn-default btn-sm" data-messenger-group-avatar-open>{$t.group_chat_logo_add|default:'Dodaj logo'}</button>
+                                                <button type="button" class="btn btn-link btn-sm" data-messenger-group-avatar-clear style="display:none;">{$t.group_chat_logo_remove|default:'Usuń logo'}</button>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Dodaj jeden email użytkownika lub wpisz @nick, aby od razu rozpocząć rozmowę 1 na 1.'}</small>
+                                    <label class="messenger-group-field" id="messenger_group_name_field">
+                                        <span>{$t.group_chat_name|default:'Nazwa grupy'}</span>
+                                        <input type="text" class="form-control" id="messenger_group_name" maxlength="20" placeholder="{$t.group_chat_name_placeholder|default:'Np. Team Access'}">
+                                    </label>
+                                    <label class="messenger-group-field" id="messenger_group_retention_field">
+                                        <span>{$t.group_chat_retention_label|default:'Auto-usuwanie'}</span>
+                                        <select class="form-control" id="messenger_group_retention_create">
+                                            <option value="5m">5 min</option>
+                                            <option value="15m">15 min</option>
+                                            <option value="30m">30 min</option>
+                                            <option value="1h">1h</option>
+                                            <option value="12h">12h</option>
+                                            <option value="24h" selected>24h</option>
+                                        </select>
+                                    </label>
                                 </div>
-                                <label class="messenger-group-field" id="messenger_group_retention_field" style="display:none;">
-                                    <span>{$t.group_chat_retention_label|default:'Auto-usuwanie'}</span>
-                                    <select class="form-control" id="messenger_group_retention_create">
-                                        <option value="0">{$t.group_chat_retention_off|default:'Wyłączone'}</option>
-                                        <option value="1">1h</option>
-                                        <option value="6">6h</option>
-                                        <option value="12">12h</option>
-                                        <option value="24">24h</option>
-                                    </select>
-                                </label>
-                                <div class="messenger-group-members" id="messenger_group_members"></div>
+                                <div class="messenger-group-step messenger-group-step--invite" id="messenger_group_invite_step">
+                                    <p class="messenger-group-step__lead" id="messenger_group_invite_lead">{$t.group_chat_direct_hint|default:'Wpisz email lub nazwę użytkownika, aby od razu rozpocząć rozmowę...'}</p>
+                                    <div class="messenger-group-field messenger-group-field--context" id="messenger_group_context" style="display:none;">
+                                        <span id="messenger_group_context_label">{$t.group_chat_invite_name_label|default:'Grupa'}</span>
+                                        <div class="messenger-group-context">
+                                            <div class="messenger-group-context__avatar" id="messenger_group_context_avatar" aria-hidden="true">
+                                                <span>G</span>
+                                            </div>
+                                            <div class="messenger-group-context__copy">
+                                                <div class="messenger-group-context__title" id="messenger_group_context_title"></div>
+                                                <div class="messenger-group-context__meta">{$t.group_chat_invite_lead|default:'Teraz dodaj członków. Zaproszenia działają tak jak w rozmowie 1 na 1 i wymagają akceptacji.'}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="messenger-group-field">
+                                        <span id="messenger_group_email_label">{$t.group_chat_direct_email_label|default:'Wyszukaj użytkownika:'}</span>
+                                        <div class="messenger-group-add-row">
+                                            <input type="text" class="form-control" id="messenger_group_email" placeholder="@username">
+                                            <button type="button" class="btn btn-default" data-messenger-group-add>{$t.add|default:'Dodaj'}</button>
+                                        </div>
+                                        <small class="messenger-group-hint" id="messenger_group_hint">{$t.group_chat_direct_hint|default:'Wpisz email lub nazwę użytkownika, aby od razu rozpocząć rozmowę...'}</small>
+                                    </div>
+                                    <div class="messenger-group-members" id="messenger_group_members"></div>
+                                </div>
                                 <div class="messenger-group-actions">
                                     <button type="button" class="btn btn-dark btn-block" data-messenger-group-submit id="messenger_group_submit_label">{$t.group_chat_create_submit|default:'Create group'}</button>
+                                    <button type="button" class="btn btn-default btn-block" data-messenger-group-open-created id="messenger_group_open_created" style="display:none;">{$t.group_chat_open_group|default:'Przejdź do grupy'}</button>
                                 </div>
                             </div>
                         </div>

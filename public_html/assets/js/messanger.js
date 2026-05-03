@@ -44,6 +44,10 @@
 		groupModalMode: 'create',
 		groupCreationKind: 'direct',
 		groupTargetConversationId: 0,
+		groupTargetConversationTitle: '',
+		groupTargetConversationAvatarUrl: '',
+		groupAvatarFile: null,
+		groupAvatarPreviewUrl: '',
 		resellerViewMode: 'list',
 		conversationTransitionTimer: null,
 		restoreOpenScrollToBottomPending: false,
@@ -280,6 +284,10 @@
 			return $('#messenger_group_context_title');
 		},
 
+		groupContextAvatar: function () {
+			return $('#messenger_group_context_avatar');
+		},
+
 		groupContextLabel: function () {
 			return $('#messenger_group_context_label');
 		},
@@ -322,6 +330,38 @@
 
 		groupMembersBox: function () {
 			return $('#messenger_group_members');
+		},
+
+		groupSetupStep: function () {
+			return $('#messenger_group_setup_step');
+		},
+
+		groupInviteStep: function () {
+			return $('#messenger_group_invite_step');
+		},
+
+		groupCreateLead: function () {
+			return $('#messenger_group_create_lead');
+		},
+
+		groupInviteLead: function () {
+			return $('#messenger_group_invite_lead');
+		},
+
+		groupOpenCreatedButton: function () {
+			return $('#messenger_group_open_created');
+		},
+
+		groupAvatarInput: function () {
+			return $('#messenger_group_avatar_file');
+		},
+
+		groupAvatarPreview: function () {
+			return $('#messenger_group_avatar_preview');
+		},
+
+		groupAvatarClearButton: function () {
+			return $('[data-messenger-group-avatar-clear]');
 		},
 
 		profileModal: function () {
@@ -1011,12 +1051,13 @@
 			var minutes = String(now.getMinutes()).padStart(2, '0');
 			var currentTime = hours + ':' + minutes;
 			var safeMessage = this.escapeHtml(message).replace(/\n/g, '<br>');
+			var $appendedNodes;
 
 			if (!$list.length || !safeMessage) {
 				return;
 			}
 
-			$list.append(
+			$appendedNodes = $(
 				'<li class="messenger-time-anchor messenger-time-anchor--local"><span>' + currentTime + '</span></li>' +
 				'<li class="messenger-item messenger-item--sent messenger-item--pending">' +
 					'<div class="messenger-bubble">' +
@@ -1025,6 +1066,8 @@
 					'<div class="messenger-time-detail">' + currentTime + '</div>' +
 				'</li>'
 			);
+			$list.append($appendedNodes);
+			this.animateMessageEntry($appendedNodes);
 
 			this.scrollToBottom();
 		},
@@ -1137,6 +1180,66 @@
 
 		closeMessageActions: function () {
 			this.chatBox().find('.messenger-item.is-actions-open').removeClass('is-actions-open');
+		},
+
+		captureRenderedMessageIds: function () {
+			var ids = {};
+
+			this.chatBox().find('.messenger-item[data-message-id]').each(function () {
+				var safeId = String($(this).attr('data-message-id') || '').trim();
+				if (safeId) {
+					ids[safeId] = true;
+				}
+			});
+
+			return ids;
+		},
+
+		animateMessageEntry: function ($nodes) {
+			if (!$nodes || !$nodes.length) {
+				return;
+			}
+
+			$nodes.addClass('is-entering');
+			window.requestAnimationFrame(function () {
+				window.requestAnimationFrame(function () {
+					$nodes.addClass('is-entering-active');
+				});
+			});
+			window.setTimeout(function () {
+				$nodes.removeClass('is-entering is-entering-active');
+			}, 340);
+		},
+
+		animateNewMessagesFromRender: function (previousIds, previousConversationId, options) {
+			var enteringNodes = [];
+			var sameConversation = previousConversationId > 0 && previousConversationId === this.activeConversationId;
+			var previousKeys = previousIds ? Object.keys(previousIds) : [];
+			options = options || {};
+
+			if (!sameConversation || !previousKeys.length || !!options.preservePrependOffset) {
+				return;
+			}
+
+			this.chatBox().find('.messenger-item[data-message-id]').each(function () {
+				var $item = $(this);
+				var safeId = String($item.attr('data-message-id') || '').trim();
+				var $timeAnchor;
+
+				if (!safeId || previousIds[safeId]) {
+					return;
+				}
+
+				$timeAnchor = $item.prev('.messenger-time-anchor');
+				if ($timeAnchor.length) {
+					enteringNodes.push($timeAnchor.get(0));
+				}
+				enteringNodes.push($item.get(0));
+			});
+
+			if (enteringNodes.length) {
+				this.animateMessageEntry($(enteringNodes));
+			}
 		},
 
 		toggleMessageActions: function (messageId, forceOpen) {
@@ -1461,6 +1564,8 @@
 			var writeMessagePlaceholder = window.MESSENGER_BOOTSTRAP.writeMessagePlaceholder || 'Write message...';
 			var readOnlyPlaceholder = window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder || 'This group is read only.';
 			var directPendingPlaceholder = window.MESSENGER_BOOTSTRAP.groupDirectPendingPlaceholder || 'This conversation is waiting for invite acceptance.';
+			var directRejectedPlaceholder = window.MESSENGER_BOOTSTRAP.groupDirectRejectedPlaceholder || 'Invitation rejected.';
+			var groupPendingPlaceholder = window.MESSENGER_BOOTSTRAP.groupPendingPlaceholder || 'Waiting for invite confirmation...';
 			var blockedPlaceholder = window.MESSENGER_BOOTSTRAP.blockedPlaceholder || 'Account blocked.';
 			var disabledByCooldown = !!this.cooldownTimer;
 			var isBlockedCustomer = String(this.contentRoot().attr('data-chat-customer-is-blocked') || '0') === '1';
@@ -1469,8 +1574,11 @@
 			var $sendButton = $('#btn-chat');
 			var $uploadButton = $('[data-messenger-upload-open]');
 			var activeType = String(this.contentRoot().attr('data-chat-active-conversation-type') || '');
-			var activeSubtitle = String(this.contentRoot().attr('data-chat-active-conversation-subtitle') || '');
-			var isPendingDirect = activeType === 'group_chat' && activeSubtitle.toLowerCase() === 'invite pending';
+			var activeDirectStatus = String(this.contentRoot().attr('data-chat-active-conversation-direct-status') || 'none');
+			var pendingMemberCount = parseInt(this.contentRoot().attr('data-chat-active-conversation-pending-member-count') || '0', 10) || 0;
+			var isPendingDirect = activeType === 'group_chat' && (activeDirectStatus === 'pending_invited' || activeDirectStatus === 'pending');
+			var isRejectedDirect = activeType === 'group_chat' && activeDirectStatus === 'rejected';
+			var isPendingGroup = activeType === 'group_chat' && !isPendingDirect && pendingMemberCount > 0;
 
 			if (!$input.length) {
 				return;
@@ -1486,7 +1594,7 @@
 			}
 
 			if (!this.activeCanSend) {
-				$input.attr('placeholder', isPendingDirect ? directPendingPlaceholder : readOnlyPlaceholder);
+				$input.attr('placeholder', isPendingDirect ? directPendingPlaceholder : (isRejectedDirect ? directRejectedPlaceholder : (isPendingGroup ? groupPendingPlaceholder : readOnlyPlaceholder)));
 				return;
 			}
 
@@ -1520,13 +1628,153 @@
 				return;
 			}
 
-			$box.html($.map(this.groupEmails, function (email, index) {
+			$box.html($.map(this.groupEmails, function (entry, index) {
+				var label = entry && typeof entry === 'object' ? String(entry.label || entry.value || '') : String(entry || '');
 				return '' +
 					'<button type="button" class="messenger-group-member" data-messenger-group-remove data-index="' + index + '">' +
-						'<span>' + self.escapeHtml(email) + '</span>' +
+						'<span>' + self.escapeHtml(label) + '</span>' +
 						'<i class="fa fa-times" aria-hidden="true"></i>' +
 					'</button>';
 			}).join(''));
+		},
+
+		clearGroupAvatarPreviewUrl: function () {
+			if (this.groupAvatarPreviewUrl && String(this.groupAvatarPreviewUrl).indexOf('blob:') === 0 && window.URL && typeof window.URL.revokeObjectURL === 'function') {
+				window.URL.revokeObjectURL(this.groupAvatarPreviewUrl);
+			}
+			this.groupAvatarPreviewUrl = '';
+		},
+
+		renderGroupAvatarPreview: function (previewUrl) {
+			var $preview = this.groupAvatarPreview();
+			var $clearButton = this.groupAvatarClearButton();
+			var safeUrl = $.trim(String(previewUrl || ''));
+
+			if (!$preview.length) {
+				return;
+			}
+
+			if (safeUrl) {
+				$preview.addClass('has-image').html('<img src="' + this.escapeHtml(safeUrl) + '" alt="">');
+				$clearButton.show();
+				return;
+			}
+
+			$preview.removeClass('has-image').html('<span><i class="fa fa-camera" aria-hidden="true"></i></span>');
+			$clearButton.hide();
+			this.renderGroupContextSummary();
+		},
+
+		resetGroupAvatar: function () {
+			this.groupAvatarFile = null;
+			this.clearGroupAvatarPreviewUrl();
+			this.groupAvatarInput().val('');
+			this.renderGroupAvatarPreview('');
+		},
+
+		handleGroupAvatarSelection: function (fileInput) {
+			var files = fileInput && fileInput.files ? fileInput.files : [];
+			var file = files && files.length ? files[0] : null;
+			var objectUrl = '';
+
+			if (!file) {
+				this.resetGroupAvatar();
+				return false;
+			}
+
+			this.groupAvatarFile = file;
+			this.clearGroupAvatarPreviewUrl();
+
+			if (window.URL && typeof window.URL.createObjectURL === 'function') {
+				objectUrl = window.URL.createObjectURL(file);
+				this.groupAvatarPreviewUrl = objectUrl;
+			}
+
+			this.renderGroupAvatarPreview(objectUrl);
+			this.renderGroupContextSummary();
+			return false;
+		},
+
+		groupInviteValues: function () {
+			return $.map(this.groupEmails, function (entry) {
+				if (entry && typeof entry === 'object') {
+					return String(entry.value || '').toLowerCase();
+				}
+
+				return String(entry || '').toLowerCase();
+			});
+		},
+
+		setGroupTargetConversation: function (conversationId, title, avatarUrl) {
+			this.groupTargetConversationId = parseInt(conversationId || 0, 10) || 0;
+			this.groupTargetConversationTitle = $.trim(String(title || ''));
+			this.groupTargetConversationAvatarUrl = $.trim(String(avatarUrl || ''));
+		},
+
+		groupContextAvatarHtml: function () {
+			var avatarUrl = $.trim(String(this.groupTargetConversationAvatarUrl || this.groupAvatarPreviewUrl || ''));
+			var title = $.trim(String(this.groupTargetConversationTitle || this.groupNameInput().val() || 'Group'));
+			var initial = title ? title.charAt(0).toUpperCase() : 'G';
+
+			if (avatarUrl) {
+				return '<img src="' + this.escapeHtml(avatarUrl) + '" alt="">';
+			}
+
+			return '<span>' + this.escapeHtml(initial) + '</span>';
+		},
+
+		renderGroupContextSummary: function () {
+			var title = $.trim(String(this.groupTargetConversationTitle || this.groupNameInput().val() || ''));
+			var $title = this.groupContextTitle();
+			var $avatar = this.groupContextAvatar();
+
+			if ($title.length) {
+				$title.text(title || (window.MESSENGER_BOOTSTRAP.groupInviteNameLabel || 'Group'));
+			}
+
+			if ($avatar.length) {
+				$avatar.html(this.groupContextAvatarHtml());
+			}
+		},
+
+		refreshGroupModalLayout: function () {
+			var isInviteMode = this.groupModalMode === 'invite';
+			var isGroupKind = this.groupCreationKind === 'group';
+			var isDirectCreate = !isInviteMode && !isGroupKind;
+			var isGroupSetup = !isInviteMode && isGroupKind;
+
+			this.groupSetupStep().prop('hidden', !isGroupSetup);
+			this.groupInviteStep().prop('hidden', !(isInviteMode || isDirectCreate));
+			this.groupContextField().toggle(isInviteMode);
+			this.groupOpenCreatedButton().toggle(isInviteMode && this.groupTargetConversationId > 0);
+
+			if (isInviteMode) {
+				this.groupModeSwitch().hide();
+				this.groupModalTitle().text(window.MESSENGER_BOOTSTRAP.groupInviteTitle || 'Add members to group');
+				this.groupInviteLead().text(window.MESSENGER_BOOTSTRAP.groupInviteLead || 'Now add members. Invitations work just like in 1:1 conversations and require acceptance.');
+				this.groupContextLabel().text(window.MESSENGER_BOOTSTRAP.groupInviteNameLabel || 'Group');
+				this.groupEmailLabel().text(window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel || 'Add participant by email');
+				this.groupHint().text(window.MESSENGER_BOOTSTRAP.groupGroupHint || 'You can search by email or @handle. Invitations must be accepted before someone joins the group.');
+				this.groupSubmitLabel().text(window.MESSENGER_BOOTSTRAP.groupInviteSubmit || 'Send invitations');
+				this.renderGroupContextSummary();
+				return;
+			}
+
+			this.refreshGroupCreationModes();
+			this.groupContextField().hide();
+
+			if (isGroupSetup) {
+				this.groupModalTitle().text(window.MESSENGER_BOOTSTRAP.groupCreateTitle || 'Create group chat');
+				this.groupCreateLead().text(window.MESSENGER_BOOTSTRAP.groupCreateLead || 'Set the group name, logo and auto-delete time first.');
+				this.groupSubmitLabel().text(window.MESSENGER_BOOTSTRAP.groupCreateSubmit || 'Create group');
+				return;
+			}
+
+			this.groupModalTitle().text(window.MESSENGER_BOOTSTRAP.groupDirectTitle || 'Start direct conversation');
+			this.groupInviteLead().text(window.MESSENGER_BOOTSTRAP.groupDirectHint || 'Add one user email or @handle to start a direct conversation right away.');
+			this.groupEmailLabel().text(window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel || 'Add user by email');
+			this.groupHint().text(window.MESSENGER_BOOTSTRAP.groupDirectHint || 'Add one user email or @handle to start a direct conversation right away.');
+			this.groupSubmitLabel().text(window.MESSENGER_BOOTSTRAP.groupDirectSubmit || 'Start conversation');
 		},
 
 		setGroupCreationKind: function (kind) {
@@ -1549,33 +1797,20 @@
 			this.groupModeButtons().removeClass('is-active').attr('aria-pressed', 'false');
 			this.groupModeButtons().filter('[data-messenger-group-kind="' + normalizedKind + '"]').addClass('is-active').attr('aria-pressed', 'true');
 
-			if (this.groupModalMode === 'invite') {
-				return;
-			}
-
-			this.groupNameField().toggle(isGroupKind);
-			this.groupModalTitle().text(isGroupKind
-				? (window.MESSENGER_BOOTSTRAP.groupCreateTitle || 'Create group chat')
-				: (window.MESSENGER_BOOTSTRAP.groupDirectTitle || 'Start direct conversation'));
-			this.groupSubmitLabel().text(isGroupKind
-				? (window.MESSENGER_BOOTSTRAP.groupCreateSubmit || 'Create group')
-				: (window.MESSENGER_BOOTSTRAP.groupDirectSubmit || 'Start conversation'));
-			this.groupEmailLabel().text(isGroupKind
-				? (window.MESSENGER_BOOTSTRAP.groupGroupEmailLabel || 'Add participant by email')
-				: (window.MESSENGER_BOOTSTRAP.groupDirectEmailLabel || 'Add user by email'));
-			this.groupHint().text(isGroupKind
-				? (window.MESSENGER_BOOTSTRAP.groupGroupHint || 'Each invitation is valid for 24 hours. If nobody accepts it in time, it is removed automatically.')
-				: (window.MESSENGER_BOOTSTRAP.groupDirectHint || 'Add one user email to start a direct conversation right away.'));
-			this.groupRetentionField().toggle(isGroupKind);
-
 			if (!isGroupKind) {
 				this.groupNameInput().val('');
-				this.groupRetentionCreate().val('0');
+				this.resetGroupAvatar();
 				if (this.groupEmails.length > 1) {
 					this.groupEmails = this.groupEmails.slice(0, 1);
 					this.renderGroupMembers();
 				}
 			}
+
+			if (isGroupKind && !this.groupRetentionCreate().val()) {
+				this.groupRetentionCreate().val('24h');
+			}
+
+			this.refreshGroupModalLayout();
 		},
 
 		resetGroupModal: function () {
@@ -1583,15 +1818,12 @@
 			this.groupEmailRequests = {};
 			this.groupModalMode = 'create';
 			this.groupCreationKind = 'direct';
-			this.groupTargetConversationId = 0;
+			this.setGroupTargetConversation(0, '', '');
 			this.groupNameInput().val('');
 			this.groupEmailInput().val('');
-			this.groupModeSwitch().show();
-			this.groupNameField().show();
-			this.groupRetentionField().hide();
-			this.groupRetentionCreate().val('0');
-			this.groupContextField().hide();
-			this.groupContextTitle().text('');
+			this.groupRetentionCreate().val('24h');
+			this.groupOpenCreatedButton().hide();
+			this.resetGroupAvatar();
 			this.renderGroupMembers();
 			this.showGroupAlert('', false);
 			this.refreshGroupCreationModes();
@@ -1608,24 +1840,24 @@
 
 			this.resetGroupModal();
 			this.groupModalMode = targetMode === 'invite' ? 'invite' : 'create';
-			this.groupTargetConversationId = parseInt(targetOptions.conversationId || 0, 10) || 0;
+			this.setGroupTargetConversation(
+				parseInt(targetOptions.conversationId || 0, 10) || 0,
+				String(targetOptions.title || this.activeConversationTitle || ''),
+				String(targetOptions.avatarUrl || '')
+			);
 
 			if (this.groupModalMode === 'invite') {
-				this.groupModeSwitch().hide();
-				this.groupNameField().hide();
-				this.groupRetentionField().hide();
-				this.groupContextField().show();
-				this.groupContextLabel().text(window.MESSENGER_BOOTSTRAP.groupInviteNameLabel || 'Group');
-				this.groupContextTitle().text(String(targetOptions.title || this.activeConversationTitle || 'Group chat'));
-				this.groupModalTitle().text(window.MESSENGER_BOOTSTRAP.groupInviteTitle || 'Add members to group');
-				this.groupSubmitLabel().text(window.MESSENGER_BOOTSTRAP.groupInviteSubmit || 'Send invitations');
+				this.groupCreationKind = 'group';
 			} else {
 				this.refreshGroupCreationModes();
 				this.setGroupCreationKind(this.defaultGroupCreationKind());
 			}
 
+			this.refreshGroupModalLayout();
+
 			this.groupModal().addClass('is-open').attr('aria-hidden', 'false');
 			$('body').addClass('messenger-upload-open');
+			this.renderGroupContextSummary();
 			window.setTimeout(function () {
 				if (targetMode === 'invite' || self.groupCreationKind === 'direct') {
 					$('#messenger_group_email').trigger('focus');
@@ -1652,6 +1884,7 @@
 		closeProfileModal: function () {
 			this.profileModal().removeClass('is-open').attr('aria-hidden', 'true');
 			$('body').removeClass('messenger-modal-open');
+			this.profileOpenContext = '';
 			return false;
 		},
 
@@ -1664,11 +1897,15 @@
 			var avatarTheme = String(payload.avatar_theme || 'theme-1');
 			var actionKind = String(payload.action_kind || 'invite');
 			var directStatus = String(payload.direct_status || '');
+			var profileContext = String(payload.profile_context || this.profileOpenContext || '');
 			var activeType = String(this.contentRoot().attr('data-chat-active-conversation-type') || '');
-			var activeSubtitle = String(this.contentRoot().attr('data-chat-active-conversation-subtitle') || '');
+			var activeIsDirectConversation = String(this.contentRoot().attr('data-chat-active-conversation-is-direct') || '0') === '1';
+			var activeDirectStatus = String(this.contentRoot().attr('data-chat-active-conversation-direct-status') || 'none');
 			var activeConversationId = parseInt(this.activeConversationId || 0, 10) || 0;
-			var isPendingDirectConversation = activeType === 'group_chat' && activeSubtitle.toLowerCase() === 'invite pending' && activeConversationId > 0;
-			var isAcceptedDirectConversation = activeType === 'group_chat' && activeConversationId > 0 && !isPendingDirectConversation;
+			var shouldUseActiveDirectContext = activeType === 'group_chat' && activeIsDirectConversation && profileContext !== 'group-member';
+			var isPendingDirectConversation = shouldUseActiveDirectContext && activeDirectStatus === 'pending_invited' && activeConversationId > 0;
+			var isRejectedDirectConversation = shouldUseActiveDirectContext && activeDirectStatus === 'rejected' && activeConversationId > 0;
+			var isAcceptedDirectConversation = shouldUseActiveDirectContext && activeConversationId > 0 && !isPendingDirectConversation && !isRejectedDirectConversation;
 			var $primaryButton = this.profileActionButton();
 			var $secondaryButton = this.profileSecondaryActionButton();
 			var $note = this.profileNote();
@@ -1685,6 +1922,10 @@
 				buttonLabel = directStatus === 'pending' ? 'Otwórz zaproszenie' : 'Wyślij wiadomość';
 			}
 
+			if (profileContext === 'group-member' && actionKind === 'invite') {
+				buttonLabel = 'Wyślij wiadomość';
+			}
+
 			if (isAcceptedDirectConversation && actionKind !== 'respond_invite') {
 				actionKind = 'open';
 				payload.conversation_id = activeConversationId;
@@ -1696,10 +1937,19 @@
 				payload.conversation_id = activeConversationId;
 			}
 
+			if (isRejectedDirectConversation && actionKind !== 'respond_invite') {
+				actionKind = 'reinvite';
+				payload.conversation_id = activeConversationId;
+			}
+
 			if (actionKind === 'respond_invite') {
 				noteText = String(window.MESSENGER_BOOTSTRAP.profileInviteMessagePrefix || 'You were invited to a conversation by') + ' ' + displayHandle + '.\n\n' + String(window.MESSENGER_BOOTSTRAP.profileInviteHint || 'You can already see this conversation in your inbox. If you do not want to stay in it, you can reject the invite.');
 				buttonLabel = String(window.MESSENGER_BOOTSTRAP.profileAcceptLabel || 'Accept');
 				secondaryLabel = String(window.MESSENGER_BOOTSTRAP.profileRejectLabel || 'Reject');
+			} else if (actionKind === 'reinvite' || directStatus === 'rejected') {
+				actionKind = 'reinvite';
+				noteText = String(window.MESSENGER_BOOTSTRAP.profileReinviteHint || 'This invitation was rejected. You can send it again.');
+				buttonLabel = String(window.MESSENGER_BOOTSTRAP.profileReinviteLabel || 'Send invite again');
 			}
 
 			this.profileAvatar().html(avatarHtml);
@@ -1720,7 +1970,7 @@
 				.toggle(actionKind === 'respond_invite');
 		},
 
-		fetchParticipantProfile: function (participantType, targetCustomerId) {
+		fetchParticipantProfile: function (participantType, targetCustomerId, profileContext) {
 			var self = this;
 			var cfg = this.config();
 			var safeCustomerId = parseInt(targetCustomerId || 0, 10) || 0;
@@ -1728,6 +1978,8 @@
 			if (participantType !== 'customer' || !safeCustomerId) {
 				return false;
 			}
+
+			this.profileOpenContext = $.trim(String(profileContext || ''));
 
 			$.ajax({
 				type: 'POST',
@@ -1813,10 +2065,53 @@
 			return false;
 		},
 
+		resendDirectInvite: function (targetCustomerId) {
+			var self = this;
+			var cfg = this.config();
+			var safeCustomerId = parseInt(targetCustomerId || 0, 10) || 0;
+
+			if (!safeCustomerId) {
+				return false;
+			}
+
+			$.ajax({
+				type: 'POST',
+				url: cfg.endpoint,
+				dataType: 'json',
+				data: {
+					action: 'start_direct_chat',
+					format: 'json',
+					target_customer_id: safeCustomerId,
+					_csrf: cfg.csrfToken
+				}
+			}).done(function (payload) {
+				if (!payload || !payload.ok) {
+					self.showNotice((payload && payload.message) || 'Unable to send invite.');
+					return;
+				}
+
+				self.renderPayload(payload, {
+					force: true,
+					scrollToBottom: true
+				});
+				if (payload.conversation_id) {
+					self.selectConversation(payload.conversation_id, 'group_chat');
+				}
+				if (payload.message) {
+					self.showNotice(payload.message);
+				}
+			}).fail(function () {
+				self.showNotice('Unable to send invite.');
+			});
+
+			return false;
+		},
+
 		addGroupEmail: function () {
 			var self = this;
 			var cfg = this.config();
 			var email = $.trim(String(this.groupEmailInput().val() || '')).toLowerCase();
+			var existingInviteValues = this.groupInviteValues();
 			if (!email) {
 				return false;
 			}
@@ -1830,7 +2125,7 @@
 				return false;
 			}
 
-			if (this.groupEmails.indexOf(email) !== -1) {
+			if ($.inArray(email, existingInviteValues) !== -1) {
 				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailDuplicate || 'This invitation is already added.', true);
 				return false;
 			}
@@ -1865,12 +2160,15 @@
 					return;
 				}
 
-				if (self.groupEmails.indexOf(String(payload.email || email).toLowerCase()) !== -1) {
+				if ($.inArray(String(payload.email || email).toLowerCase(), self.groupInviteValues()) !== -1) {
 					self.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailDuplicate || 'This invitation is already added.', true);
 					return;
 				}
 
-				self.groupEmails.push(String(payload.email || email).toLowerCase());
+				self.groupEmails.push({
+					value: String(payload.email || email).toLowerCase(),
+					label: String(payload.display_name || payload.email || email)
+				});
 				self.groupEmailInput().val('').trigger('focus');
 				self.renderGroupMembers();
 				self.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailAdded || 'Invitation prepared. It will expire after 24 hours if not accepted.', false);
@@ -2206,6 +2504,7 @@
 		renderPayload: function (payload, options) {
 			var previousMetrics = this.getScrollMetrics();
 			var previousConversationId = this.activeConversationId;
+			var previousMessageIds = this.captureRenderedMessageIds();
 			var keepBottom = false;
 			var preservePrependOffset = false;
 			var previousScrollHeight = previousMetrics ? previousMetrics.scrollHeight : 0;
@@ -2256,6 +2555,7 @@
 				}
 				this.startDeleteCountdowns();
 				this.setConversationLoadingState(false);
+				this.animateNewMessagesFromRender(previousMessageIds, previousConversationId, options);
 				if (options.animateConversation) {
 					this.playConversationEntryAnimation();
 				}
@@ -2606,12 +2906,16 @@
 		deleteMessage: function (messageId) {
 			var self = this;
 			var cfg = this.config();
+			var $messageNode;
+			var $timeAnchor;
+			var sendDeleteRequest;
 
 			if (!cfg.userId || !messageId || this.sendInFlight || this.uploadInFlight || this.fetchInFlight || this.faqPendingKey) {
 				return false;
 			}
 
-			$.ajax({
+			sendDeleteRequest = function () {
+				$.ajax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -2619,10 +2923,10 @@
 					action: 'delete_message',
 					format: 'json',
 					message_id: messageId,
-					conversation_id: this.activeConversationId,
+					conversation_id: self.activeConversationId,
 					_csrf: cfg.csrfToken
 				}
-			}).done(function (payload) {
+				}).done(function (payload) {
 				if (payload && payload.ok) {
 					self.renderPayload(payload, {
 						force: true,
@@ -2632,10 +2936,32 @@
 					self.showNotice(payload.message);
 					self.fetch({ force: true });
 				}
-			}).fail(function () {
+				}).fail(function () {
 				self.showNotice(window.MESSENGER_BOOTSTRAP.deleteFailedMessage || 'Message deletion failed.');
 				self.fetch({ force: true });
-			});
+				}).always(function () {
+					if ($messageNode && $messageNode.length) {
+						$messageNode.removeClass('is-removing');
+					}
+					if ($timeAnchor && $timeAnchor.length) {
+						$timeAnchor.removeClass('is-removing');
+					}
+				});
+			};
+
+			$messageNode = this.chatBox().find('.messenger-item[data-message-id="' + String(messageId) + '"]').first();
+			$timeAnchor = $messageNode.prev('.messenger-time-anchor');
+			this.closeMessageActions();
+
+			if ($messageNode.length) {
+				$messageNode.addClass('is-removing');
+				if ($timeAnchor.length) {
+					$timeAnchor.addClass('is-removing');
+				}
+				window.setTimeout(sendDeleteRequest, 180);
+			} else {
+				sendDeleteRequest();
+			}
 
 			return false;
 		},
@@ -2680,46 +3006,93 @@
 			var groupName = $.trim(this.groupNameInput().val());
 			var action = this.groupModalMode === 'invite' ? 'invite_to_group' : 'create_group';
 			var modalMode = this.groupModalMode;
+			var inviteValues = this.groupInviteValues();
+			var retentionValue = $.trim(String(this.groupRetentionCreate().val() || '24h')) || '24h';
+			var formData = new window.FormData();
+			var isCreateMode = modalMode !== 'invite';
+			var isNamedGroupCreate = isCreateMode && this.groupCreationKind === 'group';
+			var isDirectCreate = isCreateMode && this.groupCreationKind === 'direct';
 
-			if (!this.groupEmails.length) {
+			if (isNamedGroupCreate && !groupName) {
+				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupNameRequired || 'Group name is required.', true);
+				return false;
+			}
+
+			if ((modalMode === 'invite' || isDirectCreate) && !inviteValues.length) {
 				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupParticipantsRequired || 'Add at least one participant.', true);
 				return false;
 			}
 
-			if (this.groupModalMode !== 'invite' && this.groupCreationKind === 'group' && !groupName) {
-				this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupNameRequired || 'Group name is required.', true);
-				return false;
+			formData.append('action', action);
+			formData.append('format', 'json');
+			formData.append('group_name', groupName);
+			formData.append('group_kind', this.groupCreationKind);
+			formData.append('conversation_id', String(this.groupModalMode === 'invite' ? this.groupTargetConversationId : 0));
+			formData.append('participant_emails_json', JSON.stringify(inviteValues));
+			formData.append('retention_hours', retentionValue);
+			formData.append('_csrf', cfg.csrfToken);
+
+			if (isNamedGroupCreate && this.groupAvatarFile) {
+				formData.append('group_avatar_file', this.groupAvatarFile);
 			}
 
 			$.ajax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
-				data: {
-					action: action,
-					format: 'json',
-					group_name: groupName,
-					conversation_id: this.groupModalMode === 'invite' ? this.groupTargetConversationId : 0,
-					participant_emails_json: JSON.stringify(this.groupEmails),
-					retention_hours: this.groupModalMode === 'invite' ? '1' : (this.groupRetentionCreate().val() || '1'),
-					_csrf: cfg.csrfToken
-				}
+				data: formData,
+				processData: false,
+				contentType: false
 			}).done(function (payload) {
 				if (!payload || !payload.ok) {
 					self.showGroupAlert((payload && payload.message) || (window.MESSENGER_BOOTSTRAP.groupCreateError || 'Unable to create group chat.'), true);
 					return;
 				}
 
-				self.closeGroupModal();
-				if (modalMode === 'invite') {
-					self.showNotice(window.MESSENGER_BOOTSTRAP.groupInviteSuccess || 'Invitations sent.');
-				}
 				self.renderPayload(payload, {
 					force: true,
-					scrollToBottom: true
+					scrollToBottom: modalMode === 'invite'
 				});
+
+				if (isNamedGroupCreate) {
+					self.groupModalMode = 'invite';
+					self.groupEmails = [];
+					self.groupEmailRequests = {};
+					self.renderGroupMembers();
+					self.groupEmailInput().val('');
+					self.setGroupTargetConversation(
+						parseInt(payload.conversation_id || 0, 10) || 0,
+						String(payload.conversation_title || payload.title || groupName || ''),
+						String(payload.conversation_avatar_url || payload.avatar_url || '')
+					);
+					self.refreshGroupModalLayout();
+					self.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupCreateSuccess || 'Group created. Now you can invite members.', false);
+					window.setTimeout(function () {
+						self.groupEmailInput().trigger('focus');
+					}, 20);
+					return;
+				}
+
+				if (modalMode === 'invite') {
+					self.groupEmails = [];
+					self.groupEmailRequests = {};
+					self.renderGroupMembers();
+					self.groupEmailInput().val('');
+					self.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupInviteSuccess || 'Invitations sent.', false);
+					return;
+				}
+
+				self.closeGroupModal();
+				if (payload.conversation_id) {
+					self.selectConversation(payload.conversation_id, 'group_chat');
+				}
 			}).fail(function () {
-				self.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupCreateError || 'Unable to create group chat.', true);
+				self.showGroupAlert(
+					(isNamedGroupCreate && self.groupAvatarFile)
+						? (window.MESSENGER_BOOTSTRAP.groupLogoUploadFailed || 'Group logo upload failed.')
+						: (window.MESSENGER_BOOTSTRAP.groupCreateError || 'Unable to create group chat.'),
+					true
+				);
 			});
 
 			return false;
@@ -2919,7 +3292,7 @@
 			return false;
 		},
 
-		updateGroupRetention: function (hours) {
+		updateGroupRetention: function (retentionValue) {
 			var self = this;
 			var cfg = this.config();
 
@@ -2935,7 +3308,8 @@
 					action: 'set_group_retention',
 					format: 'json',
 					conversation_id: this.activeConversationId,
-					retention_hours: String(hours || 1),
+					retention_hours: String(retentionValue || '24h'),
+					retention_token: String(retentionValue || '24h'),
 					_csrf: cfg.csrfToken
 				}
 			}).done(function (payload) {
@@ -3174,7 +3548,7 @@
 
 			$(document).on('change.messengerUi', '[data-chat-retention-select]', function () {
 				self.closeGroupSettingsMenu();
-				self.updateGroupRetention(parseInt($(this).val() || '1', 10) || 1);
+				self.updateGroupRetention(String($(this).val() || '24h'));
 			});
 
 			$(document).on('click.messengerUi', '[data-messenger-group-open]', function (event) {
@@ -3214,7 +3588,8 @@
 				event.stopPropagation();
 				self.fetchParticipantProfile(
 					String($(this).attr('data-participant-type') || 'customer'),
-					parseInt($(this).attr('data-target-customer-id') || '0', 10) || 0
+					parseInt($(this).attr('data-target-customer-id') || '0', 10) || 0,
+					String($(this).attr('data-chat-profile-context') || '')
 				);
 			});
 
@@ -3233,9 +3608,32 @@
 				self.submitProfileAction($(this));
 			});
 
+			$(document).on('click.messengerUi', '[data-chat-direct-reinvite]', function (event) {
+				event.preventDefault();
+				self.resendDirectInvite(parseInt($(this).attr('data-target-customer-id') || '0', 10) || 0);
+			});
+
 			$(document).on('click.messengerUi', '[data-messenger-group-add]', function (event) {
 				event.preventDefault();
 				self.addGroupEmail();
+			});
+
+			$(document).on('click.messengerUi', '[data-messenger-group-avatar-open]', function (event) {
+				event.preventDefault();
+				self.groupAvatarInput().trigger('click');
+			});
+
+			$(document).on('click.messengerUi', '[data-messenger-group-avatar-clear]', function (event) {
+				event.preventDefault();
+				self.resetGroupAvatar();
+			});
+
+			$(document).on('change.messengerUi', '#messenger_group_avatar_file', function () {
+				self.handleGroupAvatarSelection(this);
+			});
+
+			$(document).on('input.messengerUi', '#messenger_group_name', function () {
+				self.renderGroupContextSummary();
 			});
 
 			$(document).on('click.messengerUi', '[data-messenger-group-kind]', function (event) {
@@ -3263,6 +3661,16 @@
 			$(document).on('click.messengerUi', '[data-messenger-group-submit]', function (event) {
 				event.preventDefault();
 				self.submitGroupCreate();
+			});
+
+			$(document).on('click.messengerUi', '[data-messenger-group-open-created]', function (event) {
+				var targetConversationId;
+				event.preventDefault();
+				targetConversationId = parseInt(self.groupTargetConversationId || 0, 10) || 0;
+				if (targetConversationId > 0) {
+					self.closeGroupModal();
+					self.selectConversation(targetConversationId, 'group_chat');
+				}
 			});
 
 			$(document).on('click.messengerUi', '[data-group-chat-invite-action]', function (event) {
