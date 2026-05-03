@@ -1680,21 +1680,10 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
         $assignedCryptoWallets = [];
     }
 
-    $preferredAssetIds = [];
-    foreach ($assignedCryptoWallets as $assignedWallet) {
-        $assetId = (int)($assignedWallet['crypto_asset_id'] ?? 0);
-        if ($assetId > 0) {
-            $preferredAssetIds[$assetId] = true;
-        }
-    }
-
-    $rateAssetIds = (!$sharedEnabled && $preferredAssetIds)
-        ? array_keys($preferredAssetIds)
-        : [];
-    $activeAssets = app_refresh_crypto_rates($db, $vsCurrency, 900, $rateAssetIds);
-    if (!$activeAssets && $rateAssetIds) {
-        $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
-    }
+    // Load the full active crypto catalog here, not only assets already assigned
+    // to the customer. This keeps the storefront selection in sync with any
+    // free wallets that can still be reserved for other cryptocurrencies.
+    $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
 
     $activeAssetsByCode = [];
     $activeAssetsById = [];
