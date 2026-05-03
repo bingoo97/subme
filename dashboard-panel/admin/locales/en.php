@@ -705,6 +705,8 @@ return [
     'settings_notes_saving' => 'Saving notes...',
     'settings_notes_saved' => 'Your administrator notes have been saved automatically.',
     'settings_notes_save_error' => 'Unable to save administrator notes.',
+    'settings_notes_save_button' => 'Save notes',
+    'settings_notes_rate_limit' => 'Too many save attempts. Wait a moment and use Save.',
     'settings_notes_locked' => 'Unlock Settings access first to save your administrator notes.',
     'settings_notes_sql_required' => 'Add the SQL column for administrator notes first.',
     'settings_change_log_title' => 'Change log',

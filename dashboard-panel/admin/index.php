@@ -5059,8 +5059,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             <form method="post"
                                   class="admin-settings-access__form"
                                   data-admin-personal-notes-form
+                                  data-autosave-interval="15000"
                                   data-save-success="<?php echo admin_e(admin_t($messages, 'settings_notes_saved', 'Your administrator notes have been saved automatically.')); ?>"
                                   data-save-error="<?php echo admin_e(admin_t($messages, 'settings_notes_save_error', 'Unable to save administrator notes.')); ?>"
+                                  data-save-rate-limit="<?php echo admin_e(admin_t($messages, 'settings_notes_rate_limit', 'Too many save attempts. Wait a moment and use Save.')); ?>"
                                   data-save-pending="<?php echo admin_e(admin_t($messages, 'settings_notes_pending', 'Unsaved changes...')); ?>"
                                   data-save-saving="<?php echo admin_e(admin_t($messages, 'settings_notes_saving', 'Saving notes...')); ?>"
                                   data-save-idle="<?php echo admin_e(admin_t($messages, 'settings_notes_idle', 'Changes save automatically.')); ?>">
@@ -5073,6 +5075,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
                                     <div class="col-12">
                                         <div class="form-text text-muted" data-admin-personal-notes-status><?php echo admin_e(admin_t($messages, 'settings_notes_idle', 'Changes save automatically.')); ?></div>
+                                    </div>
+                                    <div class="col-12 d-flex justify-content-end">
+                                        <button type="button" class="btn btn-dark" data-admin-personal-notes-save><?php echo admin_e(admin_t($messages, 'settings_notes_save_button', 'Save notes')); ?></button>
                                     </div>
                                 </div>
                             </form>

@@ -705,6 +705,8 @@ return [
     'settings_notes_saving' => 'Zapisywanie notatek...',
     'settings_notes_saved' => 'Notatki administratora zostały zapisane automatycznie.',
     'settings_notes_save_error' => 'Nie udało się zapisać notatek administratora.',
+    'settings_notes_save_button' => 'Zapisz notatki',
+    'settings_notes_rate_limit' => 'Za dużo prób zapisu. Poczekaj chwilę i użyj przycisku Zapisz.',
     'settings_notes_locked' => 'Najpierw odblokuj sekcję Settings, aby zapisać swoje notatki administratora.',
     'settings_notes_sql_required' => 'Najpierw dodaj kolumnę SQL dla notatek administratora.',
     'settings_change_log_title' => 'Wprowadzone zmiany',

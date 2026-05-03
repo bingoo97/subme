@@ -715,15 +715,19 @@ document.addEventListener('DOMContentLoaded', function () {
             var textarea = q('textarea[name="personal_notes_html"]', form);
             var csrfInput = q('input[name="_csrf"]', form);
             var statusNode = q('[data-admin-personal-notes-status]', form);
+            var saveButton = q('[data-admin-personal-notes-save]', form);
             var saveUrl = window.location.href;
+            var autosaveIntervalMs = parseInt(form.getAttribute('data-autosave-interval') || '15000', 10);
             var lastSavedValue = textarea ? String(textarea.value || '') : '';
             var isSaving = false;
-            var shouldResave = false;
-            var saveTimer = 0;
             var heartbeatTimer = 0;
 
             if (!textarea || !csrfInput || !statusNode) {
                 return;
+            }
+
+            if (!(autosaveIntervalMs > 0)) {
+                autosaveIntervalMs = 15000;
             }
 
             function setStatus(message, tone) {
@@ -747,13 +751,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 return (form.getAttribute('data-save-success') || 'Saved.') + ' ' + value;
             }
 
-            function queueSave(immediate) {
-                window.clearTimeout(saveTimer);
-                saveTimer = window.setTimeout(runSave, immediate ? 0 : 900);
-            }
-
             function hasUnsavedChanges() {
                 return String(textarea.value || '') !== lastSavedValue;
+            }
+
+            function setSaveButtonState(disabled) {
+                if (!saveButton) {
+                    return;
+                }
+                saveButton.disabled = !!disabled;
             }
 
             function flushWithBeacon() {
@@ -779,14 +785,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
 
-            function runSave() {
+            function runSave(force) {
                 var currentValue = String(textarea.value || '');
                 var requestBody;
 
-                window.clearTimeout(saveTimer);
-
                 if (isSaving) {
-                    shouldResave = true;
                     return;
                 }
 
@@ -796,8 +799,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 isSaving = true;
-                shouldResave = false;
                 setStatus(form.getAttribute('data-save-saving') || 'Saving notes...', 'idle');
+                setSaveButtonState(true);
 
                 requestBody = buildUrlEncodedPayload({
                     admin_save_personal_notes_ajax: '1',
@@ -814,6 +817,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     credentials: 'same-origin'
                 }).then(function (payload) {
                     if (!payload || !payload.ok) {
+                        if (payload && payload.__status === 429) {
+                            setStatus(form.getAttribute('data-save-rate-limit') || 'Too many save attempts. Wait a moment and use Save.', 'error');
+                            return;
+                        }
+
                         setStatus((payload && payload.message) ? payload.message : (form.getAttribute('data-save-error') || 'Unable to save administrator notes.'), 'error');
                         return;
                     }
@@ -824,26 +832,32 @@ document.addEventListener('DOMContentLoaded', function () {
                     setStatus(form.getAttribute('data-save-error') || 'Unable to save administrator notes.', 'error');
                 }).finally(function () {
                     isSaving = false;
-                    if (shouldResave || String(textarea.value || '') !== lastSavedValue) {
-                        queueSave(true);
+                    setSaveButtonState(false);
+                    if (!hasUnsavedChanges()) {
+                        setStatus(form.getAttribute('data-save-idle') || 'Changes save automatically.', 'idle');
                     }
                 });
             }
 
             textarea.addEventListener('input', function () {
                 setStatus(form.getAttribute('data-save-pending') || 'You have unsaved changes...', 'idle');
-                queueSave(false);
             });
 
             textarea.addEventListener('change', function () {
-                queueSave(true);
+                setStatus(form.getAttribute('data-save-pending') || 'You have unsaved changes...', 'idle');
             });
+
+            if (saveButton) {
+                saveButton.addEventListener('click', function () {
+                    runSave(true);
+                });
+            }
 
             heartbeatTimer = window.setInterval(function () {
                 if (!isSaving && hasUnsavedChanges()) {
-                    queueSave(true);
+                    runSave(false);
                 }
-            }, 10000);
+            }, autosaveIntervalMs);
 
             window.addEventListener('visibilitychange', function () {
                 if (doc.visibilityState === 'hidden') {
