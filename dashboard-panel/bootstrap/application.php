@@ -4521,6 +4521,94 @@ function app_email_placeholder_map(array $replacements): array
     return $map;
 }
 
+function app_email_absolute_asset_url(string $value, array $settings): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (stripos($value, 'http://') === 0 || stripos($value, 'https://') === 0) {
+        return $value;
+    }
+
+    $siteUrl = rtrim(trim((string)($settings['site_url'] ?? $settings['page_url'] ?? '')), '/');
+    $normalizedPath = app_format_logo_path($value);
+    if ($siteUrl === '' || stripos($normalizedPath, 'http://') === 0 || stripos($normalizedPath, 'https://') === 0) {
+        return $normalizedPath;
+    }
+
+    return $siteUrl . '/' . ltrim($normalizedPath, '/');
+}
+
+function app_email_wrap_html(array $settings, string $htmlBody, string $localeCode = 'en'): string
+{
+    $htmlBody = trim($htmlBody);
+    if ($htmlBody === '') {
+        return '';
+    }
+
+    if (preg_match('~<html\b|<body\b~i', $htmlBody) === 1) {
+        return $htmlBody;
+    }
+
+    $localeCode = app_normalize_email_locale($localeCode);
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+    $logoUrl = app_email_absolute_asset_url((string)($settings['site_logo_url'] ?? $settings['page_logo'] ?? ''), $settings);
+    $safeSiteName = htmlspecialchars($siteName !== '' ? $siteName : 'Subscription Panel', ENT_QUOTES, 'UTF-8');
+    $safeSiteUrl = $siteUrl !== '' ? htmlspecialchars($siteUrl, ENT_QUOTES, 'UTF-8') : '';
+    $brandHtml = '';
+
+    if ($logoUrl !== '') {
+        $safeLogoUrl = htmlspecialchars($logoUrl, ENT_QUOTES, 'UTF-8');
+        $imageHtml = '<img src="' . $safeLogoUrl . '" alt="' . $safeSiteName . '" style="display:block;max-width:180px;width:auto;height:auto;border:0;margin:0 auto;">';
+        $brandHtml = $safeSiteUrl !== ''
+            ? '<a href="' . $safeSiteUrl . '" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:inline-block;">' . $imageHtml . '</a>'
+            : $imageHtml;
+    } else {
+        $textHtml = '<div style="font-family:Arial,sans-serif;font-size:24px;line-height:1.2;font-weight:700;color:#111827;">' . $safeSiteName . '</div>';
+        $brandHtml = $safeSiteUrl !== ''
+            ? '<a href="' . $safeSiteUrl . '" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:inline-block;">' . $textHtml . '</a>'
+            : $textHtml;
+    }
+
+    $preheaderText = $localeCode === 'pl'
+        ? 'Wiadomość z systemu ' . ($siteName !== '' ? $siteName : 'Subme PRO')
+        : 'Message from ' . ($siteName !== '' ? $siteName : 'Subme PRO');
+
+    return '<!doctype html>'
+        . '<html lang="' . htmlspecialchars($localeCode, ENT_QUOTES, 'UTF-8') . '">'
+        . '<head>'
+        . '<meta charset="utf-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        . '<meta http-equiv="x-ua-compatible" content="ie=edge">'
+        . '<title>' . $safeSiteName . '</title>'
+        . '</head>'
+        . '<body style="margin:0;padding:0;background:#f5f7fb;">'
+        . '<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">' . htmlspecialchars($preheaderText, ENT_QUOTES, 'UTF-8') . '</div>'
+        . '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;background:#f5f7fb;border-collapse:collapse;margin:0;padding:24px 0;">'
+        . '<tr>'
+        . '<td align="center" style="padding:0 16px;">'
+        . '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;width:100%;background:#ffffff;border-collapse:separate;border-spacing:0;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(17,24,39,0.08);">'
+        . '<tr>'
+        . '<td align="center" style="padding:28px 24px 20px 24px;border-bottom:1px solid #eef2f7;background:#ffffff;">'
+        . $brandHtml
+        . '</td>'
+        . '</tr>'
+        . '<tr>'
+        . '<td style="padding:28px 24px 32px 24px;font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#111827;">'
+        . $htmlBody
+        . '</td>'
+        . '</tr>'
+        . '</table>'
+        . '</td>'
+        . '</tr>'
+        . '</table>'
+        . '</body>'
+        . '</html>';
+}
+
 function app_email_render(string $templateBody, array $replacements): string
 {
     return strtr($templateBody, app_email_placeholder_map($replacements));
@@ -4558,7 +4646,9 @@ function app_email_send_with_attachment(
         $mail->clearAttachments();
         $mail->addAddress($recipientEmail);
         $mail->Subject = $subject;
-        $mail->Body = $htmlBody !== '' ? $htmlBody : nl2br(app_email_plain_text($subject));
+        $mail->Body = $htmlBody !== ''
+            ? app_email_wrap_html($settings, $htmlBody, (string)($settings['default_locale_code'] ?? 'en'))
+            : nl2br(app_email_plain_text($subject));
         $mail->AltBody = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $mail->Body)));
         $mail->addStringAttachment($attachmentBody, $attachmentFilename, 'base64', $attachmentMime);
         $mail->send();
@@ -5237,7 +5327,11 @@ function app_email_queue_template(
         app_email_render($subjectTemplate, $baseReplacements),
         $subjectTemplate
     );
-    $body = app_email_render($bodyTemplate, $baseReplacements);
+    $body = app_email_wrap_html(
+        $settings,
+        app_email_render($bodyTemplate, $baseReplacements),
+        $localeCode
+    );
 
     if (app_email_plain_text($body) === '') {
         return ['ok' => false, 'message' => 'Email body is empty.', 'queued' => false];
