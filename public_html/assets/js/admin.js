@@ -63,6 +63,15 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function encodeBase64Utf8(value) {
+        var input = String(value || '');
+        try {
+            return window.btoa(unescape(encodeURIComponent(input)));
+        } catch (error) {
+            return '';
+        }
+    }
+
     function buildUrlWithQuery(url, params) {
         var base = String(url || '').trim();
         var query = toQuery(params || {});
@@ -751,7 +760,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 payload = new window.FormData();
                 payload.append('admin_save_personal_notes_ajax', '1');
                 payload.append('_csrf', csrfInput.value);
-                payload.append('personal_notes_html', currentValue);
+                payload.append('personal_notes_html_b64', encodeBase64Utf8(currentValue));
 
                 try {
                     navigator.sendBeacon(saveUrl, payload);
@@ -784,7 +793,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 formData = new window.FormData();
                 formData.append('admin_save_personal_notes_ajax', '1');
                 formData.append('_csrf', csrfInput.value);
-                formData.append('personal_notes_html', currentValue);
+                formData.append('personal_notes_html_b64', encodeBase64Utf8(currentValue));
 
                 jsonFetch(saveUrl, {
                     method: 'POST',

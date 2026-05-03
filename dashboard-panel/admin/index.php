@@ -368,10 +368,25 @@ if (isset($_POST['admin_save_personal_notes_ajax'])) {
         exit;
     }
 
+    $personalNotesHtml = (string)($_POST['personal_notes_html'] ?? '');
+    $personalNotesHtmlEncoded = trim((string)($_POST['personal_notes_html_b64'] ?? ''));
+    if ($personalNotesHtmlEncoded !== '') {
+        $decodedNotes = base64_decode(strtr($personalNotesHtmlEncoded, ' ', '+'), true);
+        if ($decodedNotes === false) {
+            http_response_code(422);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_notes_save_error', 'Unable to save administrator notes.'),
+            ]);
+            exit;
+        }
+        $personalNotesHtml = $decodedNotes;
+    }
+
     $saveNotesResult = admin_save_personal_notes(
         $db,
         (int)($adminUser['id'] ?? 0),
-        (string)($_POST['personal_notes_html'] ?? '')
+        $personalNotesHtml
     );
 
     if (empty($saveNotesResult['ok']) || !is_array($saveNotesResult['admin_user'] ?? null)) {
