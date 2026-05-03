@@ -72,6 +72,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function buildUrlEncodedPayload(values) {
+        var params = new URLSearchParams();
+        Object.keys(values || {}).forEach(function (key) {
+            params.append(key, String(values[key] == null ? '' : values[key]));
+        });
+        return params.toString();
+    }
+
     function buildUrlWithQuery(url, params) {
         var base = String(url || '').trim();
         var query = toQuery(params || {});
@@ -757,13 +765,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 currentValue = String(textarea.value || '');
-                payload = new window.FormData();
-                payload.append('admin_save_personal_notes_ajax', '1');
-                payload.append('_csrf', csrfInput.value);
-                payload.append('personal_notes_html_b64', encodeBase64Utf8(currentValue));
+                payload = buildUrlEncodedPayload({
+                    admin_save_personal_notes_ajax: '1',
+                    _csrf: csrfInput.value,
+                    personal_notes_html_b64: encodeBase64Utf8(currentValue)
+                });
 
                 try {
-                    navigator.sendBeacon(saveUrl, payload);
+                    navigator.sendBeacon(saveUrl, new Blob([payload], { type: 'application/x-www-form-urlencoded; charset=UTF-8' }));
                     lastSavedValue = currentValue;
                 } catch (error) {
                     // noop
@@ -772,7 +781,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             function runSave() {
                 var currentValue = String(textarea.value || '');
-                var formData;
+                var requestBody;
 
                 window.clearTimeout(saveTimer);
 
@@ -790,14 +799,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 shouldResave = false;
                 setStatus(form.getAttribute('data-save-saving') || 'Saving notes...', 'idle');
 
-                formData = new window.FormData();
-                formData.append('admin_save_personal_notes_ajax', '1');
-                formData.append('_csrf', csrfInput.value);
-                formData.append('personal_notes_html_b64', encodeBase64Utf8(currentValue));
+                requestBody = buildUrlEncodedPayload({
+                    admin_save_personal_notes_ajax: '1',
+                    _csrf: csrfInput.value,
+                    personal_notes_html_b64: encodeBase64Utf8(currentValue)
+                });
 
                 jsonFetch(saveUrl, {
                     method: 'POST',
-                    body: formData,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+                    body: requestBody,
                     credentials: 'same-origin'
                 }).then(function (payload) {
                     if (!payload || !payload.ok) {
