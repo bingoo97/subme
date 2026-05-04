@@ -71,7 +71,7 @@ return [
         'account_balance_label' => 'Stan konta',
         'top_up' => 'Doładuj',
         'balance_topup_modal_title' => 'Doładuj konto',
-        'balance_topup_modal_intro' => 'Wybierz metodę płatności.',
+        'balance_topup_modal_intro' => 'Wybierz metodę płatności.<br/>Jeśli masz do opłacenia tylko jedną subskrypcję, skorzystaj z płatności w zakładce: Zamówienia -> Płatność',
         'payment_test_mode_notice_title' => 'Tryb testowy płatności',
         'payment_test_mode_notice_text' => 'Możesz generować requesty płatności ale prosimy teraz nic nie wpłacać.',
         'balance_topup_amount_step_title' => 'Wpisz kwotę doładowania',

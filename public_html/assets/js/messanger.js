@@ -3729,7 +3729,6 @@
 			requestedConversationId = this.requestedConversationIdFromUrl();
 			this.restoreOpenScrollToBottomPending = !!shouldRestoreOpenState;
 			this.updateViewportMetrics();
-			this.syncDesktopDockedState();
 			this.syncConversationStateFromMarkup(true);
 			if (this.hasResellerInboxLayout()) {
 				if (!(requestedConversationId > 0 && this.activeConversationId > 0)) {
@@ -3745,6 +3744,7 @@
 					this.showConversationList();
 				}
 			}
+			this.syncDesktopDockedState();
 			this.resetGroupModal();
 			this.bind();
 			if (shouldRestoreOpenState || this.isDesktopDocked()) {

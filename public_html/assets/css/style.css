@@ -4281,6 +4281,14 @@ button[name="create_balance_payment"]:hover{
 	transform:translateY(0);
 }
 
+.modal-backdrop{
+	z-index:12040;
+}
+
+.balance-topup-modal{
+	z-index:12050;
+}
+
 .balance-topup-modal .modal-dialog{
 	max-width:580px;
 }
