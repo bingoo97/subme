@@ -663,6 +663,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
         $pageGuidanceEnabled = isset($_POST['page_guidance_enabled']) ? 1 : 0;
         $paymentTestModeNoticeEnabled = isset($_POST['payment_test_mode_notice_enabled']) ? 1 : 0;
+        $cryptoDailyBackupEnabled = isset($_POST['crypto_daily_backup_enabled']) ? 1 : 0;
+        $cryptoDailyBackupEmail = strtolower(trim((string)($_POST['crypto_daily_backup_email'] ?? '')));
         $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
         $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
         $expiredOrdersCleanupEnabled = isset($_POST['expired_orders_cleanup_enabled']) ? 1 : 0;
@@ -675,89 +677,100 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $selectedCurrencyId = 1;
         }
 
-        $updated = $db->update_using_id(
-            [
-                'default_currency_id',
-                'maintenance_mode',
-                'registration_enabled',
-                'sales_enabled',
-                'credits_sales_enabled',
-                'trials_enabled',
-                'support_chat_enabled',
-                'customer_messenger_enabled',
-                'customer_direct_chat_enabled',
-                'customer_group_chat_enabled',
-                'customer_global_group_enabled',
-                'messenger_voice_enabled',
-                'demo_messenger_showcase_enabled',
-                'reseller_group_chat_limit',
-                'support_chat_retention_hours',
-                'support_chat_retention_days',
-                'contact_form_enabled',
-                'referrals_enabled',
-                'apps_page_enabled',
-                'customer_type_switch_enabled',
-                'application_instructions_enabled',
-                'page_guidance_enabled',
-                'payment_test_mode_notice_enabled',
-                'history_cleanup_enabled',
-                'payments_cleanup_enabled',
-                'expired_orders_cleanup_enabled',
-                'bank_transfers_enabled',
-                'crypto_wallet_shared_assignments_enabled',
-                'bank_account_shared_assignments_enabled',
-            ],
-            [
-                $selectedCurrencyId,
-                $maintenanceMode,
-                $registrationEnabled,
-                $salesEnabled,
-                $creditsSalesEnabled,
-                $trialsEnabled,
-                $supportChatEnabled,
-                $customerMessengerEnabled,
-                $customerDirectChatEnabled,
-                $customerGroupChatEnabled,
-                $customerGlobalGroupEnabled,
-                $messengerVoiceEnabled,
-                $demoMessengerShowcaseEnabled,
-                $resellerGroupChatLimit,
-                $supportChatRetentionHours,
-                max(1, (int)ceil($supportChatRetentionHours / 24)),
-                $contactFormEnabled,
-                $referralsEnabled,
-                $appsPageEnabled,
-                $customerTypeSwitchEnabled,
-                $applicationInstructionsEnabled,
-                $pageGuidanceEnabled,
-                $paymentTestModeNoticeEnabled,
-                $historyCleanupEnabled,
-                $paymentsCleanupEnabled,
-                $expiredOrdersCleanupEnabled,
-                $bankTransfersEnabled,
-                $cryptoWalletSharedAssignmentsEnabled,
-                $bankAccountSharedAssignmentsEnabled,
-            ],
-            'app_settings',
-            1
-        );
-
-        if ($updated) {
-            admin_sync_products_currency($db, $selectedCurrencyId);
-            $pageAlert = admin_t($messages, 'settings_features_saved', 'Feature settings have been updated.');
-            $pageAlertType = 'success';
-            $appSettings = admin_app_settings($db);
-            if (function_exists('chat_demo_showcase_sync')) {
-                chat_demo_showcase_sync($db, is_array($appSettings) ? $appSettings : [], ['emit_messages' => false, 'source' => 'settings_save']);
-            }
-            $adminDefaultCurrencyRow = admin_default_currency_row($db);
-            $adminDefaultCurrencyCode = (string)($adminDefaultCurrencyRow['code'] ?? 'USD');
-            $adminDefaultCurrencySymbol = (string)($adminDefaultCurrencyRow['symbol'] ?? '$');
-            $adminDefaultCurrencyLabel = trim($adminDefaultCurrencyCode . ' - ' . (string)($adminDefaultCurrencyRow['name'] ?? $adminDefaultCurrencyCode));
-            $adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
-        } else {
-            $pageAlert = admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.');
+        if ($cryptoDailyBackupEmail !== '' && filter_var($cryptoDailyBackupEmail, FILTER_VALIDATE_EMAIL) === false) {
+            $pageAlert = admin_t($messages, 'settings_crypto_daily_backup_email_invalid', 'Backup recipient email must be a valid address.');
             $pageAlertType = 'danger';
+            $appSettings['crypto_daily_backup_enabled'] = $cryptoDailyBackupEnabled;
+            $appSettings['crypto_daily_backup_email'] = $cryptoDailyBackupEmail;
+        } else {
+            $updated = $db->update_using_id(
+                [
+                    'default_currency_id',
+                    'maintenance_mode',
+                    'registration_enabled',
+                    'sales_enabled',
+                    'credits_sales_enabled',
+                    'trials_enabled',
+                    'support_chat_enabled',
+                    'customer_messenger_enabled',
+                    'customer_direct_chat_enabled',
+                    'customer_group_chat_enabled',
+                    'customer_global_group_enabled',
+                    'messenger_voice_enabled',
+                    'demo_messenger_showcase_enabled',
+                    'reseller_group_chat_limit',
+                    'support_chat_retention_hours',
+                    'support_chat_retention_days',
+                    'contact_form_enabled',
+                    'referrals_enabled',
+                    'apps_page_enabled',
+                    'customer_type_switch_enabled',
+                    'application_instructions_enabled',
+                    'page_guidance_enabled',
+                    'payment_test_mode_notice_enabled',
+                    'crypto_daily_backup_enabled',
+                    'crypto_daily_backup_email',
+                    'history_cleanup_enabled',
+                    'payments_cleanup_enabled',
+                    'expired_orders_cleanup_enabled',
+                    'bank_transfers_enabled',
+                    'crypto_wallet_shared_assignments_enabled',
+                    'bank_account_shared_assignments_enabled',
+                ],
+                [
+                    $selectedCurrencyId,
+                    $maintenanceMode,
+                    $registrationEnabled,
+                    $salesEnabled,
+                    $creditsSalesEnabled,
+                    $trialsEnabled,
+                    $supportChatEnabled,
+                    $customerMessengerEnabled,
+                    $customerDirectChatEnabled,
+                    $customerGroupChatEnabled,
+                    $customerGlobalGroupEnabled,
+                    $messengerVoiceEnabled,
+                    $demoMessengerShowcaseEnabled,
+                    $resellerGroupChatLimit,
+                    $supportChatRetentionHours,
+                    max(1, (int)ceil($supportChatRetentionHours / 24)),
+                    $contactFormEnabled,
+                    $referralsEnabled,
+                    $appsPageEnabled,
+                    $customerTypeSwitchEnabled,
+                    $applicationInstructionsEnabled,
+                    $pageGuidanceEnabled,
+                    $paymentTestModeNoticeEnabled,
+                    $cryptoDailyBackupEnabled,
+                    $cryptoDailyBackupEmail !== '' ? $cryptoDailyBackupEmail : null,
+                    $historyCleanupEnabled,
+                    $paymentsCleanupEnabled,
+                    $expiredOrdersCleanupEnabled,
+                    $bankTransfersEnabled,
+                    $cryptoWalletSharedAssignmentsEnabled,
+                    $bankAccountSharedAssignmentsEnabled,
+                ],
+                'app_settings',
+                1
+            );
+
+            if ($updated) {
+                admin_sync_products_currency($db, $selectedCurrencyId);
+                $pageAlert = admin_t($messages, 'settings_features_saved', 'Feature settings have been updated.');
+                $pageAlertType = 'success';
+                $appSettings = admin_app_settings($db);
+                if (function_exists('chat_demo_showcase_sync')) {
+                    chat_demo_showcase_sync($db, is_array($appSettings) ? $appSettings : [], ['emit_messages' => false, 'source' => 'settings_save']);
+                }
+                $adminDefaultCurrencyRow = admin_default_currency_row($db);
+                $adminDefaultCurrencyCode = (string)($adminDefaultCurrencyRow['code'] ?? 'USD');
+                $adminDefaultCurrencySymbol = (string)($adminDefaultCurrencyRow['symbol'] ?? '$');
+                $adminDefaultCurrencyLabel = trim($adminDefaultCurrencyCode . ' - ' . (string)($adminDefaultCurrencyRow['name'] ?? $adminDefaultCurrencyCode));
+                $adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
+            } else {
+                $pageAlert = admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.');
+                $pageAlertType = 'danger';
+            }
         }
     }
 }
