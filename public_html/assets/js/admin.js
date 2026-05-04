@@ -1394,6 +1394,7 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-product-provider-logo-manager]').forEach(function (manager) {
             var form = closest(manager, 'form');
             var csrfInput = form ? q('input[name="_csrf"]', form) : null;
+            var providerIdInput = form ? q('input[name="provider_id"]', form) : null;
             var fileInput = q('[data-product-provider-logo-file]', manager);
             var uploadTrigger = q('[data-product-provider-logo-upload-trigger]', manager);
             var removeTrigger = q('[data-product-provider-logo-remove]', manager);
@@ -1412,6 +1413,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
             function currentUrl() {
                 return String(urlInput.value || '').trim();
+            }
+
+            function currentProviderId() {
+                if (!providerIdInput) {
+                    return 0;
+                }
+                return parseInt(String(providerIdInput.value || '0'), 10) || 0;
             }
 
             function setBusy(nextBusy) {
@@ -1469,6 +1477,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 formData.append('admin_product_provider_logo_ajax', '1');
                 formData.append('logo_action', 'upload');
                 formData.append('current_logo_url', currentUrl());
+                formData.append('provider_id', String(currentProviderId()));
                 formData.append('_csrf', String(csrfInput.value || ''));
                 formData.append('provider_logo_file', file);
 
@@ -1515,6 +1524,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 formData.append('admin_product_provider_logo_ajax', '1');
                 formData.append('logo_action', 'remove');
                 formData.append('current_logo_url', existingUrl);
+                formData.append('provider_id', String(currentProviderId()));
                 formData.append('_csrf', String(csrfInput.value || ''));
 
                 setBusy(true);

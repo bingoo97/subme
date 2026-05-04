@@ -222,7 +222,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             </div>
 
                             <div class="payment-step__actions">
-                                <button type="submit" class="btn btn-dark btn-lg" name="create_bank_payment">
+                                <button type="submit" class="btn btn-danger btn-lg" name="create_bank_payment">
                                     {$t.payment_create_bank|default:'Create bank transfer'}
                                 </button>
                             </div>

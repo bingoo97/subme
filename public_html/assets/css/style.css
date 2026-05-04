@@ -4940,6 +4940,19 @@ button[name="create_balance_payment"]:hover{
 }
 
 @media (max-width:550px) {
+	#news .news_content {
+		padding: 10px;
+	}
+	#news .news_inner,
+	#news .news_inner.active{
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		background: #ffffff;
+		box-shadow: none;
+		color:#fff;
+		margin: 2rem 0;
+	}
 	#news .news_title h2{
 		font-size: 14px;
 	}
@@ -6337,12 +6350,12 @@ img.scan{
 	display:flex;
 	align-items:center;
 	justify-content:center;
-	width:42px;
-	height:42px;
-	flex:0 0 42px;
-	border-radius:12px;
+	width: 30px;
+	height: 30px;
+	flex: 0 0 30px;
+	border-radius: 0;
 	background:#fff;
-	border:1px solid #e5e7eb;
+	border: none;
 	overflow:hidden;
 }
 
