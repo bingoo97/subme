@@ -350,19 +350,6 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     'noah.walker@demo.demo',
                 ],
             ],
-            [
-                'title' => 'Weekend Lounge',
-                'retention' => 1440,
-                'owner_email' => chat_demo_showcase_main_email(),
-                'member_emails' => [
-                    chat_demo_showcase_main_email(),
-                    'mia.hughes@demo.demo',
-                    'oliver.ross@demo.demo',
-                    'ava.collins@demo.demo',
-                    'ethan.bailey@demo.demo',
-                    'grace.ward@demo.demo',
-                ],
-            ],
         ];
     }
 
@@ -708,9 +695,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         return true;
     }
 
-    function chat_demo_showcase_acquire_tick_lock(Mysql_ks $db, int $intervalSeconds, string $currentTime): bool
+    function chat_demo_showcase_acquire_tick_lock(Mysql_ks $db, string $columnName, int $intervalSeconds, string $currentTime): bool
     {
-        if ($intervalSeconds <= 0 || !schema_object_exists($db, 'app_settings') || !schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_last_tick_at')) {
+        if (
+            $intervalSeconds <= 0
+            || !schema_object_exists($db, 'app_settings')
+            || !preg_match('/^[a-z0-9_]+$/i', $columnName)
+            || !schema_column_exists($db, 'app_settings', $columnName)
+        ) {
             return false;
         }
 
@@ -719,15 +711,98 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $safeCutoff = $db->escape($cutoff);
         $result = $db->query(
             "UPDATE app_settings
-             SET demo_messenger_showcase_last_tick_at = '{$safeNow}'
+             SET {$columnName} = '{$safeNow}'
              WHERE id = 1
                AND (
-                    demo_messenger_showcase_last_tick_at IS NULL
-                    OR demo_messenger_showcase_last_tick_at <= '{$safeCutoff}'
+                    {$columnName} IS NULL
+                    OR {$columnName} <= '{$safeCutoff}'
                )"
         );
 
         return (bool)$result && (int)$db->affected_rows > 0;
+    }
+
+    function chat_demo_showcase_member_ids_from_emails(array $memberEmails, array $customersByEmail): array
+    {
+        $memberIds = [];
+        foreach ($memberEmails as $memberEmail) {
+            $memberEmail = strtolower(trim((string)$memberEmail));
+            if ($memberEmail === '' || !isset($customersByEmail[$memberEmail]['id'])) {
+                continue;
+            }
+            $memberIds[] = (int)$customersByEmail[$memberEmail]['id'];
+        }
+
+        return array_values(array_unique(array_filter($memberIds)));
+    }
+
+    function chat_demo_showcase_emit_single_message(Mysql_ks $db, int $conversationId, array $memberEmails, array $customersByEmail): bool
+    {
+        $memberIds = chat_demo_showcase_member_ids_from_emails($memberEmails, $customersByEmail);
+        if (!$memberIds) {
+            return false;
+        }
+
+        $speakerId = (int)$memberIds[array_rand($memberIds)];
+        return chat_demo_showcase_insert_customer_message($db, $conversationId, $speakerId, chat_demo_showcase_pick_message());
+    }
+
+    function chat_demo_showcase_prune_obsolete_named_groups(Mysql_ks $db, int $ownerCustomerId, array $allowedTitles): int
+    {
+        if ($ownerCustomerId <= 0 || !schema_object_exists($db, 'support_conversations')) {
+            return 0;
+        }
+
+        $safeTitles = [];
+        foreach ($allowedTitles as $title) {
+            $title = trim((string)$title);
+            if ($title === '') {
+                continue;
+            }
+            $safeTitles[] = "'" . $db->escape($title) . "'";
+        }
+        $titleCondition = $safeTitles ? 'AND group_name NOT IN (' . implode(', ', $safeTitles) . ')' : '';
+
+        $rows = $db->select_full_user(
+            "SELECT id
+             FROM support_conversations
+             WHERE conversation_type = 'group_chat'
+               AND is_direct_conversation = 0
+               AND group_created_by_customer_id = {$ownerCustomerId}
+               {$titleCondition}"
+        );
+
+        $deleted = 0;
+        foreach ($rows as $row) {
+            $conversationId = (int)($row['id'] ?? 0);
+            if ($conversationId <= 0) {
+                continue;
+            }
+
+            if (schema_object_exists($db, 'support_messages')) {
+                $attachments = $db->select_full_user(
+                    "SELECT attachment_path
+                     FROM support_messages
+                     WHERE conversation_id = {$conversationId}
+                       AND attachment_path IS NOT NULL
+                       AND attachment_path != ''"
+                );
+                foreach ($attachments as $attachmentRow) {
+                    chat_delete_group_attachment_file((string)($attachmentRow['attachment_path'] ?? ''));
+                }
+
+                @$db->query("DELETE FROM support_messages WHERE conversation_id = {$conversationId}");
+            }
+
+            if (schema_object_exists($db, 'support_conversation_members')) {
+                @$db->query("DELETE FROM support_conversation_members WHERE conversation_id = {$conversationId}");
+            }
+
+            @$db->query("DELETE FROM support_conversations WHERE id = {$conversationId} AND conversation_type = 'group_chat' LIMIT 1");
+            $deleted++;
+        }
+
+        return $deleted;
     }
 
     function chat_demo_showcase_sync(Mysql_ks $db, array $settings = [], array $options = []): array
@@ -758,6 +833,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             }
         }
 
+        $mainCustomer = $customersByEmail[strtolower(chat_demo_showcase_main_email())] ?? null;
+        if (is_array($mainCustomer) && !empty($mainCustomer['id'])) {
+            $allowedTitles = array_map(static function (array $spec): string {
+                return trim((string)($spec['title'] ?? ''));
+            }, chat_demo_showcase_group_specs());
+            $ensuredConversations += chat_demo_showcase_prune_obsolete_named_groups($db, (int)$mainCustomer['id'], $allowedTitles);
+        }
+
         $globalConversation = chat_sync_global_group_members($db, $settings);
         if (is_array($globalConversation) && !empty($globalConversation['id'])) {
             $ensuredConversations++;
@@ -780,50 +863,47 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
         $directConversation = is_array($directResult['row']) ? $directResult['row'] : null;
 
-        $generatedMessages = 0;
+        $generatedGlobalMessages = 0;
+        $generatedPrivateMessages = 0;
         $emitMessages = !array_key_exists('emit_messages', $options) || !empty($options['emit_messages']);
-        if ($emitMessages && chat_demo_showcase_acquire_tick_lock($db, 10, chat_current_datetime())) {
-            $targets = [];
-            if (is_array($globalConversation) && !empty($globalConversation['id'])) {
-                $targets[] = [
-                    'conversation_id' => (int)$globalConversation['id'],
-                    'member_emails' => array_keys($customersByEmail),
-                ];
-            }
-            foreach (chat_demo_showcase_group_specs() as $index => $groupSpec) {
-                if (!isset($groupConversations[$index]['id'])) {
-                    continue;
+        if ($emitMessages) {
+            $currentTime = chat_current_datetime();
+
+            if (
+                is_array($globalConversation)
+                && !empty($globalConversation['id'])
+                && chat_demo_showcase_acquire_tick_lock($db, 'demo_messenger_showcase_last_global_tick_at', 30, $currentTime)
+            ) {
+                if (chat_demo_showcase_emit_single_message($db, (int)$globalConversation['id'], array_keys($customersByEmail), $customersByEmail)) {
+                    $generatedGlobalMessages++;
                 }
-                $targets[] = [
-                    'conversation_id' => (int)$groupConversations[$index]['id'],
-                    'member_emails' => (array)($groupSpec['member_emails'] ?? []),
-                ];
-            }
-            if (is_array($directConversation) && !empty($directConversation['id'])) {
-                $directSpec = chat_demo_showcase_direct_spec();
-                $targets[] = [
-                    'conversation_id' => (int)$directConversation['id'],
-                    'member_emails' => [$directSpec['owner_email'], $directSpec['partner_email']],
-                ];
             }
 
-            foreach ($targets as $target) {
-                $memberIds = [];
-                foreach ((array)($target['member_emails'] ?? []) as $memberEmail) {
-                    $memberEmail = strtolower(trim((string)$memberEmail));
-                    if ($memberEmail === '' || !isset($customersByEmail[$memberEmail]['id'])) {
-                        continue;
+            if (chat_demo_showcase_acquire_tick_lock($db, 'demo_messenger_showcase_last_private_tick_at', 60, $currentTime)) {
+                foreach (chat_demo_showcase_group_specs() as $index => $groupSpec) {
+                    if (
+                        isset($groupConversations[$index]['id'])
+                        && chat_demo_showcase_emit_single_message(
+                            $db,
+                            (int)$groupConversations[$index]['id'],
+                            (array)($groupSpec['member_emails'] ?? []),
+                            $customersByEmail
+                        )
+                    ) {
+                        $generatedPrivateMessages++;
                     }
-                    $memberIds[] = (int)$customersByEmail[$memberEmail]['id'];
-                }
-                $memberIds = array_values(array_unique(array_filter($memberIds)));
-                if (!$memberIds) {
-                    continue;
                 }
 
-                $speakerId = (int)$memberIds[array_rand($memberIds)];
-                if (chat_demo_showcase_insert_customer_message($db, (int)$target['conversation_id'], $speakerId, chat_demo_showcase_pick_message())) {
-                    $generatedMessages++;
+                if (is_array($directConversation) && !empty($directConversation['id'])) {
+                    $directSpec = chat_demo_showcase_direct_spec();
+                    if (chat_demo_showcase_emit_single_message(
+                        $db,
+                        (int)$directConversation['id'],
+                        [$directSpec['owner_email'] ?? '', $directSpec['partner_email'] ?? ''],
+                        $customersByEmail
+                    )) {
+                        $generatedPrivateMessages++;
+                    }
                 }
             }
         }
@@ -833,7 +913,9 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             'skipped' => false,
             'ensured_users' => $ensuredUsers,
             'ensured_conversations' => $ensuredConversations,
-            'generated_messages' => $generatedMessages,
+            'generated_messages' => $generatedGlobalMessages + $generatedPrivateMessages,
+            'generated_global_messages' => $generatedGlobalMessages,
+            'generated_private_messages' => $generatedPrivateMessages,
             'message' => 'Demo messenger showcase synchronized.',
         ];
     }

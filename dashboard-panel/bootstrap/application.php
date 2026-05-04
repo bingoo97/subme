@@ -3328,6 +3328,24 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('app_settings', 'demo_messenger_showcase_last_tick_at');
     }
+
+    if (!schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_last_global_tick_at')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN demo_messenger_showcase_last_global_tick_at DATETIME DEFAULT NULL
+             AFTER demo_messenger_showcase_last_tick_at"
+        );
+        schema_forget_column_cache('app_settings', 'demo_messenger_showcase_last_global_tick_at');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_last_private_tick_at')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN demo_messenger_showcase_last_private_tick_at DATETIME DEFAULT NULL
+             AFTER demo_messenger_showcase_last_global_tick_at"
+        );
+        schema_forget_column_cache('app_settings', 'demo_messenger_showcase_last_private_tick_at');
+    }
 }
 
 function app_ensure_customer_runtime_columns(Mysql_ks $db): void
@@ -4002,6 +4020,8 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['messenger_voice_enabled'] = (int)($settings['messenger_voice_enabled'] ?? 0);
     $settings['demo_messenger_showcase_enabled'] = (int)($settings['demo_messenger_showcase_enabled'] ?? 0);
     $settings['demo_messenger_showcase_last_tick_at'] = trim((string)($settings['demo_messenger_showcase_last_tick_at'] ?? ''));
+    $settings['demo_messenger_showcase_last_global_tick_at'] = trim((string)($settings['demo_messenger_showcase_last_global_tick_at'] ?? ''));
+    $settings['demo_messenger_showcase_last_private_tick_at'] = trim((string)($settings['demo_messenger_showcase_last_private_tick_at'] ?? ''));
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
     $settings['page_guidance_enabled'] = (int)($settings['page_guidance_enabled'] ?? 1);
     $settings['payment_test_mode_notice_enabled'] = (int)($settings['payment_test_mode_notice_enabled'] ?? 0);

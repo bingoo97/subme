@@ -57,7 +57,7 @@ if (empty($user['logged']) || empty($_SESSION['id'])) {
 }
 
 if (app_uses_v2_schema($db) && function_exists('chat_demo_showcase_sync')) {
-    chat_demo_showcase_sync($db, is_array($settings ?? null) ? $settings : [], ['emit_messages' => true, 'source' => 'customer_chat_action']);
+    chat_demo_showcase_sync($db, is_array($settings ?? null) ? $settings : [], ['emit_messages' => false, 'source' => 'customer_chat_action']);
 }
 
 function chat_first_admin_id(Mysql_ks $db): int

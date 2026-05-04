@@ -76,6 +76,8 @@ CREATE TABLE `app_settings` (
   `messenger_voice_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `demo_messenger_showcase_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `demo_messenger_showcase_last_tick_at` DATETIME DEFAULT NULL,
+  `demo_messenger_showcase_last_global_tick_at` DATETIME DEFAULT NULL,
+  `demo_messenger_showcase_last_private_tick_at` DATETIME DEFAULT NULL,
   `contact_form_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `referrals_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `apps_page_enabled` TINYINT(1) NOT NULL DEFAULT 1,

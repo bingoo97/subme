@@ -23,7 +23,7 @@ $messages = admin_load_messages($currentLocale);
 $appSettings = admin_app_settings($db);
 $appSettings = is_array($appSettings) ? $appSettings : [];
 if (function_exists('chat_demo_showcase_sync')) {
-    chat_demo_showcase_sync($db, $appSettings, ['emit_messages' => true, 'source' => 'admin_chat']);
+    chat_demo_showcase_sync($db, $appSettings, ['emit_messages' => false, 'source' => 'admin_chat']);
 }
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
