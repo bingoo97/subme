@@ -4818,12 +4818,12 @@ button[name="create_balance_payment"]:hover{
 }
 
 #news .news_inner{
-	font-family: 'Poppins', sans-serif;
+	font-family: sans-serif;
 	padding: 12px 14px 10px;
-    border-radius: 20px;
-    background: #ffffff;
-    box-shadow: 0 8px 2px rgba(17, 17, 17, .05);
-    word-break: break-word;
+	border-radius: 20px;
+	background: #ffffff;
+	box-shadow: 0 8px 2px rgba(17, 17, 17, .05);
+	word-break: break-word;
 	color:#fff;
 	margin: 1.5rem 0;
 }
@@ -4878,7 +4878,8 @@ button[name="create_balance_payment"]:hover{
 
 #news .news_title h2 .news-new-badge{
 	display:inline-block;
-	margin-right:6px;
+	margin-right: 2px;
+	margin-top: -2px;
 	padding:1px 6px;
 	font-size:10px;
 	font-weight:700;
@@ -4893,29 +4894,49 @@ button[name="create_balance_payment"]:hover{
 	font-family: 'Poppins', sans-serif;
 	font-size: 10px;
 	margin: 0;
-	letter-spacing: 1px;
+	letter-spacing: 0.3px;
 	color: #666;
 }
 
 #news .news_title .entry span{
-	color: #666;
+	color: #434343;
 	font-weight: 600;
 }
 
 #news .news_content{
-	font-family: 'Poppins', sans-serif;
+	font-family: sans-serif;
 	padding: 10px 18px 5px;
-	font-size: 13px;
-	text-align: justify;
-	color:#434343;
+	color:#2f2f2f;
 }
 
 #news .news_content p{
-	font-size: 15px;
-	color:#434343;
 	margin:0 0 10px;
 	font-weight: 400;
 	line-height: 25px;
+}
+
+#news .news_content a{
+	color:#0d6efd;
+}
+
+#news .news_content img{
+	display:block;
+	max-width:100%;
+	width:auto;
+	height:auto;
+	margin:0 0 12px;
+	border-radius:12px;
+}
+
+#news .news_content video{
+	display:block;
+	width:100%;
+	max-width:100%;
+	height:auto;
+	margin:0 0 12px;
+	border-radius:12px;
+	background:#000;
+	object-fit:contain;
 }
 
 @media (max-width:550px) {
@@ -4924,9 +4945,6 @@ button[name="create_balance_payment"]:hover{
 	}
 	#news .news_title .entry{
 		font-size: 10px;
-	}
-	#news .news_content p{
-		font-size: 15px;
 	}
 }
 

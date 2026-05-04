@@ -17,7 +17,7 @@
 			</div>
 			{if $news[i].text}
 			<div class="news_content">
-				<p>{$news[i].text}</p>
+				{$news[i].text nofilter}
 			</div>
 			{/if}
 		</div>

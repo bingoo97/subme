@@ -6869,6 +6869,47 @@ body.admin-login-page .alert.alert-danger::before{
     color:#fff;
 }
 
+.admin-rich-editor__color,
+.admin-rich-editor__select{
+    height:2.45rem;
+    border:1px solid rgba(15, 23, 42, 0.12);
+    border-radius:12px;
+    background:#fff;
+    color:#162033;
+    transition:background .16s ease, border-color .16s ease, transform .16s ease;
+}
+
+.admin-rich-editor__color{
+    width:2.9rem;
+    min-width:2.9rem;
+    padding:.2rem;
+    cursor:pointer;
+}
+
+.admin-rich-editor__select{
+    min-width:7.25rem;
+    padding:0 .75rem;
+    font-size:.92rem;
+    font-weight:600;
+}
+
+.admin-rich-editor__color:hover,
+.admin-rich-editor__color:focus,
+.admin-rich-editor__select:hover,
+.admin-rich-editor__select:focus{
+    background:#eef2ff;
+    border-color:rgba(59, 130, 246, 0.28);
+    outline:none;
+    transform:translateY(-1px);
+}
+
+.admin-rich-editor__color:disabled,
+.admin-rich-editor__select:disabled{
+    opacity:.55;
+    cursor:not-allowed;
+    transform:none;
+}
+
 .admin-rich-editor__toolbar-separator{
     width:1px;
     min-height:2.45rem;
@@ -6909,6 +6950,17 @@ body.admin-login-page .alert.alert-danger::before{
     height:auto;
     border-radius:16px;
     margin:.9rem 0;
+}
+
+.admin-rich-editor__surface video{
+    display:block;
+    width:100%;
+    max-width:100%;
+    height:auto;
+    margin:.9rem 0;
+    border-radius:16px;
+    background:#000;
+    object-fit:contain;
 }
 
 .admin-rich-editor__surface blockquote{

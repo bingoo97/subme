@@ -145,6 +145,7 @@ document.addEventListener('DOMContentLoaded', function () {
             BLOCKQUOTE: true,
             A: true,
             IMG: true,
+            VIDEO: true,
             DIV: true,
             SPAN: true
         };
@@ -347,6 +348,13 @@ document.addEventListener('DOMContentLoaded', function () {
                                 return;
                             }
 
+                            if (tag === 'VIDEO' && (attrName === 'src' || attrName === 'poster')) {
+                                if (!isSafeUrl(attrValue, false)) {
+                                    child.removeAttribute(attribute.name);
+                                }
+                                return;
+                            }
+
                             if (attrName === 'style') {
                                 var safeStyle = sanitizeStyle(attrValue);
                                 if (safeStyle) {
@@ -372,6 +380,20 @@ document.addEventListener('DOMContentLoaded', function () {
                             }
 
                             if (tag === 'IMG' && (attrName === 'alt' || attrName === 'title' || attrName === 'width' || attrName === 'height')) {
+                                return;
+                            }
+
+                            if (tag === 'VIDEO' && (
+                                attrName === 'controls'
+                                || attrName === 'preload'
+                                || attrName === 'playsinline'
+                                || attrName === 'muted'
+                                || attrName === 'loop'
+                                || attrName === 'autoplay'
+                                || attrName === 'width'
+                                || attrName === 'height'
+                                || attrName === 'title'
+                            )) {
                                 return;
                             }
 
@@ -435,6 +457,43 @@ document.addEventListener('DOMContentLoaded', function () {
             return button;
         }
 
+        function renderToolbarColorInput() {
+            var input = doc.createElement('input');
+            input.type = 'color';
+            input.className = 'admin-rich-editor__color';
+            input.value = '#162033';
+            input.setAttribute('data-rich-editor-control', 'color');
+            input.setAttribute('title', 'Text color');
+            input.setAttribute('aria-label', 'Text color');
+            return input;
+        }
+
+        function renderToolbarWeightSelect() {
+            var select = doc.createElement('select');
+            var options = [
+                { value: '', label: 'Weight' },
+                { value: '400', label: 'Regular' },
+                { value: '500', label: 'Medium' },
+                { value: '600', label: 'Semibold' },
+                { value: '700', label: 'Bold' },
+                { value: '800', label: 'Extra bold' }
+            ];
+
+            select.className = 'admin-rich-editor__select';
+            select.setAttribute('data-rich-editor-control', 'font-weight');
+            select.setAttribute('title', 'Font weight');
+            select.setAttribute('aria-label', 'Font weight');
+
+            options.forEach(function (optionConfig) {
+                var option = doc.createElement('option');
+                option.value = optionConfig.value;
+                option.textContent = optionConfig.label;
+                select.appendChild(option);
+            });
+
+            return select;
+        }
+
         qa('textarea[data-admin-rich-editor]').forEach(function (textarea) {
             if (!textarea || textarea.getAttribute('data-admin-rich-editor-ready') === '1') {
                 return;
@@ -443,11 +502,15 @@ document.addEventListener('DOMContentLoaded', function () {
             textarea.setAttribute('data-admin-rich-editor-ready', '1');
 
             var allowImages = textarea.getAttribute('data-admin-rich-editor-images') !== '0';
+            var allowImageUrls = textarea.getAttribute('data-admin-rich-editor-image-urls') === '1';
+            var allowVideos = textarea.getAttribute('data-admin-rich-editor-videos') === '1';
             var wrapper = doc.createElement('div');
             wrapper.className = 'admin-rich-editor';
 
             var toolbar = doc.createElement('div');
             toolbar.className = 'admin-rich-editor__toolbar';
+            var colorInput = renderToolbarColorInput();
+            var weightSelect = renderToolbarWeightSelect();
 
             var tools = [
                 { action: 'paragraph', label: 'Paragraph', html: '<strong>P</strong>' },
@@ -457,6 +520,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 { action: 'bold', label: 'Bold', html: '<i class="bi bi-type-bold"></i>' },
                 { action: 'italic', label: 'Italic', html: '<i class="bi bi-type-italic"></i>' },
                 { action: 'underline', label: 'Underline', html: '<i class="bi bi-type-underline"></i>' },
+                { action: 'separator', label: '', html: '' },
+                { action: 'textControls', label: '', html: '' },
                 { action: 'separator', label: '', html: '' },
                 { action: 'unorderedList', label: 'Bullet list', html: '<i class="bi bi-list-ul"></i>' },
                 { action: 'orderedList', label: 'Numbered list', html: '<i class="bi bi-list-ol"></i>' },
@@ -474,6 +539,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 tools.push({ action: 'image', label: 'Insert image from disk', html: '<i class="bi bi-image"></i>' });
             }
 
+            if (allowImageUrls) {
+                tools.push({ action: 'imageUrl', label: 'Insert image from URL', html: '<i class="bi bi-card-image"></i>' });
+            }
+
+            if (allowVideos) {
+                tools.push({ action: 'videoUrl', label: 'Insert video from URL', html: '<i class="bi bi-camera-video"></i>' });
+            }
+
             tools.push({ action: 'source', label: 'Toggle HTML mode', html: '<i class="bi bi-code-slash"></i>' });
 
             tools.forEach(function (tool) {
@@ -482,6 +555,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     separator.className = 'admin-rich-editor__toolbar-separator';
                     separator.setAttribute('aria-hidden', 'true');
                     toolbar.appendChild(separator);
+                    return;
+                }
+                if (tool.action === 'textControls') {
+                    toolbar.appendChild(colorInput);
+                    toolbar.appendChild(weightSelect);
                     return;
                 }
                 toolbar.appendChild(renderToolbarButton(tool));
@@ -548,6 +626,56 @@ document.addEventListener('DOMContentLoaded', function () {
                 qa('[data-rich-editor-action="source"]', toolbar).forEach(function (button) {
                     button.classList.toggle('is-active', isSourceMode());
                 });
+                qa('[data-rich-editor-control]', toolbar).forEach(function (control) {
+                    control.disabled = isSourceMode();
+                });
+            }
+
+            function getSelectionRange() {
+                var selection = window.getSelection ? window.getSelection() : null;
+                var range = null;
+                var container = null;
+
+                if (!selection || selection.rangeCount <= 0) {
+                    return null;
+                }
+
+                range = selection.getRangeAt(0);
+                container = range.commonAncestorContainer;
+
+                if (container && container.nodeType === 3) {
+                    container = container.parentNode;
+                }
+
+                if (!container || !surface.contains(container)) {
+                    return null;
+                }
+
+                return range;
+            }
+
+            function applyInlineStyle(property, value) {
+                var range = getSelectionRange();
+                var fragment;
+                var wrapperNode;
+
+                if (isSourceMode() || !property || !value || !range || range.collapsed) {
+                    return false;
+                }
+
+                fragment = range.extractContents();
+                if (!fragment || !fragment.childNodes || fragment.childNodes.length === 0) {
+                    return false;
+                }
+
+                wrapperNode = doc.createElement('span');
+                wrapperNode.setAttribute('style', property + ':' + String(value) + ';');
+                wrapperNode.appendChild(fragment);
+                range.insertNode(wrapperNode);
+
+                surface.innerHTML = sanitizeHtml(surface.innerHTML);
+                syncTextareaFromSurface(true);
+                return true;
             }
 
             function runCommand(command, value) {
@@ -557,7 +685,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 surface.focus();
                 try {
-                    doc.execCommand('styleWithCSS', false, false);
+                    doc.execCommand('styleWithCSS', false, command === 'foreColor');
                 } catch (error) {
                     // noop
                 }
@@ -605,6 +733,78 @@ document.addEventListener('DOMContentLoaded', function () {
                 runCommand('createLink', url);
             }
 
+            function promptForVideoUrl() {
+                var url = window.prompt('Paste the direct video URL:', 'https://');
+                var videoHtml = '';
+
+                if (!url) {
+                    return;
+                }
+
+                if (!isSafeUrl(url, false)) {
+                    window.alert('This video address is not allowed.');
+                    return;
+                }
+
+                videoHtml = '<p><video controls preload="metadata" playsinline src="' + escapeHtml(url) + '"></video></p>';
+                if (isSourceMode()) {
+                    source.value += (source.value ? '\n' : '') + videoHtml;
+                    syncSurfaceFromSource();
+                    return;
+                }
+
+                runCommand('insertHTML', videoHtml);
+            }
+
+            function buildResponsiveImageHtml(url, altText, widthValue, heightValue) {
+                var styles = ['max-width:100%', 'height:auto', 'width:auto', 'display:block'];
+
+                if (String(widthValue || '').trim() !== '') {
+                    styles = styles.filter(function (styleValue) {
+                        return styleValue.indexOf('width:') !== 0 && styleValue.indexOf('max-width:') !== 0;
+                    });
+                    styles.unshift('width:' + String(widthValue).trim());
+                    styles.push('max-width:100%');
+                }
+
+                if (String(heightValue || '').trim() !== '') {
+                    styles = styles.filter(function (styleValue) {
+                        return styleValue.indexOf('height:') !== 0;
+                    });
+                    styles.push('height:' + String(heightValue).trim());
+                }
+
+                return '<p><img src="' + escapeHtml(url) + '" alt="' + escapeHtml(altText || '') + '" style="' + escapeHtml(styles.join(';') + ';') + '"></p>';
+            }
+
+            function promptForImageUrl() {
+                var url = window.prompt('Paste the direct image URL:', 'https://');
+                var widthValue = '';
+                var heightValue = '';
+                var imageHtml = '';
+
+                if (!url) {
+                    return;
+                }
+
+                if (!isSafeUrl(url, false)) {
+                    window.alert('This image address is not allowed.');
+                    return;
+                }
+
+                widthValue = window.prompt('Optional width (e.g. 320px, 50%, 100%). Leave empty to keep natural size:', '') || '';
+                heightValue = window.prompt('Optional height (e.g. 180px). Leave empty to keep automatic proportion:', '') || '';
+
+                imageHtml = buildResponsiveImageHtml(url, '', widthValue, heightValue);
+                if (isSourceMode()) {
+                    source.value += (source.value ? '\n' : '') + imageHtml;
+                    syncSurfaceFromSource();
+                    return;
+                }
+
+                runCommand('insertHTML', imageHtml);
+            }
+
             function insertImageFromFile(file) {
                 if (!file) {
                     return;
@@ -617,7 +817,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
 
-                    var imageHtml = '<p><img src="' + escapeHtml(result) + '" alt="' + escapeHtml(file.name || 'image') + '"></p>';
+                    var imageHtml = buildResponsiveImageHtml(result, file.name || 'image', '', '');
                     if (isSourceMode()) {
                         source.value += (source.value ? '\n' : '') + imageHtml;
                         syncSurfaceFromSource();
@@ -737,9 +937,33 @@ document.addEventListener('DOMContentLoaded', function () {
                     fileInput.click();
                     return;
                 }
+                if (action === 'imageUrl') {
+                    promptForImageUrl();
+                    return;
+                }
+                if (action === 'videoUrl') {
+                    promptForVideoUrl();
+                    return;
+                }
                 if (action === 'source') {
                     toggleSourceMode();
                 }
+            });
+
+            colorInput.addEventListener('input', function () {
+                if (isSourceMode()) {
+                    return;
+                }
+                runCommand('foreColor', colorInput.value || '#162033');
+            });
+
+            weightSelect.addEventListener('change', function () {
+                var weight = String(weightSelect.value || '').trim();
+                if (!weight) {
+                    return;
+                }
+                applyInlineStyle('font-weight', weight);
+                weightSelect.value = '';
             });
 
             fileInput.addEventListener('change', function () {

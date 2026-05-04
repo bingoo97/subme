@@ -10366,7 +10366,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="news_body"><?php echo admin_e(admin_t($messages, 'news_body_label', 'Content')); ?></label>
-                                                        <textarea class="form-control" id="news_body" name="body" rows="12" required data-admin-rich-editor="1"><?php echo admin_e((string)($newsDraft['body'] ?? '')); ?></textarea>
+                                                        <textarea class="form-control" id="news_body" name="body" rows="12" required data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($newsDraft['body'] ?? '')); ?></textarea>
                                                         <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
                                                     </div>
                                                 </div>
@@ -10434,7 +10434,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="news_body"><?php echo admin_e(admin_t($messages, 'news_body_label', 'Content')); ?></label>
-                                                        <textarea class="form-control" id="news_body" name="body" rows="12" required data-admin-rich-editor="1"><?php echo admin_e((string)($newsEditor['body'] ?? '')); ?></textarea>
+                                                        <textarea class="form-control" id="news_body" name="body" rows="12" required data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($newsEditor['body'] ?? '')); ?></textarea>
                                                         <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
                                                     </div>
                                                     <div class="col-md-6">
