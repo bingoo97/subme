@@ -1,4 +1,56 @@
 $(function () {
+	var MODAL_BASE_Z = 12050;
+	var BACKDROP_BASE_Z = 12040;
+	var MODAL_STACK_STEP = 20;
+
+	function visibleModals() {
+		return $('.modal.in:visible, .modal.show:visible');
+	}
+
+	function ensureModalInBody($modal) {
+		if ($modal && $modal.length && !$modal.parent().is('body')) {
+			$modal.appendTo('body');
+		}
+	}
+
+	function applyModalLayering($modal) {
+		var stackIndex = Math.max(0, visibleModals().length - 1);
+		var modalZ = MODAL_BASE_Z + (stackIndex * MODAL_STACK_STEP);
+		var backdropZ = BACKDROP_BASE_Z + (stackIndex * MODAL_STACK_STEP);
+		var $backdrop = $('.modal-backdrop').last();
+
+		if ($modal && $modal.length) {
+			$modal.css('z-index', modalZ);
+		}
+
+		if ($backdrop.length) {
+			$backdrop.css('z-index', backdropZ).attr('data-modal-layered', '1');
+		}
+
+		$('body').addClass('app-modal-layer-active');
+	}
+
+	function syncModalLayerState() {
+		if (!visibleModals().length) {
+			$('body').removeClass('app-modal-layer-active');
+			$('.modal').css('z-index', '');
+			$('.modal-backdrop[data-modal-layered="1"]').css('z-index', '').removeAttr('data-modal-layered');
+		}
+	}
+
+	$(document).off('.appModalLayering');
+	$(document).on('show.bs.modal.appModalLayering', '.modal', function () {
+		$('body').addClass('app-modal-layer-active');
+		ensureModalInBody($(this));
+	});
+	$(document).on('shown.bs.modal.appModalLayering', '.modal', function () {
+		applyModalLayering($(this));
+	});
+	$(document).on('hidden.bs.modal.appModalLayering', '.modal', function () {
+		$(this).css('z-index', '');
+		window.setTimeout(syncModalLayerState, 20);
+	});
+
 	$(document).off('click.userOrderModalOpen', '[data-order-modal-open]');
 	$(document).on('click.userOrderModalOpen', '[data-order-modal-open]', function (event) {
 		event.preventDefault();
@@ -13,9 +65,8 @@ $(function () {
 			return;
 		}
 
-		if (!$modal.parent().is('body')) {
-			$modal.appendTo('body');
-		}
+		ensureModalInBody($modal);
+		$('body').addClass('app-modal-layer-active');
 
 		if (window.bootstrap && window.bootstrap.Modal) {
 			window.bootstrap.Modal.getOrCreateInstance($modal[0]).show();
@@ -28,6 +79,8 @@ $(function () {
 			if (!$('.modal-backdrop').length) {
 				$('<div class="modal-backdrop fade in show"></div>').appendTo('body');
 			}
+
+			applyModalLayering($modal);
 		}
 	});
 
@@ -55,6 +108,8 @@ $(function () {
 			$modal.removeClass('in show').hide().attr('aria-hidden', 'true');
 			$('body').removeClass('modal-open');
 			$('.modal-backdrop').remove();
+			$modal.css('z-index', '');
+			syncModalLayerState();
 		}
 	});
 

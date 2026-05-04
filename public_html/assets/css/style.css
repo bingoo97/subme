@@ -348,9 +348,15 @@ textarea.form-control{
     outline: none;
 }
 
+:root{
+	--app-modal-backdrop-z-index: 12040;
+	--app-modal-z-index: 12050;
+	--app-messenger-suspended-z-index: 11000;
+	--app-messenger-modal-suspended-z-index: 11010;
+}
+
 .modal{
 	background-color: transparent;
-	z-index: 9999;
 }
 
 .modal-content {
@@ -2077,6 +2083,23 @@ CONTENT
 	body.messenger-desktop-docked #content_logged .content-inner{
 		width:min(100%, calc(100vw - var(--messenger-desktop-width) - 64px));
 		max-width:none;
+	}
+
+	body.messenger-desktop-docked.app-modal-layer-active .navbar.navbar-user{
+		width:100%;
+		max-width:100%;
+	}
+
+	body.messenger-desktop-docked.app-modal-layer-active .top-instruction-bar,
+	body.messenger-desktop-docked.app-modal-layer-active #content,
+	body.messenger-desktop-docked.app-modal-layer-active #content_logged{
+		width:100%;
+		max-width:100%;
+		margin-right:0;
+	}
+
+	body.messenger-desktop-docked.app-modal-layer-active #content_logged .content-inner{
+		width:min(100%, calc(100vw - 64px));
 	}
 }
 
@@ -4281,12 +4304,22 @@ button[name="create_balance_payment"]:hover{
 	transform:translateY(0);
 }
 
-.modal-backdrop{
-	z-index:12040;
+body.app-modal-layer-active .messanger{
+	z-index:var(--app-messenger-suspended-z-index);
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
+}
+
+body.app-modal-layer-active .messenger-upload-modal.is-open,
+body.app-modal-layer-active .messenger-profile-modal.is-open{
+	z-index:var(--app-messenger-modal-suspended-z-index);
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
 }
 
 .balance-topup-modal{
-	z-index:12050;
 }
 
 .balance-topup-modal .modal-dialog{
