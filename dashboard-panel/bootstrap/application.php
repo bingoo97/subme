@@ -542,77 +542,38 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
     app_release_stale_auto_crypto_wallet_assignments($db);
     app_sync_crypto_wallet_address_statuses($db);
 
-    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
-    $currentCustomerFilter = $customerId > 0
-        ? " AND current_customer_assignment.customer_id = {$customerId}"
-        : '';
-
-    if ($sharedEnabled) {
-        $row = $db->select_user(
-            "SELECT
-                crypto_wallet_addresses.id AS wallet_address_id,
-                crypto_wallet_addresses.crypto_asset_id,
-                crypto_wallet_addresses.label,
-                crypto_wallet_addresses.owner_full_name,
-                crypto_wallet_addresses.address,
-                crypto_wallet_addresses.network_code,
-                crypto_wallet_addresses.memo_tag,
-                crypto_wallet_addresses.wallet_provider,
-                crypto_assets.code AS crypto_asset_code,
-                crypto_assets.name AS crypto_asset_name
-             FROM crypto_wallet_addresses
-             INNER JOIN crypto_assets ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
-             LEFT JOIN crypto_wallet_assignments AS current_customer_assignment
-               ON current_customer_assignment.wallet_address_id = crypto_wallet_addresses.id
-              AND current_customer_assignment.status IN ('reserved', 'active')
-              {$currentCustomerFilter}
-             LEFT JOIN crypto_deposit_requests AS open_request
-               ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-             WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
-               AND crypto_wallet_addresses.disabled_at IS NULL
-               AND crypto_wallet_addresses.status IN ('available', 'assigned')
-               AND current_customer_assignment.id IS NULL
-               AND open_request.id IS NULL
-             ORDER BY
-                CASE WHEN crypto_wallet_addresses.status = 'available' THEN 0 ELSE 1 END ASC,
-                crypto_wallet_addresses.is_reusable DESC,
-                crypto_wallet_addresses.last_assigned_at ASC,
-                crypto_wallet_addresses.id ASC
-             LIMIT 1"
-        );
-    } else {
-        $row = $db->select_user(
-            "SELECT
-                crypto_wallet_addresses.id AS wallet_address_id,
-                crypto_wallet_addresses.crypto_asset_id,
-                crypto_wallet_addresses.label,
-                crypto_wallet_addresses.owner_full_name,
-                crypto_wallet_addresses.address,
-                crypto_wallet_addresses.network_code,
-                crypto_wallet_addresses.memo_tag,
-                crypto_wallet_addresses.wallet_provider,
-                crypto_assets.code AS crypto_asset_code,
-                crypto_assets.name AS crypto_asset_name
-             FROM crypto_wallet_addresses
-             INNER JOIN crypto_assets ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
-             LEFT JOIN crypto_wallet_assignments
-               ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
-              AND crypto_wallet_assignments.status IN ('reserved', 'active')
-             LEFT JOIN crypto_deposit_requests AS open_request
-               ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-             WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
-               AND crypto_wallet_addresses.status = 'available'
-               AND crypto_wallet_addresses.disabled_at IS NULL
-               AND crypto_wallet_assignments.id IS NULL
-               AND open_request.id IS NULL
-             ORDER BY crypto_wallet_addresses.is_reusable DESC,
-                      crypto_wallet_addresses.last_assigned_at ASC,
-                      crypto_wallet_addresses.id ASC
-             LIMIT 1"
-        );
-    }
+    $row = $db->select_user(
+        "SELECT
+            crypto_wallet_addresses.id AS wallet_address_id,
+            crypto_wallet_addresses.crypto_asset_id,
+            crypto_wallet_addresses.label,
+            crypto_wallet_addresses.owner_full_name,
+            crypto_wallet_addresses.address,
+            crypto_wallet_addresses.network_code,
+            crypto_wallet_addresses.memo_tag,
+            crypto_wallet_addresses.wallet_provider,
+            crypto_assets.code AS crypto_asset_code,
+            crypto_assets.name AS crypto_asset_name
+         FROM crypto_wallet_addresses
+         INNER JOIN crypto_assets ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
+         LEFT JOIN crypto_wallet_assignments AS blocking_assignment
+           ON blocking_assignment.wallet_address_id = crypto_wallet_addresses.id
+          AND blocking_assignment.status IN ('reserved', 'active')
+         LEFT JOIN crypto_deposit_requests AS open_request
+           ON open_request.wallet_address_id = crypto_wallet_addresses.id
+          AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+         WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
+           AND crypto_wallet_addresses.disabled_at IS NULL
+           AND crypto_wallet_addresses.status IN ('available', 'assigned')
+           AND blocking_assignment.id IS NULL
+           AND open_request.id IS NULL
+         ORDER BY
+            CASE WHEN crypto_wallet_addresses.status = 'available' THEN 0 ELSE 1 END ASC,
+            crypto_wallet_addresses.is_reusable DESC,
+            crypto_wallet_addresses.last_assigned_at ASC,
+            crypto_wallet_addresses.id ASC
+         LIMIT 1"
+    );
 
     return is_array($row) && !empty($row['wallet_address_id']) ? $row : null;
 }
@@ -637,6 +598,20 @@ function app_assign_customer_crypto_wallet(
         return 0;
     }
 
+    $db->query('START TRANSACTION');
+
+    $wallet = $db->select_user(
+        "SELECT id, crypto_asset_id, status, disabled_at
+         FROM crypto_wallet_addresses
+         WHERE id = {$walletId}
+         LIMIT 1
+         FOR UPDATE"
+    );
+    if (!is_array($wallet) || empty($wallet['id']) || !empty($wallet['disabled_at']) || (string)($wallet['status'] ?? '') === 'disabled') {
+        $db->query('ROLLBACK');
+        return 0;
+    }
+
     $existing = $db->select_user(
         "SELECT id
          FROM crypto_wallet_assignments
@@ -644,19 +619,26 @@ function app_assign_customer_crypto_wallet(
            AND customer_id = {$customerId}
            AND status IN ('reserved', 'active')
          ORDER BY id DESC
-         LIMIT 1"
+         LIMIT 1
+         FOR UPDATE"
     );
     if (is_array($existing) && !empty($existing['id'])) {
+        $db->query('COMMIT');
         return (int)$existing['id'];
     }
 
-    $wallet = $db->select_user(
-        "SELECT id, crypto_asset_id, status, disabled_at
-         FROM crypto_wallet_addresses
-         WHERE id = {$walletId}
-         LIMIT 1"
+    $conflictingAssignment = $db->select_user(
+        "SELECT id, customer_id
+         FROM crypto_wallet_assignments
+         WHERE wallet_address_id = {$walletId}
+           AND customer_id <> {$customerId}
+           AND status IN ('reserved', 'active')
+         ORDER BY id DESC
+         LIMIT 1
+         FOR UPDATE"
     );
-    if (!is_array($wallet) || empty($wallet['id']) || !empty($wallet['disabled_at']) || (string)($wallet['status'] ?? '') === 'disabled') {
+    if (is_array($conflictingAssignment) && !empty($conflictingAssignment['id'])) {
+        $db->query('ROLLBACK');
         return 0;
     }
 
@@ -669,6 +651,7 @@ function app_assign_customer_crypto_wallet(
             'Normalized single crypto wallet per customer asset'
         );
         if (is_array($canonicalAssignment) && !empty($canonicalAssignment['id'])) {
+            $db->query('COMMIT');
             return (int)$canonicalAssignment['id'];
         }
     }
@@ -704,16 +687,23 @@ function app_assign_customer_crypto_wallet(
         'crypto_wallet_assignments'
     );
     if (!$inserted || (int)$db->id() <= 0) {
+        $db->query('ROLLBACK');
         return 0;
     }
     $assignmentId = (int)$db->id();
 
-    $db->update_using_id(
+    $updatedWallet = $db->update_using_id(
         ['status', 'last_assigned_at', 'disabled_at'],
         ['assigned', $db->expr('NOW()'), null],
         'crypto_wallet_addresses',
         $walletId
     );
+    if (!$updatedWallet) {
+        $db->query('ROLLBACK');
+        return 0;
+    }
+
+    $db->query('COMMIT');
 
     return $assignmentId;
 }
