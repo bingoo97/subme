@@ -3385,6 +3385,15 @@ function app_ensure_customer_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('customers', 'avatar_url');
     }
 
+    if (!schema_column_exists($db, 'customers', 'locale_code')) {
+        @$db->query(
+            "ALTER TABLE customers
+             ADD COLUMN locale_code VARCHAR(5) NOT NULL DEFAULT 'en'
+             AFTER password_hash_algorithm"
+        );
+        schema_forget_column_cache('customers', 'locale_code');
+    }
+
     if (schema_column_exists($db, 'customers', 'public_handle')) {
         app_backfill_missing_customer_public_handles($db);
     }
@@ -8218,8 +8227,19 @@ function app_activate_customer(Mysql_ks $db, int $customerId): void
 
 function app_update_customer_locale(Mysql_ks $db, int $customerId, string $localeCode): void
 {
+    $localeCode = localization_normalize_locale($localeCode);
+
     if (app_uses_v2_schema($db)) {
-        $db->update_using_id(['locale_code'], [$localeCode], 'customers', $customerId);
+        app_ensure_customer_runtime_columns($db);
+        $fields = ['locale_code'];
+        $values = [$localeCode];
+
+        if (schema_column_exists($db, 'customers', 'lang')) {
+            $fields[] = 'lang';
+            $values[] = localization_to_legacy_value($localeCode);
+        }
+
+        $db->update_using_id($fields, $values, 'customers', $customerId);
         return;
     }
 
