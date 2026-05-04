@@ -222,13 +222,22 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             : false;
     }
 
+    function chat_demo_showcase_enabled(array $settings = []): bool
+    {
+        return function_exists('app_demo_messenger_showcase_enabled')
+            ? app_demo_messenger_showcase_enabled($settings)
+            : false;
+    }
+
     function chat_customer_messenger_enabled(array $customer, array $settings = []): bool
     {
         if (chat_customer_is_reseller($customer)) {
             return true;
         }
 
-        return !empty($settings['support_chat_enabled']) && !empty($settings['customer_messenger_enabled']);
+        return function_exists('app_support_chat_effective_enabled')
+            && app_support_chat_effective_enabled($settings)
+            && (!empty($settings['customer_messenger_enabled']) || chat_demo_showcase_enabled($settings));
     }
 
     function chat_customer_can_use_groups(array $customer, array $settings = []): bool
@@ -242,7 +251,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return true;
         }
 
-        return chat_customer_messenger_enabled($customer, $settings) && !empty($settings['customer_direct_chat_enabled']);
+        return chat_customer_messenger_enabled($customer, $settings)
+            && (!empty($settings['customer_direct_chat_enabled']) || chat_demo_showcase_enabled($settings));
     }
 
     function chat_customer_can_create_named_groups(array $customer, array $settings = []): bool
@@ -251,12 +261,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return chat_reseller_group_chat_limit($settings) > 0;
         }
 
-        return chat_customer_messenger_enabled($customer, $settings) && !empty($settings['customer_group_chat_enabled']);
+        return chat_customer_messenger_enabled($customer, $settings)
+            && (!empty($settings['customer_group_chat_enabled']) || chat_demo_showcase_enabled($settings));
     }
 
     function chat_customer_global_group_enabled(array $customer, array $settings = []): bool
     {
-        return chat_customer_messenger_enabled($customer, $settings) && !empty($settings['customer_global_group_enabled']);
+        return chat_customer_messenger_enabled($customer, $settings)
+            && (!empty($settings['customer_global_group_enabled']) || chat_demo_showcase_enabled($settings));
     }
 
     function chat_customer_can_edit_messenger_identity(array $customer, array $settings = []): bool
@@ -288,6 +300,542 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     function chat_global_group_retention_hours(): int
     {
         return 1440;
+    }
+
+    function chat_demo_showcase_main_email(): string
+    {
+        return 'demo@demo.demo';
+    }
+
+    function chat_demo_showcase_customer_specs(): array
+    {
+        return [
+            ['email' => 'demo@demo.demo', 'handle' => 'demo', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'alex.morgan@demo.demo', 'handle' => 'alexmorgan', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'sophie.carter@demo.demo', 'handle' => 'sophiecarter', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'liam.parker@demo.demo', 'handle' => 'liamparker', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'emma.bennett@demo.demo', 'handle' => 'emmabennett', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'noah.walker@demo.demo', 'handle' => 'noahwalker', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'mia.hughes@demo.demo', 'handle' => 'miahughes', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'oliver.ross@demo.demo', 'handle' => 'oliverross', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'ava.collins@demo.demo', 'handle' => 'avacollins', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'ethan.bailey@demo.demo', 'handle' => 'ethanbailey', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'grace.ward@demo.demo', 'handle' => 'graceward', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'lucas.brooks@demo.demo', 'handle' => 'lucasbrooks', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'chloe.reed@demo.demo', 'handle' => 'chloereed', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'jack.hayes@demo.demo', 'handle' => 'jackhayes', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'ella.foster@demo.demo', 'handle' => 'ellafoster', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'henry.price@demo.demo', 'handle' => 'henryprice', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'zoe.bryant@demo.demo', 'handle' => 'zoebryant', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'mason.cook@demo.demo', 'handle' => 'masoncook', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'lily.long@demo.demo', 'handle' => 'lilylong', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'owen.powell@demo.demo', 'handle' => 'owenpowell', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'ruby.barnes@demo.demo', 'handle' => 'rubybarnes', 'password' => '1234', 'locale' => 'en'],
+        ];
+    }
+
+    function chat_demo_showcase_group_specs(): array
+    {
+        return [
+            [
+                'title' => 'Streaming Crew',
+                'retention' => 1440,
+                'owner_email' => chat_demo_showcase_main_email(),
+                'member_emails' => [
+                    chat_demo_showcase_main_email(),
+                    'alex.morgan@demo.demo',
+                    'sophie.carter@demo.demo',
+                    'liam.parker@demo.demo',
+                    'emma.bennett@demo.demo',
+                    'noah.walker@demo.demo',
+                ],
+            ],
+            [
+                'title' => 'Weekend Lounge',
+                'retention' => 1440,
+                'owner_email' => chat_demo_showcase_main_email(),
+                'member_emails' => [
+                    chat_demo_showcase_main_email(),
+                    'mia.hughes@demo.demo',
+                    'oliver.ross@demo.demo',
+                    'ava.collins@demo.demo',
+                    'ethan.bailey@demo.demo',
+                    'grace.ward@demo.demo',
+                ],
+            ],
+        ];
+    }
+
+    function chat_demo_showcase_direct_spec(): array
+    {
+        return [
+            'owner_email' => chat_demo_showcase_main_email(),
+            'partner_email' => 'alex.morgan@demo.demo',
+            'retention' => 1440,
+        ];
+    }
+
+    function chat_demo_showcase_message_pool(): array
+    {
+        return [
+            'Looks good here.',
+            'Nice setup.',
+            'All set.',
+            'Good idea 👍',
+            'Sounds good to me.',
+            'I like this view.',
+            'We can keep it simple.',
+            'That works.',
+            'Okay 🙂',
+            'Thanks, noted.',
+            'This looks clean.',
+            'Quick check, all good.',
+            'Sure, let us keep going.',
+            'Small update: still good here.',
+            'Great choice.',
+            'Looks smooth 👌',
+            'I am here.',
+            'Nice one.',
+            'Two words: very clean.',
+            'Works for me.',
+        ];
+    }
+
+    function chat_demo_showcase_pick_message(): string
+    {
+        $messages = chat_demo_showcase_message_pool();
+        if (!$messages) {
+            return 'Looks good here.';
+        }
+
+        return (string)$messages[array_rand($messages)];
+    }
+
+    function chat_demo_showcase_disable_member_email_notifications(Mysql_ks $db, int $conversationId, int $customerId): void
+    {
+        $member = chat_group_member_row($db, $conversationId, chat_participant_key_for_customer($customerId));
+        if (!$member || !array_key_exists('email_notifications_enabled', $member)) {
+            return;
+        }
+
+        if ((int)($member['email_notifications_enabled'] ?? 1) !== 0) {
+            $db->update_using_id(['email_notifications_enabled'], [0], 'support_conversation_members', (int)$member['id']);
+        }
+    }
+
+    function chat_demo_showcase_ensure_customer(Mysql_ks $db, array $spec): array
+    {
+        $email = strtolower(trim((string)($spec['email'] ?? '')));
+        $handleInput = trim((string)($spec['handle'] ?? ''));
+        $localeCode = trim((string)($spec['locale'] ?? 'en'));
+        $password = (string)($spec['password'] ?? '1234');
+        if ($email === '') {
+            return ['row' => null, 'changed' => false];
+        }
+
+        $row = function_exists('app_find_customer_by_email') ? app_find_customer_by_email($db, $email) : null;
+        $created = false;
+        if (!is_array($row) || empty($row['id'])) {
+            $customerId = function_exists('app_insert_customer_registration')
+                ? app_insert_customer_registration($db, $email, $password, $localeCode !== '' ? $localeCode : 'en', chat_current_datetime(), '127.0.0.1', 1, 'client')
+                : 0;
+            if ($customerId > 0) {
+                $row = function_exists('app_find_customer_by_id') ? app_find_customer_by_id($db, $customerId) : null;
+                $created = true;
+            }
+        }
+
+        if (!is_array($row) || empty($row['id'])) {
+            return ['row' => null, 'changed' => false];
+        }
+
+        $customerId = (int)($row['id'] ?? 0);
+        $handleResult = function_exists('app_resolve_customer_public_handle')
+            ? app_resolve_customer_public_handle($db, $handleInput, $email, $customerId)
+            : ['ok' => true, 'handle' => $handleInput];
+        $resolvedHandle = !empty($handleResult['ok']) ? trim((string)($handleResult['handle'] ?? '')) : trim((string)($row['public_handle'] ?? ''));
+        if ($resolvedHandle === '' && function_exists('app_generate_customer_public_handle')) {
+            $resolvedHandle = app_generate_customer_public_handle($db, $email, $customerId);
+        }
+
+        $status = 'active';
+        $customerType = 'client';
+        $emailVerifiedAt = trim((string)($row['email_verified_at'] ?? ''));
+        if ($emailVerifiedAt === '') {
+            $emailVerifiedAt = chat_current_datetime();
+        }
+
+        $fields = ['public_handle', 'status', 'customer_type', 'locale_code', 'email_verified_at'];
+        $values = [$resolvedHandle, $status, $customerType, $localeCode !== '' ? $localeCode : 'en', $emailVerifiedAt];
+        $db->update_using_id($fields, $values, 'customers', $customerId);
+
+        if ($created && function_exists('app_store_customer_password')) {
+            app_store_customer_password($db, $customerId, $password);
+        }
+
+        $freshRow = function_exists('app_find_customer_by_id') ? app_find_customer_by_id($db, $customerId) : $row;
+        return ['row' => $freshRow, 'changed' => $created];
+    }
+
+    function chat_demo_showcase_find_named_group_conversation(Mysql_ks $db, string $title): ?array
+    {
+        $title = trim($title);
+        if ($title === '') {
+            return null;
+        }
+
+        $safeTitle = $db->escape($title);
+        $row = $db->select_user(
+            "SELECT *
+             FROM support_conversations
+             WHERE conversation_type = 'group_chat'
+               AND is_direct_conversation = 0
+               AND (
+                    group_name = '{$safeTitle}'
+                    OR subject = '{$safeTitle}'
+               )
+             ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+             LIMIT 1"
+        );
+
+        return is_array($row) && !empty($row['id']) ? $row : null;
+    }
+
+    function chat_demo_showcase_create_group_shell(
+        Mysql_ks $db,
+        int $ownerCustomerId,
+        string $title,
+        int $retentionMinutes,
+        bool $isDirectConversation = false
+    ): ?array {
+        if ($ownerCustomerId <= 0 || $title === '' || !schema_object_exists($db, 'support_conversations')) {
+            return null;
+        }
+
+        $currentTime = chat_current_datetime();
+        $inserted = $db->insert(
+            ['conversation_type', 'customer_id', 'assigned_admin_id', 'subject', 'group_name', 'is_group_read_only', 'group_created_by_customer_id', 'group_created_by_admin_user_id', 'is_direct_conversation', 'message_retention_hours', 'message_retention_minutes', 'status', 'priority', 'created_at', 'updated_at'],
+            ['group_chat', $ownerCustomerId, null, $title, $title, 0, $ownerCustomerId, null, $isDirectConversation ? 1 : 0, chat_group_retention_storage_hours($retentionMinutes), $retentionMinutes, 'open', 'normal', $currentTime, $currentTime],
+            'support_conversations'
+        );
+        if (!$inserted) {
+            return null;
+        }
+
+        $conversationId = (int)$db->id();
+        return chat_group_conversation_row($db, $conversationId);
+    }
+
+    function chat_demo_showcase_sync_customer_members(
+        Mysql_ks $db,
+        int $conversationId,
+        int $ownerCustomerId,
+        array $memberCustomerIds,
+        bool $isDirectConversation = false
+    ): void {
+        if ($conversationId <= 0 || $ownerCustomerId <= 0 || !$memberCustomerIds) {
+            return;
+        }
+
+        $desired = [];
+        foreach ($memberCustomerIds as $memberCustomerId) {
+            $memberCustomerId = (int)$memberCustomerId;
+            if ($memberCustomerId <= 0) {
+                continue;
+            }
+            $desired[chat_participant_key_for_customer($memberCustomerId)] = $memberCustomerId;
+            chat_add_group_member(
+                $db,
+                $conversationId,
+                [
+                    'participant_key' => chat_participant_key_for_customer($memberCustomerId),
+                    'participant_type' => 'customer',
+                    'customer_id' => $memberCustomerId,
+                    'admin_user_id' => 0,
+                ],
+                'accepted',
+                $memberCustomerId === $ownerCustomerId ? 'owner' : 'member',
+                $ownerCustomerId,
+                0
+            );
+            chat_demo_showcase_disable_member_email_notifications($db, $conversationId, $memberCustomerId);
+        }
+
+        $rows = $db->select_full_user(
+            "SELECT id, participant_key, customer_id
+             FROM support_conversation_members
+             WHERE conversation_id = {$conversationId}
+               AND participant_type = 'customer'"
+        );
+        foreach ($rows as $row) {
+            $participantKey = trim((string)($row['participant_key'] ?? ''));
+            if ($participantKey === '' || isset($desired[$participantKey])) {
+                continue;
+            }
+            $db->update_using_id(
+                ['invite_status', 'can_post', 'left_at'],
+                ['left', 0, chat_current_datetime()],
+                'support_conversation_members',
+                (int)($row['id'] ?? 0)
+            );
+        }
+
+        $db->update_using_id(
+            ['customer_id', 'group_created_by_customer_id', 'is_direct_conversation', 'status'],
+            [$ownerCustomerId, $ownerCustomerId, $isDirectConversation ? 1 : 0, 'open'],
+            'support_conversations',
+            $conversationId
+        );
+    }
+
+    function chat_demo_showcase_ensure_named_group(Mysql_ks $db, array $spec, array $customersByEmail): array
+    {
+        $ownerEmail = strtolower(trim((string)($spec['owner_email'] ?? '')));
+        $title = trim((string)($spec['title'] ?? ''));
+        $retentionMinutes = chat_group_normalize_retention_hours($spec['retention'] ?? 1440) ?? 1440;
+        $owner = $ownerEmail !== '' ? ($customersByEmail[$ownerEmail] ?? null) : null;
+        if (!is_array($owner) || empty($owner['id']) || $title === '') {
+            return ['row' => null, 'changed' => false];
+        }
+
+        $conversation = chat_demo_showcase_find_named_group_conversation($db, $title);
+        $created = false;
+        if (!$conversation) {
+            $conversation = chat_demo_showcase_create_group_shell($db, (int)$owner['id'], $title, $retentionMinutes, false);
+            $created = true;
+        }
+        if (!is_array($conversation) || empty($conversation['id'])) {
+            return ['row' => null, 'changed' => false];
+        }
+
+        $conversationId = (int)($conversation['id'] ?? 0);
+        $memberCustomerIds = [];
+        foreach ((array)($spec['member_emails'] ?? []) as $memberEmail) {
+            $memberEmail = strtolower(trim((string)$memberEmail));
+            if ($memberEmail === '' || !isset($customersByEmail[$memberEmail]['id'])) {
+                continue;
+            }
+            $memberCustomerIds[] = (int)$customersByEmail[$memberEmail]['id'];
+        }
+        $memberCustomerIds = array_values(array_unique(array_filter($memberCustomerIds)));
+        if (!in_array((int)$owner['id'], $memberCustomerIds, true)) {
+            array_unshift($memberCustomerIds, (int)$owner['id']);
+        }
+
+        $db->update_using_id(
+            ['subject', 'group_name', 'message_retention_hours', 'message_retention_minutes', 'status'],
+            [$title, $title, chat_group_retention_storage_hours($retentionMinutes), $retentionMinutes, 'open'],
+            'support_conversations',
+            $conversationId
+        );
+
+        chat_demo_showcase_sync_customer_members($db, $conversationId, (int)$owner['id'], $memberCustomerIds, false);
+        return ['row' => chat_group_conversation_row($db, $conversationId), 'changed' => $created];
+    }
+
+    function chat_demo_showcase_ensure_direct_conversation(Mysql_ks $db, array $spec, array $customersByEmail): array
+    {
+        $ownerEmail = strtolower(trim((string)($spec['owner_email'] ?? '')));
+        $partnerEmail = strtolower(trim((string)($spec['partner_email'] ?? '')));
+        $retentionMinutes = chat_group_normalize_retention_hours($spec['retention'] ?? 1440) ?? 1440;
+        $owner = $ownerEmail !== '' ? ($customersByEmail[$ownerEmail] ?? null) : null;
+        $partner = $partnerEmail !== '' ? ($customersByEmail[$partnerEmail] ?? null) : null;
+        if (!is_array($owner) || empty($owner['id']) || !is_array($partner) || empty($partner['id'])) {
+            return ['row' => null, 'changed' => false];
+        }
+
+        $conversation = chat_find_customer_direct_conversation_between($db, (int)$owner['id'], (int)$partner['id']);
+        $created = false;
+        if (!$conversation) {
+            $conversation = chat_demo_showcase_create_group_shell($db, (int)$owner['id'], 'Direct Chat', $retentionMinutes, true);
+            $created = true;
+        }
+        if (!is_array($conversation) || empty($conversation['id'])) {
+            return ['row' => null, 'changed' => false];
+        }
+
+        $conversationId = (int)($conversation['id'] ?? 0);
+        $db->update_using_id(
+            ['subject', 'group_name', 'message_retention_hours', 'message_retention_minutes', 'is_direct_conversation', 'status'],
+            ['Direct Chat', 'Direct Chat', chat_group_retention_storage_hours($retentionMinutes), $retentionMinutes, 1, 'open'],
+            'support_conversations',
+            $conversationId
+        );
+
+        chat_demo_showcase_sync_customer_members($db, $conversationId, (int)$owner['id'], [(int)$owner['id'], (int)$partner['id']], true);
+        return ['row' => chat_group_conversation_row($db, $conversationId), 'changed' => $created];
+    }
+
+    function chat_demo_showcase_insert_customer_message(Mysql_ks $db, int $conversationId, int $customerId, string $messageBody): bool
+    {
+        $messageBody = trim($messageBody);
+        if ($conversationId <= 0 || $customerId <= 0 || $messageBody === '') {
+            return false;
+        }
+
+        $conversation = chat_group_accessible_for_customer($db, $customerId, $conversationId);
+        if (
+            !$conversation
+            || !empty($conversation['is_group_read_only'])
+            || (int)($conversation['can_post'] ?? 1) === 0
+            || !chat_group_member_can_post($db, $conversationId, chat_participant_key_for_customer($customerId))
+        ) {
+            return false;
+        }
+
+        $currentTime = chat_current_datetime();
+        $inserted = $db->insert(
+            ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
+            [$conversationId, 'customer', $customerId, $messageBody, null, null, 0, $currentTime],
+            'support_messages'
+        );
+        if (!$inserted) {
+            return false;
+        }
+
+        $messageId = (int)$db->id();
+        $db->update_using_id(
+            ['updated_at', 'last_customer_message_at', 'status'],
+            [$currentTime, $currentTime, 'open'],
+            'support_conversations',
+            $conversationId
+        );
+        $member = chat_group_member_row($db, $conversationId, chat_participant_key_for_customer($customerId));
+        if ($member) {
+            $db->update_using_id(['last_read_message_id'], [$messageId], 'support_conversation_members', (int)$member['id']);
+        }
+
+        return true;
+    }
+
+    function chat_demo_showcase_acquire_tick_lock(Mysql_ks $db, int $intervalSeconds, string $currentTime): bool
+    {
+        if ($intervalSeconds <= 0 || !schema_object_exists($db, 'app_settings') || !schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_last_tick_at')) {
+            return false;
+        }
+
+        $cutoff = date('Y-m-d H:i:s', strtotime($currentTime) - $intervalSeconds);
+        $safeNow = $db->escape($currentTime);
+        $safeCutoff = $db->escape($cutoff);
+        $result = $db->query(
+            "UPDATE app_settings
+             SET demo_messenger_showcase_last_tick_at = '{$safeNow}'
+             WHERE id = 1
+               AND (
+                    demo_messenger_showcase_last_tick_at IS NULL
+                    OR demo_messenger_showcase_last_tick_at <= '{$safeCutoff}'
+               )"
+        );
+
+        return (bool)$result && (int)$db->affected_rows > 0;
+    }
+
+    function chat_demo_showcase_sync(Mysql_ks $db, array $settings = [], array $options = []): array
+    {
+        if (!chat_demo_showcase_enabled($settings)) {
+            return ['ok' => true, 'skipped' => true, 'ensured_users' => 0, 'ensured_conversations' => 0, 'generated_messages' => 0, 'message' => 'Demo messenger showcase is disabled.'];
+        }
+
+        if (!schema_object_exists($db, 'customers') || !schema_object_exists($db, 'support_conversations')) {
+            return ['ok' => false, 'ensured_users' => 0, 'ensured_conversations' => 0, 'generated_messages' => 0, 'message' => 'Required messenger tables are missing.'];
+        }
+
+        chat_ensure_group_chat_runtime($db);
+        if (function_exists('app_ensure_customer_runtime_columns')) {
+            app_ensure_customer_runtime_columns($db);
+        }
+
+        $ensuredUsers = 0;
+        $ensuredConversations = 0;
+        $customersByEmail = [];
+        foreach (chat_demo_showcase_customer_specs() as $spec) {
+            $ensureResult = chat_demo_showcase_ensure_customer($db, $spec);
+            if (!empty($ensureResult['changed'])) {
+                $ensuredUsers++;
+            }
+            if (is_array($ensureResult['row']) && !empty($ensureResult['row']['email'])) {
+                $customersByEmail[strtolower((string)$ensureResult['row']['email'])] = $ensureResult['row'];
+            }
+        }
+
+        $globalConversation = chat_sync_global_group_members($db, $settings);
+        if (is_array($globalConversation) && !empty($globalConversation['id'])) {
+            $ensuredConversations++;
+        }
+
+        $groupConversations = [];
+        foreach (chat_demo_showcase_group_specs() as $groupSpec) {
+            $groupResult = chat_demo_showcase_ensure_named_group($db, $groupSpec, $customersByEmail);
+            if (!empty($groupResult['changed'])) {
+                $ensuredConversations++;
+            }
+            if (is_array($groupResult['row']) && !empty($groupResult['row']['id'])) {
+                $groupConversations[] = $groupResult['row'];
+            }
+        }
+
+        $directResult = chat_demo_showcase_ensure_direct_conversation($db, chat_demo_showcase_direct_spec(), $customersByEmail);
+        if (!empty($directResult['changed'])) {
+            $ensuredConversations++;
+        }
+        $directConversation = is_array($directResult['row']) ? $directResult['row'] : null;
+
+        $generatedMessages = 0;
+        $emitMessages = !array_key_exists('emit_messages', $options) || !empty($options['emit_messages']);
+        if ($emitMessages && chat_demo_showcase_acquire_tick_lock($db, 10, chat_current_datetime())) {
+            $targets = [];
+            if (is_array($globalConversation) && !empty($globalConversation['id'])) {
+                $targets[] = [
+                    'conversation_id' => (int)$globalConversation['id'],
+                    'member_emails' => array_keys($customersByEmail),
+                ];
+            }
+            foreach (chat_demo_showcase_group_specs() as $index => $groupSpec) {
+                if (!isset($groupConversations[$index]['id'])) {
+                    continue;
+                }
+                $targets[] = [
+                    'conversation_id' => (int)$groupConversations[$index]['id'],
+                    'member_emails' => (array)($groupSpec['member_emails'] ?? []),
+                ];
+            }
+            if (is_array($directConversation) && !empty($directConversation['id'])) {
+                $directSpec = chat_demo_showcase_direct_spec();
+                $targets[] = [
+                    'conversation_id' => (int)$directConversation['id'],
+                    'member_emails' => [$directSpec['owner_email'], $directSpec['partner_email']],
+                ];
+            }
+
+            foreach ($targets as $target) {
+                $memberIds = [];
+                foreach ((array)($target['member_emails'] ?? []) as $memberEmail) {
+                    $memberEmail = strtolower(trim((string)$memberEmail));
+                    if ($memberEmail === '' || !isset($customersByEmail[$memberEmail]['id'])) {
+                        continue;
+                    }
+                    $memberIds[] = (int)$customersByEmail[$memberEmail]['id'];
+                }
+                $memberIds = array_values(array_unique(array_filter($memberIds)));
+                if (!$memberIds) {
+                    continue;
+                }
+
+                $speakerId = (int)$memberIds[array_rand($memberIds)];
+                if (chat_demo_showcase_insert_customer_message($db, (int)$target['conversation_id'], $speakerId, chat_demo_showcase_pick_message())) {
+                    $generatedMessages++;
+                }
+            }
+        }
+
+        return [
+            'ok' => true,
+            'skipped' => false,
+            'ensured_users' => $ensuredUsers,
+            'ensured_conversations' => $ensuredConversations,
+            'generated_messages' => $generatedMessages,
+            'message' => 'Demo messenger showcase synchronized.',
+        ];
     }
 
     function chat_group_avatar_upload_directory(): string
@@ -1155,7 +1703,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         string $ipAddress = ''
     ): array {
         chat_ensure_group_chat_runtime($db);
-        if ($customerId <= 0 || empty($settings['customer_global_group_enabled'])) {
+        if ($customerId <= 0 || !chat_demo_showcase_enabled($settings) && empty($settings['customer_global_group_enabled'])) {
             return ['ok' => false, 'message' => 'Global chat is disabled.'];
         }
 
@@ -1498,7 +2046,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
     function chat_ensure_global_group_conversation(Mysql_ks $db, array $settings = []): ?array
     {
-        if (empty($settings['customer_global_group_enabled'])) {
+        if (!chat_demo_showcase_enabled($settings) && empty($settings['customer_global_group_enabled'])) {
             return null;
         }
 
@@ -1532,7 +2080,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
     function chat_sync_global_group_members(Mysql_ks $db, array $settings = []): ?array
     {
-        if (empty($settings['customer_global_group_enabled'])) {
+        if (!chat_demo_showcase_enabled($settings) && empty($settings['customer_global_group_enabled'])) {
             return null;
         }
 

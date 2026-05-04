@@ -175,6 +175,13 @@ function admin_messenger_voice_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'messenger_voice_enabled', false);
 }
 
+function admin_demo_messenger_showcase_enabled(array $settings): bool
+{
+    return function_exists('app_demo_messenger_showcase_enabled')
+        ? app_demo_messenger_showcase_enabled($settings)
+        : false;
+}
+
 function admin_application_instructions_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'application_instructions_enabled', true);
@@ -12298,7 +12305,7 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     app_ensure_customer_runtime_columns($db);
     if ($adminUserId > 0 && function_exists('app_fetch_settings') && function_exists('chat_sync_global_group_members')) {
         $settings = app_fetch_settings($db);
-        if (!empty($settings['customer_global_group_enabled'])) {
+        if (admin_demo_messenger_showcase_enabled(is_array($settings) ? $settings : []) || !empty($settings['customer_global_group_enabled'])) {
             chat_sync_global_group_members($db, is_array($settings) ? $settings : []);
         }
     }

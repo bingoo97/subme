@@ -1,4 +1,4 @@
-{if $user.logged && $settings.support_chat_enabled}
+{if $user.logged && ($settings.support_chat_effective_enabled|default:0 || $settings.support_chat_enabled)}
 <div class="messanger" id="messanger">
         <div class="panel">
                 <div class="panel-heading" id="panel-heading" data-user-id="{$user.id}" role="button" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle onclick="return toggleMessengerPanel();">

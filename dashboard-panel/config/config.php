@@ -40,6 +40,7 @@ $settings['smtp_password'] = isset($settings['smtp_password'])
 $settings['api_key'] = isset($settings['api_key'])
     ? (string)$settings['api_key']
     : (isset($settings['apikey']) ? (string)$settings['apikey'] : '');
+$settings['support_chat_effective_enabled'] = function_exists('app_support_chat_effective_enabled') && app_support_chat_effective_enabled($settings) ? 1 : 0;
 $smarty->assign('settings', $settings);
 $smarty->assign('csrf_token', app_csrf_token());
 

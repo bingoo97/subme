@@ -3131,11 +3131,20 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'apps_page_enabled');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'apps_url')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN apps_url VARCHAR(255) DEFAULT NULL
+             AFTER apps_page_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'apps_url');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'application_instructions_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN application_instructions_enabled TINYINT(1) NOT NULL DEFAULT 1
-             AFTER apps_page_enabled"
+             AFTER apps_url"
         );
         schema_forget_column_cache('app_settings', 'application_instructions_enabled');
     }
@@ -3300,6 +3309,24 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
              AFTER customer_global_group_enabled"
         );
         schema_forget_column_cache('app_settings', 'messenger_voice_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN demo_messenger_showcase_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER messenger_voice_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'demo_messenger_showcase_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_last_tick_at')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN demo_messenger_showcase_last_tick_at DATETIME DEFAULT NULL
+             AFTER demo_messenger_showcase_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'demo_messenger_showcase_last_tick_at');
     }
 }
 
@@ -3966,12 +3993,15 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['contact_form_enabled'] = (int)($settings['contact_form_enabled'] ?? 1);
     $settings['referrals_enabled'] = (int)($settings['referrals_enabled'] ?? 1);
     $settings['apps_page_enabled'] = (int)($settings['apps_page_enabled'] ?? 1);
+    $settings['apps_url'] = trim((string)($settings['apps_url'] ?? ''));
     $settings['customer_type_switch_enabled'] = (int)($settings['customer_type_switch_enabled'] ?? 0);
     $settings['customer_messenger_enabled'] = (int)($settings['customer_messenger_enabled'] ?? 0);
     $settings['customer_direct_chat_enabled'] = (int)($settings['customer_direct_chat_enabled'] ?? 0);
     $settings['customer_group_chat_enabled'] = (int)($settings['customer_group_chat_enabled'] ?? 0);
     $settings['customer_global_group_enabled'] = (int)($settings['customer_global_group_enabled'] ?? 0);
     $settings['messenger_voice_enabled'] = (int)($settings['messenger_voice_enabled'] ?? 0);
+    $settings['demo_messenger_showcase_enabled'] = (int)($settings['demo_messenger_showcase_enabled'] ?? 0);
+    $settings['demo_messenger_showcase_last_tick_at'] = trim((string)($settings['demo_messenger_showcase_last_tick_at'] ?? ''));
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
     $settings['page_guidance_enabled'] = (int)($settings['page_guidance_enabled'] ?? 1);
     $settings['payment_test_mode_notice_enabled'] = (int)($settings['payment_test_mode_notice_enabled'] ?? 0);
@@ -4002,6 +4032,38 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['apikey'] = $settings['api_key'] ?? '';
 
     return $settings;
+}
+
+function app_current_site_host(array $settings = []): string
+{
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+    if ($siteUrl !== '') {
+        $host = trim((string)parse_url($siteUrl, PHP_URL_HOST));
+        if ($host !== '') {
+            return strtolower($host);
+        }
+    }
+
+    if (!empty($_SERVER['HTTP_HOST'])) {
+        return strtolower(trim((string)$_SERVER['HTTP_HOST']));
+    }
+
+    return 'localhost';
+}
+
+function app_is_demo_subdomain(array $settings = []): bool
+{
+    return app_current_site_host($settings) === 'demo.subme.pro';
+}
+
+function app_demo_messenger_showcase_enabled(array $settings = []): bool
+{
+    return app_is_demo_subdomain($settings) && (int)($settings['demo_messenger_showcase_enabled'] ?? 0) === 1;
+}
+
+function app_support_chat_effective_enabled(array $settings = []): bool
+{
+    return !empty($settings['support_chat_enabled']) || app_demo_messenger_showcase_enabled($settings);
 }
 
 function app_crypto_daily_backup_enabled(array $settings): bool
@@ -7429,6 +7491,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         $emailLimit = 20;
     }
 
+    $settings = app_fetch_settings($db);
+
     $email = app_email_process_queue($db, $emailLimit);
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
     $archive = app_archive_expired_payment_requests($db, $safeNow);
@@ -7443,6 +7507,9 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $messenger = function_exists('chat_prune_group_chat_messages')
         ? chat_prune_group_chat_messages($db, $safeNow)
         : ['ok' => true, 'deleted_messages' => 0, 'deleted_files' => 0, 'message' => 'Group messenger cleanup skipped.'];
+    $demoShowcase = function_exists('chat_demo_showcase_sync')
+        ? chat_demo_showcase_sync($db, is_array($settings) ? $settings : [], ['emit_messages' => false, 'source' => 'maintenance'])
+        : ['ok' => true, 'ensured_users' => 0, 'ensured_conversations' => 0, 'generated_messages' => 0, 'message' => 'Demo messenger showcase skipped.'];
     $prune = app_prune_retained_data($db, $safeNow);
 
     $steps = [
@@ -7456,6 +7523,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         'live_chat_cleanup' => $chat,
         'group_chat_invites_cleanup' => $expiredInvites,
         'group_chat_cleanup' => $messenger,
+        'demo_messenger_showcase' => $demoShowcase,
         'retention_cleanup' => $prune,
     ];
 
@@ -7493,6 +7561,9 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'deleted_group_direct_conversations' => (int)($expiredInvites['deleted_direct_conversations'] ?? 0),
             'deleted_group_chat_messages' => (int)($messenger['deleted_messages'] ?? 0),
             'deleted_group_chat_files' => (int)($messenger['deleted_files'] ?? 0),
+            'demo_showcase_ensured_users' => (int)($demoShowcase['ensured_users'] ?? 0),
+            'demo_showcase_ensured_conversations' => (int)($demoShowcase['ensured_conversations'] ?? 0),
+            'demo_showcase_generated_messages' => (int)($demoShowcase['generated_messages'] ?? 0),
             'deleted_history_logs' => (int)($prune['deleted_history_logs'] ?? 0),
             'deleted_crypto_transactions' => (int)($prune['deleted_crypto_transactions'] ?? 0),
             'deleted_crypto_requests' => (int)($prune['deleted_crypto_requests'] ?? 0),
@@ -8150,14 +8221,14 @@ function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $
                 && function_exists('chat_customer_can_use_groups')
             ) {
                 $settings = app_fetch_settings($db);
-                if (!empty($settings['customer_global_group_enabled'])) {
+                if (app_demo_messenger_showcase_enabled(is_array($settings) ? $settings : []) || !empty($settings['customer_global_group_enabled'])) {
                     $customerRow = $db->select_user(
                         "SELECT id, email, public_handle, avatar_url, customer_type, status, last_login_at
                          FROM customers
                          WHERE id = {$customerId}
                          LIMIT 1"
                     );
-                    if (is_array($customerRow) && !empty($customerRow['id']) && chat_customer_can_use_groups($customerRow, is_array($settings) ? $settings : [])) {
+                    if (is_array($customerRow) && !empty($customerRow['id']) && chat_customer_global_group_enabled($customerRow, is_array($settings) ? $settings : [])) {
                         chat_sync_global_group_members($db, is_array($settings) ? $settings : []);
                     }
                 }

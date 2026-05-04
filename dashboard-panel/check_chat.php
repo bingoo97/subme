@@ -36,7 +36,7 @@ function chat_require_csrf(array $messages = []): void
     exit;
 }
 
-if (empty($settings['support_chat_enabled'])) {
+if (!app_support_chat_effective_enabled(is_array($settings ?? null) ? $settings : [])) {
     $disabledMessage = localization_translate($t, 'support_chat_disabled_notice', 'Support chat is currently disabled.');
 
     if ((isset($_POST['format']) && $_POST['format'] === 'json') || (isset($_GET['format']) && $_GET['format'] === 'json')) {
@@ -54,6 +54,10 @@ if (empty($user['logged']) || empty($_SESSION['id'])) {
 
     echo '<p>Please login again...</p>';
     exit;
+}
+
+if (app_uses_v2_schema($db) && function_exists('chat_demo_showcase_sync')) {
+    chat_demo_showcase_sync($db, is_array($settings ?? null) ? $settings : [], ['emit_messages' => true, 'source' => 'customer_chat_action']);
 }
 
 function chat_first_admin_id(Mysql_ks $db): int

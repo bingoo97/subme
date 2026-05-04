@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../bootstrap/chat.php';
 
-if (empty($settings['support_chat_enabled']) || !isset($user['logged']) || !$user['logged']) {
+if (!app_support_chat_effective_enabled(is_array($settings ?? null) ? $settings : []) || !isset($user['logged']) || !$user['logged']) {
     $smarty->assign('chat', []);
     $smarty->assign('chat_nieprzeczytane', 0);
     $smarty->assign('chat_last_message_id', 0);
@@ -35,7 +35,10 @@ $chatMessageLimit = function_exists('chat_customer_normalize_message_limit')
     : 10;
 
 if (app_uses_v2_schema($db)) {
-    if (!empty($settings['customer_global_group_enabled']) && chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : [])) {
+    if (function_exists('chat_demo_showcase_sync')) {
+        chat_demo_showcase_sync($db, is_array($settings ?? null) ? $settings : [], ['emit_messages' => true, 'source' => 'customer_chat']);
+    }
+    if (chat_customer_global_group_enabled($user, is_array($settings ?? null) ? $settings : [])) {
         chat_sync_global_group_members($db, is_array($settings ?? null) ? $settings : []);
     }
     $chatCustomerFullMessenger = chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : []);

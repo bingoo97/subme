@@ -27,6 +27,9 @@ $adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
 $siteName = trim((string)($appSettings['site_name'] ?? 'Reseller'));
 $siteLogoUrl = trim((string)($appSettings['site_logo_url'] ?? ''));
 $sitePreviewUrl = trim((string)($appSettings['site_url'] ?? '/'));
+if (function_exists('chat_demo_showcase_sync')) {
+    chat_demo_showcase_sync($db, is_array($appSettings) ? $appSettings : [], ['emit_messages' => false, 'source' => 'admin_index']);
+}
 
 if (isset($_POST['admin_locale']) && admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
     $_SESSION['admin_locale'] = admin_normalize_locale((string)$_POST['admin_locale']);
@@ -190,6 +193,7 @@ $siteSettingsFormState = [
     'site_name' => trim((string)($appSettings['site_name'] ?? '')),
     'site_title' => trim((string)($appSettings['site_title'] ?? '')),
     'site_url' => trim((string)($appSettings['site_url'] ?? '')),
+    'apps_url' => trim((string)($appSettings['apps_url'] ?? '')),
     'site_logo_url' => trim((string)($appSettings['site_logo_url'] ?? '')),
     'site_description' => trim((string)($appSettings['site_description'] ?? '')),
     'site_keywords' => trim((string)($appSettings['site_keywords'] ?? '')),
@@ -639,6 +643,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $customerGroupChatEnabled = isset($_POST['customer_group_chat_enabled']) ? 1 : 0;
         $customerGlobalGroupEnabled = isset($_POST['customer_global_group_enabled']) ? 1 : 0;
         $messengerVoiceEnabled = isset($_POST['messenger_voice_enabled']) ? 1 : 0;
+        $demoMessengerShowcaseEnabled = app_is_demo_subdomain(is_array($appSettings ?? null) ? $appSettings : [])
+            ? (isset($_POST['demo_messenger_showcase_enabled']) ? 1 : 0)
+            : (int)($appSettings['demo_messenger_showcase_enabled'] ?? 0);
         $resellerGroupChatLimit = (int)($_POST['reseller_group_chat_limit'] ?? 10);
         if ($resellerGroupChatLimit < 0) {
             $resellerGroupChatLimit = 0;
@@ -682,6 +689,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 'customer_group_chat_enabled',
                 'customer_global_group_enabled',
                 'messenger_voice_enabled',
+                'demo_messenger_showcase_enabled',
                 'reseller_group_chat_limit',
                 'support_chat_retention_hours',
                 'support_chat_retention_days',
@@ -712,6 +720,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $customerGroupChatEnabled,
                 $customerGlobalGroupEnabled,
                 $messengerVoiceEnabled,
+                $demoMessengerShowcaseEnabled,
                 $resellerGroupChatLimit,
                 $supportChatRetentionHours,
                 max(1, (int)ceil($supportChatRetentionHours / 24)),
@@ -738,6 +747,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $pageAlert = admin_t($messages, 'settings_features_saved', 'Feature settings have been updated.');
             $pageAlertType = 'success';
             $appSettings = admin_app_settings($db);
+            if (function_exists('chat_demo_showcase_sync')) {
+                chat_demo_showcase_sync($db, is_array($appSettings) ? $appSettings : [], ['emit_messages' => false, 'source' => 'settings_save']);
+            }
             $adminDefaultCurrencyRow = admin_default_currency_row($db);
             $adminDefaultCurrencyCode = (string)($adminDefaultCurrencyRow['code'] ?? 'USD');
             $adminDefaultCurrencySymbol = (string)($adminDefaultCurrencyRow['symbol'] ?? '$');
@@ -755,6 +767,7 @@ if ($route === 'settings' && isset($_POST['admin_save_site_settings'])) {
         'site_name' => trim((string)($_POST['site_name'] ?? '')),
         'site_title' => trim((string)($_POST['site_title'] ?? '')),
         'site_url' => trim((string)($_POST['site_url'] ?? '')),
+        'apps_url' => trim((string)($_POST['apps_url'] ?? '')),
         'site_logo_url' => trim((string)($_POST['site_logo_url'] ?? '')),
         'site_description' => trim((string)($_POST['site_description'] ?? '')),
         'site_keywords' => trim((string)($_POST['site_keywords'] ?? '')),
@@ -772,6 +785,7 @@ if ($route === 'settings' && isset($_POST['admin_save_site_settings'])) {
         $siteNameInput = $siteSettingsFormState['site_name'];
         $siteTitleInput = $siteSettingsFormState['site_title'] !== '' ? $siteSettingsFormState['site_title'] : $siteNameInput;
         $siteUrlInput = $siteSettingsFormState['site_url'];
+        $appsUrlInput = $siteSettingsFormState['apps_url'];
         $siteLogoUrlInput = $siteSettingsFormState['site_logo_url'];
         $supportEmailInput = $siteSettingsFormState['support_email'];
 
@@ -784,16 +798,20 @@ if ($route === 'settings' && isset($_POST['admin_save_site_settings'])) {
         } elseif ($siteUrlInput === '' || filter_var($siteUrlInput, FILTER_VALIDATE_URL) === false) {
             $pageAlert = admin_t($messages, 'settings_site_url_invalid', 'Page URL must be a valid address.');
             $pageAlertType = 'danger';
+        } elseif ($appsUrlInput !== '' && filter_var($appsUrlInput, FILTER_VALIDATE_URL) === false) {
+            $pageAlert = admin_t($messages, 'settings_apps_url_invalid', 'Apps URL must be a valid address.');
+            $pageAlertType = 'danger';
         } elseif ($supportEmailInput === '' || !filter_var($supportEmailInput, FILTER_VALIDATE_EMAIL)) {
             $pageAlert = admin_t($messages, 'settings_support_email_invalid', 'Support email must be a valid email address.');
             $pageAlertType = 'danger';
         } else {
             $updated = $db->update_using_id(
-                ['site_name', 'site_title', 'site_url', 'site_logo_url', 'site_description', 'site_keywords', 'support_email'],
+                ['site_name', 'site_title', 'site_url', 'apps_url', 'site_logo_url', 'site_description', 'site_keywords', 'support_email'],
                 [
                     $siteNameInput,
                     $siteTitleInput,
                     $siteUrlInput,
+                    $appsUrlInput !== '' ? $appsUrlInput : null,
                     $siteLogoUrlInput !== '' ? $siteLogoUrlInput : null,
                     $siteSettingsFormState['site_description'] !== '' ? $siteSettingsFormState['site_description'] : null,
                     $siteSettingsFormState['site_keywords'] !== '' ? $siteSettingsFormState['site_keywords'] : null,
@@ -811,6 +829,7 @@ if ($route === 'settings' && isset($_POST['admin_save_site_settings'])) {
                     'site_name' => trim((string)($appSettings['site_name'] ?? '')),
                     'site_title' => trim((string)($appSettings['site_title'] ?? '')),
                     'site_url' => trim((string)($appSettings['site_url'] ?? '')),
+                    'apps_url' => trim((string)($appSettings['apps_url'] ?? '')),
                     'site_logo_url' => trim((string)($appSettings['site_logo_url'] ?? '')),
                     'site_description' => trim((string)($appSettings['site_description'] ?? '')),
                     'site_keywords' => trim((string)($appSettings['site_keywords'] ?? '')),
@@ -973,6 +992,22 @@ if ($route === 'products' && isset($_POST['admin_product_provider_logo_ajax'])) 
 
     $logoAction = trim((string)($_POST['logo_action'] ?? ''));
     $currentLogoUrl = trim((string)($_POST['current_logo_url'] ?? ''));
+    $providerId = isset($_POST['provider_id']) ? (int)$_POST['provider_id'] : 0;
+    $persistToProvider = $providerId > 0;
+    $persistedLogoUrl = '';
+
+    if ($persistToProvider) {
+        $providerRow = admin_product_provider_find($db, $providerId);
+        if (!is_array($providerRow) || empty($providerRow['id'])) {
+            http_response_code(404);
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'product_provider_not_found', 'Provider not found.'),
+            ]);
+            exit;
+        }
+        $persistedLogoUrl = trim((string)($providerRow['logo_url'] ?? ''));
+    }
 
     if ($logoAction === 'upload') {
         $uploadedLogoUrl = admin_product_provider_logo_public_path($_FILES['provider_logo_file'] ?? [], (int)$adminUser['id']);
@@ -985,8 +1020,22 @@ if ($route === 'products' && isset($_POST['admin_product_provider_logo_ajax'])) 
             exit;
         }
 
-        if ($currentLogoUrl !== '' && $currentLogoUrl !== $uploadedLogoUrl) {
-            admin_delete_product_provider_logo_file($currentLogoUrl);
+        if ($persistToProvider) {
+            $updated = $db->update_using_id(['logo_url'], [$uploadedLogoUrl], 'product_providers', $providerId);
+            if (!$updated) {
+                admin_delete_product_provider_logo_file($uploadedLogoUrl);
+                http_response_code(500);
+                echo json_encode([
+                    'ok' => false,
+                    'message' => admin_t($messages, 'product_provider_logo_upload_error', 'Unable to upload the provider logo right now.'),
+                ]);
+                exit;
+            }
+        }
+
+        $previousLogoToDelete = $persistToProvider ? $persistedLogoUrl : $currentLogoUrl;
+        if ($previousLogoToDelete !== '' && $previousLogoToDelete !== $uploadedLogoUrl) {
+            admin_delete_product_provider_logo_file($previousLogoToDelete);
         }
 
         echo json_encode([
@@ -998,8 +1047,21 @@ if ($route === 'products' && isset($_POST['admin_product_provider_logo_ajax'])) 
     }
 
     if ($logoAction === 'remove') {
-        if ($currentLogoUrl !== '') {
-            admin_delete_product_provider_logo_file($currentLogoUrl);
+        if ($persistToProvider) {
+            $updated = $db->update_using_id(['logo_url'], [null], 'product_providers', $providerId);
+            if (!$updated) {
+                http_response_code(500);
+                echo json_encode([
+                    'ok' => false,
+                    'message' => admin_t($messages, 'product_provider_logo_remove_error', 'Unable to remove the provider logo right now.'),
+                ]);
+                exit;
+            }
+        }
+
+        $previousLogoToDelete = $persistToProvider ? $persistedLogoUrl : $currentLogoUrl;
+        if ($previousLogoToDelete !== '') {
+            admin_delete_product_provider_logo_file($previousLogoToDelete);
         }
 
         echo json_encode([
@@ -11525,6 +11587,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <label class="form-label" for="support_email"><?php echo admin_e(admin_t($messages, 'settings_support_email', 'Support email')); ?></label>
                                                     <input type="email" class="form-control" id="support_email" name="support_email" value="<?php echo admin_e((string)$siteSettingsFormState['support_email']); ?>" placeholder="support@example.com" required>
                                                 </div>
+                                                <div class="col-12">
+                                                    <label class="form-label" for="apps_url"><?php echo admin_e(admin_t($messages, 'settings_apps_url', 'Apps URL')); ?></label>
+                                                    <input type="url" class="form-control" id="apps_url" name="apps_url" value="<?php echo admin_e((string)$siteSettingsFormState['apps_url']); ?>" placeholder="https://example.com/apps">
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_apps_url_help', 'Optional direct URL used on the Apps and Instructions pages for app downloads.')); ?></small>
+                                                </div>
                                                 <div class="col-md-12">
                                                     <div
                                                         class="admin-settings-logo-manager"
@@ -11689,6 +11756,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_enabled_help', 'If ON, the Messenger shows a preview microphone button in the composer. The button stays inactive for now and only presents the planned UI.')); ?></small>
                                                 </div>
+                                                <?php if (app_is_demo_subdomain($appSettings)) { ?>
+                                                <div class="col-12">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="demo_messenger_showcase_enabled" name="demo_messenger_showcase_enabled"<?php echo admin_demo_messenger_showcase_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <label class="form-check-label" for="demo_messenger_showcase_enabled"><?php echo admin_e(admin_t($messages, 'settings_demo_messenger_showcase_enabled', 'Demo messenger showcase ON')); ?></label>
+                                                    </div>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_demo_messenger_showcase_enabled_help', 'Demo only: recreates 20 sample users, demo@demo.demo, 2 group chats, 1 direct chat and injects neutral demo traffic roughly every 10 seconds while the Messenger is active. If admins delete showcase users or chats while this switch stays ON, the system recreates them automatically.')); ?></small>
+                                                </div>
+                                                <?php } ?>
                                                 <div class="col-12">
                                                     <label class="form-label" for="reseller_group_chat_limit"><?php echo admin_e(admin_t($messages, 'settings_reseller_group_chat_limit', 'Max reseller group chats')); ?></label>
                                                     <input
