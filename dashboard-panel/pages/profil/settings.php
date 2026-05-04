@@ -9,6 +9,8 @@ switch ($site) {
 
         $canEditMessengerIdentity = chat_customer_can_edit_messenger_identity($user, is_array($settings ?? null) ? $settings : []);
         $smarty->assign('settings_can_edit_messenger_identity', $canEditMessengerIdentity);
+        $canEditPublicHandle = false;
+        $smarty->assign('settings_can_edit_public_handle', $canEditPublicHandle);
 
         $smarty->assign('settings_open_password_modal', false);
         $sendSettingsJson = static function (array $payload): void {
@@ -149,7 +151,7 @@ switch ($site) {
             ];
             $avatarUrl = app_customer_avatar_url((string)($user['avatar_url'] ?? ''));
 
-            if ($canEditMessengerIdentity) {
+            if ($canEditPublicHandle) {
                 $resolvedHandle = app_resolve_customer_public_handle(
                     $db,
                     (string)($_POST['public_handle'] ?? ''),
@@ -181,8 +183,8 @@ switch ($site) {
             $user['locale_code'] = $selectedLocale;
             $user['email_notification'] = $emailNotificationEnabled ? 1 : 0;
             $user['is_newsletter_subscribed'] = $user['email_notification'];
+            $user['public_handle'] = (string)($resolvedHandle['handle'] ?? '');
             if ($canEditMessengerIdentity) {
-                $user['public_handle'] = (string)($resolvedHandle['handle'] ?? '');
                 $user['avatar_url'] = $avatarUrl;
             }
 
@@ -190,8 +192,8 @@ switch ($site) {
             app_update_customer_email_notification($db, (int)$user['id'], $emailNotificationEnabled);
             if ($canEditMessengerIdentity) {
                 $db->update_using_id(
-                    ['public_handle', 'avatar_url'],
-                    [(string)($resolvedHandle['handle'] ?? ''), $avatarUrl !== '' ? $avatarUrl : null],
+                    ['avatar_url'],
+                    [$avatarUrl !== '' ? $avatarUrl : null],
                     'customers',
                     (int)$user['id']
                 );

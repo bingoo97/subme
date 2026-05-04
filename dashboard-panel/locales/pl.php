@@ -312,6 +312,7 @@ return [
         'settings_handle_placeholder' => 'twoj-login',
         'settings_handle_help' => 'Ten nick będzie widoczny dla innych użytkowników w rozmowach Messengera, jeśli Twoje konto ma dostęp do rozszerzonego widoku chatu.',
         'settings_handle_taken' => 'Ten nick jest już zajęty.',
+        'settings_handle_locked' => 'Nick może zmienić tylko reseller lub administrator.',
         'settings_avatar_label' => 'Avatar',
         'settings_avatar_help' => 'Kliknij w okrągły avatar, aby wgrać zdjęcie. Plik zostanie automatycznie zmniejszony i przygotowany do messengera.',
         'settings_avatar_trigger' => 'Kliknij avatar, aby wgrać zdjęcie',

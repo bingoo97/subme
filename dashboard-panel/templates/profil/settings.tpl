@@ -36,8 +36,13 @@
                 </div>
                 <div class="settings-form__field">
                     <label class="settings-form__label">{$t.settings_handle_label}</label>
+                    {if $settings_can_edit_public_handle|default:false}
                     <input type="text" class="form-control settings-form__control" name="public_handle" value="{$user.public_handle|default:''}" placeholder="{$t.settings_handle_placeholder|default:'twoj-login'}" autocomplete="off" data-settings-handle-input>
                     <p class="settings-form__help">{$t.settings_handle_help}</p>
+                    {else}
+                    <input type="text" class="form-control settings-form__control settings-form__control--readonly" value="{$user.public_handle|default:''}" readonly="readonly" data-settings-handle-input>
+                    <p class="settings-form__help">{$t.settings_handle_locked|default:'Nick może zmienić tylko reseller lub administrator.'}</p>
+                    {/if}
                 </div>
                 {/if}
                 <div class="settings-form__field">
