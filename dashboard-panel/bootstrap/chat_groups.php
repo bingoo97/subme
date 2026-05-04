@@ -414,7 +414,15 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         $email = strtolower(trim((string)($spec['email'] ?? '')));
         $handleInput = trim((string)($spec['handle'] ?? ''));
-        $localeCode = localization_normalize_locale((string)($spec['locale'] ?? 'en'));
+        $rawLocaleCode = (string)($spec['locale'] ?? 'en');
+        if (function_exists('localization_normalize_locale')) {
+            $localeCode = localization_normalize_locale($rawLocaleCode);
+        } else {
+            $localeCode = strtolower(trim($rawLocaleCode));
+            if (!in_array($localeCode, ['pl', 'en', 'de'], true)) {
+                $localeCode = 'en';
+            }
+        }
         $password = (string)($spec['password'] ?? '1234');
         if ($email === '') {
             return ['row' => null, 'changed' => false];
@@ -452,7 +460,15 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $emailVerifiedAt = chat_current_datetime();
         }
 
-        $storedLocaleCode = localization_normalize_locale((string)($row['locale_code'] ?? ''));
+        $storedLocaleCode = (string)($row['locale_code'] ?? '');
+        if (function_exists('localization_normalize_locale')) {
+            $storedLocaleCode = localization_normalize_locale($storedLocaleCode);
+        } else {
+            $storedLocaleCode = strtolower(trim($storedLocaleCode));
+            if (!in_array($storedLocaleCode, ['pl', 'en', 'de'], true)) {
+                $storedLocaleCode = '';
+            }
+        }
         $fields = ['public_handle', 'status', 'customer_type', 'email_verified_at'];
         $values = [$resolvedHandle, $status, $customerType, $emailVerifiedAt];
 
