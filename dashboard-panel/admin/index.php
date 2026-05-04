@@ -1413,6 +1413,20 @@ $faqFormState = [
     'body' => '',
     'is_active' => 1,
 ];
+$pageEditorId = 0;
+$pageEditor = null;
+$pageShowCreate = false;
+$pageListPage = 1;
+$pageListPerPage = 20;
+$pageListTotal = 0;
+$pageListTotalPages = 1;
+$pageFormState = [
+    'locale_code' => 'pl',
+    'title' => '',
+    'slug' => '',
+    'body' => '',
+    'is_active' => 1,
+];
 $helpEditorId = 0;
 $helpEditor = null;
 $helpShowCreate = false;
@@ -1514,6 +1528,21 @@ if ($route === 'faq' && isset($_GET['saved_faq'])) {
 
 if ($route === 'faq' && isset($_GET['deleted_faq'])) {
     $pageAlert = admin_t($messages, 'faq_delete_success', 'FAQ entry deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'pages' && isset($_GET['created_page'])) {
+    $pageAlert = admin_t($messages, 'page_create_success', 'Page created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'pages' && isset($_GET['saved_page'])) {
+    $pageAlert = admin_t($messages, 'page_save_success', 'Page saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'pages' && isset($_GET['deleted_page'])) {
+    $pageAlert = admin_t($messages, 'page_delete_success', 'Page deleted successfully.');
     $pageAlertType = 'success';
 }
 
@@ -2285,6 +2314,97 @@ if ($route === 'faq') {
             $faqEditorId = 0;
         } elseif (isset($_POST['admin_save_faq'])) {
             $faqEditor = array_merge($faqEditor, $faqFormState);
+        }
+    }
+}
+
+if ($route === 'pages') {
+    $pageListPage = max(1, (int)($_GET['page_list_page'] ?? 1));
+    $pageListTotal = admin_page_count($db);
+    $pageListTotalPages = max(1, (int)ceil($pageListTotal / $pageListPerPage));
+    if ($pageListPage > $pageListTotalPages) {
+        $pageListPage = $pageListTotalPages;
+    }
+
+    $pageEditorId = isset($_GET['edit_page']) ? (int)$_GET['edit_page'] : 0;
+    $pageShowCreate = (string)($_GET['view'] ?? '') === 'create';
+
+    if (isset($_POST['admin_create_page'])) {
+        $pageShowCreate = true;
+        $pageListPage = max(1, (int)($_POST['page_list_page'] ?? $pageListPage));
+        $pageFormState = [
+            'locale_code' => admin_page_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'body' => trim((string)($_POST['body'] ?? '')),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $createResult = admin_create_page($db, $_POST);
+            if (!empty($createResult['ok']) && !empty($createResult['page_id'])) {
+                header('Location: /admin/?page=pages&edit_page=' . (int)$createResult['page_id'] . '&page_list_page=' . $pageListPage . '&created_page=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'page_create_error', 'Unable to create page.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_page'])) {
+        $pageEditorId = (int)($_POST['page_id'] ?? 0);
+        $pageListPage = max(1, (int)($_POST['page_list_page'] ?? $pageListPage));
+        $pageFormState = [
+            'locale_code' => admin_page_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'slug' => trim((string)($_POST['slug'] ?? '')),
+            'body' => trim((string)($_POST['body'] ?? '')),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveResult = admin_save_page($db, $pageEditorId, $_POST);
+            if (!empty($saveResult['ok'])) {
+                header('Location: /admin/?page=pages&edit_page=' . $pageEditorId . '&page_list_page=' . $pageListPage . '&saved_page=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'page_save_error', 'Unable to save page.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_page'])) {
+        $pageListPage = max(1, (int)($_POST['page_list_page'] ?? $pageListPage));
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteResult = admin_delete_page($db, (int)($_POST['page_id'] ?? 0));
+            if (!empty($deleteResult['ok'])) {
+                header('Location: /admin/?page=pages&page_list_page=' . $pageListPage . '&deleted_page=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'page_delete_error', 'Unable to delete page.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if ($pageEditorId > 0) {
+        $pageEditor = admin_page_find($db, $pageEditorId);
+        if (!$pageEditor) {
+            $pageEditorId = 0;
+        } elseif (isset($_POST['admin_save_page'])) {
+            $pageEditor = array_merge($pageEditor, $pageFormState);
         }
     }
 }
@@ -3527,6 +3647,7 @@ $pageTitleMap = [
     'crypto-wallets' => admin_t($messages, 'page_crypto_wallets_title', 'Crypto wallets'),
     'cryptocurrencies' => admin_t($messages, 'page_cryptocurrencies_title', 'Cryptocurrencies'),
     'news' => admin_t($messages, 'page_news_title', 'News'),
+    'pages' => admin_t($messages, 'page_pages_title', 'Pages'),
     'live-chat' => admin_t($messages, 'page_live_chat_title', 'Live chat'),
     'email-templates' => admin_t($messages, 'page_email_templates_title', 'Email templates'),
     'faq' => admin_t($messages, 'page_faq_title', 'FAQ'),
@@ -3544,6 +3665,7 @@ $pageIntroMap = [
     'crypto-wallets' => admin_t($messages, 'page_crypto_wallets_intro', ''),
     'cryptocurrencies' => admin_t($messages, 'page_cryptocurrencies_intro', ''),
     'news' => admin_t($messages, 'page_news_intro', ''),
+    'pages' => admin_t($messages, 'page_pages_intro', ''),
     'live-chat' => admin_t($messages, 'page_live_chat_intro', ''),
     'email-templates' => admin_t($messages, 'page_email_templates_intro', ''),
     'faq' => admin_t($messages, 'page_faq_intro', ''),
@@ -11327,6 +11449,243 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <?php for ($pageNumber = 1; $pageNumber <= $faqListTotalPages; $pageNumber++): ?>
                                                         <li class="page-item<?php echo $pageNumber === $faqListPage ? ' active' : ''; ?>">
                                                             <a class="page-link" href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                        </li>
+                                                    <?php endfor; ?>
+                                                </ul>
+                                            </nav>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                    <?php
+                                    endif;
+                                    break;
+
+                                case 'pages':
+                                    if ($pageShowCreate):
+                                        $pageDraft = $pageFormState;
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'page_create_title', 'Add page')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_pages', 'Back to pages')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-3">
+                                                        <label class="form-label" for="content_page_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                        <select class="form-select" id="content_page_locale" name="locale_code">
+                                                            <?php foreach (admin_page_locale_options() as $pageLocaleCode => $pageLocaleLabel): ?>
+                                                                <option value="<?php echo admin_e($pageLocaleCode); ?>"<?php echo admin_page_normalize_locale((string)($pageDraft['locale_code'] ?? 'pl')) === $pageLocaleCode ? ' selected' : ''; ?>><?php echo admin_e($pageLocaleLabel); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="form-label" for="content_page_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="content_page_title" name="title" value="<?php echo admin_e((string)($pageDraft['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_slug"><?php echo admin_e(admin_t($messages, 'page_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="content_page_slug" name="slug" value="<?php echo admin_e((string)($pageDraft['slug'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'page_slug_placeholder', 'generated-from-title')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="content_page_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($pageDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($pageDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-8">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="content_page_body"><?php echo admin_e(admin_t($messages, 'page_body_label', 'Content')); ?></label>
+                                                        <textarea class="form-control" id="content_page_body" name="body" rows="12" required data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($pageDraft['body'] ?? '')); ?></textarea>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_page">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'page_create_button', 'Create page')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($pageEditorId > 0 && is_array($pageEditor) && !empty($pageEditor['id'])):
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'page_editor_title', 'Edit page')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_pages', 'Back to pages')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="page_id" value="<?php echo admin_e((string)$pageEditor['id']); ?>">
+                                                <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-3">
+                                                        <label class="form-label" for="content_page_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
+                                                        <select class="form-select" id="content_page_locale" name="locale_code">
+                                                            <?php foreach (admin_page_locale_options() as $pageLocaleCode => $pageLocaleLabel): ?>
+                                                                <option value="<?php echo admin_e($pageLocaleCode); ?>"<?php echo admin_page_normalize_locale((string)($pageEditor['locale_code'] ?? 'pl')) === $pageLocaleCode ? ' selected' : ''; ?>><?php echo admin_e($pageLocaleLabel); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="form-label" for="content_page_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="content_page_title" name="title" value="<?php echo admin_e((string)($pageEditor['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_slug"><?php echo admin_e(admin_t($messages, 'page_slug_label', 'Slug')); ?></label>
+                                                        <input type="text" class="form-control" id="content_page_slug" name="slug" value="<?php echo admin_e((string)($pageEditor['slug'] ?? '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="content_page_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($pageEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($pageEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_system_label', 'System entry')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(!empty($pageEditor['is_system']) ? admin_t($messages, 'page_system_yes', 'Yes') : admin_t($messages, 'page_system_no', 'No')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="content_page_body"><?php echo admin_e(admin_t($messages, 'page_body_label', 'Content')); ?></label>
+                                                        <textarea class="form-control" id="content_page_body" name="body" rows="12" required data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($pageEditor['body'] ?? '')); ?></textarea>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($pageEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($pageEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_page">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'page_save_button', 'Save page')); ?></span>
+                                                    </button>
+                                                    <?php if (empty($pageEditor['is_system'])): ?>
+                                                        <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_page" formnovalidate onclick="return confirm('<?php echo admin_e(admin_t($messages, 'page_delete_confirm', 'Delete this page?')); ?>');">
+                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'page_delete_button', 'Delete page')); ?></span>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    $pageRows = admin_page_rows($db, $pageListPerPage, ($pageListPage - 1) * $pageListPerPage);
+                                    ?>
+                                    <div class="admin-section-actions">
+                                        <a href="/admin/?page=pages&amp;view=create&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-dark">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span><?php echo admin_e(admin_t($messages, 'page_add_new', 'Add page')); ?></span>
+                                        </a>
+                                    </div>
+                                    <?php if ($pageRows): ?>
+                                        <div class="table-responsive">
+                                            <table class="table admin-table align-middle">
+                                                <thead>
+                                                    <tr>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></th>
+                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php foreach ($pageRows as $row): ?>
+                                                        <tr>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
+                                                                <div class="d-flex align-items-center gap-2 flex-wrap">
+                                                                    <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
+                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(strtoupper((string)($row['locale_code'] ?? 'pl'))); ?></span>
+                                                                    <?php foreach (admin_page_visual_badges((array)$row, $messages) as $pageBadge): ?>
+                                                                        <span class="admin-page-tag" style="--page-tag-bg: <?php echo admin_e((string)($pageBadge['bg'] ?? '#f3f4f6')); ?>; --page-tag-color: <?php echo admin_e((string)($pageBadge['text'] ?? '#111827')); ?>;">
+                                                                            <?php echo admin_e((string)($pageBadge['label'] ?? '')); ?>
+                                                                        </span>
+                                                                    <?php endforeach; ?>
+                                                                </div>
+                                                                <div class="text-body-secondary small"><?php echo admin_e((string)($row['slug'] ?? '')); ?></div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?>">
+                                                                <div class="d-flex flex-column gap-1">
+                                                                    <span><?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?></span>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e(!empty($row['is_system']) ? admin_t($messages, 'page_system_yes', 'Yes') : admin_t($messages, 'page_system_no', 'No')); ?></span>
+                                                                </div>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                    <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                </span>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?>">
+                                                                <?php echo admin_e(substr((string)($row['updated_at'] ?? ''), 0, 16)); ?>
+                                                            </td>
+                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                                <div class="admin-wallet-actions">
+                                                                    <a href="/admin/?page=pages&amp;edit_page=<?php echo admin_e((string)$row['id']); ?>&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-dark btn-sm">
+                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                    </a>
+                                                                    <?php if (empty($row['is_system'])): ?>
+                                                                        <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'page_delete_confirm', 'Delete this page?')); ?>');">
+                                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                            <input type="hidden" name="page_id" value="<?php echo admin_e((string)$row['id']); ?>">
+                                                                            <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
+                                                                            <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_page" title="<?php echo admin_e(admin_t($messages, 'page_delete_button', 'Delete page')); ?>">
+                                                                                <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                            </button>
+                                                                        </form>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <?php if ($pageListTotalPages > 1): ?>
+                                            <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'page_pagination', 'Page list pages')); ?>">
+                                                <ul class="pagination admin-pagination">
+                                                    <?php for ($pageNumber = 1; $pageNumber <= $pageListTotalPages; $pageNumber++): ?>
+                                                        <li class="page-item<?php echo $pageNumber === $pageListPage ? ' active' : ''; ?>">
+                                                            <a class="page-link" href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
                                                         </li>
                                                     <?php endfor; ?>
                                                 </ul>

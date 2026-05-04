@@ -2,6 +2,8 @@
 
 	$page_title = '';
 	$appInstructionRoutes = ['instruction-smart-iptv', 'instruction-ott-player', 'instruction-newlook'];
+	$currentStaticPageLocale = isset($currentLocale) ? (string)$currentLocale : (string)($_SESSION['lang'] ?? 'en');
+	$customStaticPage = app_static_page_find_for_route($db, (string)$site, $currentStaticPageLocale);
 	if ($site === 'apps' && !app_apps_page_enabled($settings)) {
 		header('Location: /');
 		exit;
@@ -14,7 +16,7 @@
 	
 	switch ($site){ 
  
-	default: 					$page_title = "Homepage"; break;
+	default: 					$page_title = is_array($customStaticPage) && !empty($customStaticPage['title']) ? (string)$customStaticPage['title'] : "Homepage"; break;
 	
 	case "news":		   		$page_title = "News"; break;
 	case "apps":		   		$page_title = "Apps"; break;
@@ -98,7 +100,13 @@
 				
 		switch($site){
 			
-			default: 					include("pages/homepage.php"); break; 
+			default:
+				if (is_array($customStaticPage) && !empty($customStaticPage['id'])) {
+					include("pages/static_page.php");
+				} else {
+					include("pages/homepage.php");
+				}
+				break; 
 				
 			case "news":				include("pages/profil/news.php"); break;
 			case "apps":				include("pages/apps.php"); break;

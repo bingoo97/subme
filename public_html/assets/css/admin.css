@@ -5688,6 +5688,22 @@ body.admin-login-page{
     background:#e0f2fe;
 }
 
+.admin-page-tag{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:24px;
+    padding:4px 10px;
+    border-radius:999px;
+    background:var(--page-tag-bg, #f3f4f6);
+    color:var(--page-tag-color, #111827);
+    font-size:.76rem;
+    font-weight:800;
+    line-height:1;
+    letter-spacing:.01em;
+    white-space:nowrap;
+}
+
 .admin-status-pill--xs{
     padding:.15rem .35rem;
     font-size:.65rem;
@@ -7016,6 +7032,197 @@ body.admin-login-page .alert.alert-danger::before{
 .admin-rich-editor__source{
     font-family:"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     resize:vertical;
+}
+
+.admin-editor-page .admin-rich-editor__surface .content-box{
+    max-width:900px;
+    margin:0 auto;
+    padding:1.5rem;
+    border-radius:24px;
+    background:#fff;
+    border:1px solid rgba(15, 23, 42, 0.08);
+}
+
+.admin-editor-page .admin-rich-editor__surface .info-page{
+    background:linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+}
+
+.admin-editor-page .admin-rich-editor__surface .payment-wizard__header{
+    margin-bottom:1.5rem;
+}
+
+.admin-editor-page .admin-rich-editor__surface .payment-wizard__header h1{
+    display:flex;
+    align-items:center;
+    gap:.65rem;
+    margin:0;
+    font-size:1.75rem;
+    font-weight:900;
+    color:#111827;
+}
+
+.admin-editor-page .admin-rich-editor__surface .payment-wizard__header p{
+    margin:.5rem 0 0;
+    color:#667085;
+    font-size:.98rem;
+}
+
+.admin-editor-page .admin-rich-editor__surface .back{
+    color:#c31071;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact{
+    display:grid;
+    gap:1rem;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact .col-sm-12{
+    width:100%;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact a{
+    text-decoration:none;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact .one_box{
+    display:flex;
+    align-items:center;
+    gap:1rem;
+    min-height:84px;
+    padding:1rem 1.15rem;
+    border-radius:20px;
+    background:#fff;
+    border:1px solid rgba(15, 23, 42, 0.08);
+    transition:border-color .16s ease, transform .16s ease, background .16s ease;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact .one_box:hover{
+    border-color:rgba(195, 16, 113, 0.22);
+    background:#fff7fb;
+    transform:translateY(-1px);
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact .one_box i{
+    font-size:1.7rem;
+    color:#c31071;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact .one_box img{
+    flex:0 0 auto;
+}
+
+.admin-editor-page .admin-rich-editor__surface .home_buttons.home_buttons--compact .one_box .title{
+    margin:0;
+    color:#111827;
+    font-size:1rem;
+    font-weight:800;
+}
+
+.admin-editor-page .admin-rich-editor__surface .exchange-logo-lg{
+    height:40px;
+    width:40px;
+    border-radius:50%;
+    object-fit:cover;
+    background:#fff;
+    padding:5px;
+}
+
+.admin-editor-page .admin-rich-editor__surface .exchange-buttons{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    justify-content:center;
+}
+
+.admin-editor-page .admin-rich-editor__surface .exchange-buttons .btn{
+    flex:0 0 auto;
+}
+
+.admin-editor-page .admin-rich-editor__surface .instruction-content{
+    margin:2rem 0;
+}
+
+.admin-editor-page .admin-rich-editor__surface .instruction-content h2{
+    font-size:24px;
+    font-weight:600;
+    margin-bottom:1.5rem;
+    color:#111827;
+}
+
+.admin-editor-page .admin-rich-editor__surface .instruction-content .desc-title{
+    font-size:18px;
+    font-weight:600;
+    color:#111827;
+    margin-top:1.5rem;
+    margin-bottom:.5rem;
+}
+
+.admin-editor-page .admin-rich-editor__surface .instruction-content .desc-note{
+    font-size:14px;
+    line-height:1.6;
+    background:#337ab7;
+    color:#fff;
+    margin:0;
+    padding:1rem;
+    border-radius:1rem;
+}
+
+.admin-editor-page .admin-rich-editor__surface .download_apps a{
+    display:inline-block;
+}
+
+.admin-editor-page .admin-rich-editor__surface .download_apps a img{
+    padding:0;
+    margin:5px;
+    border:1px solid #1d1d1d;
+}
+
+.admin-editor-page .admin-rich-editor__surface .phone-img{
+    max-width:300px;
+    margin:1rem;
+    display:block;
+    padding:5px;
+    border:10px solid #1a1a1a;
+    border-radius:2rem;
+}
+
+.admin-editor-page .admin-rich-editor__surface .text-justify{
+    text-align:justify;
+}
+
+.admin-editor-page .admin-rich-editor__surface .img-responsive{
+    display:block;
+    max-width:100%;
+    height:auto;
+}
+
+.admin-editor-page .admin-rich-editor__surface .thumbnail{
+    display:block;
+    max-width:100%;
+    padding:.25rem;
+    border-radius:14px;
+    background:#fff;
+    border:1px solid rgba(15, 23, 42, 0.1);
+}
+
+.admin-editor-page .admin-rich-editor__surface .btn{
+    border-radius:14px;
+    font-weight:700;
+}
+
+@media (max-width: 768px){
+    .admin-editor-page .admin-rich-editor__surface .content-box{
+        padding:1rem;
+        border-radius:20px;
+    }
+
+    .admin-editor-page .admin-rich-editor__surface .payment-wizard__header h1{
+        font-size:1.4rem;
+    }
+
+    .admin-editor-page .admin-rich-editor__surface .phone-img{
+        margin:1rem auto !important;
+    }
 }
 
 .admin-form-check{

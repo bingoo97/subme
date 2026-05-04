@@ -44,7 +44,7 @@
         <hr/>
         <div class="alert alert-info"><i class="fa fa-info-circle" aria-hidden="true"></i> Jeśli nie jesteś pewny ile dokładnie kupić napisz do nas na LIVE CHAT a wyliczymy to za Ciebie.</div>
         <div class="alert alert-info"><i class="fa fa-info-circle" aria-hidden="true"></i> Sprawdź przed wysłaniem ile wynosi opłata transakcyjna! Ostateczne prowizje i cały koszt transakcji zobaczysz w podsumowaniu wypłaty przed wysłaniem. Jeśli masz wątpliwości to napisz do nas!</div>
-        <div class="alert alert-danger"><i class="fa fa-exclamation-triangle" aria-hidden="true"></i> <strong>UWAGA!</strong> W przypadku płatności z giełdy kryptowalutowej należy podać imię i nazwisko osoby do której jest wykonywany przelew w zależności od wymogów giełdy. Prosimy nie wpisywać nic na temat Subskrybcji czy opłaty za Stream lub TV np. {$settings.site_name} lub IPTV itp.</div>
+        <div class="alert alert-danger"><i class="fa fa-exclamation-triangle" aria-hidden="true"></i> <strong>UWAGA!</strong> W przypadku płatności z giełdy kryptowalutowej należy podać imię i nazwisko osoby do której jest wykonywany przelew w zależności od wymogów giełdy. Prosimy nie wpisywać nic na temat Subskrybcji czy opłaty za Stream np. {$settings.site_name} itp.</div>
     {elseif $instruction_guide_site == 'instruction-revolut'}
         <img src="img/rev-crypto.jpg" class="img-responsive" alt="img" />
         <br />
@@ -76,7 +76,7 @@
             <li>{$t.instruction_revolut_step11_html|default:'- Imię i nazwisko: <span class="btn btn-xs btn-outline-danger strong">otrzymasz od nas na Live Chat!</span>' nofilter}</li>
             <img src="/img/crypto/revo/7.jpeg" class="img-responsive phone-img" alt="" />
             <li>{$t.instruction_revolut_step12_html|default:'10. Wpisz <strong>adres portfela</strong>, który otrzymasz od nas. <span class="btn btn-xs btn-danger strong"><i class="fa fa-exclamation-triangle" aria-hidden="true"></i></span>' nofilter}</li>
-            <li>{$t.instruction_revolut_step13_html|default:'11. Wpisz <strong>nazwę portfela</strong> np. portfel zewnętrzny (opcjonalnie)<br /><strong class="red border-red border-radius">UWAGA! Prosimy nie wpisywać nic na temat subskrypcji czy opłaty za Stream lub TV np. {site_name} lub IPTV itp.</strong>'|replace:'{site_name}':$settings.site_name nofilter}</li>
+            <li>{$t.instruction_revolut_step13_html|default:'11. Wpisz <strong>nazwę portfela</strong> np. portfel zewnętrzny (opcjonalnie)<br /><strong class="red border-red border-radius">UWAGA! Prosimy nie wpisywać nic na temat subskrypcji czy opłaty za Stream lub TV itp.</strong>'|replace:'{site_name}':$settings.site_name nofilter}</li>
             <li>{$t.instruction_revolut_step14_html|default:'12. Wybierz dodany wcześniej portfel z listy dostępnych portfeli.' nofilter}</li>
             <li>{$t.instruction_revolut_step15_html|default:'13. Wpisz <strong>kwotę transakcji</strong><br />- <strong class="red">napisz do nas przed płatnością, aby dokonać wyliczeń liczby tokenów do wysłania.</strong> <span class="btn btn-xs btn-danger strong"><i class="fa fa-exclamation-triangle" aria-hidden="true"></i></span>' nofilter}</li>
             <li>{$t.instruction_revolut_step16_html|default:'14. Zatwierdź klikając: <span class="btn btn-xs btn-outline-dark strong">Wyślij</span>' nofilter}</li>
@@ -106,10 +106,6 @@
         <p class="text-justify"><strong>Instrukcja jak korzystać z aplikacji OTT-Player:</strong></p>
         <p class="text-justify">Aplikację można zainstalować na urządzeniach z systemem Android lub Windows.</p>
         <hr/>
-        {if $apps_url neq ''}
-        <p>{$t.apps_download_from|default:'You can download apps directly from'}:<br/><a href="{$apps_url}" class="btn btn-sm btn-dark mt-2" target="_blank" rel="noopener noreferrer">{$apps_url}</a></p>
-        {/if}
-        <hr/>
         <ul style="list-style: none;padding: 5px;">
             <li>1. Włączamy aplikację i wybieramy jeden z dostępnych języków np. <span class="btn btn-xs btn-outline-dark strong">Polski</span> <i class="fa fa-caret-right" aria-hidden="true"></i> <span class="btn btn-xs btn-outline-dark strong">Manual setup</span></li>
             <li>2. Przewijamy listę z wtyczkami na sam dół i wybieramy <span class="btn btn-xs btn-outline-dark strong">New Look</span></li>
@@ -128,10 +124,6 @@
         <br />
         <p class="text-justify"><strong>Instrukcja jak korzystać z aplikacji NewLook 4 i NewLook 2:</strong></p>
         <p class="text-justify">Aplikację można zainstalować na urządzeniach z systemem Android.</p>
-        <hr/>
-        {if $apps_url neq ''}
-        <p>{$t.apps_download_from|default:'You can download apps directly from'}:<br/><a href="{$apps_url}" class="btn btn-sm btn-dark mt-2" target="_blank" rel="noopener noreferrer">{$apps_url}</a></p>
-        {/if}
         <hr/>
         <ul style="list-style: none;padding: 5px;">
             <li>1. Zainstaluj aplikację NewLook 4 lub NewLook 2 na urządzeniu z Android</li>

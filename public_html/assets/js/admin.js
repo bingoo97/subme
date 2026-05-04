@@ -128,6 +128,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var allowedTags = {
             P: true,
             BR: true,
+            HR: true,
             STRONG: true,
             B: true,
             EM: true,
@@ -147,7 +148,13 @@ document.addEventListener('DOMContentLoaded', function () {
             IMG: true,
             VIDEO: true,
             DIV: true,
-            SPAN: true
+            SPAN: true,
+            TABLE: true,
+            THEAD: true,
+            TBODY: true,
+            TR: true,
+            TD: true,
+            TH: true
         };
         var alwaysAllowedClassNames = {
             red: true,
@@ -210,6 +217,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
             var lower = url.toLowerCase();
             if (allowDataImages && lower.indexOf('data:image/') === 0) {
+                return true;
+            }
+
+            if (
+                !/^[a-z][a-z0-9+.-]*:/i.test(url)
+                && lower.indexOf('//') !== 0
+                && !/\s/.test(url)
+                && /^[./A-Za-z0-9_~%+\-?&=#@(),!$*;'[\]]+$/.test(url)
+            ) {
                 return true;
             }
 

@@ -600,7 +600,7 @@ function admin_user_access_level(array $adminUser): int
 
 function admin_route_minimum_access_level(string $route): int
 {
-    $restrictedRoutes = ['settings', 'email-templates', 'faq'];
+    $restrictedRoutes = ['settings', 'email-templates', 'faq', 'pages'];
     return in_array($route, $restrictedRoutes, true) ? 1000 : 500;
 }
 
@@ -654,6 +654,7 @@ function admin_route_label_key(string $route): string
         'crypto-wallets' => 'nav_crypto_wallets',
         'cryptocurrencies' => 'nav_cryptocurrencies',
         'news' => 'nav_news',
+        'pages' => 'nav_pages',
         'live-chat' => 'nav_live_chat',
         'email-templates' => 'nav_email_templates',
         'faq' => 'nav_faq',
@@ -1131,6 +1132,7 @@ function admin_navigation_config(array $settings = [], ?array $adminUser = null)
         ],
         'content' => [
             ['route' => 'news', 'icon' => 'bi-megaphone', 'label_key' => 'nav_news'],
+            ['route' => 'pages', 'icon' => 'bi-file-earmark-richtext', 'label_key' => 'nav_pages'],
             ['route' => 'live-chat', 'icon' => 'bi-chat-dots', 'label_key' => 'nav_live_chat'],
             ['route' => 'email-templates', 'icon' => 'bi-envelope-paper', 'label_key' => 'nav_email_templates'],
             ['route' => 'faq', 'icon' => 'bi-question-circle', 'label_key' => 'nav_faq'],
@@ -15165,6 +15167,294 @@ function admin_delete_faq(Mysql_ks $db, int $faqId): array
     ];
 }
 
+function admin_page_seed_system_rows(Mysql_ks $db): void
+{
+    if (function_exists('app_ensure_system_content_pages_runtime')) {
+        app_ensure_system_content_pages_runtime($db);
+    }
+}
+
+function admin_page_locale_options(): array
+{
+    return admin_faq_locale_options();
+}
+
+function admin_page_normalize_locale(?string $locale): string
+{
+    return admin_faq_normalize_locale($locale);
+}
+
+function admin_page_slugify(string $value): string
+{
+    return admin_faq_slugify($value);
+}
+
+function admin_page_locale_aware_slug(Mysql_ks $db, string $title, string $requestedSlug, string $localeCode, int $excludeId = 0): string
+{
+    $localeCode = admin_page_normalize_locale($localeCode);
+    $baseSlug = $requestedSlug !== '' ? $requestedSlug : $title;
+    $baseSlug = admin_page_slugify($baseSlug);
+    $baseSlug = preg_replace('/-(pl|en)$/', '', $baseSlug) ?? $baseSlug;
+
+    return admin_faq_unique_slug($db, $title, $baseSlug . '-' . $localeCode, $excludeId);
+}
+
+function admin_page_count(Mysql_ks $db): int
+{
+    if (!schema_object_exists($db, 'static_pages')) {
+        return 0;
+    }
+
+    admin_page_seed_system_rows($db);
+    admin_ensure_static_pages_locale_runtime($db);
+    $row = $db->select_user("SELECT COUNT(*) AS total FROM static_pages WHERE page_type = 'page'");
+    return (int)($row['total'] ?? 0);
+}
+
+function admin_page_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
+{
+    if (!schema_object_exists($db, 'static_pages')) {
+        return [];
+    }
+
+    admin_page_seed_system_rows($db);
+    admin_ensure_static_pages_locale_runtime($db);
+    $limit = max(1, min(100, $limit));
+    $offset = max(0, $offset);
+
+    $rows = $db->select_full_user(
+        "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
+         FROM static_pages
+         WHERE page_type = 'page'
+         ORDER BY is_system DESC, id ASC"
+    );
+
+    $rows = is_array($rows) ? admin_page_sort_rows($rows) : [];
+    return array_slice($rows, $offset, $limit);
+}
+
+function admin_page_find(Mysql_ks $db, int $pageId): ?array
+{
+    if ($pageId <= 0 || !schema_object_exists($db, 'static_pages')) {
+        return null;
+    }
+
+    admin_page_seed_system_rows($db);
+    admin_ensure_static_pages_locale_runtime($db);
+    $row = $db->select_user(
+        "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
+         FROM static_pages
+         WHERE id = {$pageId}
+           AND page_type = 'page'
+         LIMIT 1"
+    );
+
+    return is_array($row) ? $row : null;
+}
+
+function admin_page_slug_base(string $slug): string
+{
+    $slug = strtolower(trim($slug));
+    return preg_replace('/-(pl|en)$/', '', $slug) ?? $slug;
+}
+
+function admin_page_visual_badges(array $row, array $messages): array
+{
+    $slug = admin_page_slug_base((string)($row['slug'] ?? ''));
+    $map = [
+        'instructions' => [
+            [
+                'label' => admin_t($messages, 'instructions_title', 'Instructions'),
+                'bg' => '#eef2ff',
+                'text' => '#516aff',
+            ],
+            [
+                'label' => 'MENU',
+                'bg' => '#eef2ff',
+                'text' => '#516aff',
+            ],
+        ],
+        'apps' => [
+            [
+                'label' => admin_t($messages, 'apps_title', 'Apps'),
+                'bg' => '#eef6ff',
+                'text' => '#2563eb',
+            ],
+            [
+                'label' => 'MENU',
+                'bg' => '#eef6ff',
+                'text' => '#2563eb',
+            ],
+        ],
+        'instruction-trust-wallet' => [[
+            'label' => 'Trust Wallet',
+            'bg' => '#ecfdf5',
+            'text' => '#059669',
+        ]],
+        'instruction-revolut' => [[
+            'label' => 'Revolut',
+            'bg' => '#fff7ed',
+            'text' => '#ea580c',
+        ]],
+        'instruction-crypto-exchange' => [[
+            'label' => admin_t($messages, 'instructions_crypto_exchange', 'Crypto exchange'),
+            'bg' => '#fffbeb',
+            'text' => '#b45309',
+        ]],
+        'instruction-smart-iptv' => [[
+            'label' => 'Smart IPTV',
+            'bg' => '#eff6ff',
+            'text' => '#1d4ed8',
+        ]],
+        'instruction-ott-player' => [[
+            'label' => 'OTT Player',
+            'bg' => '#f5f3ff',
+            'text' => '#7c3aed',
+        ]],
+        'instruction-newlook' => [[
+            'label' => 'NewLook',
+            'bg' => '#fdf2f8',
+            'text' => '#c31071',
+        ]],
+    ];
+
+    if (!isset($map[$slug])) {
+        return [];
+    }
+
+    return $map[$slug];
+}
+
+function admin_page_sort_rows(array $rows): array
+{
+    usort($rows, static function (array $left, array $right): int {
+        $leftSystem = !empty($left['is_system']) ? 1 : 0;
+        $rightSystem = !empty($right['is_system']) ? 1 : 0;
+        if ($leftSystem !== $rightSystem) {
+            return $rightSystem <=> $leftSystem;
+        }
+
+        $leftBase = admin_page_slug_base((string)($left['slug'] ?? ''));
+        $rightBase = admin_page_slug_base((string)($right['slug'] ?? ''));
+        $slugCompare = strcmp($leftBase, $rightBase);
+        if ($slugCompare !== 0) {
+            return $slugCompare;
+        }
+
+        $leftLocale = admin_page_normalize_locale((string)($left['locale_code'] ?? 'pl'));
+        $rightLocale = admin_page_normalize_locale((string)($right['locale_code'] ?? 'pl'));
+        $localeCompare = strcmp($leftLocale, $rightLocale);
+        if ($localeCompare !== 0) {
+            return $localeCompare;
+        }
+
+        $leftSlug = (string)($left['slug'] ?? '');
+        $rightSlug = (string)($right['slug'] ?? '');
+        $fullSlugCompare = strcmp($leftSlug, $rightSlug);
+        if ($fullSlugCompare !== 0) {
+            return $fullSlugCompare;
+        }
+
+        return ((int)($left['id'] ?? 0)) <=> ((int)($right['id'] ?? 0));
+    });
+
+    return $rows;
+}
+
+function admin_create_page(Mysql_ks $db, array $input): array
+{
+    if (!schema_object_exists($db, 'static_pages')) {
+        return ['ok' => false, 'message' => 'Page storage is not available.'];
+    }
+
+    admin_page_seed_system_rows($db);
+    admin_ensure_static_pages_locale_runtime($db);
+    $title = trim((string)($input['title'] ?? ''));
+    $slugInput = trim((string)($input['slug'] ?? ''));
+    $body = trim((string)($input['body'] ?? ''));
+    $localeCode = admin_page_normalize_locale((string)($input['locale_code'] ?? 'pl'));
+    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($title === '') {
+        return ['ok' => false, 'message' => 'Page title is required.'];
+    }
+
+    if ($body === '') {
+        return ['ok' => false, 'message' => 'Page content is required.'];
+    }
+
+    $slug = admin_page_locale_aware_slug($db, $title, $slugInput, $localeCode);
+    $inserted = $db->insert(
+        ['slug', 'title', 'body', 'locale_code', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, 'page', 0, $isActive],
+        'static_pages'
+    );
+
+    if (!$inserted) {
+        return ['ok' => false, 'message' => 'Unable to create page.'];
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Page created successfully.',
+        'page_id' => (int)$db->id(),
+    ];
+}
+
+function admin_save_page(Mysql_ks $db, int $pageId, array $input): array
+{
+    $page = admin_page_find($db, $pageId);
+    if (!is_array($page) || empty($page['id'])) {
+        return ['ok' => false, 'message' => 'Page not found.'];
+    }
+
+    $title = trim((string)($input['title'] ?? ''));
+    $slugInput = trim((string)($input['slug'] ?? ''));
+    $body = trim((string)($input['body'] ?? ''));
+    $localeCode = admin_page_normalize_locale((string)($input['locale_code'] ?? (string)($page['locale_code'] ?? 'pl')));
+    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($title === '') {
+        return ['ok' => false, 'message' => 'Page title is required.'];
+    }
+
+    if ($body === '') {
+        return ['ok' => false, 'message' => 'Page content is required.'];
+    }
+
+    $slug = admin_page_locale_aware_slug($db, $title, $slugInput, $localeCode, $pageId);
+    $updated = $db->update_using_id(
+        ['slug', 'title', 'body', 'locale_code', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, 'page', (int)($page['is_system'] ?? 0), $isActive],
+        'static_pages',
+        $pageId
+    );
+
+    return [
+        'ok' => (bool)$updated,
+        'message' => $updated ? 'Page saved successfully.' : 'Unable to save page.',
+    ];
+}
+
+function admin_delete_page(Mysql_ks $db, int $pageId): array
+{
+    $page = admin_page_find($db, $pageId);
+    if (!is_array($page) || empty($page['id'])) {
+        return ['ok' => false, 'message' => 'Page not found.'];
+    }
+
+    if (!empty($page['is_system'])) {
+        return ['ok' => false, 'message' => 'System pages cannot be deleted.'];
+    }
+
+    $deleted = $db->delete_using_id('static_pages', $pageId);
+
+    return [
+        'ok' => (bool)$deleted,
+        'message' => $deleted ? 'Page deleted successfully.' : 'Unable to delete page.',
+    ];
+}
+
 function admin_help_topic_audience_options(): array
 {
     return [
@@ -16963,6 +17253,7 @@ function admin_page_cards(string $route, array $messages): array
         'crypto-wallets' => ['title' => admin_t($messages, 'page_crypto_wallets_card_title', 'Crypto wallets'), 'text' => admin_t($messages, 'page_crypto_wallets_card_text', 'Manage wallet pools and customer assignments.')],
         'cryptocurrencies' => ['title' => admin_t($messages, 'page_cryptocurrencies_card_title', 'Cryptocurrencies'), 'text' => admin_t($messages, 'page_cryptocurrencies_card_text', 'Enable or disable crypto assets and edit their labels, networks and notes.')],
         'news' => ['title' => admin_t($messages, 'page_news_card_title', 'News'), 'text' => admin_t($messages, 'page_news_card_text', 'Publish announcements visible to customers.')],
+        'pages' => ['title' => admin_t($messages, 'page_pages_card_title', 'Pages'), 'text' => admin_t($messages, 'page_pages_card_text', 'Edit static customer-facing pages like instructions and apps.')],
         'email-templates' => ['title' => admin_t($messages, 'page_email_templates_card_title', 'Email templates'), 'text' => admin_t($messages, 'page_email_templates_card_text', 'Prepare message templates and transactional content.')],
         'faq' => ['title' => admin_t($messages, 'page_faq_card_title', 'FAQ'), 'text' => admin_t($messages, 'page_faq_card_text', 'Edit quick questions and static help answers.')],
         'help' => ['title' => admin_t($messages, 'page_help_card_title', 'Help'), 'text' => admin_t($messages, 'page_help_card_text', 'Edit the admin tutorial topics shown in the floating help modal.')],

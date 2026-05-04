@@ -6,62 +6,16 @@ if (is_array($appSettings) && !empty($appSettings['apps_url'])) {
     $appsUrl = trim((string)$appSettings['apps_url']);
 }
 $applicationInstructionsEnabled = app_application_instructions_enabled($appSettings);
+app_ensure_system_content_pages_runtime($db);
+$currentStaticPageLocale = app_static_page_normalize_locale($currentLocale ?? ($user['locale_code'] ?? 'en'));
 
-$apps = [
-    [
-        'name' => 'NewLook 4',
-        'platform' => 'Android',
-        'description' => localization_translate($t, 'apps_newlook_description', 'NewLook 4 player for Android devices.'),
-        'url' => '',
-        'download_url' => 'https://tinyurl.com/3av56p84',
-        'logo' => '/img/new_look.png',
-        'instruction_url' => '/instruction-newlook',
-    ],
-    [
-        'name' => 'NewLook 2',
-        'platform' => 'Android',
-        'description' => localization_translate($t, 'apps_newlook2_description', 'NewLook 2 IPTV player for Android devices.'),
-        'url' => '',
-        'download_url' => 'https://tinyurl.com/yc37sjfa',
-        'logo' => '/img/new_look.png',
-        'instruction_url' => '/instruction-newlook',
-    ],
-    [
-        'name' => 'OTT-Player',
-        'platform' => 'Android / iOS / Samsung / LG',
-        'description' => localization_translate($t, 'apps_ottplayer_description', 'OTTPlayer for various platforms including Smart TVs.'),
-        'url' => '',
-        'download_url' => 'https://tinyurl.com/46c2hb3s',
-        'logo' => '/img/ott/logo-ott.jpg',
-        'instruction_url' => '/instruction-ott-player',
-    ],
- //   [
- //       'name' => 'Smart IPTV',
- //       'platform' => 'Samsung / LG / Android / iOS',
- //       'description' => localization_translate($t, 'apps_smartiptv_description', 'Smart IPTV for Smart TVs and mobile devices.'),
- //       'url' => 'https://siptv.app/howto/',
- //       'download_url' => '',
- //       'logo' => '/img/smart_logo_t.png',
- //       'instruction_url' => '/instruction-smart-iptv',
- //   ],
- //   [
- //       'name' => 'SS-IPTV',
- //       'platform' => 'Samsung / LG',
- //       'description' => localization_translate($t, 'apps_ssiptv_description', 'SS-IPTV for Smart TVs.'),
- //       'url' => 'https://ss-iptv.com/en/users/playlist',
- //       'download_url' => '',
- //       'logo' => '/img/ssiptv-iptv-icon.png',
- //       'instruction_url' => '/instruction-smart-iptv',
- //   ],
-];
+$apps = app_apps_seed_data($t, $applicationInstructionsEnabled);
 
 $appsFallbackToGlobalUrl = false;
 
 foreach ($apps as $index => $app) {
     $directUrl = '';
-    if (!empty($app['download_url'])) {
-        $directUrl = trim((string)$app['download_url']);
-    } elseif (!empty($app['url'])) {
+    if (!empty($app['url'])) {
         $directUrl = trim((string)$app['url']);
     } elseif ($appsUrl !== '') {
         $directUrl = $appsUrl;
@@ -69,18 +23,24 @@ foreach ($apps as $index => $app) {
     }
 
     $apps[$index]['url'] = $directUrl;
-    $apps[$index]['uses_global_apps_url'] = ($directUrl !== '' && $directUrl === $appsUrl && empty($app['download_url']));
+    $apps[$index]['uses_global_apps_url'] = ($directUrl !== '' && $directUrl === $appsUrl);
 }
 
-if (!$applicationInstructionsEnabled) {
-    foreach ($apps as $index => $app) {
-        $apps[$index]['instruction_url'] = '';
-    }
-}
+$staticPage = app_static_page_find_for_route($db, 'apps', $currentStaticPageLocale);
+$staticPageBody = is_array($staticPage) && !empty($staticPage['id'])
+    ? (string)($staticPage['body'] ?? '')
+    : app_static_page_body_apps($t);
 
-$smarty->assign('apps', $apps);
-$smarty->assign('apps_url', $appsUrl);
-$smarty->assign('apps_fallback_to_global_url', $appsFallbackToGlobalUrl);
-$smarty->display('apps.tpl');
+$smarty->assign(
+    'static_page_body_html',
+    app_render_static_page_body(
+        $staticPageBody,
+        [
+            'apps_table' => app_render_apps_table_markup($apps, $t),
+            'apps_fallback_link' => app_render_apps_fallback_link_markup($appsUrl, $appsFallbackToGlobalUrl, $t),
+        ]
+    )
+);
+$smarty->display('static_page.tpl');
 
 ?>
