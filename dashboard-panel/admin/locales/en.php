@@ -1231,7 +1231,7 @@ return [
     'help_sort_order_label' => 'Order',
     'help_answer_html_label' => 'Answer HTML',
     'help_answer_html_help' => 'Supports headings, bold, links, lists, text alignment and images from disk. Keep the answer concise. You can also switch to HTML mode.',
-    'rich_editor_html_help' => 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.',
+    'rich_editor_html_help' => 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode and use class names plus safe inline styles.',
     'help_pagination' => 'Help pages',
     'back_to_help' => 'Back to help',
     'help_modal_open' => 'Open help',

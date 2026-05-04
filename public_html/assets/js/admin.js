@@ -148,9 +148,57 @@ document.addEventListener('DOMContentLoaded', function () {
             DIV: true,
             SPAN: true
         };
-        var allowedClassNames = {
+        var alwaysAllowedClassNames = {
             red: true,
             'border-red': true
+        };
+        var allowedStyleProperties = {
+            'text-align': true,
+            color: true,
+            background: true,
+            'background-color': true,
+            'font-size': true,
+            'font-weight': true,
+            'font-style': true,
+            'font-family': true,
+            'line-height': true,
+            'letter-spacing': true,
+            'text-decoration': true,
+            'text-transform': true,
+            'white-space': true,
+            display: true,
+            width: true,
+            'min-width': true,
+            'max-width': true,
+            height: true,
+            'min-height': true,
+            'max-height': true,
+            margin: true,
+            'margin-top': true,
+            'margin-right': true,
+            'margin-bottom': true,
+            'margin-left': true,
+            padding: true,
+            'padding-top': true,
+            'padding-right': true,
+            'padding-bottom': true,
+            'padding-left': true,
+            border: true,
+            'border-top': true,
+            'border-right': true,
+            'border-bottom': true,
+            'border-left': true,
+            'border-color': true,
+            'border-width': true,
+            'border-style': true,
+            'border-radius': true,
+            'box-shadow': true,
+            opacity: true,
+            overflow: true,
+            'overflow-x': true,
+            'overflow-y': true,
+            float: true,
+            clear: true
         };
 
         function isSafeUrl(value, allowDataImages) {
@@ -173,9 +221,32 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function sanitizeStyle(value) {
-            var style = String(value || '');
-            var match = style.match(/text-align\s*:\s*(left|center|right|justify)/i);
-            return match ? 'text-align:' + match[1].toLowerCase() + ';' : '';
+            var safeDeclarations = [];
+
+            String(value || '')
+                .split(';')
+                .forEach(function (declaration) {
+                    var parts = String(declaration || '').split(':');
+                    var property = String(parts.shift() || '').trim().toLowerCase();
+                    var propertyValue = String(parts.join(':') || '').trim();
+                    var normalizedValue = propertyValue.replace(/\s+/g, ' ');
+
+                    if (!property || !normalizedValue || !allowedStyleProperties[property]) {
+                        return;
+                    }
+
+                    if (/(expression\s*\(|javascript\s*:|vbscript\s*:|data\s*:|url\s*\(|@import|behavior\s*:)/i.test(normalizedValue)) {
+                        return;
+                    }
+
+                    if (!/^[#(),.%+\-\/:\w\s"'!]+$/.test(normalizedValue)) {
+                        return;
+                    }
+
+                    safeDeclarations.push(property + ':' + normalizedValue);
+                });
+
+            return safeDeclarations.join(';') + (safeDeclarations.length ? ';' : '');
         }
 
         function sanitizeClassNames(value) {
@@ -185,7 +256,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     return String(className || '').trim();
                 })
                 .filter(function (className) {
-                    return !!allowedClassNames[className];
+                    return !!alwaysAllowedClassNames[className] || /^[A-Za-z0-9_-]+$/.test(className);
                 })
                 .join(' ');
         }

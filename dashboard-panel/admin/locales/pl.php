@@ -1231,7 +1231,7 @@ return [
     'help_sort_order_label' => 'Kolejność',
     'help_answer_html_label' => 'Odpowiedź HTML',
     'help_answer_html_help' => 'Obsługuje nagłówki, pogrubienia, linki, listy, justowanie i obrazy z dysku. Zachowaj zwięzłą odpowiedź. Możesz też przełączyć się na widok HTML.',
-    'rich_editor_html_help' => 'Obsługuje nagłówki, pogrubienia, linki, listy, justowanie i obrazy z dysku. Możesz też przełączyć się na widok HTML.',
+    'rich_editor_html_help' => 'Obsługuje nagłówki, pogrubienia, linki, listy, justowanie i obrazy z dysku. Możesz też przełączyć się na widok HTML i używać class oraz bezpiecznych stylów inline.',
     'help_pagination' => 'Strony pomocy',
     'back_to_help' => 'Wróć do pomocy',
     'help_modal_open' => 'Otwórz pomoc',
