@@ -533,6 +533,31 @@ function app_sync_crypto_wallet_address_statuses($db, int $walletId = 0): void
     );
 }
 
+function app_crypto_wallet_has_non_cancelled_history($db, int $walletId, int $customerId = 0): bool
+{
+    if ($walletId <= 0 || !schema_object_exists($db, 'crypto_deposit_requests')) {
+        return false;
+    }
+
+    $customerFilter = $customerId > 0 ? " AND crypto_deposit_requests.customer_id = {$customerId}" : '';
+
+    $row = $db->select_user(
+        "SELECT crypto_deposit_requests.id
+         FROM crypto_deposit_requests
+         LEFT JOIN crypto_wallet_assignments AS payment_assignment
+           ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+         WHERE (
+                crypto_deposit_requests.wallet_address_id = {$walletId}
+             OR payment_assignment.wallet_address_id = {$walletId}
+         ){$customerFilter}
+           AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
+         ORDER BY crypto_deposit_requests.id DESC
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']);
+}
+
 function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $customerId = 0, array $settings = []): ?array
 {
     if ($assetId <= 0 || !schema_object_exists($db, 'crypto_wallet_addresses')) {
@@ -567,6 +592,18 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
            AND crypto_wallet_addresses.status IN ('available', 'assigned')
            AND blocking_assignment.id IS NULL
            AND open_request.id IS NULL
+           AND NOT EXISTS (
+                SELECT 1
+                FROM crypto_deposit_requests AS historical_request
+                LEFT JOIN crypto_wallet_assignments AS historical_assignment
+                  ON historical_assignment.id = historical_request.wallet_assignment_id
+                WHERE (
+                        historical_request.wallet_address_id = crypto_wallet_addresses.id
+                     OR historical_assignment.wallet_address_id = crypto_wallet_addresses.id
+                )
+                  AND historical_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
+                LIMIT 1
+           )
          ORDER BY
             CASE WHEN crypto_wallet_addresses.status = 'available' THEN 0 ELSE 1 END ASC,
             crypto_wallet_addresses.is_reusable DESC,
@@ -638,6 +675,11 @@ function app_assign_customer_crypto_wallet(
          FOR UPDATE"
     );
     if (is_array($conflictingAssignment) && !empty($conflictingAssignment['id'])) {
+        $db->query('ROLLBACK');
+        return 0;
+    }
+
+    if (app_crypto_wallet_has_non_cancelled_history($db, $walletId) && !app_crypto_wallet_has_non_cancelled_history($db, $walletId, $customerId)) {
         $db->query('ROLLBACK');
         return 0;
     }

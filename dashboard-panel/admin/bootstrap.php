@@ -11083,6 +11083,14 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         return ['ok' => false, 'message' => 'Disabled wallet cannot be assigned.'];
     }
 
+    if (function_exists('app_crypto_wallet_has_non_cancelled_history')) {
+        $hasOtherCustomerHistory = app_crypto_wallet_has_non_cancelled_history($db, $walletId)
+            && !app_crypto_wallet_has_non_cancelled_history($db, $walletId, $customerId);
+        if ($hasOtherCustomerHistory) {
+            return ['ok' => false, 'message' => 'This wallet already has payment history for another customer and cannot be assigned again.'];
+        }
+    }
+
     $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
     $activeAssignments = admin_crypto_wallet_active_assignments($db, $walletId);
     $customerAssignments = admin_customer_active_crypto_assignments($db, $customerId, strtoupper(trim((string)($wallet['asset_code'] ?? ''))));
