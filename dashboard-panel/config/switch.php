@@ -68,7 +68,12 @@
 
 	////////////////////////////////////////////////////
 			
-	if($settings["homepage_verify"] == 1 && !$has_verified_home_email){
+	$registrationEnabled = (int)($settings['active_register'] ?? 0) === 1;
+	$requireHomepageVerification = (int)($settings["homepage_verify"] ?? 0) === 1
+		&& !$has_verified_home_email
+		&& !$registrationEnabled;
+
+	if($requireHomepageVerification){
 		
 		include("scripts/check_email.php");
 		$smarty->display("homepage_verify.tpl"); 

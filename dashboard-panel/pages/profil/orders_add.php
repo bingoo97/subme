@@ -127,6 +127,9 @@
 			$customerProductType = app_customer_product_type($user, $settings);
 			$productTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
 			$existingPendingOrder = orders_find_pending_unpaid_order($db, $user, $tenantId);
+			$pendingActivationOrder = app_uses_v2_schema($db)
+				? app_find_customer_paid_pending_activation_order($db, (int)$user['id'])
+				: null;
 
 			if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
 				$smarty->assign("alert_error", localization_translate($t, 'csrf_invalid'));
@@ -145,6 +148,19 @@
 
 			if ($existingPendingOrder) {
 				$ordersPaymentRedirectId = (int)$existingPendingOrder['id'];
+				return;
+			}
+
+			if ($pendingActivationOrder) {
+				$smarty->assign(
+					"alert_error",
+					localization_translate(
+						$t,
+						'orders_pending_activation_block_notice',
+						'You already have a paid order waiting for activation. Wait until the admin activates it before adding another order.'
+					)
+				);
+				$smarty->display("alert.tpl");
 				return;
 			}
 

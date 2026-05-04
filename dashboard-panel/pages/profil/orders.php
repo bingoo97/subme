@@ -11,6 +11,10 @@ switch ($site) {
 			$orderCatalogMode = app_customer_order_catalog_mode($user, $settings);
 			$orderSalesAvailable = app_customer_sales_enabled($user, $settings);
 			$orderCatalogHasProducts = false;
+			$pendingActivationOrder = app_uses_v2_schema($db)
+				? app_find_customer_paid_pending_activation_order($db, (int)$user['id'])
+				: null;
+			$orderAddBlockedByPendingActivation = $pendingActivationOrder ? 1 : 0;
 
 			if (app_uses_v2_schema($db)) {
 				$productTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
@@ -31,6 +35,8 @@ switch ($site) {
 			$smarty->assign('order_catalog_product_type', $orderCatalogMode);
 			$smarty->assign('order_sales_available', $orderSalesAvailable ? 1 : 0);
 			$smarty->assign('order_catalog_has_products', $orderCatalogHasProducts ? 1 : 0);
+			$smarty->assign('order_add_blocked_by_pending_activation', $orderAddBlockedByPendingActivation);
+			$smarty->assign('order_pending_activation_block_order', $pendingActivationOrder);
 
 			if (app_uses_v2_schema($db) && isset($_POST["order_note_save"])) {
 				$orderId = isset($_POST["order_note_id"]) ? (int)$_POST["order_note_id"] : 0;
@@ -123,6 +129,18 @@ switch ($site) {
 				if(isset($_POST["order_add"])){
 					if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
 						$smarty->assign("alert_error", localization_translate($t, 'csrf_invalid'));
+						$smarty->display("alert.tpl");
+						break;
+					}
+					if ($orderAddBlockedByPendingActivation) {
+						$smarty->assign(
+							"alert_error",
+							localization_translate(
+								$t,
+								'orders_pending_activation_block_notice',
+								'You already have a paid order waiting for activation. Wait until the admin activates it before adding another order.'
+							)
+						);
 						$smarty->display("alert.tpl");
 						break;
 					}

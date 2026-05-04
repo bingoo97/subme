@@ -872,9 +872,17 @@ if (app_uses_v2_schema($db)) {
         $hasAssignedCryptoWallets = !empty($cryptoAssets);
         $canUseBank = $bankEnabled && !empty($bankAccounts);
         $canUseCrypto = $cryptoEnabled && $hasAssignedCryptoWallets;
+        $blockingPendingActivationOrder = app_find_customer_paid_pending_activation_order(
+            $db,
+            (int)$user['id'],
+            (int)($selected['id'] ?? 0)
+        );
         $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
         $selectedProductPrice = round((float)($selectedProduct['price'] ?? $selected['price'] ?? 0), 2);
-        $canUseBalance = $selectedProduct && $selectedProductPrice > 0 && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
+        $canUseBalance = !$blockingPendingActivationOrder
+            && $selectedProduct
+            && $selectedProductPrice > 0
+            && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
 
         $selectedMethod = isset($_POST['payment_method']) ? trim((string)$_POST['payment_method']) : '';
         if ($selectedMethod !== 'crypto' && $selectedMethod !== 'bank_transfer' && $selectedMethod !== 'balance') {
@@ -1323,6 +1331,15 @@ if (app_uses_v2_schema($db)) {
                 $smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
             } elseif (!$selectedProduct) {
                 $smarty->assign('alert_error', localization_translate($t, 'payment_choose_package_error', 'Choose a package first.'));
+            } elseif ($blockingPendingActivationOrder) {
+                $smarty->assign(
+                    'alert_error',
+                    localization_translate(
+                        $t,
+                        'payment_balance_blocked_pending_activation',
+                        'Balance payment is unavailable while another paid order is still waiting for activation.'
+                    )
+                );
             } else {
                 $selectedProductPrice = round((float)($selectedProduct['price'] ?? 0), 2);
                 $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
@@ -1546,7 +1563,10 @@ if (app_uses_v2_schema($db)) {
 
         $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
         $selectedProductPrice = round((float)($selectedProduct['price'] ?? $selected['price'] ?? 0), 2);
-        $canUseBalance = $selectedProduct && $selectedProductPrice > 0 && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
+        $canUseBalance = !$blockingPendingActivationOrder
+            && $selectedProduct
+            && $selectedProductPrice > 0
+            && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
 
         $smarty->assign('selected', $selected);
         $smarty->assign('payment_can_request', $canRequestPayment);
@@ -1562,6 +1582,7 @@ if (app_uses_v2_schema($db)) {
         $smarty->assign('payment_can_use_bank', $canUseBank);
         $smarty->assign('payment_can_use_balance', $canUseBalance);
         $smarty->assign('payment_customer_balance_amount', number_format($customerBalanceAmount, 2, '.', ''));
+        $smarty->assign('payment_balance_blocking_order', $blockingPendingActivationOrder ?: null);
         $smarty->assign('payment_bank_accounts', $bankAccounts);
         $smarty->assign('payment_crypto_request', $cryptoRequest ?: null);
         $smarty->assign('payment_bank_request', $bankRequest ?: null);

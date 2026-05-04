@@ -2481,6 +2481,44 @@ function app_order_status_visual(array $order): array
     ];
 }
 
+function app_find_customer_paid_pending_activation_order(
+    Mysql_ks $db,
+    int $customerId,
+    int $excludeOrderId = 0
+): ?array {
+    if (
+        $customerId <= 0
+        || !schema_object_exists($db, 'orders')
+    ) {
+        return null;
+    }
+
+    $excludeSql = $excludeOrderId > 0 ? " AND orders.id <> {$excludeOrderId}" : '';
+
+    $row = $db->select_user(
+        "SELECT
+            orders.id,
+            orders.product_id,
+            orders.status,
+            orders.payment_status,
+            orders.fulfillment_status,
+            products.name AS product_name,
+            product_providers.name AS provider_name
+         FROM orders
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         WHERE orders.customer_id = {$customerId}
+           AND LOWER(COALESCE(orders.status, '')) IN ('pending_payment', 'paid_pending_activation')
+           AND LOWER(COALESCE(orders.payment_status, '')) = 'paid'
+           AND LOWER(COALESCE(orders.fulfillment_status, 'pending')) NOT IN ('delivered', 'fulfilled', 'completed', 'cancelled')
+           {$excludeSql}
+         ORDER BY orders.id DESC
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
 function app_ensure_order_renewal_runtime_columns(Mysql_ks $db): void
 {
     static $done = false;

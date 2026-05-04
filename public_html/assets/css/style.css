@@ -6325,10 +6325,39 @@ img.scan{
 	box-shadow:0 14px 32px rgba(15,23,42,.12);
 }
 
+.order-product-picker__summary{
+	display:flex;
+	align-items:center;
+	gap:.85rem;
+	min-width:0;
+	flex:1 1 auto;
+}
+
+.order-product-picker__logo{
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:42px;
+	height:42px;
+	flex:0 0 42px;
+	border-radius:12px;
+	background:#fff;
+	border:1px solid #e5e7eb;
+	overflow:hidden;
+}
+
+.order-product-picker__logo img{
+	display:block;
+	width:100%;
+	height:100%;
+	object-fit:contain;
+}
+
 .order-product-picker__title{
 	font-size:1rem;
 	font-weight: 600;
 	letter-spacing:-.02em;
+	min-width:0;
 }
 
 .order-product-picker__meta{
@@ -6425,6 +6454,10 @@ img.scan{
 	.order-product-picker__option{
 		flex-direction:column;
 		align-items:flex-start;
+	}
+
+	.order-product-picker__summary{
+		width:100%;
 	}
 
 	.order-product-picker__meta{

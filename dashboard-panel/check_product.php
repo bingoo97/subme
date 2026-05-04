@@ -43,6 +43,9 @@ $catalogProductType = app_customer_order_catalog_mode($user, $settings);
 $productDescriptionSelect = schema_column_exists($db, 'products', 'description')
     ? 'products.description AS description,'
     : "'' AS description,";
+$providerLogoSelect = schema_column_exists($db, 'product_providers', 'logo_url')
+    ? 'product_providers.logo_url AS provider_logo_url,'
+    : "'' AS provider_logo_url,";
 $legacyProductDescriptionSelect = schema_column_exists($db, 'products', 'description')
     ? 'description,'
     : "'' AS description,";
@@ -53,15 +56,18 @@ if (app_uses_v2_schema($db)) {
             products.id,
             products.name,
             {$productDescriptionSelect}
+            {$providerLogoSelect}
             products.duration_hours AS duration,
             products.price_amount AS price,
             products.is_trial AS trial,
             products.product_type,
             currencies.symbol AS currency_symbol
          FROM products
+         INNER JOIN product_providers ON product_providers.id = products.provider_id
          LEFT JOIN currencies ON currencies.id = products.currency_id
          WHERE products.provider_id = {$providerId}
            AND products.is_active = 1
+           AND product_providers.is_active = 1
            AND products.product_type IN ({$productTypeSql})
            " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
            " . ($trialsEnabled ? '' : "AND products.is_trial = 0") . "
@@ -74,6 +80,7 @@ if (app_uses_v2_schema($db)) {
             id,
             name,
             {$legacyProductDescriptionSelect}
+            '' AS provider_logo_url,
             duration,
             price,
             trial
@@ -112,6 +119,9 @@ foreach ($products as $product) {
     $isTrial = !empty($product['trial']);
     $productType = strtolower(trim((string)($product['product_type'] ?? 'subscription')));
     $currencySymbol = htmlspecialchars((string)($product['currency_symbol'] ?? $reseller['currency_symbol'] ?? ''), ENT_QUOTES, 'UTF-8');
+    $providerLogoRaw = trim((string)($product['provider_logo_url'] ?? ''));
+    $providerLogoPath = $providerLogoRaw !== '' ? app_format_logo_path($providerLogoRaw) : '';
+    $providerLogoAlt = htmlspecialchars((string)($reseller['page_name'] ?? 'Provider logo'), ENT_QUOTES, 'UTF-8');
 
     if ($productType === 'credits') {
         $durationLabel = localization_translate($t, 'product_type_credits_short', 'Credits');
@@ -128,7 +138,14 @@ foreach ($products as $product) {
         . ' data-product-price="' . htmlspecialchars($price . ' ' . $currencySymbol, ENT_QUOTES, 'UTF-8') . '"'
         . ' data-description="' . $productDescriptionAttr . '"'
         . ' onclick="selectProductOption(this)">';
+    echo '<span class="order-product-picker__summary">';
+    if ($providerLogoPath !== '') {
+        echo '<span class="order-product-picker__logo">';
+        echo '<img src="' . htmlspecialchars($providerLogoPath, ENT_QUOTES, 'UTF-8') . '" alt="' . $providerLogoAlt . '" loading="lazy">';
+        echo '</span>';
+    }
     echo '<span class="order-product-picker__title">' . $productName . '</span>';
+    echo '</span>';
     echo '<span class="order-product-picker__meta">';
     echo '<span class="order-product-picker__badge order-product-picker__badge--muted">' . htmlspecialchars($durationLabel, ENT_QUOTES, 'UTF-8') . '</span>';
     echo '<span class="order-product-picker__badge order-product-picker__badge--dark">' . $price . ' ' . $currencySymbol . '</span>';

@@ -56,29 +56,41 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <i class="fa fa-search" aria-hidden="true"></i> {$t.payment_pending_topup_block_button|default:'Go to top-up payment'}
                     </a>
                 </div>
-            {elseif $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance}
-                <div class="payment-method-start{if $payment_selected_method neq ''} is-hidden{/if}" data-payment-start>
-                    <div class="payment-method-start__buttons">
-                    {if $payment_can_use_crypto}
-                        <button type="button" class="payment-method-start__button" data-payment-target="crypto">
-                            <i class="fa fa-btc" aria-hidden="true"></i> {$t.payment_method_crypto|default:'Pay with crypto'}
-                        </button>
-                    {/if}
-                    {if $payment_can_use_bank}
-                        <button type="button" class="payment-method-start__button" data-payment-target="bank">
-                            <i class="fa fa-university" aria-hidden="true"></i> {$t.payment_method_bank|default:'Pay by bank transfer'}
-                        </button>
-                    {/if}
-                    {if $payment_can_use_balance}
-                        <button type="button" class="payment-method-start__button payment-method-start__button--balance" data-payment-target="balance">
-                            <i class="fa fa-credit-card" aria-hidden="true"></i> {$t.payment_method_balance|default:'Pay with balance'}
-                        </button>
-                    {/if}
+            {elseif $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance || $payment_balance_blocking_order}
+                {if $payment_balance_blocking_order}
+                    <div class="alert alert-warning payment-support-alert">
+                        <strong>{$t.payment_balance_blocked_pending_activation_title|default:'Another paid order is still waiting for activation.'}</strong><br />
+                        {$t.payment_balance_blocked_pending_activation_text|default:'Wait until the admin activates your already paid order before using account balance for another purchase.'}
                     </div>
-                    <div class="payment-method-hero">
-                        <img src="/img/package.jpg" alt="Payment package" class="payment-method-hero__image" />
+                {/if}
+                {if $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance}
+                    <div class="payment-method-start{if $payment_selected_method neq ''} is-hidden{/if}" data-payment-start>
+                        <div class="payment-method-start__buttons">
+                        {if $payment_can_use_crypto}
+                            <button type="button" class="payment-method-start__button" data-payment-target="crypto">
+                                <i class="fa fa-btc" aria-hidden="true"></i> {$t.payment_method_crypto|default:'Pay with crypto'}
+                            </button>
+                        {/if}
+                        {if $payment_can_use_bank}
+                            <button type="button" class="payment-method-start__button" data-payment-target="bank">
+                                <i class="fa fa-university" aria-hidden="true"></i> {$t.payment_method_bank|default:'Pay by bank transfer'}
+                            </button>
+                        {/if}
+                        {if $payment_can_use_balance}
+                            <button type="button" class="payment-method-start__button payment-method-start__button--balance" data-payment-target="balance">
+                                <i class="fa fa-credit-card" aria-hidden="true"></i> {$t.payment_method_balance|default:'Pay with balance'}
+                            </button>
+                        {/if}
+                        </div>
+                        <div class="payment-method-hero">
+                            <img src="/img/package.jpg" alt="Payment package" class="payment-method-hero__image" />
+                        </div>
                     </div>
-                </div>
+                {else}
+                    <div class="alert alert-warning">
+                        {$t.payment_no_method_available|default:'No payment method is currently available for this account. Contact support to activate a crypto wallet or bank account.'}
+                    </div>
+                {/if}
 
                 {if $payment_can_use_crypto}
                     <div class="payment-method-panel{if $payment_selected_method eq 'crypto'} is-active{/if}" data-payment-panel="crypto">

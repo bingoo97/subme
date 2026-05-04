@@ -1,7 +1,11 @@
 <div class="content-box orders-view{if $order_catalog_product_type|default:'subscription' eq 'credits'} orders-view-history{else} orders-view-modern{/if}">
     <div class="orders-header{if $order_catalog_product_type|default:'subscription' eq 'credits'} orders-header--history{/if}">
         <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.orders|default:'Orders'}</h1>
-        {if $order_sales_available && $order_catalog_has_products|default:false}
+        {if $order_add_blocked_by_pending_activation|default:false}
+            <div class="alert alert-warning orders-header__warning">
+                {$t.orders_pending_activation_block_notice|default:'You already have a paid order waiting for activation. Wait until the admin activates it before adding another order.'}
+            </div>
+        {elseif $order_sales_available && $order_catalog_has_products|default:false}
             <form action="" method="post">
                 <input type="hidden" name="_csrf" value="{$csrf_token|default:''}">
                 <button type="submit" class="btn btn-dark btn-lg" name="order_add">
