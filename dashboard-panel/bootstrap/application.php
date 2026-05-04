@@ -7018,6 +7018,10 @@ function app_queue_order_transition_notifications(Mysql_ks $db, array $beforeOrd
         $results[] = app_queue_order_email($db, 'order-activated', $orderId, [], 60);
     }
 
+    if ($beforeStatus !== 'expired' && $afterStatus === 'expired') {
+        $results[] = app_queue_order_email($db, 'order-expired', $orderId, [], 60);
+    }
+
     return $results;
 }
 
