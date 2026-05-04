@@ -4907,11 +4907,12 @@ button[name="create_balance_payment"]:hover{
 	padding: 10px 18px 5px;
 	font-size: 13px;
 	text-align: justify;
+	color:#434343;
 }
 
 #news .news_content p{
 	font-size: 15px;
-	color:#7b7b7b;
+	color:#434343;
 	margin:0 0 10px;
 	font-weight: 400;
 	line-height: 25px;
