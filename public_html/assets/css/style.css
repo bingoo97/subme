@@ -2599,6 +2599,43 @@ CONTENT
 	color:#fff!important;
 }
 
+.home_buttons .one_box.one_box--orders-attention{
+	position: relative;
+	overflow: hidden;
+	border-color: rgba(195, 16, 113, 0.26);
+	animation: homeOrdersCardPulse 2.8s ease-in-out infinite;
+}
+
+.home_buttons .one_box.one_box--orders-attention::after{
+	content:'';
+	position:absolute;
+	inset:0;
+	background: linear-gradient(120deg, rgba(195,16,113,0) 0%, rgba(195,16,113,0.08) 45%, rgba(195,16,113,0) 100%);
+	transform: translateX(-130%);
+	animation: homeOrdersCardSweep 3.8s ease-in-out infinite;
+	pointer-events:none;
+}
+
+.home_buttons .one_box.one_box--orders-attention i,
+.home_buttons .one_box.one_box--orders-attention p.title{
+	color:#c31071;
+	animation: homeOrdersAccentPulse 2.8s ease-in-out infinite;
+}
+
+.home_buttons .one_box.one_box--orders-attention:hover,
+.home_buttons .one_box.one_box--orders-attention:focus{
+	background-color:#fff7fb;
+	border-color:#c31071;
+	color:#c31071;
+}
+
+.home_buttons .one_box.one_box--orders-attention:hover i,
+.home_buttons .one_box.one_box--orders-attention:hover p.title,
+.home_buttons .one_box.one_box--orders-attention:focus i,
+.home_buttons .one_box.one_box--orders-attention:focus p.title{
+	color:#c31071;
+}
+
 @media (max-width: 500px) {
 	.home_buttons .one_box{
 		height: 65px;
@@ -2610,6 +2647,9 @@ CONTENT
 	.home_buttons .one_box i{
 		top: 0px;
 		font-size: 24px;
+	}
+
+	.home_buttons .one_box.one_box--orders-attention{
 	}
 }
 
@@ -3003,6 +3043,54 @@ body.homepage-onboarding-open{
     .home_buttons .one_box.color_alert p.title .btn{
 	    margin-top: -1px;
 	   }
+}
+
+@keyframes homeOrdersAccentPulse{
+	0%{
+		color:#8b0f54;
+		text-shadow: 0 0 0 rgba(195, 16, 113, 0);
+		opacity:1;
+	}
+	50%{
+		color:#c31071;
+		text-shadow: 0 0 14px rgba(195, 16, 113, 0.18);
+		opacity:1;
+	}
+	100%{
+		color:#8b0f54;
+		text-shadow: 0 0 0 rgba(195, 16, 113, 0);
+		opacity:1;
+	}
+}
+
+@keyframes homeOrdersCardPulse{
+	0%{
+		border-color: rgba(195, 16, 113, 0.18);
+	}
+	50%{
+		border-color: rgba(195, 16, 113, 0.48);
+	}
+	100%{
+		border-color: rgba(195, 16, 113, 0.18);
+	}
+}
+
+@keyframes homeOrdersCardSweep{
+	0%{
+		transform: translateX(-130%);
+		opacity:0;
+	}
+	18%{
+		opacity:1;
+	}
+	45%{
+		transform: translateX(130%);
+		opacity:1;
+	}
+	100%{
+		transform: translateX(130%);
+		opacity:0;
+	}
 }
 
 .profil-avatar{

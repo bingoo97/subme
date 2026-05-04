@@ -25,7 +25,7 @@
     </div>
 	<div class="col-sm-12">
 		<a href="/orders" title="{$t.orders}">
-			<div class="one_box">
+			<div class="one_box one_box--orders-attention">
 				<i class="fa fa-tasks" aria-hidden="true"></i>
 				<p class="title">{$t.orders}</p>
 			</div>
