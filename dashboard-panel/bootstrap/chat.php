@@ -1227,6 +1227,7 @@ if (!function_exists('chat_normalize_messages')) {
                 'id' => isset($row['id']) ? (int)$row['id'] : 0,
                 'direction' => $systemNoticeText !== '' ? 'system' : ($isCustomerMessage ? 'sent' : 'received'),
                 'sender_is_admin' => isset($row['sender_type']) && (string)$row['sender_type'] === 'admin',
+                'sender_customer_id' => (isset($row['sender_type']) && (string)$row['sender_type'] === 'customer') ? (int)($row['customer_id'] ?? 0) : 0,
                 'sender_label' => $senderLabel,
                 'message_html' => chat_format_message_html($messageBody),
                 'is_emoji_only' => $systemNoticeText === '' && chat_message_is_emoji_only($messageBody),

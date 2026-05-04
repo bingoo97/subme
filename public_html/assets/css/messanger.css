@@ -459,6 +459,24 @@
 	color:#7a7a7a;
 }
 
+.messenger-author-button{
+	display:inline-flex;
+	align-items:center;
+	gap:4px;
+	padding:0;
+	border:0;
+	background:transparent;
+	cursor:pointer;
+	text-align:left;
+}
+
+.messenger-author-button:hover,
+.messenger-author-button:focus{
+	color:#111827;
+	text-decoration:none;
+	outline:none;
+}
+
 .messenger-author__admin-badge{
 	display:inline-flex;
 	align-items:center;

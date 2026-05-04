@@ -1922,7 +1922,7 @@
 				buttonLabel = directStatus === 'pending' ? 'Otwórz zaproszenie' : 'Wyślij wiadomość';
 			}
 
-			if (profileContext === 'group-member' && actionKind === 'invite') {
+			if ((profileContext === 'group-member' || profileContext === 'message-author') && actionKind === 'invite') {
 				buttonLabel = 'Wyślij wiadomość';
 			}
 

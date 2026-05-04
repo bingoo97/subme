@@ -308,7 +308,24 @@
                 <li class="messenger-item messenger-item--{$chat[i].direction}{if $chat[i].can_interact|default:false} messenger-item--interactive{/if}" data-message-id="{$chat[i].id}"{if $chat[i].can_interact|default:false} data-chat-message-item{/if}>
 					<div class="messenger-bubble"{if $chat[i].can_interact|default:false} data-chat-message-bubble{/if}>
 						{if $chat[i].direction eq 'received'}
-						<div class="messenger-author{if $chat_active_conversation_is_group|default:false && !($chat_active_conversation_is_direct|default:false) && $chat[i].sender_is_admin|default:false} messenger-author--admin{/if}">{if $chat_active_conversation_is_group|default:false && !($chat_active_conversation_is_direct|default:false) && $chat[i].sender_is_admin|default:false}<span class="messenger-author__admin-badge" aria-hidden="true">★</span>{/if}{$chat[i].sender_label}</div>
+                            {assign var="chatCanOpenAuthorProfile" value=false}
+                            {if ($chat_active_conversation_is_group|default:false) && !($chat_active_conversation_is_direct|default:false) && !($chat[i].sender_is_admin|default:false) && ($chat[i].sender_customer_id|default:0 gt 0) && ($chat[i].sender_customer_id|default:0 ne $user.id)}
+                                {assign var="chatCanOpenAuthorProfile" value=true}
+                            {/if}
+                            {if $chatCanOpenAuthorProfile}
+                            <button
+                                type="button"
+                                class="messenger-author messenger-author-button"
+                                data-chat-profile-open
+                                data-chat-profile-context="message-author"
+                                data-participant-type="customer"
+                                data-target-customer-id="{$chat[i].sender_customer_id|default:0}"
+                            >
+                                {$chat[i].sender_label}
+                            </button>
+                            {else}
+						    <div class="messenger-author{if $chat_active_conversation_is_group|default:false && !($chat_active_conversation_is_direct|default:false) && $chat[i].sender_is_admin|default:false} messenger-author--admin{/if}">{if $chat_active_conversation_is_group|default:false && !($chat_active_conversation_is_direct|default:false) && $chat[i].sender_is_admin|default:false}<span class="messenger-author__admin-badge" aria-hidden="true">★</span>{/if}{$chat[i].sender_label}</div>
+                            {/if}
 						{/if}
 						{if $chat[i].reply_to_message_id|default:0 gt 0 && $chat[i].reply_preview_text|default:'' ne ''}
 						<button type="button" class="messenger-reply-preview" data-chat-scroll-to-message="{$chat[i].reply_to_message_id}">
