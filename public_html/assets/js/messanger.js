@@ -568,6 +568,14 @@
 			return true;
 		},
 
+		hasActiveConversationSelection: function () {
+			if ((parseInt(this.activeConversationId || 0, 10) || 0) > 0) {
+				return true;
+			}
+
+			return String(this.activeConversationType || '') === 'live_chat';
+		},
+
 		updateViewportMetrics: function () {
 			var $widget = this.widget();
 			var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
@@ -610,7 +618,7 @@
 			}
 
 			if (this.hasResellerInboxLayout()) {
-				if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0) {
+				if (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection()) {
 					this.showConversationView();
 				} else {
 					this.showConversationList();
@@ -797,7 +805,7 @@
 
 			delays.forEach(function (delay) {
 				window.setTimeout(function () {
-					if (self.hasResellerInboxLayout() && self.activeConversationId > 0 && self.resellerViewMode === 'conversation') {
+					if (self.hasResellerInboxLayout() && self.hasActiveConversationSelection() && self.resellerViewMode === 'conversation') {
 						self.showConversationView();
 					}
 					self.refreshOpenLayout(true);
@@ -806,7 +814,7 @@
 			});
 
 			raf(function () {
-				if (self.hasResellerInboxLayout() && self.activeConversationId > 0 && self.resellerViewMode === 'conversation') {
+				if (self.hasResellerInboxLayout() && self.hasActiveConversationSelection() && self.resellerViewMode === 'conversation') {
 					self.showConversationView();
 				}
 				self.refreshOpenLayout(true);
@@ -2412,7 +2420,7 @@
 
 		open: function () {
 			var self = this;
-			var shouldMarkRead = !this.hasResellerInboxLayout() || (this.resellerViewMode === 'conversation' && this.activeConversationId > 0);
+			var shouldMarkRead = !this.hasResellerInboxLayout() || (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection());
 			if (this.isDesktopDocked()) {
 				this.syncDesktopDockedState();
 				this.refreshOpenLayout(true);
@@ -2426,7 +2434,7 @@
 				return false;
 			}
 			if (this.hasResellerInboxLayout()) {
-				if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0) {
+				if (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection()) {
 					this.showConversationView();
 				} else {
 					this.showConversationList();
@@ -2547,7 +2555,7 @@
 				}
 				this.bindChatScrollHandler();
 				if (this.hasResellerInboxLayout()) {
-					if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0) {
+					if (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection()) {
 						this.showConversationView();
 					} else {
 						this.showConversationList();
@@ -2580,9 +2588,9 @@
 			}
 
 			if (keepBottom && this.restoreOpenScrollToBottomPending) {
-				if (this.hasResellerInboxLayout() && this.resellerViewMode === 'conversation' && this.activeConversationId > 0) {
-					this.showConversationView();
-				}
+			if (this.hasResellerInboxLayout() && this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection()) {
+				this.showConversationView();
+			}
 				this.restoreOpenScrollToBottomPending = false;
 				this.scheduleScrollToBottom();
 			}
@@ -2602,6 +2610,7 @@
 			var self = this;
 			var cfg = this.config();
 			var requestConversationId;
+			var requestConversationType;
 			var requestData;
 			options = options || {};
 
@@ -2611,6 +2620,7 @@
 
 			this.fetchInFlight = true;
 			requestConversationId = options.hasOwnProperty('conversationId') ? (parseInt(options.conversationId || 0, 10) || 0) : this.activeConversationId;
+			requestConversationType = options.hasOwnProperty('conversationType') ? String(options.conversationType || '') : String(this.activeConversationType || '');
 			requestData = {
 				action: options.markRead ? 'read' : 'fetch',
 				format: 'json',
@@ -2624,6 +2634,9 @@
 
 			if (requestConversationId > 0 || options.hasOwnProperty('conversationId')) {
 				requestData.conversation_id = requestConversationId;
+				if (requestConversationType) {
+					requestData.conversation_type = requestConversationType;
+				}
 			}
 
 			return $.ajax({
@@ -2647,10 +2660,11 @@
 			});
 		},
 
-		markRead: function (conversationId) {
+		markRead: function (conversationId, conversationType) {
 			return this.fetch({
 				markRead: true,
 				conversationId: typeof conversationId === 'undefined' ? this.activeConversationId : conversationId,
+				conversationType: typeof conversationType === 'undefined' ? this.activeConversationType : conversationType,
 				scrollToBottom: true
 			});
 		},
@@ -2990,10 +3004,11 @@
 			this.fetch({
 				force: true,
 				conversationId: nextConversationId,
+				conversationType: nextConversationType,
 				scrollToBottom: true,
 				animateConversation: true
 			}).done(function () {
-				self.markRead(nextConversationId);
+				self.markRead(nextConversationId, nextConversationType);
 			}).always(function () {
 				self.setConversationLoadingState(false);
 			});
@@ -3731,14 +3746,14 @@
 			this.updateViewportMetrics();
 			this.syncConversationStateFromMarkup(true);
 			if (this.hasResellerInboxLayout()) {
-				if (!(requestedConversationId > 0 && this.activeConversationId > 0)) {
+				if (!(requestedConversationId > 0 && (this.activeConversationId > 0 || this.hasActiveConversationSelection()))) {
 					this.restoreActiveConversationState();
 				} else {
 					this.resellerViewMode = 'conversation';
 					this.saveActiveConversationState();
 					this.syncConversationUrlState();
 				}
-				if (this.resellerViewMode === 'conversation' && this.activeConversationId > 0 && (shouldRestoreOpenState || this.isDesktopDocked() || requestedConversationId > 0)) {
+				if (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection() && (shouldRestoreOpenState || this.isDesktopDocked() || requestedConversationId > 0 || this.activeConversationType === 'live_chat')) {
 					this.showConversationView();
 				} else {
 					this.showConversationList();

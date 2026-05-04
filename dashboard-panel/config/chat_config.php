@@ -30,6 +30,9 @@ $chatCustomerIsBlocked = false;
 $requestedConversationId = isset($chatRenderConversationId) && $chatRenderConversationId !== null
     ? (int)$chatRenderConversationId
     : (isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0));
+$requestedConversationType = isset($chatRenderConversationType) && $chatRenderConversationType !== null
+    ? trim((string)$chatRenderConversationType)
+    : (isset($_POST['conversation_type']) ? trim((string)$_POST['conversation_type']) : (isset($_GET['conversation_type']) ? trim((string)$_GET['conversation_type']) : ''));
 $chatMessageLimit = function_exists('chat_customer_normalize_message_limit')
     ? chat_customer_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0)
     : 10;
@@ -43,7 +46,7 @@ if (app_uses_v2_schema($db)) {
     }
     $chatCustomerFullMessenger = chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : []);
     $chatConversations = chat_customer_conversation_list($db, $user, $reseller, $chatSupportLabel, is_array($settings ?? null) ? $settings : []);
-    $chatActiveConversation = chat_customer_selected_conversation($db, $user, $requestedConversationId, is_array($settings ?? null) ? $settings : []);
+    $chatActiveConversation = chat_customer_selected_conversation($db, $user, $requestedConversationId, is_array($settings ?? null) ? $settings : [], $requestedConversationType);
     $chatMessages = chat_messages_for_customer_conversation($db, $user, $chatActiveConversation, $reseller, $chatSupportLabel, $chatMessageLimit);
     $chatTotalMessages = function_exists('chat_messages_total_for_customer_conversation')
         ? chat_messages_total_for_customer_conversation($db, $user, $chatActiveConversation)

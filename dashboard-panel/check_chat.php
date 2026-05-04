@@ -308,10 +308,12 @@ function chat_render_payload(
     array $reseller,
     array $settings,
     string $currentLocale = 'en',
-    ?int $forcedConversationId = null
+    ?int $forcedConversationId = null,
+    ?string $forcedConversationType = null
 ): array
 {
     $chatRenderConversationId = $forcedConversationId;
+    $chatRenderConversationType = $forcedConversationType;
     include __DIR__ . '/config/chat_config.php';
 
     return [
@@ -549,6 +551,7 @@ function chat_store_uploaded_image(array $file, int $customerId): ?string
 
 $currentCustomerId = (int)$_SESSION['id'];
 $requestedConversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
+$requestedConversationType = isset($_POST['conversation_type']) ? trim((string)$_POST['conversation_type']) : (isset($_GET['conversation_type']) ? trim((string)$_GET['conversation_type']) : '');
 $responseFormat = isset($_POST['format']) ? (string)$_POST['format'] : (isset($_GET['format']) ? (string)$_GET['format'] : 'html');
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $faqKey = isset($_POST['faq_key']) ? trim((string)$_POST['faq_key']) : (isset($_GET['faq_key']) ? trim((string)$_GET['faq_key']) : '');
@@ -1101,7 +1104,8 @@ $payload = chat_render_payload(
     $reseller,
     is_array($settings ?? null) ? $settings : [],
     isset($currentLocale) ? (string)$currentLocale : 'en',
-    $requestedConversationId > 0 ? $requestedConversationId : null
+    $requestedConversationId > 0 ? $requestedConversationId : null,
+    $requestedConversationType !== '' ? $requestedConversationType : null
 );
 $rateLimitState = chat_rate_limit_state();
 

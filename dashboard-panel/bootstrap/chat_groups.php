@@ -4387,17 +4387,37 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         return $entries;
     }
 
-    function chat_customer_selected_conversation(Mysql_ks $db, array $customer, int $requestedConversationId, array $settings = []): array
+    function chat_customer_selected_conversation(Mysql_ks $db, array $customer, int $requestedConversationId, array $settings = [], string $requestedConversationType = ''): array
     {
         chat_ensure_group_chat_runtime($db);
         $customerId = (int)($customer['id'] ?? 0);
         $conversationId = max(0, $requestedConversationId);
+        $requestedType = trim($requestedConversationType);
         $fullMessengerEnabled = chat_customer_can_use_groups($customer, $settings);
         if ($customerId <= 0) {
             return ['id' => 0, 'type' => 'live_chat', 'is_group' => false];
         }
 
         if ($conversationId > 0 && $fullMessengerEnabled) {
+            if ($requestedType === 'live_chat') {
+                $directConversation = $db->select_user(
+                    "SELECT id, subject, updated_at, created_at
+                     FROM support_conversations
+                     WHERE id = {$conversationId}
+                       AND conversation_type = 'live_chat'
+                       AND customer_id = {$customerId}
+                     LIMIT 1"
+                );
+                if (is_array($directConversation) && !empty($directConversation['id'])) {
+                    return [
+                        'id' => (int)$directConversation['id'],
+                        'type' => 'live_chat',
+                        'is_group' => false,
+                        'row' => $directConversation,
+                    ];
+                }
+            }
+
             $groupConversation = chat_group_accessible_for_customer($db, $customerId, $conversationId);
             if ($groupConversation) {
                 if (!empty($groupConversation['is_direct_conversation'])) {
@@ -4423,21 +4443,23 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 ];
             }
 
-            $directConversation = $db->select_user(
-                "SELECT id, subject, updated_at, created_at
-                 FROM support_conversations
-                 WHERE id = {$conversationId}
-                   AND conversation_type = 'live_chat'
-                   AND customer_id = {$customerId}
-                 LIMIT 1"
-            );
-            if (is_array($directConversation) && !empty($directConversation['id'])) {
-                return [
-                    'id' => (int)$directConversation['id'],
-                    'type' => 'live_chat',
-                    'is_group' => false,
-                    'row' => $directConversation,
-                ];
+            if ($requestedType !== 'group_chat' && $requestedType !== 'global_group') {
+                $directConversation = $db->select_user(
+                    "SELECT id, subject, updated_at, created_at
+                     FROM support_conversations
+                     WHERE id = {$conversationId}
+                       AND conversation_type = 'live_chat'
+                       AND customer_id = {$customerId}
+                     LIMIT 1"
+                );
+                if (is_array($directConversation) && !empty($directConversation['id'])) {
+                    return [
+                        'id' => (int)$directConversation['id'],
+                        'type' => 'live_chat',
+                        'is_group' => false,
+                        'row' => $directConversation,
+                    ];
+                }
             }
         }
 
