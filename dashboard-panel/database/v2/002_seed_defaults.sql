@@ -286,6 +286,8 @@ INSERT INTO `email_templates` (`template_key`, `name`, `subject`, `body_html`, `
   ('payment-request-created', 'Payment request notification', 'Payment is waiting', 'Hello,\n\nA payment request is waiting in your account.\n\nLog in to the website to complete the payment:\n{payment_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
   ('order-paid', 'Order paid notification', 'Payment confirmed', 'Hello,\n\nYour payment has been confirmed.\n\nLog in to your account to review the details:\n{order_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
   ('order-activated', 'Order activated notification', 'Your subscription is active', 'Hello,\n\nYour subscription is now active.\n\nLog in to your account to review the details:\n{order_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
+  ('order-expiring-soon', 'Order expiry reminder notification', 'Your subscription expires in 5 days', 'Hello,\n\nThis is a reminder that your subscription will expire soon.\n\nLog in to your account to review the details and renew it in advance:\n{order_url}\n\nExpiry date: {expires_at_local}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
+  ('order-expired', 'Order expired notification', 'Your order expired', 'Hello,\n\nYour subscription has expired.\n\nLog in to your account to renew it:\n{order_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
   ('live-chat-admin-notify', 'Live chat admin notification', 'You have a new message [Support]', 'Hello,\n\nA customer sent a new message in {site_name} live chat.\n\nCustomer: {customer_email}\n\nLog in to the admin panel to reply:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
   ('live-chat-customer-notify', 'Live chat customer notification', 'You have a new message [Support]', 'Hello,\n\nYou received a new message in {site_name}.\n\nLog in to your account to check Live Chat:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}\n\nThis message was generated automatically.', 1, 1),
   ('news-broadcast', 'News notification', 'New important information', 'Hello,\n\nA new important message was published in {site_name}.\n\nLog in to your account and open News:\n{news_url}\n\nRegards,\n{site_name}\n{site_url}', 1, 1),
@@ -305,6 +307,8 @@ SELECT et.id, 'en',
     WHEN 'payment-request-created' THEN 'Payment is waiting'
     WHEN 'order-paid' THEN 'Payment confirmed'
     WHEN 'order-activated' THEN 'Your subscription is active'
+    WHEN 'order-expiring-soon' THEN 'Your subscription expires in 5 days'
+    WHEN 'order-expired' THEN 'Your order expired'
     WHEN 'live-chat-admin-notify' THEN 'You have a new message [Support]'
     WHEN 'live-chat-customer-notify' THEN 'You have a new message [Support]'
     WHEN 'news-broadcast' THEN 'New important information'
@@ -318,6 +322,8 @@ SELECT et.id, 'en',
     WHEN 'payment-request-created' THEN 'Hello,\n\nA payment request is waiting in your account.\n\nLog in to the website to complete the payment:\n{payment_url}\n\nRegards,\n{site_name}\n{site_url}'
     WHEN 'order-paid' THEN 'Hello,\n\nYour payment has been confirmed.\n\nLog in to your account to review the details:\n{order_url}\n\nRegards,\n{site_name}\n{site_url}'
     WHEN 'order-activated' THEN 'Hello,\n\nYour subscription is now active.\n\nLog in to your account to review the details:\n{order_url}\n\nRegards,\n{site_name}\n{site_url}'
+    WHEN 'order-expiring-soon' THEN 'Hello,\n\nThis is a reminder that your subscription will expire soon.\n\nLog in to your account to review the details and renew it in advance:\n{order_url}\n\nExpiry date: {expires_at_local}\n\nRegards,\n{site_name}\n{site_url}'
+    WHEN 'order-expired' THEN 'Hello,\n\nYour subscription has expired.\n\nLog in to your account to renew it:\n{order_url}\n\nRegards,\n{site_name}\n{site_url}'
     WHEN 'live-chat-admin-notify' THEN 'Hello,\n\nA customer sent a new message in {site_name} live chat.\n\nCustomer: {customer_email}\n\nLog in to the admin panel to reply:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}'
     WHEN 'live-chat-customer-notify' THEN 'Hello,\n\nYou received a new message in {site_name}.\n\nLog in to your account to check Live Chat:\n{chat_url}\n\nRegards,\n{site_name}\n{site_url}\n\nThis message was generated automatically.'
     WHEN 'news-broadcast' THEN 'Hello,\n\nA new important message was published in {site_name}.\n\nLog in to your account and open News:\n{news_url}\n\nRegards,\n{site_name}\n{site_url}'
@@ -332,6 +338,8 @@ WHERE et.template_key IN (
   'payment-request-created',
   'order-paid',
   'order-activated',
+  'order-expiring-soon',
+  'order-expired',
   'live-chat-admin-notify',
   'live-chat-customer-notify',
   'news-broadcast',
@@ -351,6 +359,8 @@ SELECT et.id, 'pl',
     WHEN 'payment-request-created' THEN 'Płatność oczekuje'
     WHEN 'order-paid' THEN 'Płatność została potwierdzona'
     WHEN 'order-activated' THEN 'Subskrypcja jest aktywna'
+    WHEN 'order-expiring-soon' THEN 'Twoja subskrypcja wygasa za 5 dni'
+    WHEN 'order-expired' THEN 'Twoje zamówienie wygasło'
     WHEN 'live-chat-admin-notify' THEN 'Masz nową wiadomość [Support]'
     WHEN 'live-chat-customer-notify' THEN 'Masz nową wiadomość [Support]'
     WHEN 'news-broadcast' THEN 'Nowa ważna informacja'
@@ -364,6 +374,8 @@ SELECT et.id, 'pl',
     WHEN 'payment-request-created' THEN 'Witaj,\n\nNa Twoim koncie oczekuje płatność.\n\nZaloguj się na stronę, aby ją dokończyć:\n{payment_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
     WHEN 'order-paid' THEN 'Witaj,\n\nTwoja płatność została potwierdzona.\n\nZaloguj się na swoje konto, aby sprawdzić szczegóły:\n{order_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
     WHEN 'order-activated' THEN 'Witaj,\n\nTwoja subskrypcja jest już aktywna.\n\nZaloguj się na swoje konto, aby sprawdzić szczegóły:\n{order_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
+    WHEN 'order-expiring-soon' THEN 'Witaj,\n\nPrzypominamy, że Twoja subskrypcja wkrótce wygaśnie.\n\nZaloguj się na swoje konto, aby sprawdzić szczegóły i odnowić ją wcześniej:\n{order_url}\n\nData wygaśnięcia: {expires_at_local}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
+    WHEN 'order-expired' THEN 'Witaj,\n\nTwoja subskrypcja wygasła.\n\nZaloguj się na swoje konto, aby ją odnowić:\n{order_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
     WHEN 'live-chat-admin-notify' THEN 'Witaj,\n\nKlient wysłał nową wiadomość na live chacie w {site_name}.\n\nKlient: {customer_email}\n\nZaloguj się do panelu admina, aby odpowiedzieć:\n{chat_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
     WHEN 'live-chat-customer-notify' THEN 'Witaj,\n\nOtrzymałeś nową wiadomość w {site_name}.\n\nZaloguj się na swoje konto, aby sprawdzić Live Chat:\n{chat_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}\n\nTa wiadomość została wygenerowana automatycznie.'
     WHEN 'news-broadcast' THEN 'Witaj,\n\nW {site_name} została opublikowana nowa ważna informacja.\n\nZaloguj się na swoje konto i otwórz News:\n{news_url}\n\nPozdrawiamy,\n{site_name}\n{site_url}'
@@ -378,6 +390,8 @@ WHERE et.template_key IN (
   'payment-request-created',
   'order-paid',
   'order-activated',
+  'order-expiring-soon',
+  'order-expired',
   'live-chat-admin-notify',
   'live-chat-customer-notify',
   'news-broadcast',

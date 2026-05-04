@@ -39,6 +39,12 @@ Active user-facing emails:
   - sent when payment becomes confirmed
 - `order-activated`
   - sent when subscription becomes active
+- `order-expiring-soon`
+  - sent once, 5 days before subscription expiry
+  - should point customer back to `/orders`
+- `order-expired`
+  - sent when subscription becomes expired
+  - should point customer back to `/orders`
 - `live-chat-customer-notify`
   - sent only when admin writes and customer is offline
   - 15-minute cooldown per conversation recipient
@@ -65,7 +71,6 @@ Support/admin emails:
 Disabled by design to reduce noise:
 - no automatic email on raw order creation
 - no automatic email on subscription extension
-- no automatic email on subscription expiry
 - no automatic email on order cancellation
 - no duplicate live chat email bursts while the same conversation is active
 - no reseller messenger email bursts more often than once per hour for the same recipient

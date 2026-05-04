@@ -14783,6 +14783,7 @@ function admin_email_template_polish_title(string $templateKey, string $fallback
         'payment-request-created' => 'Powiadomienie o oczekującej płatności',
         'order-paid' => 'Powiadomienie o potwierdzeniu płatności',
         'order-activated' => 'Powiadomienie o aktywacji zamówienia',
+        'order-expiring-soon' => 'Powiadomienie 5 dni przed wygaśnięciem zamówienia',
         'order-expired' => 'Powiadomienie o wygaśnięciu zamówienia',
         'live-chat-admin-notify' => 'Powiadomienie admina o nowej wiadomości',
         'live-chat-customer-notify' => 'Powiadomienie klienta o nowej wiadomości',

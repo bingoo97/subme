@@ -5003,6 +5003,12 @@ function app_email_builtin_templates(): array
             'body' => app_email_builtin_templates_localized('en')['order-activated']['body'],
             'placeholders' => ['order_id', 'id_zamowienia', 'order_url', 'site_name', 'site_url', 'pagename', 'pageurl'],
         ],
+        'order-expiring-soon' => [
+            'name' => 'Order expiry reminder notification',
+            'subject' => 'Your subscription expires soon',
+            'body' => app_email_builtin_templates_localized('en')['order-expiring-soon']['body'],
+            'placeholders' => ['order_id', 'id_zamowienia', 'order_url', 'expires_at', 'expires_at_local', 'days_remaining', 'site_name', 'site_url', 'pagename', 'pageurl'],
+        ],
         'order-expired' => [
             'name' => 'Order expired notification',
             'subject' => 'Your order expired',
@@ -5073,6 +5079,7 @@ function app_email_active_template_keys(): array
         'payment-request-created',
         'order-paid',
         'order-activated',
+        'order-expiring-soon',
         'order-expired',
         'live-chat-admin-notify',
         'live-chat-customer-notify',
@@ -5096,6 +5103,7 @@ function app_email_builtin_templates_localized(string $localeCode): array
             'payment-request-created' => ['subject' => 'Płatność oczekuje', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że dla zamówienia nr <strong>#%order_id%</strong> oczekuje płatność.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły i opłacić zamówienie.</p>\n{$footer}"],
             'order-paid' => ['subject' => 'Płatność została potwierdzona', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że płatność do zamówienia nr <strong>#%order_id%</strong> została potwierdzona.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły.</p>\n{$footer}"],
             'order-activated' => ['subject' => 'Twoje zamówienie jest aktywne', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że zamówienie nr <strong>#%order_id%</strong> jest aktywne.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły.</p>\n{$footer}"],
+            'order-expiring-soon' => ['subject' => 'Twoja subskrypcja wygasa za 5 dni', 'body' => "<h3>Witaj,</h3>\n<p>Przypominamy, że zamówienie nr <strong>#%order_id%</strong> wygaśnie <strong>%expires_at_local%</strong>.</p>\n<p>Aby uniknąć przerwy w dostępie, odnów subskrypcję wcześniej.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić szczegóły i dostępne opcje przedłużenia.</p>\n{$footer}"],
             'order-expired' => ['subject' => 'Twoje zamówienie wygasło', 'body' => "<h3>Witaj,</h3>\n<p>Informujemy, że Twoje zamówienie nr <strong>#%order_id%</strong> właśnie wygasło.</p>\n<p>Subskrypcję możesz odnowić w dowolnym czasie.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić ofertę.</p>\n{$footer}"],
             'live-chat-admin-notify' => ['subject' => 'Masz nową wiadomość [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Klient wysłał nową wiadomość przez Live Chat.</p>\n<p>Login klienta: <strong>%customer_email%</strong></p>\n<p>Przejdź do panelu administracyjnego, aby odpowiedzieć.</p>\n{$footer}"],
             'live-chat-customer-notify' => ['subject' => 'Masz nową wiadomość [Support]', 'body' => "<h3>Witaj,</h3>\n<p>Otrzymałeś nową wiadomość od supportu.</p>\n<p>Zaloguj się na swoje konto, aby sprawdzić Live Chat.</p>\n{$footer}"],
@@ -5113,6 +5121,7 @@ function app_email_builtin_templates_localized(string $localeCode): array
         'payment-request-created' => ['subject' => 'Payment is waiting', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that payment is waiting for order <strong>#%order_id%</strong>.</p>\n<p>Log in to your account to review the details and complete the payment.</p>\n{$footer}"],
         'order-paid' => ['subject' => 'Payment confirmed', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that payment for order <strong>#%order_id%</strong> has been confirmed.</p>\n<p>Log in to your account to review the details.</p>\n{$footer}"],
         'order-activated' => ['subject' => 'Your order is active', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that order <strong>#%order_id%</strong> is active.</p>\n<p>Log in to your account to review the details.</p>\n{$footer}"],
+        'order-expiring-soon' => ['subject' => 'Your subscription expires in 5 days', 'body' => "<h3>Hello,</h3>\n<p>This is a reminder that order <strong>#%order_id%</strong> will expire on <strong>%expires_at_local%</strong>.</p>\n<p>To avoid any interruption, renew the subscription in advance.</p>\n<p>Log in to your account to review the details and available renewal options.</p>\n{$footer}"],
         'order-expired' => ['subject' => 'Your order expired', 'body' => "<h3>Hello,</h3>\n<p>We would like to inform you that your order <strong>#%order_id%</strong> has just expired.</p>\n<p>You can renew the subscription at any time.</p>\n<p>Log in to your account to review the available offer.</p>\n{$footer}"],
         'live-chat-admin-notify' => ['subject' => 'You have a new message [Support]', 'body' => "<h3>Hello,</h3>\n<p>A customer sent a new message through Live Chat.</p>\n<p>Customer login: <strong>%customer_email%</strong></p>\n<p>Open the admin panel to reply.</p>\n{$footer}"],
         'live-chat-customer-notify' => ['subject' => 'You have a new message [Support]', 'body' => "<h3>Hello,</h3>\n<p>You received a new message from support.</p>\n<p>Log in to your account to check Live Chat.</p>\n{$footer}"],
@@ -6938,6 +6947,15 @@ function app_queue_order_email(Mysql_ks $db, string $templateKey, int $orderId, 
     }
 
     $settings = app_fetch_settings($db);
+    $expiresAtUtc = (string)($order['expires_at'] ?? '');
+    $expiresAtLocal = $expiresAtUtc !== '' ? app_format_utc_datetime_local($expiresAtUtc) : '';
+    $daysRemaining = 0;
+    if ($expiresAtUtc !== '') {
+        $expiresAtTimestamp = app_timestamp_from_utc_datetime($expiresAtUtc);
+        if ($expiresAtTimestamp > 0) {
+            $daysRemaining = max(0, (int)ceil(($expiresAtTimestamp - time()) / 86400));
+        }
+    }
     $replacements = array_merge([
         'customer_email' => (string)($order['customer_email'] ?? ''),
         'order_id' => (int)($order['id'] ?? 0),
@@ -6949,7 +6967,9 @@ function app_queue_order_email(Mysql_ks $db, string $templateKey, int $orderId, 
         'status' => (string)($order['status'] ?? ''),
         'payment_status' => (string)($order['payment_status'] ?? ''),
         'fulfillment_status' => (string)($order['fulfillment_status'] ?? ''),
-        'expires_at' => (string)($order['expires_at'] ?? ''),
+        'expires_at' => $expiresAtUtc,
+        'expires_at_local' => $expiresAtLocal,
+        'days_remaining' => $daysRemaining,
         'paid_at' => (string)($order['paid_at'] ?? ''),
         'order_url' => rtrim((string)($settings['site_url'] ?? ''), '/') . '/orders',
     ], $extraReplacements);
@@ -6999,6 +7019,119 @@ function app_queue_order_transition_notifications(Mysql_ks $db, array $beforeOrd
     }
 
     return $results;
+}
+
+function app_order_expiry_reminder_event_note(int $daysBefore): string
+{
+    $daysBefore = max(1, $daysBefore);
+    return 'Subscription expiry reminder queued ' . $daysBefore . ' days before expiry';
+}
+
+function app_queue_upcoming_order_expiry_reminders(Mysql_ks $db, ?string $now = null, int $daysBefore = 5): array
+{
+    if ($daysBefore <= 0 || !schema_object_exists($db, 'orders')) {
+        return [
+            'ok' => true,
+            'time' => trim((string)$now) !== '' ? (string)$now : date('Y-m-d H:i:s'),
+            'queued' => 0,
+            'checked_orders' => 0,
+            'logged_events' => 0,
+            'message' => 'No upcoming expiry reminder action required.',
+        ];
+    }
+
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+    $eventNote = app_order_expiry_reminder_event_note($daysBefore);
+    $safeEventNote = $db->escape($eventNote);
+    $windowFloorDays = max(0, $daysBefore - 1);
+
+    $sql = "
+        SELECT orders.id, orders.expires_at
+        FROM orders
+        WHERE orders.status = 'active'
+          AND orders.expires_at IS NOT NULL
+          AND orders.expires_at > '{$safeNowSql}'
+          AND orders.expires_at <= DATE_ADD('{$safeNowSql}', INTERVAL {$daysBefore} DAY)
+          AND orders.expires_at > DATE_ADD('{$safeNowSql}', INTERVAL {$windowFloorDays} DAY)
+    ";
+
+    if (schema_object_exists($db, 'order_status_events')) {
+        $sql .= "
+          AND NOT EXISTS (
+                SELECT 1
+                FROM order_status_events
+                WHERE order_status_events.order_id = orders.id
+                  AND order_status_events.event_note = '{$safeEventNote}'
+          )
+        ";
+    }
+
+    $rows = $db->select_full_user($sql);
+    if (!is_array($rows) || !$rows) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'queued' => 0,
+            'checked_orders' => 0,
+            'logged_events' => 0,
+            'message' => 'No subscriptions matched the upcoming expiry reminder window.',
+        ];
+    }
+
+    $queued = 0;
+    $loggedEvents = 0;
+    foreach ($rows as $row) {
+        $orderId = (int)($row['id'] ?? 0);
+        if ($orderId <= 0) {
+            continue;
+        }
+
+        $expiresAtUtc = (string)($row['expires_at'] ?? '');
+        $emailResult = app_queue_order_email(
+            $db,
+            'order-expiring-soon',
+            $orderId,
+            [
+                'days_remaining' => $daysBefore,
+                'expires_at_local' => $expiresAtUtc !== '' ? app_format_utc_datetime_local($expiresAtUtc) : '',
+            ],
+            86400
+        );
+
+        if (empty($emailResult['queued']) && empty($emailResult['skipped_duplicate'])) {
+            continue;
+        }
+
+        if (schema_object_exists($db, 'order_status_events')) {
+            $inserted = $db->insert(
+                ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note', 'created_at'],
+                [$orderId, null, 'active', 'active', $eventNote, $safeNow],
+                'order_status_events'
+            );
+            if ($inserted) {
+                $loggedEvents++;
+            }
+        }
+
+        if (!empty($emailResult['queued'])) {
+            $queued++;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'time' => $safeNow,
+        'queued' => $queued,
+        'checked_orders' => count($rows),
+        'logged_events' => $loggedEvents,
+        'message' => $queued > 0
+            ? 'Upcoming expiry reminder emails queued successfully.'
+            : 'No new upcoming expiry reminders were queued.',
+    ];
 }
 
 function app_queue_live_chat_admin_notification(
@@ -8242,6 +8375,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
 
     $email = app_email_process_queue($db, $emailLimit);
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
+    $expiryReminders = app_queue_upcoming_order_expiry_reminders($db, $safeNow, 5);
     $archive = app_archive_expired_payment_requests($db, $safeNow);
     $cancelExpired = app_cancel_stale_expired_payment_requests($db, $safeNow);
     $deleteCancelled = app_delete_stale_cancelled_payment_requests($db, $safeNow);
@@ -8262,6 +8396,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $steps = [
         'email_queue' => $email,
         'crypto_daily_backup' => $cryptoBackup,
+        'order_expiry_reminders' => $expiryReminders,
         'archive_requests' => $archive,
         'cancel_expired_requests' => $cancelExpired,
         'delete_cancelled_requests' => $deleteCancelled,
@@ -8292,6 +8427,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'emails_failed' => (int)($email['failed'] ?? 0),
             'crypto_backup_sent' => (int)($cryptoBackup['sent'] ?? 0),
             'crypto_backup_rows' => (int)($cryptoBackup['rows'] ?? 0),
+            'order_expiry_reminders_queued' => (int)($expiryReminders['queued'] ?? 0),
             'expired_crypto_requests' => (int)($archive['expired_crypto_requests'] ?? 0),
             'expired_bank_requests' => (int)($archive['expired_bank_requests'] ?? 0),
             'reset_order_payment_method' => (int)($archive['reset_order_payment_method'] ?? 0),
