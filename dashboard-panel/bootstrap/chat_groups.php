@@ -414,7 +414,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         $email = strtolower(trim((string)($spec['email'] ?? '')));
         $handleInput = trim((string)($spec['handle'] ?? ''));
-        $localeCode = trim((string)($spec['locale'] ?? 'en'));
+        $localeCode = localization_normalize_locale((string)($spec['locale'] ?? 'en'));
         $password = (string)($spec['password'] ?? '1234');
         if ($email === '') {
             return ['row' => null, 'changed' => false];
@@ -452,8 +452,15 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $emailVerifiedAt = chat_current_datetime();
         }
 
-        $fields = ['public_handle', 'status', 'customer_type', 'locale_code', 'email_verified_at'];
-        $values = [$resolvedHandle, $status, $customerType, $localeCode !== '' ? $localeCode : 'en', $emailVerifiedAt];
+        $storedLocaleCode = localization_normalize_locale((string)($row['locale_code'] ?? ''));
+        $fields = ['public_handle', 'status', 'customer_type', 'email_verified_at'];
+        $values = [$resolvedHandle, $status, $customerType, $emailVerifiedAt];
+
+        if ($created || $storedLocaleCode === '') {
+            $fields[] = 'locale_code';
+            $values[] = $localeCode !== '' ? $localeCode : 'en';
+        }
+
         $db->update_using_id($fields, $values, 'customers', $customerId);
 
         if ($created && function_exists('app_store_customer_password')) {
