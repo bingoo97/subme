@@ -28,7 +28,7 @@ if (function_exists('chat_demo_showcase_sync')) {
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $messageLimit = admin_chat_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0);
-$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'toggle_reaction', 'set_customer_block_status', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
+$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'voice_upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'toggle_reaction', 'set_customer_block_status', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $mutatingActions, true) && !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
     http_response_code(419);
@@ -580,6 +580,40 @@ if ($action === 'upload' && !empty($_FILES['file']['tmp_name'])) {
     $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
     $replyToMessageId = chat_validate_reply_target($db, $conversationId, $replyToMessageId) ?? 0;
     admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], '', $attachmentPath, $replyToMessageId > 0 ? $replyToMessageId : null);
+}
+
+if ($action === 'voice_upload' && !empty($_FILES['voice_file']['tmp_name'])) {
+    if ($conversationType !== 'live_chat') {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Voice messages are available only in direct live chat.']);
+        exit;
+    }
+
+    $durationSeconds = isset($_POST['audio_duration_seconds']) ? (int)$_POST['audio_duration_seconds'] : 0;
+    $voicePayload = chat_store_uploaded_voice_message($_FILES['voice_file'], (int)$adminUser['id'], $durationSeconds);
+    if ($voicePayload === null) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Voice message upload failed.']);
+        exit;
+    }
+
+    $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
+    $replyToMessageId = chat_validate_reply_target($db, $conversationId, $replyToMessageId) ?? 0;
+    $inserted = admin_chat_insert_message(
+        $db,
+        $conversationId,
+        (int)$adminUser['id'],
+        '',
+        null,
+        $replyToMessageId > 0 ? $replyToMessageId : null,
+        $voicePayload
+    );
+    if (!$inserted) {
+        chat_delete_uploaded_file((string)($voicePayload['audio_path'] ?? ''));
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Voice message could not be saved.']);
+        exit;
+    }
 }
 
 if ($action === 'delete_message') {

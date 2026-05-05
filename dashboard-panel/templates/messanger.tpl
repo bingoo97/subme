@@ -95,6 +95,17 @@
                         window.MESSENGER_BOOTSTRAP.groupDeleteConfirm = '{$t.group_chat_delete_confirm|default:"Remove this group for all participants?"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupSettingsError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.groupRetentionError = '{$t.settings_save_error|default:"Unable to save settings."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceEnabled = {if $settings.messenger_voice_enabled|default:0}1{else}0{/if};
+                        window.MESSENGER_BOOTSTRAP.voiceRecordLabel = '{$t.chat_voice_button|default:"Przytrzymaj, aby nagrać wiadomość głosową"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStartLabel = '{$t.chat_voice_start_recording|default:"Kliknij, aby rozpocząć nagrywanie"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStopLabel = '{$t.chat_voice_stop_recording|default:"Kliknij, aby zakończyć nagrywanie"|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceUnavailableConversationLabel = '{$t.chat_voice_live_chat_only|default:"Wiadomości głosowe są dostępne tylko w Support Chat."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceUnsupportedMessage = '{$t.chat_voice_unsupported|default:"Ta przeglądarka nie obsługuje wiadomości głosowych."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voicePermissionDeniedMessage = '{$t.chat_voice_permission_denied|default:"Dostęp do mikrofonu został odrzucony."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceRecordFailedMessage = '{$t.chat_voice_record_failed|default:"Nie udało się nagrać wiadomości głosowej."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceUploadFailedMessage = '{$t.chat_voice_upload_failed|default:"Nie udało się wysłać wiadomości głosowej."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceRecordBusyMessage = '{$t.chat_voice_busy|default:"Poczekaj, aż wiadomość głosowa się wyśle."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceMaxDurationSeconds = {$settings.messenger_voice_max_duration_seconds|default:30};
                     </script>
                     <div class="messenger-alert" id="messenger_alert" style="display:none;"></div>
                     <div class="messenger-compose">
@@ -117,7 +128,6 @@
                                     <button type="button" class="messenger-compose__action btn btn-default" data-messenger-upload-open onclick="return openMessengerUpload();" title="{$t.chat_attachment|default:'Załącznik'}" aria-label="{$t.chat_attachment|default:'Załącznik'}">
                                         <i class="fa fa-paperclip" aria-hidden="true"></i>
                                     </button>
-                                    {if $settings.messenger_voice_enabled|default:0}
                                     <button
                                         type="button"
                                         class="messenger-compose__voice btn btn-primary is-disabled"
@@ -129,9 +139,13 @@
                                     >
                                         <i class="fa fa-microphone" aria-hidden="true"></i>
                                     </button>
-                                    {/if}
                                 </div>
                             </div>
+                        </div>
+                        <div class="messenger-compose__voice-status" id="messenger_voice_status" hidden>
+                            <span class="messenger-compose__voice-indicator" aria-hidden="true"></span>
+                            <span class="messenger-compose__voice-text">Nagrywanie...</span>
+                            <span class="messenger-compose__voice-timer" id="messenger_voice_timer">0:00</span>
                         </div>
                     </div>
                 </div> 

@@ -643,6 +643,10 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $customerGroupChatEnabled = isset($_POST['customer_group_chat_enabled']) ? 1 : 0;
         $customerGlobalGroupEnabled = isset($_POST['customer_global_group_enabled']) ? 1 : 0;
         $messengerVoiceEnabled = isset($_POST['messenger_voice_enabled']) ? 1 : 0;
+        $messengerVoiceMaxDurationSeconds = (int)($_POST['messenger_voice_max_duration_seconds'] ?? 30);
+        if (!in_array($messengerVoiceMaxDurationSeconds, app_messenger_voice_duration_options(), true)) {
+            $messengerVoiceMaxDurationSeconds = 30;
+        }
         $demoMessengerShowcaseEnabled = app_is_demo_subdomain(is_array($appSettings ?? null) ? $appSettings : [])
             ? (isset($_POST['demo_messenger_showcase_enabled']) ? 1 : 0)
             : (int)($appSettings['demo_messenger_showcase_enabled'] ?? 0);
@@ -697,6 +701,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'customer_group_chat_enabled',
                     'customer_global_group_enabled',
                     'messenger_voice_enabled',
+                    'messenger_voice_max_duration_seconds',
                     'demo_messenger_showcase_enabled',
                     'reseller_group_chat_limit',
                     'support_chat_retention_hours',
@@ -730,6 +735,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $customerGroupChatEnabled,
                     $customerGlobalGroupEnabled,
                     $messengerVoiceEnabled,
+                    $messengerVoiceMaxDurationSeconds,
                     $demoMessengerShowcaseEnabled,
                     $resellerGroupChatLimit,
                     $supportChatRetentionHours,
@@ -4544,6 +4550,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-group-retention-intro="<?php echo admin_e(admin_t($messages, 'group_chat_retention_modal_intro', 'Choose how long messages in this group should stay visible before they are removed automatically.')); ?>"
                         data-chat-group-retention-save-error="<?php echo admin_e(admin_t($messages, 'group_chat_retention_save_error', 'Unable to update auto-delete settings.')); ?>"
                         data-chat-group-retention-hint-template="<?php echo admin_e(admin_t($messages, 'group_chat_retention_hint_after', 'Auto-delete after {label}')); ?>"
+                        data-chat-voice-enabled="<?php echo admin_messenger_voice_enabled($appSettings) ? '1' : '0'; ?>"
+                        data-chat-voice-max-duration-seconds="<?php echo admin_e((string)admin_messenger_voice_max_duration_seconds($appSettings)); ?>"
+                        data-chat-voice-disabled-tooltip="<?php echo admin_e(admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
+                        data-chat-voice-live-chat-only="<?php echo admin_e(admin_t($messages, 'chat_voice_live_chat_only', 'Voice messages are available only in direct live chat.')); ?>"
+                        data-chat-voice-start="<?php echo admin_e(admin_t($messages, 'chat_voice_start_recording', 'Click to start recording')); ?>"
+                        data-chat-voice-stop="<?php echo admin_e(admin_t($messages, 'chat_voice_stop_recording', 'Click to stop recording')); ?>"
+                        data-chat-voice-hold="<?php echo admin_e(admin_t($messages, 'chat_voice_hold_recording', 'Hold to record a voice message')); ?>"
+                        data-chat-voice-unsupported="<?php echo admin_e(admin_t($messages, 'chat_voice_unsupported', 'This browser does not support voice messages.')); ?>"
+                        data-chat-voice-permission-denied="<?php echo admin_e(admin_t($messages, 'chat_voice_permission_denied', 'Microphone access was denied.')); ?>"
+                        data-chat-voice-record-failed="<?php echo admin_e(admin_t($messages, 'chat_voice_record_failed', 'Unable to record the voice message.')); ?>"
+                        data-chat-voice-upload-failed="<?php echo admin_e(admin_t($messages, 'chat_voice_upload_failed', 'Unable to upload the voice message.')); ?>"
+                        data-chat-voice-busy="<?php echo admin_e(admin_t($messages, 'chat_voice_busy', 'Finish the current voice message first.')); ?>"
+                        data-chat-voice-status-label="<?php echo admin_e(admin_t($messages, 'chat_voice_status_recording', 'Recording...')); ?>"
                         data-chat-create-user-success="<?php echo admin_e(admin_t($messages, 'chat_create_user_success', 'User created successfully.')); ?>"
                         data-chat-create-user-error="<?php echo admin_e(admin_t($messages, 'chat_create_user_error', 'Unable to create the user.')); ?>"
                         data-chat-create-user-email-queued="<?php echo admin_e(admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')); ?>"
@@ -4754,6 +4773,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 <div class="admin-chat-inbox__composer">
                                     <div class="admin-chat-inbox__composer-alert" data-admin-chat-alert hidden></div>
                                     <div class="admin-chat-inbox__composer-preview" data-admin-chat-link-preview hidden></div>
+                                    <div class="admin-chat-inbox__composer-voice-status" data-admin-chat-voice-status hidden>
+                                        <span class="admin-chat-inbox__composer-voice-indicator" aria-hidden="true"></span>
+                                        <span class="admin-chat-inbox__composer-voice-text"><?php echo admin_e(admin_t($messages, 'chat_voice_status_recording', 'Recording...')); ?></span>
+                                        <span class="admin-chat-inbox__composer-voice-timer" data-admin-chat-voice-timer>0:00</span>
+                                    </div>
                                     <div class="admin-chat-inbox__composer-reply" data-admin-chat-reply-preview hidden>
                                         <button type="button" class="admin-chat-inbox__composer-reply-close" data-admin-chat-reply-clear aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
                                             <i class="bi bi-x-lg" aria-hidden="true"></i>
@@ -4773,18 +4797,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <button type="button" class="admin-chat-inbox__composer-action btn btn-default" data-admin-chat-upload-button title="<?php echo admin_e(admin_t($messages, 'chat_upload_button', 'Upload image')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_upload_button', 'Upload image')); ?>">
                                                     <i class="bi bi-paperclip" aria-hidden="true"></i>
                                                 </button>
-                                                <?php if (admin_messenger_voice_enabled($appSettings)): ?>
-                                                    <button
-                                                        type="button"
-                                                        class="admin-chat-inbox__composer-voice btn btn-primary is-disabled"
-                                                        data-disabled-tooltip="<?php echo admin_e(admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
-                                                        title="<?php echo admin_e(admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
-                                                        aria-label="<?php echo admin_e(admin_t($messages, 'chat_voice_button', 'Voice message')); ?>"
-                                                        aria-disabled="true"
-                                                    >
-                                                        <i class="bi bi-mic-fill" aria-hidden="true"></i>
-                                                    </button>
-                                                <?php endif; ?>
+                                                <button
+                                                    type="button"
+                                                    class="admin-chat-inbox__composer-voice btn btn-primary<?php echo admin_messenger_voice_enabled($appSettings) ? '' : ' is-disabled'; ?>"
+                                                    data-admin-chat-voice-button
+                                                    data-disabled-tooltip="<?php echo admin_e(admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
+                                                    title="<?php echo admin_e(admin_messenger_voice_enabled($appSettings) ? admin_t($messages, 'chat_voice_button', 'Voice message') : admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
+                                                    aria-label="<?php echo admin_e(admin_messenger_voice_enabled($appSettings) ? admin_t($messages, 'chat_voice_button', 'Voice message') : admin_t($messages, 'chat_voice_disabled_tooltip', 'Voice message recording is currently disabled.')); ?>"
+                                                    aria-disabled="<?php echo admin_messenger_voice_enabled($appSettings) ? 'false' : 'true'; ?>"
+                                                >
+                                                    <i class="bi bi-mic-fill" aria-hidden="true"></i>
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
@@ -12127,6 +12150,25 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-check-label" for="messenger_voice_enabled"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_enabled', 'Messenger voice UI ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_enabled_help', 'If ON, the Messenger shows a preview microphone button in the composer. The button stays inactive for now and only presents the planned UI.')); ?></small>
+                                                </div>
+                                                <div class="col-12 col-md-4">
+                                                    <label class="form-label" for="messenger_voice_max_duration_seconds"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_max_duration', 'Max voice message length')); ?></label>
+                                                    <select class="form-select" id="messenger_voice_max_duration_seconds" name="messenger_voice_max_duration_seconds">
+                                                        <?php foreach (app_messenger_voice_duration_options() as $voiceDurationSeconds): ?>
+                                                            <?php
+                                                            $voiceDurationLabel = $voiceDurationSeconds . 's';
+                                                            if ($voiceDurationSeconds === 60) {
+                                                                $voiceDurationLabel = '1 min';
+                                                            } elseif ($voiceDurationSeconds === 120) {
+                                                                $voiceDurationLabel = '2 min';
+                                                            } elseif ($voiceDurationSeconds === 300) {
+                                                                $voiceDurationLabel = '5 min';
+                                                            }
+                                                            ?>
+                                                            <option value="<?php echo admin_e((string)$voiceDurationSeconds); ?>"<?php echo admin_messenger_voice_max_duration_seconds($appSettings) === $voiceDurationSeconds ? ' selected' : ''; ?>><?php echo admin_e($voiceDurationLabel); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_messenger_voice_max_duration_help', 'Admins can limit how long one voice message may be. The browser recording stops automatically after the selected time.')); ?></small>
                                                 </div>
                                                 <?php if (app_is_demo_subdomain($appSettings)) { ?>
                                                 <div class="col-12">

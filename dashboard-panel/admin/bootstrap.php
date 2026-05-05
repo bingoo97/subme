@@ -38,7 +38,7 @@ function admin_send_security_headers(): void
     header('X-Frame-Options: SAMEORIGIN');
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: strict-origin-when-cross-origin');
-    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    header('Permissions-Policy: geolocation=(), microphone=(self), camera=()');
 }
 
 function admin_supported_locales(): array
@@ -173,6 +173,13 @@ function admin_customer_global_group_enabled(array $settings): bool
 function admin_messenger_voice_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'messenger_voice_enabled', false);
+}
+
+function admin_messenger_voice_max_duration_seconds(array $settings): int
+{
+    return function_exists('app_messenger_voice_max_duration_seconds')
+        ? app_messenger_voice_max_duration_seconds($settings)
+        : 30;
 }
 
 function admin_demo_messenger_showcase_enabled(array $settings): bool
@@ -12312,6 +12319,7 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
         return [];
     }
 
+    chat_ensure_message_interactions_runtime($db);
     app_ensure_customer_runtime_columns($db);
     if ($adminUserId > 0 && function_exists('app_fetch_settings') && function_exists('chat_sync_global_group_members')) {
         $settings = app_fetch_settings($db);
@@ -12351,6 +12359,20 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
                 ORDER BY support_messages.id DESC
                 LIMIT 1
             ) AS last_attachment_path,
+            (
+                SELECT support_messages.message_type
+                FROM support_messages
+                WHERE support_messages.conversation_id = support_conversations.id
+                ORDER BY support_messages.id DESC
+                LIMIT 1
+            ) AS last_message_type,
+            (
+                SELECT support_messages.audio_path
+                FROM support_messages
+                WHERE support_messages.conversation_id = support_conversations.id
+                ORDER BY support_messages.id DESC
+                LIMIT 1
+            ) AS last_audio_path,
             (
                 SELECT COUNT(*)
                 FROM support_messages
@@ -12695,19 +12717,15 @@ function admin_delete_chat_quick_reply(Mysql_ks $db, int $replyId): array
 
 function admin_chat_message_preview(array $row, array $messages): string
 {
-    $rawBody = (string)($row['last_message_body'] ?? '');
-    $cardPayload = function_exists('app_chat_card_decode') ? app_chat_card_decode($rawBody) : null;
-    if (is_array($cardPayload) && !empty($cardPayload['title'])) {
-        $body = trim((string)$cardPayload['title']);
-    } else {
-        $systemNoticeText = function_exists('chat_system_notice_text') ? chat_system_notice_text($rawBody) : '';
-        $body = $systemNoticeText !== ''
-            ? trim($systemNoticeText)
-            : trim(html_entity_decode(strip_tags($rawBody), ENT_QUOTES, 'UTF-8'));
-    }
-    if ($body === '' && trim((string)($row['last_attachment_path'] ?? '')) !== '') {
-        $body = admin_t($messages, 'chat_preview_image', 'Image attachment');
-    }
+    $body = chat_message_preview_text_from_row(
+        [
+            'message_body' => (string)($row['last_message_body'] ?? ''),
+            'attachment_path' => (string)($row['last_attachment_path'] ?? ''),
+            'message_type' => (string)($row['last_message_type'] ?? ''),
+            'audio_path' => (string)($row['last_audio_path'] ?? ''),
+        ],
+        admin_t($messages, 'chat_preview_image', 'Image attachment')
+    );
 
     $body = preg_replace('/\s+/u', ' ', $body) ?? $body;
     if (mb_strlen($body) > 30) {
@@ -13212,6 +13230,10 @@ function admin_chat_conversation_messages(Mysql_ks $db, int $conversationId, int
             support_messages.admin_user_id,
             support_messages.message_body,
             support_messages.attachment_path,
+            support_messages.message_type,
+            support_messages.audio_path,
+            support_messages.audio_mime_type,
+            support_messages.audio_duration_seconds,
             support_messages.reply_to_message_id,
             {$readSelect} AS is_read,
             support_messages.created_at,
@@ -13972,6 +13994,7 @@ function admin_chat_create_bank_payment_request(
 
 function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
 {
+    chat_ensure_message_interactions_runtime($db);
     if ($conversationId <= 0 || !schema_object_exists($db, 'support_conversations')) {
         return false;
     }
@@ -13989,7 +14012,7 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
     $attachmentPaths = [];
     if (schema_object_exists($db, 'support_messages')) {
         $messageRows = $db->select_full_user(
-            "SELECT attachment_path
+            "SELECT attachment_path, audio_path
              FROM support_messages
              WHERE conversation_id = {$conversationId}"
         );
@@ -13997,6 +14020,10 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
             $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
             if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
                 $attachmentPaths[] = $attachmentPath;
+            }
+            $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
+            if ($audioPath !== '' && strpos($audioPath, '/uploads/chat/') === 0) {
+                $attachmentPaths[] = $audioPath;
             }
         }
     }
@@ -14036,11 +14063,7 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
     $db->commit();
 
     foreach (array_unique($attachmentPaths) as $attachmentPath) {
-        foreach (app_chat_attachment_candidate_paths($attachmentPath) as $absoluteAttachmentPath) {
-            if (is_file($absoluteAttachmentPath)) {
-                @unlink($absoluteAttachmentPath);
-            }
-        }
+        app_chat_delete_attachment_file($attachmentPath);
     }
 
     return true;
@@ -14048,12 +14071,13 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
 
 function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messageId): bool
 {
+    chat_ensure_message_interactions_runtime($db);
     if ($conversationId <= 0 || $messageId <= 0 || !schema_object_exists($db, 'support_messages')) {
         return false;
     }
 
     $messageRow = $db->select_user(
-        "SELECT id, attachment_path
+        "SELECT id, attachment_path, audio_path
          FROM support_messages
          WHERE id = {$messageId}
            AND conversation_id = {$conversationId}
@@ -14073,11 +14097,11 @@ function admin_delete_chat_message(Mysql_ks $db, int $conversationId, int $messa
 
     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
     if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
-        foreach (app_chat_attachment_candidate_paths($attachmentPath) as $absoluteAttachmentPath) {
-            if (is_file($absoluteAttachmentPath)) {
-                @unlink($absoluteAttachmentPath);
-            }
-        }
+        app_chat_delete_attachment_file($attachmentPath);
+    }
+    $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
+    if ($audioPath !== '' && strpos($audioPath, '/uploads/chat/') === 0) {
+        app_chat_delete_attachment_file($audioPath);
     }
 
     admin_chat_refresh_conversation_timestamps($db, $conversationId);
@@ -14115,13 +14139,18 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     <?php
                     $isCustomer = (string)($messageRow['sender_type'] ?? '') === 'customer';
                     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
+                    $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
+                    $audioMimeType = trim((string)($messageRow['audio_mime_type'] ?? ''));
+                    $audioDurationLabel = trim((string)($messageRow['audio_duration_label'] ?? ''));
                     $messageBodyRaw = (string)($messageRow['message_body'] ?? '');
                     $systemNoticeText = chat_system_notice_text($messageBodyRaw);
                     $isSystemNotice = $systemNoticeText !== '';
                     $bubbleClass = $isSystemNotice ? 'is-system' : ($isCustomer ? 'is-customer' : 'is-admin');
                     $messageHtml = chat_format_message_html((string)($messageRow['message_body'] ?? ''));
+                    $isAudioMessage = !empty($messageRow['is_audio_message']) && $audioPath !== '';
+                    $isAudioExpired = !empty($messageRow['is_audio_expired']);
                     $isStructuredCard = admin_chat_message_is_structured_card($messageBodyRaw);
-                    $canEdit = !$isSystemNotice && trim($messageBodyRaw) !== '' && !$isStructuredCard;
+                    $canEdit = !$isSystemNotice && !$isAudioMessage && !$isAudioExpired && trim($messageBodyRaw) !== '' && !$isStructuredCard;
                     $canDelete = true;
                     $canInteract = !$isSystemNotice;
                     $showActionRow = $canEdit || $canDelete;
@@ -14183,7 +14212,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                         </div>
                     <?php endif; ?>
                     <div class="admin-chat-conversation__message <?php echo admin_e($bubbleClass); ?>" data-admin-chat-message data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>">
-                        <div class="admin-chat-conversation__bubble"<?php if ($canInteract): ?> data-admin-chat-message-bubble<?php endif; ?>>
+                        <div class="admin-chat-conversation__bubble<?php echo $isAudioMessage ? ' admin-chat-conversation__bubble--audio' : ''; ?>"<?php if ($canInteract): ?> data-admin-chat-message-bubble<?php endif; ?>>
                             <?php if ($isSystemNotice): ?>
                                 <?php if ($messageHtml !== ''): ?>
                                     <div class="admin-chat-conversation__text<?php echo $isEmojiOnlyMessage ? ' admin-chat-conversation__text--emoji-only' : ''; ?>"><?php echo $messageHtml; ?></div>
@@ -14206,6 +14235,18 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                                     <a href="<?php echo admin_e($attachmentPath); ?>" target="_blank" rel="noopener noreferrer" class="admin-chat-conversation__image-link">
                                         <img src="<?php echo admin_e($attachmentPath); ?>" alt="attachment" class="admin-chat-conversation__image">
                                     </a>
+                                <?php endif; ?>
+                                <?php if ($isAudioMessage): ?>
+                                    <div class="admin-chat-conversation__audio">
+                                        <audio controls preload="metadata" class="admin-chat-conversation__audio-player" data-chat-audio-player>
+                                            <source src="<?php echo admin_e($audioPath); ?>"<?php if ($audioMimeType !== ''): ?> type="<?php echo admin_e($audioMimeType); ?>"<?php endif; ?>>
+                                        </audio>
+                                        <?php if ($audioDurationLabel !== ''): ?>
+                                            <span class="admin-chat-conversation__audio-duration"><?php echo admin_e($audioDurationLabel); ?></span>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php elseif ($isAudioExpired): ?>
+                                    <div class="admin-chat-conversation__audio-expired"><?php echo admin_e(chat_voice_message_expired_label()); ?></div>
                                 <?php endif; ?>
                                 <?php if ($messageHtml !== ''): ?>
                                     <div class="admin-chat-conversation__text"><?php echo $messageHtml; ?></div>
@@ -14237,7 +14278,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                                             data-admin-chat-reply-open
                                             data-message-id="<?php echo admin_e((string)($messageRow['id'] ?? 0)); ?>"
                                             data-reply-sender="<?php echo admin_e($senderLabel); ?>"
-                                            data-reply-text="<?php echo admin_e(chat_message_preview_excerpt($messageBodyRaw, $attachmentPath)); ?>">
+                                            data-reply-text="<?php echo admin_e($isAudioMessage ? chat_voice_message_label() : ($isAudioExpired ? chat_voice_message_expired_label() : chat_message_preview_excerpt($messageBodyRaw, $attachmentPath))); ?>">
                                             <i class="bi bi-reply" aria-hidden="true"></i>
                                         </button>
                                         <?php foreach (chat_message_reaction_catalog() as $reactionCode => $reactionEmoji): ?>
@@ -14398,14 +14439,19 @@ function admin_set_customer_block_status_from_chat(Mysql_ks $db, int $customerId
     );
 }
 
-function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $adminUserId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null): bool
+function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $adminUserId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null, array $messageMeta = []): bool
 {
     chat_ensure_message_interactions_runtime($db);
     $messageBody = trim($messageBody);
     $attachmentPath = trim((string)$attachmentPath);
     $currentTime = function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s');
+    $messageType = trim((string)($messageMeta['message_type'] ?? ''));
+    $audioPath = trim((string)($messageMeta['audio_path'] ?? ''));
+    $audioMimeType = trim((string)($messageMeta['audio_mime_type'] ?? ''));
+    $audioDurationSeconds = isset($messageMeta['audio_duration_seconds']) ? (int)$messageMeta['audio_duration_seconds'] : 0;
+    $expiresAt = trim((string)($messageMeta['expires_at'] ?? ''));
 
-    if ($conversationId <= 0 || $adminUserId <= 0 || ($messageBody === '' && $attachmentPath === '')) {
+    if ($conversationId <= 0 || $adminUserId <= 0 || ($messageBody === '' && $attachmentPath === '' && $audioPath === '')) {
         return false;
     }
 
@@ -14418,11 +14464,14 @@ function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $admin
 
     $customerId = isset($conversationRow['customer_id']) ? (int)$conversationRow['customer_id'] : 0;
     $conversationType = trim((string)($conversationRow['conversation_type'] ?? 'live_chat'));
+    if ($messageType === '') {
+        $messageType = $audioPath !== '' ? 'audio' : 'text';
+    }
 
     $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
     $inserted = $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
-        [$conversationId, 'admin', $customerId > 0 ? $customerId : null, $adminUserId, $messageBody, $attachmentPath !== '' ? $attachmentPath : null, $replyToMessageId, 0, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'admin_user_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'message_type', 'audio_path', 'audio_mime_type', 'audio_duration_seconds', 'expires_at', 'is_read', 'created_at'],
+        [$conversationId, 'admin', $customerId > 0 ? $customerId : null, $adminUserId, $messageBody, $attachmentPath !== '' ? $attachmentPath : null, $replyToMessageId, $messageType, $audioPath !== '' ? $audioPath : null, $audioMimeType !== '' ? $audioMimeType : null, $audioDurationSeconds > 0 ? $audioDurationSeconds : null, $expiresAt !== '' ? $expiresAt : null, 0, $currentTime],
         'support_messages'
     );
 
@@ -14438,15 +14487,31 @@ function admin_chat_insert_message(Mysql_ks $db, int $conversationId, int $admin
     );
 
     if ($conversationType === 'group_chat') {
+        $previewText = chat_message_preview_text_from_row(
+            [
+                'message_body' => $messageBody,
+                'attachment_path' => $attachmentPath,
+                'message_type' => $messageType,
+                'audio_path' => $audioPath,
+            ]
+        );
         chat_queue_group_customer_notifications_if_offline(
             $db,
             $conversationId,
             ['participant_type' => 'admin', 'customer_id' => 0, 'admin_user_id' => $adminUserId],
-            $messageBody,
+            $previewText,
             $attachmentPath
         );
     } elseif ($customerId > 0) {
-        app_queue_live_chat_customer_notification_if_offline($db, $conversationId, $customerId, $messageBody, $attachmentPath);
+        $previewText = chat_message_preview_text_from_row(
+            [
+                'message_body' => $messageBody,
+                'attachment_path' => $attachmentPath,
+                'message_type' => $messageType,
+                'audio_path' => $audioPath,
+            ]
+        );
+        app_queue_live_chat_customer_notification_if_offline($db, $conversationId, $customerId, $previewText, $attachmentPath);
     }
 
     return true;

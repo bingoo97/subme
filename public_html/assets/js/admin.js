@@ -3684,6 +3684,9 @@ document.addEventListener('DOMContentLoaded', function () {
         var composerReplySender = q('[data-admin-chat-reply-sender]', root);
         var composerReplyText = q('[data-admin-chat-reply-text]', root);
         var uploadInput = q('[data-admin-chat-file]', root);
+        var voiceButton = q('[data-admin-chat-voice-button]', root);
+        var voiceStatus = q('[data-admin-chat-voice-status]', root);
+        var voiceTimerLabel = q('[data-admin-chat-voice-timer]', root);
         var ordersLinkButton = q('[data-admin-chat-orders-link]', root);
         var converterHeaderButton = q('.admin-chat-inbox__conversation-header [data-admin-converter-open]', root);
         var quickRepliesHeaderButton = q('[data-admin-chat-quick-open]', root);
@@ -3776,6 +3779,17 @@ document.addEventListener('DOMContentLoaded', function () {
         var linkPreviewRequestId = 0;
         var linkPreviewTimer = 0;
         var messageActionTouchTimer = 0;
+        var voiceRecording = false;
+        var voiceRecorder = null;
+        var voiceStream = null;
+        var voiceChunks = [];
+        var voiceRecordStartedAt = 0;
+        var voiceRecordTimer = 0;
+        var voicePendingPointer = false;
+        var voiceShouldStopAfterStart = false;
+        var voiceStartInFlight = false;
+        var voiceUploadInFlight = false;
+        var voicePointerMode = false;
         var paymentModals = {
             crypto: buildPaymentModalState('crypto'),
             bank: buildPaymentModalState('bank')
@@ -3813,6 +3827,264 @@ document.addEventListener('DOMContentLoaded', function () {
             composerAlert.classList.toggle('alert-danger', !!isError);
             composerAlert.classList.toggle('alert-success', !isError && !!message);
             setHidden(composerAlert, !message);
+        }
+
+        function voiceFeatureEnabled() {
+            return String(root.getAttribute('data-chat-voice-enabled') || '0') === '1';
+        }
+
+        function voiceMaxDurationSeconds() {
+            return Math.max(10, parseInt(root.getAttribute('data-chat-voice-max-duration-seconds') || '30', 10) || 30);
+        }
+
+        function isDesktopVoiceToggleMode() {
+            return !!(window.matchMedia && window.matchMedia('(pointer:fine)').matches);
+        }
+
+        function isVoiceBusy() {
+            return !!(voiceRecording || voiceStartInFlight || voiceUploadInFlight);
+        }
+
+        function voiceBusyMessage() {
+            return root.getAttribute('data-chat-voice-busy') || 'Finish the current voice message first.';
+        }
+
+        function stopVoiceStreamTracks() {
+            if (!voiceStream) {
+                return;
+            }
+            try {
+                voiceStream.getTracks().forEach(function (track) {
+                    track.stop();
+                });
+            } catch (error) {
+                // noop
+            }
+            voiceStream = null;
+        }
+
+        function updateVoiceComposerState() {
+            var featureEnabled;
+            var mediaSupported;
+            var liveChatActive;
+            var canRecord;
+            var label;
+
+            if (!voiceButton) {
+                return;
+            }
+
+            featureEnabled = voiceFeatureEnabled();
+            mediaSupported = !!window.MediaRecorder && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+            liveChatActive = activeConversationType === 'live_chat' && activeConversationId > 0;
+            canRecord = featureEnabled && mediaSupported && liveChatActive && !voiceUploadInFlight;
+
+            if (!featureEnabled) {
+                label = root.getAttribute('data-chat-voice-disabled-tooltip') || 'Voice message recording is currently disabled.';
+            } else if (!liveChatActive) {
+                label = root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available only in direct live chat with the user.';
+            } else if (!mediaSupported) {
+                label = root.getAttribute('data-chat-voice-unsupported') || 'This browser does not support voice messages.';
+            } else if (isDesktopVoiceToggleMode()) {
+                label = voiceRecording
+                    ? (root.getAttribute('data-chat-voice-stop') || 'Click to stop recording')
+                    : (root.getAttribute('data-chat-voice-start') || 'Click to start recording');
+            } else {
+                label = root.getAttribute('data-chat-voice-hold') || 'Hold to record a voice message';
+            }
+
+            voiceButton.classList.toggle('is-disabled', !canRecord && !voiceRecording);
+            voiceButton.classList.toggle('is-recording', !!voiceRecording);
+            voiceButton.setAttribute('aria-disabled', !canRecord && !voiceRecording ? 'true' : 'false');
+            voiceButton.setAttribute('title', label);
+            voiceButton.setAttribute('aria-label', label);
+        }
+
+        function resetVoiceRecordingState() {
+            window.clearInterval(voiceRecordTimer);
+            voiceRecordTimer = 0;
+            stopVoiceStreamTracks();
+            voiceRecorder = null;
+            voiceRecording = false;
+            voiceStartInFlight = false;
+            voicePendingPointer = false;
+            voiceShouldStopAfterStart = false;
+            voicePointerMode = false;
+            voiceRecordStartedAt = 0;
+            voiceChunks = [];
+            if (voiceStatus) {
+                setHidden(voiceStatus, true);
+            }
+            if (voiceTimerLabel) {
+                voiceTimerLabel.textContent = '0:00';
+            }
+            updateVoiceComposerState();
+        }
+
+        function updateVoiceTimer() {
+            var elapsedSeconds = 0;
+            var maxDurationSeconds = voiceMaxDurationSeconds();
+
+            if (voiceRecordStartedAt > 0) {
+                elapsedSeconds = Math.max(0, Math.floor((Date.now() - voiceRecordStartedAt) / 1000));
+            }
+
+            if (voiceTimerLabel) {
+                voiceTimerLabel.textContent = Math.floor(elapsedSeconds / 60) + ':' + String(elapsedSeconds % 60).padStart(2, '0');
+            }
+
+            if (elapsedSeconds >= maxDurationSeconds && voiceRecorder && voiceRecorder.state === 'recording') {
+                stopVoiceRecording(true);
+            }
+        }
+
+        function uploadVoiceMessage(blob, fileName, durationSeconds) {
+            var formData;
+
+            if (!blob || !activeConversationId || voiceUploadInFlight) {
+                return;
+            }
+
+            voiceUploadInFlight = true;
+            updateVoiceComposerState();
+            formData = new FormData();
+            formData.append('voice_file', blob, fileName || 'voice-message.webm');
+            formData.append('reply_to_message_id', String(replyToMessageId || 0));
+            formData.append('audio_duration_seconds', String(durationSeconds || 0));
+
+            postConversation('voice_upload', formData, true).then(function (payload) {
+                if (!payload.ok) {
+                    showComposerAlert(payload.message || root.getAttribute('data-chat-voice-upload-failed') || 'Unable to upload the voice message.', true);
+                    return;
+                }
+                clearReplyTarget();
+                showComposerAlert('', false);
+                renderConversation(payload, { scrollToBottom: true });
+            }).catch(function () {
+                showComposerAlert(root.getAttribute('data-chat-voice-upload-failed') || 'Unable to upload the voice message.', true);
+            }).finally(function () {
+                voiceUploadInFlight = false;
+                updateVoiceComposerState();
+            });
+        }
+
+        function stopVoiceRecording(keepPendingPointer) {
+            if (!keepPendingPointer) {
+                voicePendingPointer = false;
+            }
+            if (voiceStartInFlight && !voiceRecording) {
+                voiceShouldStopAfterStart = true;
+                return false;
+            }
+            if (!voiceRecorder || voiceRecorder.state !== 'recording') {
+                return false;
+            }
+            voiceRecorder.stop();
+            return false;
+        }
+
+        function startVoiceRecording() {
+            var preferredMimeTypes;
+            var recorderOptions = {};
+            var mimeType = '';
+
+            if (!voiceFeatureEnabled()) {
+                showComposerAlert(root.getAttribute('data-chat-voice-disabled-tooltip') || 'Voice message recording is currently disabled.', true);
+                return false;
+            }
+
+            if (isVoiceBusy()) {
+                showComposerAlert(voiceBusyMessage(), true);
+                return false;
+            }
+
+            if (!(activeConversationType === 'live_chat' && activeConversationId > 0)) {
+                showComposerAlert(root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available only in direct live chat with the user.', true);
+                return false;
+            }
+
+            if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function' || typeof window.MediaRecorder === 'undefined') {
+                showComposerAlert(root.getAttribute('data-chat-voice-unsupported') || 'This browser does not support voice messages.', true);
+                return false;
+            }
+
+            voiceStartInFlight = true;
+            voicePendingPointer = true;
+            voiceShouldStopAfterStart = false;
+            updateVoiceComposerState();
+
+            navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+                var recorder;
+                var stopHandled = false;
+                preferredMimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
+
+                preferredMimeTypes.some(function (candidate) {
+                    if (window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported(candidate)) {
+                        mimeType = candidate;
+                        return true;
+                    }
+                    return false;
+                });
+                if (mimeType) {
+                    recorderOptions.mimeType = mimeType;
+                }
+
+                recorder = new window.MediaRecorder(stream, recorderOptions);
+                voiceStream = stream;
+                voiceRecorder = recorder;
+                voiceChunks = [];
+                voiceRecording = true;
+                voiceStartInFlight = false;
+                voiceRecordStartedAt = Date.now();
+                if (voiceStatus) {
+                    setHidden(voiceStatus, false);
+                }
+                updateVoiceTimer();
+                window.clearInterval(voiceRecordTimer);
+                voiceRecordTimer = window.setInterval(updateVoiceTimer, 250);
+                updateVoiceComposerState();
+                showComposerAlert('', false);
+
+                recorder.addEventListener('dataavailable', function (event) {
+                    if (event.data && event.data.size > 0) {
+                        voiceChunks.push(event.data);
+                    }
+                });
+                recorder.addEventListener('stop', function () {
+                    var durationSeconds = Math.max(1, Math.round((Date.now() - voiceRecordStartedAt) / 1000));
+                    var blob;
+                    var fileName;
+                    stopHandled = true;
+
+                    if (!voiceChunks.length) {
+                        resetVoiceRecordingState();
+                        return;
+                    }
+
+                    blob = new Blob(voiceChunks, { type: recorder.mimeType || 'audio/webm' });
+                    fileName = 'voice-message.' + ((blob.type || '').indexOf('ogg') >= 0 ? 'ogg' : ((blob.type || '').indexOf('mp4') >= 0 ? 'm4a' : 'webm'));
+                    uploadVoiceMessage(blob, fileName, durationSeconds);
+                    resetVoiceRecordingState();
+                });
+                recorder.addEventListener('error', function () {
+                    if (stopHandled || voiceChunks.length > 0 || (voiceRecorder && voiceRecorder.state === 'inactive')) {
+                        return;
+                    }
+                    showComposerAlert(root.getAttribute('data-chat-voice-record-failed') || 'Unable to record the voice message.', true);
+                    resetVoiceRecordingState();
+                });
+                recorder.start();
+                if (voiceShouldStopAfterStart) {
+                    stopVoiceRecording(false);
+                }
+            }).catch(function () {
+                voiceStartInFlight = false;
+                voicePendingPointer = false;
+                updateVoiceComposerState();
+                showComposerAlert(root.getAttribute('data-chat-voice-permission-denied') || 'Microphone access was denied.', true);
+            });
+
+            return false;
         }
 
         function clearReplyTarget() {
@@ -3866,6 +4138,62 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             return ids;
+        }
+
+        function captureConversationAudioPlayers() {
+            var players = {};
+
+            qa('[data-admin-chat-message][data-message-id]', body || root).forEach(function (node) {
+                var safeId = String(node.getAttribute('data-message-id') || '').trim();
+                var audio = node.querySelector('[data-chat-audio-player]');
+                if (!safeId || !audio || !audio.currentSrc) {
+                    return;
+                }
+                players[safeId] = {
+                    node: audio,
+                    src: audio.currentSrc,
+                    currentTime: audio.currentTime || 0,
+                    wasPlaying: !audio.paused && !audio.ended
+                };
+            });
+
+            return players;
+        }
+
+        function restoreConversationAudioPlayers(players) {
+            if (!players || !body) {
+                return;
+            }
+
+            Object.keys(players).forEach(function (messageId) {
+                var state = players[messageId];
+                var messageNode = body.querySelector('[data-admin-chat-message][data-message-id="' + messageId + '"]');
+                var replacement;
+                if (!state || !state.node || !messageNode) {
+                    return;
+                }
+                replacement = messageNode.querySelector('[data-chat-audio-player]');
+                if (!replacement) {
+                    return;
+                }
+                if (replacement.currentSrc && state.src && replacement.currentSrc !== state.src) {
+                    return;
+                }
+                try {
+                    state.node.currentTime = state.currentTime || 0;
+                } catch (error) {
+                    // ignore currentTime restore failures
+                }
+                replacement.parentNode.replaceChild(state.node, replacement);
+                if (state.wasPlaying && typeof state.node.play === 'function') {
+                    var playResult = state.node.play();
+                    if (playResult && typeof playResult.catch === 'function') {
+                        playResult.catch(function () {
+                            return undefined;
+                        });
+                    }
+                }
+            });
         }
 
         function animateConversationMessageEntry(nodes) {
@@ -4405,7 +4733,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (!activeConversationHasMoreMessages || loadingOlderMessages || conversationFetchInFlight) {
+            if (!activeConversationHasMoreMessages || loadingOlderMessages || conversationFetchInFlight || isVoiceBusy()) {
                 return;
             }
 
@@ -4464,7 +4792,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (loadingOlderMessages || conversationFetchInFlight) {
+            if (loadingOlderMessages || conversationFetchInFlight || isVoiceBusy()) {
                 return;
             }
 
@@ -5560,6 +5888,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function closePanel() {
+            if (isVoiceBusy()) {
+                showComposerAlert(voiceBusyMessage(), true);
+                return;
+            }
             if (panel) {
                 setHidden(panel, true);
             }
@@ -5574,6 +5906,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function showList() {
+            if (isVoiceBusy()) {
+                showComposerAlert(voiceBusyMessage(), true);
+                return;
+            }
             clearReplyTarget();
             closeMessageActions();
             if (listView) {
@@ -5648,6 +5984,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (body) {
                 body.classList.remove('is-loading-older');
             }
+            updateVoiceComposerState();
         }
 
         function showConversation() {
@@ -5687,6 +6024,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var previousMetrics = getConversationScrollMetrics();
             var previousConversationId = activeConversationId;
             var previousMessageIds = captureConversationMessageIds();
+            var activeAudioPlayers = captureConversationAudioPlayers();
             var previousScrollHeight = previousMetrics ? previousMetrics.scrollHeight : 0;
             var previousScrollTop = previousMetrics ? previousMetrics.scrollTop : 0;
             var keepBottom = false;
@@ -5721,6 +6059,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (body && shouldReplaceBody) {
                 body.innerHTML = payload.html || '';
                 lastRenderedConversationHtml = String(payload.html || '');
+                restoreConversationAudioPlayers(activeAudioPlayers);
                 closeMessageActions();
             }
             if (body) {
@@ -5810,6 +6149,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (retentionInlineLabel) {
                 setHidden(retentionInlineLabel, !(activeConversationType === 'group_chat' || activeConversationType === 'global_group'));
             }
+            updateVoiceComposerState();
             if (keepBottom && shouldReplaceBody && !preservePrependOffset && !options.preserveScroll) {
                 scrollConversationToBottom();
             }
@@ -5863,6 +6203,13 @@ document.addEventListener('DOMContentLoaded', function () {
             var query;
 
             if (!conversationId) {
+                return;
+            }
+
+            if (isVoiceBusy()) {
+                if (!requestOptions.silent) {
+                    showComposerAlert(voiceBusyMessage(), true);
+                }
                 return;
             }
 
@@ -6592,6 +6939,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 var detectedUrl = extractFirstUrl(message);
                 var previewUrl = linkPreviewData && linkPreviewUrl === detectedUrl && linkPreviewDismissedUrl !== detectedUrl ? linkPreviewUrl : '';
                 var previewRemoved = detectedUrl && linkPreviewDismissedUrl === detectedUrl ? 1 : 0;
+                if (isVoiceBusy()) {
+                    showComposerAlert(voiceBusyMessage(), true);
+                    return;
+                }
                 if (!message) {
                     return;
                 }
@@ -6621,10 +6972,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (q('[data-admin-chat-upload-button]', root) && uploadInput) {
             q('[data-admin-chat-upload-button]', root).addEventListener('click', function () {
+                if (isVoiceBusy()) {
+                    showComposerAlert(voiceBusyMessage(), true);
+                    return;
+                }
                 uploadInput.click();
             });
 
             uploadInput.addEventListener('change', function () {
+                if (isVoiceBusy()) {
+                    showComposerAlert(voiceBusyMessage(), true);
+                    uploadInput.value = '';
+                    return;
+                }
                 if (!uploadInput.files || !uploadInput.files[0] || !activeConversationId) {
                     return;
                 }
@@ -6650,6 +7010,62 @@ document.addEventListener('DOMContentLoaded', function () {
                 });
             });
         }
+
+        if (voiceButton) {
+            voiceButton.addEventListener('pointerdown', function (event) {
+                if (isDesktopVoiceToggleMode()) {
+                    return;
+                }
+                if (voiceButton.classList.contains('is-disabled') || voiceButton.getAttribute('aria-disabled') === 'true') {
+                    return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                voicePointerMode = true;
+                startVoiceRecording();
+            });
+
+            voiceButton.addEventListener('click', function (event) {
+                if (!isDesktopVoiceToggleMode()) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return false;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                if (voiceButton.classList.contains('is-disabled') || voiceButton.getAttribute('aria-disabled') === 'true') {
+                    return false;
+                }
+                if (voiceRecording || voiceStartInFlight) {
+                    return stopVoiceRecording(false);
+                }
+                return startVoiceRecording();
+            });
+        }
+
+        doc.addEventListener('pointerup', function () {
+            if (isDesktopVoiceToggleMode() || !voicePointerMode) {
+                return;
+            }
+            if (!voiceRecording && !voiceStartInFlight) {
+                voicePointerMode = false;
+                return;
+            }
+            stopVoiceRecording(false);
+        });
+
+        doc.addEventListener('pointercancel', function () {
+            if (isDesktopVoiceToggleMode() || !voicePointerMode) {
+                return;
+            }
+            if (!voiceRecording && !voiceStartInFlight) {
+                voicePointerMode = false;
+                return;
+            }
+            stopVoiceRecording(false);
+        });
+
+        updateVoiceComposerState();
 
         doc.addEventListener('click', function (event) {
             var openCustomerChat = closest(event.target, '[data-admin-chat-start-customer]');

@@ -223,6 +223,25 @@ function app_public_path(string $relativePath = ''): string
     return $basePath . '/' . $relativePath;
 }
 
+if (!function_exists('app_messenger_voice_duration_options')) {
+    function app_messenger_voice_duration_options(): array
+    {
+        return [10, 30, 60, 120, 300];
+    }
+}
+
+if (!function_exists('app_messenger_voice_max_duration_seconds')) {
+    function app_messenger_voice_max_duration_seconds(array $settings = []): int
+    {
+        $value = (int)($settings['messenger_voice_max_duration_seconds'] ?? 30);
+        if (!in_array($value, app_messenger_voice_duration_options(), true)) {
+            $value = 30;
+        }
+
+        return $value;
+    }
+}
+
 if (!function_exists('app_static_page_normalize_locale')) {
     function app_static_page_normalize_locale(?string $localeCode): string
     {
@@ -961,6 +980,46 @@ function app_chat_attachment_absolute_path(string $attachmentPath, bool $migrate
     }
 
     return $activePath;
+}
+
+function app_chat_delete_attachment_file(string $attachmentPath): array
+{
+    $candidatePaths = app_chat_attachment_candidate_paths($attachmentPath);
+    if ($candidatePaths === []) {
+        return [
+            'known' => false,
+            'had_file' => false,
+            'deleted' => false,
+            'remaining' => false,
+        ];
+    }
+
+    $hadFile = false;
+    $deleted = false;
+    foreach ($candidatePaths as $candidatePath) {
+        if (!is_file($candidatePath)) {
+            continue;
+        }
+        $hadFile = true;
+        if (@unlink($candidatePath)) {
+            $deleted = true;
+        }
+    }
+
+    $remaining = false;
+    foreach ($candidatePaths as $candidatePath) {
+        if (is_file($candidatePath)) {
+            $remaining = true;
+            break;
+        }
+    }
+
+    return [
+        'known' => true,
+        'had_file' => $hadFile,
+        'deleted' => $deleted,
+        'remaining' => $remaining,
+    ];
 }
 
 function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): string
@@ -4029,11 +4088,20 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'messenger_voice_enabled');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'messenger_voice_max_duration_seconds')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN messenger_voice_max_duration_seconds SMALLINT UNSIGNED NOT NULL DEFAULT 30
+             AFTER messenger_voice_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'messenger_voice_max_duration_seconds');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'demo_messenger_showcase_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN demo_messenger_showcase_enabled TINYINT(1) NOT NULL DEFAULT 0
-             AFTER messenger_voice_enabled"
+             AFTER messenger_voice_max_duration_seconds"
         );
         schema_forget_column_cache('app_settings', 'demo_messenger_showcase_enabled');
     }
@@ -4745,6 +4813,7 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['customer_group_chat_enabled'] = (int)($settings['customer_group_chat_enabled'] ?? 0);
     $settings['customer_global_group_enabled'] = (int)($settings['customer_global_group_enabled'] ?? 0);
     $settings['messenger_voice_enabled'] = (int)($settings['messenger_voice_enabled'] ?? 0);
+    $settings['messenger_voice_max_duration_seconds'] = app_messenger_voice_max_duration_seconds($settings);
     $settings['demo_messenger_showcase_enabled'] = (int)($settings['demo_messenger_showcase_enabled'] ?? 0);
     $settings['demo_messenger_showcase_last_tick_at'] = trim((string)($settings['demo_messenger_showcase_last_tick_at'] ?? ''));
     $settings['demo_messenger_showcase_last_global_tick_at'] = trim((string)($settings['demo_messenger_showcase_last_global_tick_at'] ?? ''));
@@ -8204,6 +8273,12 @@ function app_prune_retained_data(Mysql_ks $db, ?string $now = null): array
 
 function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): array
 {
+    if (!function_exists('chat_ensure_message_interactions_runtime') && is_file(__DIR__ . '/chat.php')) {
+        require_once __DIR__ . '/chat.php';
+    }
+    if (function_exists('chat_ensure_message_interactions_runtime')) {
+        chat_ensure_message_interactions_runtime($db);
+    }
     $settings = app_fetch_settings($db);
     $safeNow = trim((string)$now);
     if ($safeNow === '') {
@@ -8235,7 +8310,7 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
 
     if (schema_object_exists($db, 'support_conversations') && schema_column_exists($db, 'support_conversations', 'conversation_type')) {
         $rows = $db->select_full_user(
-            "SELECT support_messages.id, support_messages.attachment_path
+            "SELECT support_messages.id, support_messages.attachment_path, support_messages.audio_path
              FROM support_messages
              INNER JOIN support_conversations
                      ON support_conversations.id = support_messages.conversation_id
@@ -8245,7 +8320,7 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
         );
     } else {
         $rows = $db->select_full_user(
-            "SELECT id, attachment_path
+            "SELECT id, attachment_path, audio_path
              FROM support_messages
              WHERE created_at < '{$safeCutoff}'
              ORDER BY id ASC"
@@ -8265,19 +8340,38 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
     }
 
     $messageIds = [];
+    $skippedMessages = 0;
     $deletedFiles = 0;
     foreach ($rows as $row) {
         $messageId = (int)($row['id'] ?? 0);
-        if ($messageId > 0) {
-            $messageIds[] = $messageId;
-        }
+        $canDeleteMessage = true;
 
         $attachmentPath = trim((string)($row['attachment_path'] ?? ''));
         if ($attachmentPath !== '' && strpos($attachmentPath, '/uploads/chat/') === 0) {
-            $absolutePath = app_chat_attachment_absolute_path($attachmentPath);
-            if (is_file($absolutePath) && @unlink($absolutePath)) {
+            $deleteResult = app_chat_delete_attachment_file($attachmentPath);
+            if (!empty($deleteResult['deleted'])) {
                 $deletedFiles++;
             }
+            if (!empty($deleteResult['remaining'])) {
+                $canDeleteMessage = false;
+            }
+        }
+
+        $audioPath = trim((string)($row['audio_path'] ?? ''));
+        if ($audioPath !== '' && strpos($audioPath, '/uploads/chat/') === 0) {
+            $deleteResult = app_chat_delete_attachment_file($audioPath);
+            if (!empty($deleteResult['deleted'])) {
+                $deletedFiles++;
+            }
+            if (!empty($deleteResult['remaining'])) {
+                $canDeleteMessage = false;
+            }
+        }
+
+        if ($messageId > 0 && $canDeleteMessage) {
+            $messageIds[] = $messageId;
+        } elseif ($messageId > 0) {
+            $skippedMessages++;
         }
     }
 
@@ -8289,7 +8383,10 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
             'deleted_messages' => 0,
             'deleted_empty_conversations' => 0,
             'deleted_files' => $deletedFiles,
-            'message' => 'No old live chat messages found.',
+            'skipped_messages' => $skippedMessages,
+            'message' => $skippedMessages > 0
+                ? 'Some old live chat messages were kept because their files could not be removed.'
+                : 'No old live chat messages found.',
         ];
     }
 
@@ -8306,6 +8403,7 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
             'deleted_messages' => 0,
             'deleted_empty_conversations' => 0,
             'deleted_files' => $deletedFiles,
+            'skipped_messages' => $skippedMessages,
             'message' => 'Unable to delete old live chat messages.',
         ];
     }
@@ -8353,9 +8451,130 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
         'deleted_messages' => $deletedMessages,
         'deleted_empty_conversations' => $deletedEmptyConversations,
         'deleted_files' => $deletedFiles,
+        'skipped_messages' => $skippedMessages,
         'message' => $deletedMessages > 0
-            ? 'Old live chat messages deleted.'
-            : 'No old live chat messages found.',
+            ? ($skippedMessages > 0
+                ? 'Old live chat messages deleted. Some messages were skipped because their files could not be removed.'
+                : 'Old live chat messages deleted.')
+            : ($skippedMessages > 0
+                ? 'Some old live chat messages were kept because their files could not be removed.'
+                : 'No old live chat messages found.'),
+    ];
+}
+
+function app_prune_expired_support_chat_audio_messages(Mysql_ks $db, ?string $now = null): array
+{
+    if (!function_exists('chat_ensure_message_interactions_runtime') && is_file(__DIR__ . '/chat.php')) {
+        require_once __DIR__ . '/chat.php';
+    }
+    if (function_exists('chat_ensure_message_interactions_runtime')) {
+        chat_ensure_message_interactions_runtime($db);
+    }
+    $safeNow = trim((string)$now);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    if (
+        !schema_object_exists($db, 'support_messages')
+        || !schema_object_exists($db, 'support_conversations')
+        || !schema_column_exists($db, 'support_messages', 'message_type')
+        || !schema_column_exists($db, 'support_messages', 'audio_path')
+        || !schema_column_exists($db, 'support_messages', 'expires_at')
+    ) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'expired_messages' => 0,
+            'deleted_files' => 0,
+            'message' => 'Voice message expiry runtime is not available.',
+        ];
+    }
+
+    $safeNowSql = $db->escape($safeNow);
+    $rows = $db->select_full_user(
+        "SELECT support_messages.id, support_messages.audio_path
+         FROM support_messages
+         INNER JOIN support_conversations
+                 ON support_conversations.id = support_messages.conversation_id
+         WHERE support_conversations.conversation_type = 'live_chat'
+           AND support_messages.message_type = 'audio'
+           AND support_messages.audio_path IS NOT NULL
+           AND support_messages.audio_path <> ''
+           AND support_messages.expires_at IS NOT NULL
+           AND support_messages.expires_at <= '{$safeNowSql}'
+         ORDER BY support_messages.id ASC"
+    );
+
+    if (!$rows) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'expired_messages' => 0,
+            'deleted_files' => 0,
+            'message' => 'No expired voice messages found.',
+        ];
+    }
+
+    $expiredMessageIds = [];
+    $skippedMessages = 0;
+    $deletedFiles = 0;
+    foreach ($rows as $row) {
+        $messageId = (int)($row['id'] ?? 0);
+        $canExpireMessage = true;
+
+        $audioPath = trim((string)($row['audio_path'] ?? ''));
+        if ($audioPath !== '' && strpos($audioPath, '/uploads/chat/') === 0) {
+            $deleteResult = app_chat_delete_attachment_file($audioPath);
+            if (!empty($deleteResult['deleted'])) {
+                $deletedFiles++;
+            }
+            if (!empty($deleteResult['remaining'])) {
+                $canExpireMessage = false;
+            }
+        }
+
+        if ($messageId > 0 && $canExpireMessage) {
+            $expiredMessageIds[] = $messageId;
+        } elseif ($messageId > 0) {
+            $skippedMessages++;
+        }
+    }
+
+    if (!$expiredMessageIds) {
+        return [
+            'ok' => true,
+            'time' => $safeNow,
+            'expired_messages' => 0,
+            'deleted_files' => $deletedFiles,
+            'skipped_messages' => $skippedMessages,
+            'message' => $skippedMessages > 0
+                ? 'Some expired voice messages were kept because their files could not be removed.'
+                : 'No expired voice messages found.',
+        ];
+    }
+
+    $idList = implode(',', array_map('intval', array_unique($expiredMessageIds)));
+    $updated = $db->query(
+        "UPDATE support_messages
+         SET message_type = 'audio_expired',
+             audio_path = NULL,
+             audio_mime_type = NULL,
+             expires_at = NULL
+         WHERE id IN ({$idList})"
+    );
+
+    return [
+        'ok' => $updated !== false,
+        'time' => $safeNow,
+        'expired_messages' => count($expiredMessageIds),
+        'deleted_files' => $deletedFiles,
+        'skipped_messages' => $skippedMessages,
+        'message' => $updated !== false
+            ? ($skippedMessages > 0
+                ? 'Expired voice messages were cleaned up. Some messages were kept because their files could not be removed.'
+                : 'Expired voice messages were cleaned up.')
+            : 'Unable to mark expired voice messages as expired.',
     ];
 }
 
@@ -8385,6 +8604,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $deleteCancelled = app_delete_stale_cancelled_payment_requests($db, $safeNow);
     $staleOrders = app_delete_stale_unpaid_orders($db, $safeNow);
     $expire = app_expire_overdue_orders($db, $safeNow);
+    $voiceChat = app_prune_expired_support_chat_audio_messages($db, $safeNow);
     $chat = app_prune_support_chat_messages($db, $safeNow);
     $expiredInvites = function_exists('chat_expire_stale_group_invites')
         ? chat_expire_stale_group_invites($db, 24)
@@ -8406,6 +8626,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
         'delete_cancelled_requests' => $deleteCancelled,
         'stale_unpaid_orders' => $staleOrders,
         'expire_orders' => $expire,
+        'live_chat_voice_cleanup' => $voiceChat,
         'live_chat_cleanup' => $chat,
         'group_chat_invites_cleanup' => $expiredInvites,
         'group_chat_cleanup' => $messenger,
@@ -8441,6 +8662,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'auto_deleted_cancelled_bank_requests' => (int)($deleteCancelled['deleted_bank_requests'] ?? 0),
             'deleted_stale_unpaid_orders' => (int)($staleOrders['deleted_orders'] ?? 0),
             'expired_orders' => (int)($expire['expired_orders'] ?? 0),
+            'expired_voice_messages' => (int)($voiceChat['expired_messages'] ?? 0),
             'deleted_chat_messages' => (int)($chat['deleted_messages'] ?? 0),
             'deleted_chat_conversations' => (int)($chat['deleted_empty_conversations'] ?? 0),
             'deleted_chat_files' => (int)($chat['deleted_files'] ?? 0),

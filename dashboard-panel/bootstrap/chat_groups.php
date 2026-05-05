@@ -4110,6 +4110,20 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     LIMIT 1
                 ) AS last_attachment_path,
                 (
+                    SELECT support_messages.message_type
+                    FROM support_messages
+                    WHERE support_messages.conversation_id = support_conversations.id
+                    ORDER BY support_messages.created_at DESC, support_messages.id DESC
+                    LIMIT 1
+                ) AS last_message_type,
+                (
+                    SELECT support_messages.audio_path
+                    FROM support_messages
+                    WHERE support_messages.conversation_id = support_conversations.id
+                    ORDER BY support_messages.created_at DESC, support_messages.id DESC
+                    LIMIT 1
+                ) AS last_audio_path,
+                (
                     SELECT COUNT(*)
                     FROM support_messages
                     WHERE support_messages.conversation_id = support_conversations.id
@@ -4165,6 +4179,20 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     ORDER BY support_messages.created_at DESC, support_messages.id DESC
                     LIMIT 1
                 ) AS last_attachment_path,
+                (
+                    SELECT support_messages.message_type
+                    FROM support_messages
+                    WHERE support_messages.conversation_id = support_conversations.id
+                    ORDER BY support_messages.created_at DESC, support_messages.id DESC
+                    LIMIT 1
+                ) AS last_message_type,
+                (
+                    SELECT support_messages.audio_path
+                    FROM support_messages
+                    WHERE support_messages.conversation_id = support_conversations.id
+                    ORDER BY support_messages.created_at DESC, support_messages.id DESC
+                    LIMIT 1
+                ) AS last_audio_path,
                 (
                     SELECT COUNT(*)
                     FROM support_messages
@@ -4241,6 +4269,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 support_messages.admin_user_id,
                 support_messages.message_body AS tresc,
                 support_messages.attachment_path,
+                support_messages.message_type,
+                support_messages.audio_path,
+                support_messages.audio_mime_type,
+                support_messages.audio_duration_seconds,
                 support_messages.reply_to_message_id,
                 DATE_FORMAT(support_messages.created_at, '%Y-%m-%d %H:%i:%s') AS data,
                 support_messages.is_read AS status,
@@ -4310,6 +4342,20 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                         LIMIT 1
                     ) AS last_attachment_path,
                     (
+                        SELECT support_messages.message_type
+                        FROM support_messages
+                        WHERE support_messages.conversation_id = {$supportConversationId}
+                        ORDER BY support_messages.id DESC
+                        LIMIT 1
+                    ) AS last_message_type,
+                    (
+                        SELECT support_messages.audio_path
+                        FROM support_messages
+                        WHERE support_messages.conversation_id = {$supportConversationId}
+                        ORDER BY support_messages.id DESC
+                        LIMIT 1
+                    ) AS last_audio_path,
+                    (
                         SELECT COUNT(*)
                         FROM support_messages
                         WHERE support_messages.conversation_id = {$supportConversationId}
@@ -4329,6 +4375,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 (string)($supportMeta['last_attachment_path'] ?? ''),
                 'New image attachment'
             );
+            if (trim((string)($supportMeta['last_message_type'] ?? '')) === 'audio' && trim((string)($supportMeta['last_audio_path'] ?? '')) !== '') {
+                $supportPreview = chat_voice_message_label();
+            } elseif (trim((string)($supportMeta['last_message_type'] ?? '')) === 'audio_expired') {
+                $supportPreview = chat_voice_message_expired_label();
+            }
             $supportUnread = (int)($supportMeta['unread_count'] ?? 0);
             $supportUpdatedAt = (string)($supportMeta['updated_at'] ?? '');
         }
@@ -4373,9 +4424,13 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     'title' => (string)($summary['title'] ?? chat_group_conversation_title($row)),
                     'subtitle' => (string)($summary['subtitle'] ?? 'Group'),
                     'unread_count' => (int)($row['unread_count'] ?? 0),
-                    'preview' => chat_message_preview_text(
-                        (string)($row['last_message_body'] ?? ''),
-                        (string)($row['last_attachment_path'] ?? ''),
+                    'preview' => chat_message_preview_text_from_row(
+                        [
+                            'message_body' => (string)($row['last_message_body'] ?? ''),
+                            'attachment_path' => (string)($row['last_attachment_path'] ?? ''),
+                            'message_type' => (string)($row['last_message_type'] ?? ''),
+                            'audio_path' => (string)($row['last_audio_path'] ?? ''),
+                        ],
                         'New image attachment'
                     ),
                     'updated_at' => (string)($row['updated_at'] ?? $row['created_at'] ?? ''),
@@ -4586,6 +4641,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 support_messages.admin_user_id,
                 support_messages.message_body AS tresc,
                 support_messages.attachment_path,
+                support_messages.message_type,
+                support_messages.audio_path,
+                support_messages.audio_mime_type,
+                support_messages.audio_duration_seconds,
                 support_messages.reply_to_message_id,
                 DATE_FORMAT(support_messages.created_at, '%Y-%m-%d %H:%i:%s') AS data,
                 support_messages.is_read AS status,

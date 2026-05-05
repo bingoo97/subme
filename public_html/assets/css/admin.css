@@ -2253,6 +2253,12 @@ body.admin-login-page{
     color:#3b3b3b;
 }
 
+.admin-chat-inbox__composer-voice.is-recording{
+    background:#111;
+    border-color:#111;
+    color:#fff;
+}
+
 .admin-chat-inbox__composer-voice.is-disabled{
     position:relative;
     cursor:not-allowed;
@@ -2309,6 +2315,45 @@ body.admin-login-page{
     transform:translateY(-50%) translateX(-2px);
 }
 
+.admin-chat-inbox__composer-voice-status{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:8px;
+    padding:8px 12px;
+    border-radius:14px;
+    background:#fff4f8;
+    color:#7e1146;
+    font-size:12px;
+    font-weight:600;
+}
+
+.admin-chat-inbox__composer-voice-indicator{
+    width:8px;
+    height:8px;
+    border-radius:999px;
+    background:#d10d5a;
+    box-shadow:0 0 0 0 rgba(209,13,90,.35);
+    animation:adminChatVoicePulse 1.2s ease-in-out infinite;
+}
+
+.admin-chat-inbox__composer-voice-timer{
+    margin-left:auto;
+    font-variant-numeric:tabular-nums;
+}
+
+@keyframes adminChatVoicePulse{
+    0%{
+        box-shadow:0 0 0 0 rgba(209,13,90,.35);
+    }
+    70%{
+        box-shadow:0 0 0 8px rgba(209,13,90,0);
+    }
+    100%{
+        box-shadow:0 0 0 0 rgba(209,13,90,0);
+    }
+}
+
 .admin-chat-inbox__composer-action:hover,
 .admin-chat-inbox__composer-action:focus,
 .admin-chat-inbox__composer-action:active,
@@ -2318,9 +2363,43 @@ body.admin-login-page{
 .admin-chat-inbox__composer-voice:hover,
 .admin-chat-inbox__composer-voice:focus,
 .admin-chat-inbox__composer-voice:active{
-    background:#f7f7f8;
-    border-color:#f7f7f8;
-    color:#3b3b3b;
+	background:#f7f7f8;
+	border-color:#f7f7f8;
+	color:#3b3b3b;
+}
+
+.admin-chat-conversation__audio{
+	display:grid;
+	grid-template-columns:minmax(0, 1fr);
+	gap:6px;
+	margin-top:4px;
+	width:100%;
+}
+
+.admin-chat-conversation__audio-player{
+	display:block;
+	width:100%;
+	max-width:none;
+	min-width:0;
+	min-height:34px;
+	border-radius:4px;
+    border:1px solid #333;
+}
+
+.admin-chat-conversation__audio-duration{
+	font-size:10px;
+	font-weight:600;
+	opacity:.72;
+	white-space:nowrap;
+	padding-left:4px;
+	justify-self:start;
+}
+
+.admin-chat-conversation__audio-expired{
+	margin-top:6px;
+	font-size:12px;
+	font-weight:600;
+	opacity:.72;
 }
 
 .admin-chat-inbox__composer-input{
@@ -2352,7 +2431,7 @@ body.admin-login-page{
     position:relative;
     padding-bottom:14px;
     overflow:visible;
-    max-height:420px;
+    max-height:1600px;
     will-change:transform, opacity, filter, max-height;
     transition:
         opacity .34s cubic-bezier(.22, 1, .36, 1),
@@ -2409,6 +2488,14 @@ body.admin-login-page{
     padding:.8rem .9rem 1rem;
     border-radius:20px;
     background:#fff;
+}
+
+.admin-chat-conversation__bubble--audio{
+    width:min(340px, calc(100vw - 156px));
+    min-width:min(280px, calc(100vw - 156px));
+    max-width:min(360px, calc(100vw - 120px));
+    padding:.7rem .9rem .65rem;
+    border-radius:24px;
 }
 
 .admin-chat-conversation__sender{
@@ -2510,6 +2597,10 @@ body.admin-login-page{
     font-size: 12px;
     line-height:1.55;
     font-weight: 600;
+}
+
+.admin-chat-conversation__bubble--audio .admin-chat-conversation__text{
+    margin-top:6px;
 }
 
 .admin-chat-conversation__text--emoji-only{

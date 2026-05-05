@@ -220,7 +220,7 @@
 	gap:0;
 	padding-bottom:14px;
 	overflow:visible;
-	max-height:420px;
+	max-height:1600px;
 	will-change:transform, opacity, filter, max-height;
 	transition:
 		opacity .34s cubic-bezier(.22, 1, .36, 1),
@@ -383,7 +383,9 @@
 .messenger-item--intro{
 	flex-direction:column;
 	align-items:flex-start;
-	gap:12px;
+	gap:14px;
+	padding-bottom:22px;
+	z-index:2;
 }
 
 .messenger-item--intro.is-collapsed{
@@ -398,6 +400,14 @@
 	background:#fff;
 	/* box-shadow:0 8px 24px rgba(17,17,17,.05); */
 	word-break:break-word;
+}
+
+.messenger-bubble--audio{
+	width:min(340px, calc(100vw - 108px));
+	min-width:min(280px, calc(100vw - 108px));
+	max-width:min(360px, calc(100vw - 72px));
+	padding:10px 14px 5px;
+	border-radius:26px;
 }
 
 .messenger-item--sent .messenger-bubble{
@@ -799,6 +809,9 @@
 .messenger-faq-panel{
 	width:100%;
 	max-width:100%;
+	position:relative;
+	z-index:2;
+	padding-top:2px;
 }
 
 .messenger-faq-label{
@@ -810,9 +823,14 @@
 }
 
 .messenger-faq-prompts{
-	display: block;
-	flex-wrap:wrap;
+	display:flex;
+	flex-direction:column;
+	gap:6px;
 	margin: 0;
+}
+
+.messenger-item--audio{
+	padding-bottom:18px;
 }
 
 .chat-payment-card{
@@ -1334,6 +1352,93 @@
 	background: #ebebeb;
 	color: #4e4e4e;
 	border-color:#ebebeb;
+}
+
+.messenger-compose__voice.is-recording{
+	background:#111;
+	border-color:#111;
+	color:#fff;
+}
+
+.messenger-compose__voice-status{
+	display:flex;
+	align-items:center;
+	gap:8px;
+	margin-top:8px;
+	padding:6px 12px;
+	border-radius:999px;
+	background:#f7f7f8;
+	color:#3b3b3b;
+	font-size:12px;
+	font-weight:600;
+}
+
+.messenger-compose__voice-indicator{
+	width:8px;
+	height:8px;
+	border-radius:999px;
+	background:#d10d5a;
+	box-shadow:0 0 0 0 rgba(209,13,90,.35);
+	animation:messengerVoicePulse 1.2s ease-in-out infinite;
+}
+
+.messenger-compose__voice-timer{
+	margin-left:auto;
+	font-variant-numeric:tabular-nums;
+}
+
+.messenger-audio{
+	display:grid;
+	grid-template-columns:minmax(0, 1fr);
+	gap:6px;
+	margin-top:2px;
+	width:100%;
+}
+
+.messenger-audio__player{
+	display:block;
+	width:100%;
+	max-width:none;
+	min-width:0;
+	min-height:34px;
+	border-radius: 4px;
+	background: #f2f3f4;
+}
+
+.messenger-audio__duration{
+	font-size:10px;
+	font-weight:600;
+	opacity:.72;
+	white-space:nowrap;
+	padding-left:4px;
+	justify-self:start;
+}
+
+.messenger-audio__expired{
+	margin-top:4px;
+	font-size:12px;
+	font-weight:600;
+	opacity:.72;
+}
+
+.messenger-bubble--audio .messenger-text{
+	margin-top:6px;
+}
+
+.messenger-bubble--audio .messenger-bubble__meta{
+	margin-top:4px;
+}
+
+@keyframes messengerVoicePulse{
+	0%{
+		box-shadow:0 0 0 0 rgba(209,13,90,.35);
+	}
+	70%{
+		box-shadow:0 0 0 8px rgba(209,13,90,0);
+	}
+	100%{
+		box-shadow:0 0 0 0 rgba(209,13,90,0);
+	}
 }
 
 .messenger-group-action{

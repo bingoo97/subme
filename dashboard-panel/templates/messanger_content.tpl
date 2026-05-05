@@ -249,7 +249,6 @@
 								type="button"
 								class="messenger-faq-prompt"
 								data-chat-faq-key="{$faqPrompt.faq_key|escape:'html'}"
-								onclick="return chatFaqPrompt('{$faqPrompt.faq_key|escape:'javascript'}');"
 							>
 								{$faqPrompt.title nofilter}
 							</button>
@@ -305,8 +304,8 @@
                     <span>{$chat[i].time_anchor_label}</span>
                 </li>
                 {/if}
-                <li class="messenger-item messenger-item--{$chat[i].direction}{if $chat[i].can_interact|default:false} messenger-item--interactive{/if}" data-message-id="{$chat[i].id}"{if $chat[i].can_interact|default:false} data-chat-message-item{/if}>
-					<div class="messenger-bubble"{if $chat[i].can_interact|default:false} data-chat-message-bubble{/if}>
+				<li class="messenger-item messenger-item--{$chat[i].direction}{if $chat[i].is_audio_message|default:false} messenger-item--audio{/if}{if $chat[i].can_interact|default:false} messenger-item--interactive{/if}" data-message-id="{$chat[i].id}"{if $chat[i].can_interact|default:false} data-chat-message-item{/if}>
+					<div class="messenger-bubble{if $chat[i].is_audio_message|default:false} messenger-bubble--audio{/if}"{if $chat[i].can_interact|default:false} data-chat-message-bubble{/if}>
 						{if $chat[i].direction eq 'received'}
                             {assign var="chatCanOpenAuthorProfile" value=false}
                             {if ($chat_active_conversation_is_group|default:false) && !($chat_active_conversation_is_direct|default:false) && !($chat[i].sender_is_admin|default:false) && ($chat[i].sender_customer_id|default:0 gt 0) && ($chat[i].sender_customer_id|default:0 ne $user.id)}
@@ -338,6 +337,18 @@
 							<img src="{$chat[i].attachment_path}" class="messenger-image" alt="attachment" />
 						</a>
 						{/if}
+						{if $chat[i].is_audio_message|default:false && $chat[i].audio_path|default:'' ne ''}
+						<div class="messenger-audio">
+							<audio controls preload="metadata" class="messenger-audio__player" data-chat-audio-player>
+								<source src="{$chat[i].audio_path|escape:'html'}"{if $chat[i].audio_mime_type|default:'' ne ''} type="{$chat[i].audio_mime_type|escape:'html'}"{/if}>
+							</audio>
+							{if $chat[i].audio_duration_label|default:'' ne ''}
+							<span class="messenger-audio__duration">{$chat[i].audio_duration_label|escape:'html'}</span>
+							{/if}
+						</div>
+						{elseif $chat[i].is_audio_expired|default:false}
+						<div class="messenger-audio__expired">{$t.chat_voice_message_expired|default:'Wiadomość głosowa wygasła.'}</div>
+						{/if}
 						{if $chat[i].message_html ne ''}
 						<div class="messenger-text{if $chat[i].is_emoji_only|default:false} messenger-text--emoji-only{/if}">{$chat[i].message_html nofilter}</div>
 						{/if}
@@ -359,7 +370,7 @@
                         {/if}
                         {if $chat[i].can_interact|default:false}
                         <div class="messenger-message-actions" data-chat-message-actions>
-                            <button type="button" class="messenger-message-actions__button" data-chat-reply-open data-message-id="{$chat[i].id}" data-reply-sender="{$chat[i].sender_label|escape:'html'}" data-reply-text="{if $chat[i].message_html ne ''}{$chat[i].message_html|strip_tags|truncate:90:'...'|escape:'html'}{elseif $chat[i].attachment_path ne ''}{$t.chat_attachment|default:'Załącznik'|escape:'html'}{else}{$t.chat_reply_unknown|default:'Wiadomość'|escape:'html'}{/if}">
+                            <button type="button" class="messenger-message-actions__button" data-chat-reply-open data-message-id="{$chat[i].id}" data-reply-sender="{$chat[i].sender_label|escape:'html'}" data-reply-text="{if $chat[i].message_html ne ''}{$chat[i].message_html|strip_tags|truncate:90:'...'|escape:'html'}{elseif $chat[i].is_audio_message|default:false}{$t.chat_voice_message_label|default:'Wiadomość głosowa'|escape:'html'}{elseif $chat[i].is_audio_expired|default:false}{$t.chat_voice_message_expired|default:'Wiadomość głosowa wygasła.'|escape:'html'}{elseif $chat[i].attachment_path ne ''}{$t.chat_attachment|default:'Załącznik'|escape:'html'}{else}{$t.chat_reply_unknown|default:'Wiadomość'|escape:'html'}{/if}">
                                 <i class="fa fa-reply" aria-hidden="true"></i>
                             </button>
                             {foreach from=['thumbs_up'=>'👍','heart'=>'❤️','joy'=>'😂','wow'=>'😮','sad'=>'😢'] key=chatReactionCode item=chatReactionEmoji}

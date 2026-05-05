@@ -36,6 +36,51 @@ if (!function_exists('chat_ensure_message_interactions_runtime')) {
             schema_forget_column_cache('support_messages', 'reply_to_message_id');
         }
 
+        if (schema_object_exists($db, 'support_messages') && !schema_column_exists($db, 'support_messages', 'message_type')) {
+            @$db->query(
+                "ALTER TABLE support_messages
+                 ADD COLUMN message_type VARCHAR(24) NOT NULL DEFAULT 'text'
+                 AFTER reply_to_message_id"
+            );
+            schema_forget_column_cache('support_messages', 'message_type');
+        }
+
+        if (schema_object_exists($db, 'support_messages') && !schema_column_exists($db, 'support_messages', 'audio_path')) {
+            @$db->query(
+                "ALTER TABLE support_messages
+                 ADD COLUMN audio_path VARCHAR(255) DEFAULT NULL
+                 AFTER message_type"
+            );
+            schema_forget_column_cache('support_messages', 'audio_path');
+        }
+
+        if (schema_object_exists($db, 'support_messages') && !schema_column_exists($db, 'support_messages', 'audio_mime_type')) {
+            @$db->query(
+                "ALTER TABLE support_messages
+                 ADD COLUMN audio_mime_type VARCHAR(64) DEFAULT NULL
+                 AFTER audio_path"
+            );
+            schema_forget_column_cache('support_messages', 'audio_mime_type');
+        }
+
+        if (schema_object_exists($db, 'support_messages') && !schema_column_exists($db, 'support_messages', 'audio_duration_seconds')) {
+            @$db->query(
+                "ALTER TABLE support_messages
+                 ADD COLUMN audio_duration_seconds SMALLINT UNSIGNED DEFAULT NULL
+                 AFTER audio_mime_type"
+            );
+            schema_forget_column_cache('support_messages', 'audio_duration_seconds');
+        }
+
+        if (schema_object_exists($db, 'support_messages') && !schema_column_exists($db, 'support_messages', 'expires_at')) {
+            @$db->query(
+                "ALTER TABLE support_messages
+                 ADD COLUMN expires_at DATETIME DEFAULT NULL
+                 AFTER audio_duration_seconds"
+            );
+            schema_forget_column_cache('support_messages', 'expires_at');
+        }
+
         if (!schema_object_exists($db, 'support_message_reactions')) {
             @$db->query(
                 "CREATE TABLE IF NOT EXISTS support_message_reactions (
@@ -56,6 +101,148 @@ if (!function_exists('chat_ensure_message_interactions_runtime')) {
             );
             unset($GLOBALS['schema_object_exists_cache']['support_message_reactions']);
         }
+    }
+}
+
+if (!function_exists('chat_audio_upload_directory')) {
+    function chat_audio_upload_directory(): string
+    {
+        return app_public_path('uploads/chat/audio');
+    }
+}
+
+if (!function_exists('chat_voice_message_max_duration_seconds')) {
+    function chat_voice_message_max_duration_seconds(?array $settings = null): int
+    {
+        if ($settings === null) {
+            $settings = isset($GLOBALS['settings']) && is_array($GLOBALS['settings']) ? $GLOBALS['settings'] : [];
+        }
+
+        return function_exists('app_messenger_voice_max_duration_seconds')
+            ? app_messenger_voice_max_duration_seconds($settings)
+            : 30;
+    }
+}
+
+if (!function_exists('chat_voice_message_max_file_bytes')) {
+    function chat_voice_message_max_file_bytes(?array $settings = null): int
+    {
+        $maxDurationSeconds = chat_voice_message_max_duration_seconds($settings);
+        $bytesPerMinute = 2 * 1024 * 1024;
+        $calculated = (int)ceil(($maxDurationSeconds / 60) * $bytesPerMinute);
+
+        return max(2 * 1024 * 1024, $calculated);
+    }
+}
+
+if (!function_exists('chat_voice_message_retention_seconds')) {
+    function chat_voice_message_retention_seconds(): int
+    {
+        return 24 * 3600;
+    }
+}
+
+if (!function_exists('chat_voice_message_mime_map')) {
+    function chat_voice_message_mime_map(): array
+    {
+        return [
+            'audio/webm' => 'webm',
+            'audio/webm;codecs=opus' => 'webm',
+            'audio/ogg' => 'ogg',
+            'audio/ogg;codecs=opus' => 'ogg',
+            'audio/mp4' => 'mp4',
+            'audio/mpeg' => 'mp3',
+            'audio/mp3' => 'mp3',
+            'audio/wav' => 'wav',
+            'audio/x-wav' => 'wav',
+        ];
+    }
+}
+
+if (!function_exists('chat_voice_message_extension_map')) {
+    function chat_voice_message_extension_map(): array
+    {
+        return [
+            'webm' => 'audio/webm',
+            'ogg' => 'audio/ogg',
+            'mp4' => 'audio/mp4',
+            'm4a' => 'audio/mp4',
+            'mp3' => 'audio/mpeg',
+            'wav' => 'audio/wav',
+        ];
+    }
+}
+
+if (!function_exists('chat_voice_message_is_audio_type')) {
+    function chat_voice_message_is_audio_type(string $messageType): bool
+    {
+        return trim($messageType) === 'audio';
+    }
+}
+
+if (!function_exists('chat_voice_message_is_expired_type')) {
+    function chat_voice_message_is_expired_type(string $messageType): bool
+    {
+        return trim($messageType) === 'audio_expired';
+    }
+}
+
+if (!function_exists('chat_voice_message_label')) {
+    function chat_voice_message_label(): string
+    {
+        return 'Voice message';
+    }
+}
+
+if (!function_exists('chat_voice_message_expired_label')) {
+    function chat_voice_message_expired_label(): string
+    {
+        return 'Voice message expired.';
+    }
+}
+
+if (!function_exists('chat_voice_message_duration_label')) {
+    function chat_voice_message_duration_label(?int $durationSeconds): string
+    {
+        $duration = max(0, (int)$durationSeconds);
+        $minutes = floor($duration / 60);
+        $seconds = $duration % 60;
+        return sprintf('%d:%02d', $minutes, $seconds);
+    }
+}
+
+if (!function_exists('chat_voice_message_expires_at')) {
+    function chat_voice_message_expires_at(?string $createdAt = null): string
+    {
+        $baseTimestamp = $createdAt !== null && trim($createdAt) !== '' ? strtotime($createdAt) : time();
+        if ($baseTimestamp === false) {
+            $baseTimestamp = time();
+        }
+
+        return date('Y-m-d H:i:s', $baseTimestamp + chat_voice_message_retention_seconds());
+    }
+}
+
+if (!function_exists('chat_voice_message_public_payload')) {
+    function chat_voice_message_public_payload(array $row): array
+    {
+        $messageType = trim((string)($row['message_type'] ?? ''));
+        $audioPath = trim((string)($row['audio_path'] ?? ''));
+        $duration = isset($row['audio_duration_seconds']) ? (int)$row['audio_duration_seconds'] : 0;
+        $mimeType = trim((string)($row['audio_mime_type'] ?? ''));
+
+        if (chat_voice_message_is_audio_type($messageType) && $audioPath !== '') {
+            app_chat_attachment_absolute_path($audioPath, true);
+        }
+
+        return [
+            'is_audio_message' => chat_voice_message_is_audio_type($messageType) && $audioPath !== '',
+            'is_audio_expired' => chat_voice_message_is_expired_type($messageType) || (chat_voice_message_is_audio_type($messageType) && $audioPath === ''),
+            'audio_path' => $audioPath,
+            'audio_mime_type' => $mimeType,
+            'audio_duration_seconds' => $duration > 0 ? $duration : 0,
+            'audio_duration_label' => $duration > 0 ? chat_voice_message_duration_label($duration) : '',
+        ];
     }
 }
 
@@ -94,6 +281,84 @@ if (!function_exists('chat_message_preview_excerpt')) {
             return rtrim(substr($text, 0, max(1, $limit - 1))) . '…';
         }
         return $text;
+    }
+}
+
+if (!function_exists('chat_store_uploaded_voice_message')) {
+    function chat_store_uploaded_voice_message(array $file, int $customerId, int $durationSeconds = 0): ?array
+    {
+        $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+        $tmpPath = (string)($file['tmp_name'] ?? '');
+        $originalName = (string)($file['name'] ?? '');
+        $declaredMimeType = trim((string)($file['type'] ?? ''));
+        $fileSize = isset($file['size']) ? (int)$file['size'] : 0;
+        $allowedMimeMap = chat_voice_message_mime_map();
+        $allowedExtensionMap = chat_voice_message_extension_map();
+        $originalExtension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        $durationSeconds = max(0, $durationSeconds);
+
+        if (
+            $uploadError !== UPLOAD_ERR_OK
+            || !is_uploaded_file($tmpPath)
+            || $fileSize <= 0
+            || $fileSize > chat_voice_message_max_file_bytes()
+            || $durationSeconds <= 0
+            || $durationSeconds > chat_voice_message_max_duration_seconds()
+        ) {
+            return null;
+        }
+
+        $resolvedMimeType = $declaredMimeType !== '' ? strtolower($declaredMimeType) : '';
+        if ($resolvedMimeType === '' && function_exists('mime_content_type')) {
+            $resolvedMimeType = strtolower((string)mime_content_type($tmpPath));
+        }
+        if ($resolvedMimeType !== '' && isset($allowedMimeMap[$resolvedMimeType])) {
+            $safeExtension = $allowedMimeMap[$resolvedMimeType];
+        } elseif ($originalExtension !== '' && isset($allowedExtensionMap[$originalExtension])) {
+            $safeExtension = $originalExtension;
+            $resolvedMimeType = $allowedExtensionMap[$originalExtension];
+        } else {
+            return null;
+        }
+
+        $uploadDirectory = chat_audio_upload_directory();
+        if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+            return null;
+        }
+
+        $fileName = 'voice_' . $customerId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $safeExtension;
+        $destinationPath = $uploadDirectory . '/' . $fileName;
+        if (!move_uploaded_file($tmpPath, $destinationPath)) {
+            return null;
+        }
+
+        return [
+            'message_type' => 'audio',
+            'audio_path' => '/uploads/chat/audio/' . $fileName,
+            'audio_mime_type' => $resolvedMimeType,
+            'audio_duration_seconds' => $durationSeconds,
+            'expires_at' => chat_voice_message_expires_at(),
+        ];
+    }
+}
+
+if (!function_exists('chat_message_preview_text_from_row')) {
+    function chat_message_preview_text_from_row(array $row, string $defaultAttachmentLabel = 'Image attachment'): string
+    {
+        $messageType = trim((string)($row['message_type'] ?? ''));
+        $audioPath = trim((string)($row['audio_path'] ?? ''));
+        if (chat_voice_message_is_audio_type($messageType) && $audioPath !== '') {
+            return chat_voice_message_label();
+        }
+        if (chat_voice_message_is_expired_type($messageType)) {
+            return chat_voice_message_expired_label();
+        }
+
+        return chat_message_preview_text(
+            (string)($row['message_body'] ?? $row['tresc'] ?? ''),
+            (string)($row['attachment_path'] ?? ''),
+            $defaultAttachmentLabel
+        );
     }
 }
 
@@ -235,6 +500,10 @@ if (!function_exists('chat_enrich_support_message_rows')) {
                     support_messages.admin_user_id,
                     support_messages.message_body AS tresc,
                     support_messages.attachment_path,
+                    support_messages.message_type,
+                    support_messages.audio_path,
+                    support_messages.audio_mime_type,
+                    support_messages.audio_duration_seconds,
                     NULLIF(TRIM(admin_users.public_handle), '') AS admin_public_handle,
                     admin_users.login_name AS admin_login_name,
                     customers.email AS customer_email,
@@ -251,10 +520,7 @@ if (!function_exists('chat_enrich_support_message_rows')) {
                 }
                 $replyMap[$replyId] = [
                     'sender_label' => chat_sender_display_name($replyRow, $reseller, $defaultSupportLabel),
-                    'preview_text' => chat_message_preview_excerpt(
-                        (string)($replyRow['tresc'] ?? ''),
-                        chat_extract_attachment_path((string)($replyRow['attachment_path'] ?? ''), (string)($replyRow['tresc'] ?? ''))
-                    ),
+                    'preview_text' => chat_message_preview_text_from_row($replyRow, 'Attachment'),
                 ];
             }
         }
@@ -312,6 +578,14 @@ if (!function_exists('chat_enrich_support_message_rows')) {
                 $rows[$index]['reply_preview_text'] = (string)($replyMap[$replyId]['preview_text'] ?? '');
                 $rows[$index]['reply_target_exists'] = true;
             }
+            $audioPayload = chat_voice_message_public_payload($row);
+            $rows[$index]['message_type'] = trim((string)($row['message_type'] ?? 'text'));
+            $rows[$index]['is_audio_message'] = !empty($audioPayload['is_audio_message']);
+            $rows[$index]['is_audio_expired'] = !empty($audioPayload['is_audio_expired']);
+            $rows[$index]['audio_path'] = (string)($audioPayload['audio_path'] ?? '');
+            $rows[$index]['audio_mime_type'] = (string)($audioPayload['audio_mime_type'] ?? '');
+            $rows[$index]['audio_duration_seconds'] = (int)($audioPayload['audio_duration_seconds'] ?? 0);
+            $rows[$index]['audio_duration_label'] = (string)($audioPayload['audio_duration_label'] ?? '');
             $rows[$index]['reactions'] = $messageId > 0 && !empty($reactionBuckets[$messageId])
                 ? array_values($reactionBuckets[$messageId])
                 : [];
@@ -1198,6 +1472,7 @@ if (!function_exists('chat_normalize_messages')) {
                 isset($row['attachment_path']) ? (string)$row['attachment_path'] : '',
                 isset($row['tresc']) ? (string)$row['tresc'] : ''
             );
+            $audioPayload = chat_voice_message_public_payload($row);
             $systemNoticeText = chat_system_notice_text((string)($row['tresc'] ?? ''));
             if ($attachmentPath !== '') {
                 app_chat_attachment_absolute_path($attachmentPath, true);
@@ -1232,6 +1507,13 @@ if (!function_exists('chat_normalize_messages')) {
                 'message_html' => chat_format_message_html($messageBody),
                 'is_emoji_only' => $systemNoticeText === '' && chat_message_is_emoji_only($messageBody),
                 'attachment_path' => $attachmentPath,
+                'message_type' => trim((string)($row['message_type'] ?? 'text')),
+                'is_audio_message' => !empty($audioPayload['is_audio_message']),
+                'is_audio_expired' => !empty($audioPayload['is_audio_expired']),
+                'audio_path' => (string)($audioPayload['audio_path'] ?? ''),
+                'audio_mime_type' => (string)($audioPayload['audio_mime_type'] ?? ''),
+                'audio_duration_seconds' => (int)($audioPayload['audio_duration_seconds'] ?? 0),
+                'audio_duration_label' => (string)($audioPayload['audio_duration_label'] ?? ''),
                 'created_label' => chat_format_timestamp($createdAt),
                 'time_anchor_label' => $showAnchor ? $anchorLabel : '',
                 'is_unread' => $isUnread,

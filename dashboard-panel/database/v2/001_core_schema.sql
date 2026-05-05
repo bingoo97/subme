@@ -74,6 +74,7 @@ CREATE TABLE `app_settings` (
   `customer_group_chat_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `customer_global_group_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `messenger_voice_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+  `messenger_voice_max_duration_seconds` SMALLINT UNSIGNED NOT NULL DEFAULT 30,
   `demo_messenger_showcase_enabled` TINYINT(1) NOT NULL DEFAULT 0,
   `demo_messenger_showcase_last_tick_at` DATETIME DEFAULT NULL,
   `demo_messenger_showcase_last_global_tick_at` DATETIME DEFAULT NULL,

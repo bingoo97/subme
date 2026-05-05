@@ -99,16 +99,25 @@ function chat_find_or_create_conversation(Mysql_ks $db, int $customerId): int
     return (int)$db->id();
 }
 
-function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null): void
+function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null, array $messageMeta = []): void
 {
     chat_ensure_message_interactions_runtime($db);
     $conversationId = chat_find_or_create_conversation($db, $customerId);
     $currentTime = function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s');
     $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
+    $messageType = trim((string)($messageMeta['message_type'] ?? ''));
+    $audioPath = trim((string)($messageMeta['audio_path'] ?? ''));
+    $audioMimeType = trim((string)($messageMeta['audio_mime_type'] ?? ''));
+    $audioDurationSeconds = isset($messageMeta['audio_duration_seconds']) ? (int)$messageMeta['audio_duration_seconds'] : 0;
+    $expiresAt = trim((string)($messageMeta['expires_at'] ?? ''));
+
+    if ($messageType === '') {
+        $messageType = $audioPath !== '' ? 'audio' : 'text';
+    }
 
     $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
-        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, 0, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'message_type', 'audio_path', 'audio_mime_type', 'audio_duration_seconds', 'expires_at', 'is_read', 'created_at'],
+        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, $messageType, $audioPath !== '' ? $audioPath : null, $audioMimeType !== '' ? $audioMimeType : null, $audioDurationSeconds > 0 ? $audioDurationSeconds : null, $expiresAt !== '' ? $expiresAt : null, 0, $currentTime],
         'support_messages'
     );
 
@@ -119,7 +128,15 @@ function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $mes
         $conversationId
     );
 
-    app_queue_live_chat_admin_notification($db, $conversationId, $customerId, $messageBody, $attachmentPath);
+    $previewText = chat_message_preview_text_from_row(
+        [
+            'message_body' => $messageBody,
+            'attachment_path' => $attachmentPath,
+            'message_type' => $messageType,
+            'audio_path' => $audioPath,
+        ]
+    );
+    app_queue_live_chat_admin_notification($db, $conversationId, $customerId, $previewText, $attachmentPath);
 }
 
 function chat_insert_support_message(Mysql_ks $db, int $customerId, string $messageBody, ?string $createdAt = null, ?int $replyToMessageId = null): void
@@ -144,7 +161,7 @@ function chat_insert_support_message(Mysql_ks $db, int $customerId, string $mess
     );
 }
 
-function chat_insert_customer_group_message(Mysql_ks $db, int $conversationId, int $customerId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null): bool
+function chat_insert_customer_group_message(Mysql_ks $db, int $conversationId, int $customerId, string $messageBody, ?string $attachmentPath = null, ?int $replyToMessageId = null, array $messageMeta = []): bool
 {
     chat_ensure_message_interactions_runtime($db);
     $conversation = chat_group_accessible_for_customer($db, $customerId, $conversationId);
@@ -159,9 +176,18 @@ function chat_insert_customer_group_message(Mysql_ks $db, int $conversationId, i
 
     $currentTime = chat_current_datetime();
     $replyToMessageId = $replyToMessageId !== null && $replyToMessageId > 0 ? $replyToMessageId : null;
+    $messageType = trim((string)($messageMeta['message_type'] ?? ''));
+    $audioPath = trim((string)($messageMeta['audio_path'] ?? ''));
+    $audioMimeType = trim((string)($messageMeta['audio_mime_type'] ?? ''));
+    $audioDurationSeconds = isset($messageMeta['audio_duration_seconds']) ? (int)$messageMeta['audio_duration_seconds'] : 0;
+    $expiresAt = trim((string)($messageMeta['expires_at'] ?? ''));
+
+    if ($messageType === '') {
+        $messageType = $audioPath !== '' ? 'audio' : 'text';
+    }
     $inserted = $db->insert(
-        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'is_read', 'created_at'],
-        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, 0, $currentTime],
+        ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'message_type', 'audio_path', 'audio_mime_type', 'audio_duration_seconds', 'expires_at', 'is_read', 'created_at'],
+        [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, $messageType, $audioPath !== '' ? $audioPath : null, $audioMimeType !== '' ? $audioMimeType : null, $audioDurationSeconds > 0 ? $audioDurationSeconds : null, $expiresAt !== '' ? $expiresAt : null, 0, $currentTime],
         'support_messages'
     );
 
@@ -208,22 +234,75 @@ function chat_delete_uploaded_file(?string $attachmentPath): void
         return;
     }
 
-    foreach (app_chat_attachment_candidate_paths($attachmentPath) as $filePath) {
-        if (is_file($filePath)) {
-            @unlink($filePath);
-        }
+    app_chat_delete_attachment_file($attachmentPath);
+}
+
+function chat_store_uploaded_voice_message(array $file, int $customerId, int $durationSeconds = 0): ?array
+{
+    $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+    $tmpPath = (string)($file['tmp_name'] ?? '');
+    $originalName = (string)($file['name'] ?? '');
+    $declaredMimeType = trim((string)($file['type'] ?? ''));
+    $fileSize = isset($file['size']) ? (int)$file['size'] : 0;
+    $allowedMimeMap = chat_voice_message_mime_map();
+    $allowedExtensionMap = chat_voice_message_extension_map();
+    $originalExtension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    $durationSeconds = max(0, $durationSeconds);
+
+    if (
+        $uploadError !== UPLOAD_ERR_OK
+        || !is_uploaded_file($tmpPath)
+        || $fileSize <= 0
+        || $fileSize > chat_voice_message_max_file_bytes()
+        || $durationSeconds <= 0
+        || $durationSeconds > chat_voice_message_max_duration_seconds()
+    ) {
+        return null;
     }
+
+    $resolvedMimeType = $declaredMimeType !== '' ? strtolower($declaredMimeType) : '';
+    if ($resolvedMimeType === '' && function_exists('mime_content_type')) {
+        $resolvedMimeType = strtolower((string)mime_content_type($tmpPath));
+    }
+    if ($resolvedMimeType !== '' && isset($allowedMimeMap[$resolvedMimeType])) {
+        $safeExtension = $allowedMimeMap[$resolvedMimeType];
+    } elseif ($originalExtension !== '' && isset($allowedExtensionMap[$originalExtension])) {
+        $safeExtension = $originalExtension;
+        $resolvedMimeType = $allowedExtensionMap[$originalExtension];
+    } else {
+        return null;
+    }
+
+    $uploadDirectory = chat_audio_upload_directory();
+    if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+        return null;
+    }
+
+    $fileName = 'voice_' . $customerId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $safeExtension;
+    $destinationPath = $uploadDirectory . '/' . $fileName;
+    if (!move_uploaded_file($tmpPath, $destinationPath)) {
+        return null;
+    }
+
+    return [
+        'message_type' => 'audio',
+        'audio_path' => '/uploads/chat/audio/' . $fileName,
+        'audio_mime_type' => $resolvedMimeType,
+        'audio_duration_seconds' => $durationSeconds,
+        'expires_at' => chat_voice_message_expires_at(),
+    ];
 }
 
 function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, int $messageId): bool
 {
+    chat_ensure_message_interactions_runtime($db);
     if ($messageId <= 0) {
         return false;
     }
 
     if (app_uses_v2_schema($db)) {
         $row = $db->select_user(
-            "SELECT support_messages.id, support_messages.attachment_path, support_messages.created_at, support_messages.sender_type, support_messages.customer_id AS message_customer_id, support_conversations.conversation_type, support_conversations.id AS conversation_id, support_conversations.group_created_by_customer_id, support_conversation_members.invite_status
+            "SELECT support_messages.id, support_messages.attachment_path, support_messages.audio_path, support_messages.created_at, support_messages.sender_type, support_messages.customer_id AS message_customer_id, support_conversations.conversation_type, support_conversations.id AS conversation_id, support_conversations.group_created_by_customer_id, support_conversation_members.invite_status
              FROM support_messages
              INNER JOIN support_conversations
                 ON support_conversations.id = support_messages.conversation_id
@@ -256,6 +335,7 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
 
         if (chat_is_group_like_conversation_type((string)($row['conversation_type'] ?? ''))) {
             chat_delete_uploaded_file(isset($row['attachment_path']) ? (string)$row['attachment_path'] : '');
+            chat_delete_uploaded_file(isset($row['audio_path']) ? (string)$row['audio_path'] : '');
             if (schema_object_exists($db, 'support_message_reactions')) {
                 $db->query("DELETE FROM support_message_reactions WHERE message_id = {$messageId}");
             }
@@ -271,6 +351,7 @@ function chat_delete_customer_message_if_allowed(Mysql_ks $db, int $customerId, 
         }
 
         chat_delete_uploaded_file(isset($row['attachment_path']) ? (string)$row['attachment_path'] : '');
+        chat_delete_uploaded_file(isset($row['audio_path']) ? (string)$row['audio_path'] : '');
         if (schema_object_exists($db, 'support_message_reactions')) {
             $db->query("DELETE FROM support_message_reactions WHERE message_id = {$messageId}");
         }
@@ -579,6 +660,7 @@ if (
     || $action === 'send'
     || $action === 'link_preview'
     || $action === 'upload'
+    || $action === 'voice_upload'
     || $action === 'toggle_reaction'
     || $action === 'delete_message'
     || $action === 'faq_prompt'
@@ -626,6 +708,7 @@ if (
     && (
         $action === 'send'
         || $action === 'upload'
+        || $action === 'voice_upload'
         || $action === 'toggle_reaction'
         || !empty($_FILES['file']['tmp_name'])
     )
@@ -1028,10 +1111,40 @@ if (app_uses_v2_schema($db)) {
         }
     }
 
+    if ($action === 'voice_upload' && !empty($_FILES['voice_file']['tmp_name'])) {
+        if ($customerHasFullMessenger && $requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
+            chat_json_response(['ok' => false, 'message' => 'Voice messages are only available in live chat right now.']);
+        }
+
+        chat_require_rate_limit_slot($responseFormat);
+        $durationSeconds = isset($_POST['audio_duration_seconds']) ? (int)$_POST['audio_duration_seconds'] : 0;
+        $voicePayload = chat_store_uploaded_voice_message($_FILES['voice_file'], $currentCustomerId, $durationSeconds);
+        if ($voicePayload === null) {
+            if ($responseFormat === 'json') {
+                chat_json_response(['ok' => false, 'message' => 'Voice message upload failed.']);
+            }
+            echo '<p>Voice message upload failed.</p>';
+            exit;
+        }
+
+        $supportConversationId = chat_find_or_create_conversation($db, $currentCustomerId);
+        $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
+        $replyToMessageId = chat_validate_reply_target($db, $supportConversationId, $replyToMessageId) ?? 0;
+        chat_insert_customer_message(
+            $db,
+            $currentCustomerId,
+            '',
+            null,
+            $replyToMessageId > 0 ? $replyToMessageId : null,
+            $voicePayload
+        );
+        chat_register_customer_message_sent();
+    }
+
     if ($action === 'faq_prompt' && isset($selectedFaqPrompt)) {
         chat_require_rate_limit_slot($responseFormat);
         chat_insert_customer_message($db, $currentCustomerId, (string)$selectedFaqPrompt['title']);
-        chat_insert_support_message($db, $currentCustomerId, (string)$selectedFaqPrompt['answer'], date('Y-m-d H:i:s', time() + 3));
+        chat_insert_support_message($db, $currentCustomerId, (string)$selectedFaqPrompt['answer']);
         chat_register_customer_message_sent();
     }
 
@@ -1087,7 +1200,7 @@ if (app_uses_v2_schema($db)) {
         );
         $db->insert(
             ['user1', 'user2', 'tresc', 'data', 'status'],
-            [chat_first_admin_id($db), $currentCustomerId, (string)$selectedFaqPrompt['answer'], date('Y-m-d H:i:s', time() + 3), 1],
+            [chat_first_admin_id($db), $currentCustomerId, (string)$selectedFaqPrompt['answer'], date('Y-m-d H:i:s'), 1],
             'produkty_chat'
         );
         chat_register_customer_message_sent();

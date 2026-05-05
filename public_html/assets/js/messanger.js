@@ -17,6 +17,16 @@
 		fetchInFlight: false,
 		sendInFlight: false,
 		uploadInFlight: false,
+		voiceRecording: false,
+		voiceRecorder: null,
+		voiceStream: null,
+		voiceChunks: [],
+		voiceRecordStartedAt: 0,
+		voiceRecordTimer: null,
+		voicePendingPointer: false,
+		voiceShouldStopAfterStart: false,
+		voiceStartInFlight: false,
+		voicePointerMode: false,
 		lastMessageId: 0,
 		lastRenderedHtml: '',
 		faqPendingKey: '',
@@ -94,6 +104,18 @@
 
 		input: function () {
 			return $('#tresc');
+		},
+
+		voiceButton: function () {
+			return $('[data-messenger-voice-preview]');
+		},
+
+		voiceStatus: function () {
+			return $('#messenger_voice_status');
+		},
+
+		voiceTimerLabel: function () {
+			return $('#messenger_voice_timer');
 		},
 
 		alertBox: function () {
@@ -1506,6 +1528,10 @@
 				return;
 			}
 
+			if (this.voiceRecording || this.voiceStartInFlight || this.uploadInFlight) {
+				return;
+			}
+
 			this.resellerViewMode = 'list';
 			this.closeMessageActions();
 			this.setConversationLoadingState(false);
@@ -1568,6 +1594,255 @@
 			}, 280);
 		},
 
+		captureActiveAudioPlayers: function () {
+			var players = {};
+			this.chatBox().find('[data-message-id]').each(function () {
+				var $message = $(this);
+				var messageId = String($message.attr('data-message-id') || '');
+				var audio = $message.find('[data-chat-audio-player]').get(0);
+				if (!messageId || !audio || !audio.currentSrc) {
+					return;
+				}
+				players[messageId] = {
+					node: audio,
+					src: audio.currentSrc,
+					currentTime: audio.currentTime || 0,
+					wasPlaying: !audio.paused && !audio.ended
+				};
+			});
+			return players;
+		},
+
+		restoreActiveAudioPlayers: function (players) {
+			var self = this;
+			if (!players) {
+				return;
+			}
+
+			$.each(players, function (messageId, state) {
+				var $message = self.chatBox().find('[data-message-id="' + String(messageId) + '"]').first();
+				var replacement = $message.find('[data-chat-audio-player]').get(0);
+				var restoredNode;
+				if (!$message.length || !replacement || !state || !state.node) {
+					return;
+				}
+				if (replacement.currentSrc && state.src && replacement.currentSrc !== state.src) {
+					return;
+				}
+
+				restoredNode = state.node;
+				try {
+					restoredNode.currentTime = state.currentTime || 0;
+				} catch (error) {
+					// ignore currentTime restore failures
+				}
+				replacement.parentNode.replaceChild(restoredNode, replacement);
+				if (state.wasPlaying && typeof restoredNode.play === 'function') {
+					var playResult = restoredNode.play();
+					if (playResult && typeof playResult.catch === 'function') {
+						playResult.catch(function () {
+							return undefined;
+						});
+					}
+				}
+			});
+		},
+
+		voiceFeatureEnabled: function () {
+			return String(window.MESSENGER_BOOTSTRAP.voiceEnabled || '0') === '1';
+		},
+
+		isDesktopVoiceToggleMode: function () {
+			return !!(window.matchMedia && window.matchMedia('(pointer:fine)').matches);
+		},
+
+		resetVoiceRecordingState: function () {
+			window.clearInterval(this.voiceRecordTimer);
+			this.voiceRecordTimer = null;
+			this.voiceRecording = false;
+			this.voiceStartInFlight = false;
+			this.voicePendingPointer = false;
+			this.voiceShouldStopAfterStart = false;
+			this.voicePointerMode = false;
+			this.voiceChunks = [];
+			this.voiceRecorder = null;
+			this.voiceRecordStartedAt = 0;
+			if (this.voiceStream) {
+				(this.voiceStream.getTracks() || []).forEach(function (track) {
+					track.stop();
+				});
+			}
+			this.voiceStream = null;
+			this.voiceStatus().prop('hidden', true).removeClass('is-recording');
+			this.voiceTimerLabel().text('0:00');
+			this.updateComposerAvailability();
+		},
+
+		updateVoiceTimer: function () {
+			var maxDurationSeconds = parseInt(window.MESSENGER_BOOTSTRAP.voiceMaxDurationSeconds || 30, 10) || 30;
+			var elapsedSeconds = 0;
+			if (this.voiceRecordStartedAt > 0) {
+				elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.voiceRecordStartedAt) / 1000));
+			}
+			this.voiceTimerLabel().text(Math.floor(elapsedSeconds / 60) + ':' + String(elapsedSeconds % 60).padStart(2, '0'));
+			if (elapsedSeconds >= maxDurationSeconds && this.voiceRecorder && this.voiceRecorder.state === 'recording') {
+				this.stopVoiceRecording(true);
+			}
+		},
+
+		startVoiceRecording: function () {
+			var self = this;
+			if (!this.voiceFeatureEnabled()) {
+				this.showNotice($('[data-messenger-voice-preview]').attr('data-disabled-tooltip') || 'Opcja nagrywania wiadomości głosowych jest obecnie wyłączona.');
+				return false;
+			}
+			if (this.voiceRecording || this.voiceStartInFlight || this.sendInFlight || this.uploadInFlight || !this.activeCanSend || this.activeConversationType !== 'live_chat') {
+				return false;
+			}
+			if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function' || typeof window.MediaRecorder === 'undefined') {
+				this.showNotice(window.MESSENGER_BOOTSTRAP.voiceUnsupportedMessage || 'Voice messages are not supported in this browser.');
+				return false;
+			}
+
+			this.voiceStartInFlight = true;
+			this.voicePendingPointer = true;
+			this.voiceShouldStopAfterStart = false;
+
+			navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+				var preferredMimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
+				var recorderOptions = {};
+				var mimeType = '';
+				var recorder;
+				var stopHandled = false;
+
+				preferredMimeTypes.some(function (candidate) {
+					if (window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported(candidate)) {
+						mimeType = candidate;
+						return true;
+					}
+					return false;
+				});
+				if (mimeType) {
+					recorderOptions.mimeType = mimeType;
+				}
+
+				recorder = new window.MediaRecorder(stream, recorderOptions);
+				self.voiceStream = stream;
+				self.voiceRecorder = recorder;
+				self.voiceChunks = [];
+				self.voiceRecording = true;
+				self.voiceStartInFlight = false;
+				self.voiceRecordStartedAt = Date.now();
+				self.voiceStatus().prop('hidden', false).addClass('is-recording');
+				self.updateVoiceTimer();
+				window.clearInterval(self.voiceRecordTimer);
+				self.voiceRecordTimer = window.setInterval(function () {
+					self.updateVoiceTimer();
+				}, 250);
+				self.updateComposerAvailability();
+
+				recorder.addEventListener('dataavailable', function (event) {
+					if (event.data && event.data.size > 0) {
+						self.voiceChunks.push(event.data);
+					}
+				});
+				recorder.addEventListener('stop', function () {
+					var durationSeconds = Math.max(1, Math.round((Date.now() - self.voiceRecordStartedAt) / 1000));
+					var blob;
+					var fileName;
+					stopHandled = true;
+					if (!self.voiceChunks.length) {
+						self.resetVoiceRecordingState();
+						return;
+					}
+					blob = new Blob(self.voiceChunks, { type: recorder.mimeType || 'audio/webm' });
+					fileName = 'voice-message.' + ((blob.type || '').indexOf('ogg') >= 0 ? 'ogg' : ((blob.type || '').indexOf('mp4') >= 0 ? 'm4a' : 'webm'));
+					self.uploadVoiceMessage(blob, fileName, durationSeconds);
+					self.resetVoiceRecordingState();
+				});
+				recorder.addEventListener('error', function () {
+					if (stopHandled || self.voiceChunks.length > 0 || (self.voiceRecorder && self.voiceRecorder.state === 'inactive')) {
+						return;
+					}
+					self.showNotice(window.MESSENGER_BOOTSTRAP.voiceRecordFailedMessage || 'Voice message recording failed.');
+					self.resetVoiceRecordingState();
+				});
+				recorder.start();
+				if (self.voiceShouldStopAfterStart) {
+					self.stopVoiceRecording(false);
+				}
+			}).catch(function () {
+				self.voiceStartInFlight = false;
+				self.voicePendingPointer = false;
+				self.showNotice(window.MESSENGER_BOOTSTRAP.voicePermissionDeniedMessage || 'Microphone access was denied.');
+				self.updateComposerAvailability();
+			});
+
+			return false;
+		},
+
+		stopVoiceRecording: function (keepPendingPointer) {
+			if (!keepPendingPointer) {
+				this.voicePendingPointer = false;
+			}
+			if (this.voiceStartInFlight && !this.voiceRecording) {
+				this.voiceShouldStopAfterStart = true;
+				return false;
+			}
+			if (!this.voiceRecorder || this.voiceRecorder.state !== 'recording') {
+				return false;
+			}
+			this.voiceRecorder.stop();
+			return false;
+		},
+
+		uploadVoiceMessage: function (blob, fileName, durationSeconds) {
+			var self = this;
+			var cfg = this.config();
+			var formData;
+
+			if (!cfg.userId || !blob || this.sendInFlight || this.uploadInFlight) {
+				return false;
+			}
+
+			this.uploadInFlight = true;
+			formData = new FormData();
+			formData.append('action', 'voice_upload');
+			formData.append('format', 'json');
+			formData.append('conversation_id', String(this.activeConversationId || 0));
+			formData.append('conversation_type', String(this.activeConversationType || 'live_chat'));
+			formData.append('reply_to_message_id', String(this.replyToMessageId || 0));
+			formData.append('audio_duration_seconds', String(durationSeconds || 0));
+			formData.append('_csrf', cfg.csrfToken);
+			formData.append('voice_file', blob, fileName || 'voice-message.webm');
+
+			$.ajax({
+				type: 'POST',
+				processData: false,
+				contentType: false,
+				url: cfg.endpoint,
+				dataType: 'json',
+				data: formData
+			}).done(function (payload) {
+				if (payload && payload.ok) {
+					self.clearReplyTarget();
+					self.renderPayload(payload, {
+						force: true,
+						scrollToBottom: true
+					});
+				} else if (payload && payload.message) {
+					self.showNotice(payload.message);
+				}
+			}).fail(function () {
+				self.showNotice(window.MESSENGER_BOOTSTRAP.voiceUploadFailedMessage || 'Voice message upload failed.');
+			}).always(function () {
+				self.uploadInFlight = false;
+				self.updateComposerAvailability();
+			});
+
+			return false;
+		},
+
 		updateComposerAvailability: function () {
 			var writeMessagePlaceholder = window.MESSENGER_BOOTSTRAP.writeMessagePlaceholder || 'Write message...';
 			var readOnlyPlaceholder = window.MESSENGER_BOOTSTRAP.groupReadOnlyPlaceholder || 'This group is read only.';
@@ -1581,6 +1856,7 @@
 			var $input = this.input();
 			var $sendButton = $('#btn-chat');
 			var $uploadButton = $('[data-messenger-upload-open]');
+			var $voiceButton = this.voiceButton();
 			var activeType = String(this.contentRoot().attr('data-chat-active-conversation-type') || '');
 			var activeDirectStatus = String(this.contentRoot().attr('data-chat-active-conversation-direct-status') || 'none');
 			var pendingMemberCount = parseInt(this.contentRoot().attr('data-chat-active-conversation-pending-member-count') || '0', 10) || 0;
@@ -1595,6 +1871,26 @@
 			$input.prop('disabled', disabled);
 			$sendButton.prop('disabled', disabled);
 			$uploadButton.prop('disabled', disabled);
+			if ($voiceButton.length) {
+				var featureEnabled = this.voiceFeatureEnabled();
+				var canRecordVoice = featureEnabled && !disabled && activeType === 'live_chat' && !!window.MediaRecorder && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+				var disabledVoiceTooltip = String($voiceButton.attr('data-disabled-tooltip') || '');
+				var unavailableConversationLabel = window.MESSENGER_BOOTSTRAP.voiceUnavailableConversationLabel || 'Voice messages are available only in Support Chat.';
+				var activeVoiceLabel = this.isDesktopVoiceToggleMode()
+					? (this.voiceRecording
+						? (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStopLabel || 'Click to stop recording')
+						: (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStartLabel || 'Click to start recording'))
+					: (window.MESSENGER_BOOTSTRAP.voiceRecordLabel || 'Hold to record a voice message');
+				var voiceLabel = !featureEnabled
+					? disabledVoiceTooltip
+					: (activeType !== 'live_chat' ? unavailableConversationLabel : activeVoiceLabel);
+				$voiceButton.toggleClass('is-disabled', !canRecordVoice);
+				$voiceButton.toggleClass('is-recording', !!this.voiceRecording);
+				$voiceButton.prop('disabled', !canRecordVoice && !this.voiceRecording);
+				$voiceButton.attr('aria-disabled', !canRecordVoice ? 'true' : 'false');
+				$voiceButton.attr('title', voiceLabel);
+				$voiceButton.attr('aria-label', voiceLabel);
+			}
 
 			if (isBlockedCustomer) {
 				$input.attr('placeholder', blockedPlaceholder);
@@ -2513,6 +2809,7 @@
 			var previousMetrics = this.getScrollMetrics();
 			var previousConversationId = this.activeConversationId;
 			var previousMessageIds = this.captureRenderedMessageIds();
+			var activeAudioPlayers = this.captureActiveAudioPlayers();
 			var keepBottom = false;
 			var preservePrependOffset = false;
 			var previousScrollHeight = previousMetrics ? previousMetrics.scrollHeight : 0;
@@ -2542,6 +2839,7 @@
 			if (payload.html !== this.lastRenderedHtml || options.force) {
 				this.chatBox().html(payload.html);
 				this.lastRenderedHtml = payload.html;
+				this.restoreActiveAudioPlayers(activeAudioPlayers);
 				this.closeMessageActions();
 				this.closeGroupMenu();
 				this.closeGroupSettingsMenu();
@@ -2567,10 +2865,6 @@
 				if (options.animateConversation) {
 					this.playConversationEntryAnimation();
 				}
-				if (this.faqPendingKey) {
-					this.showTypingIndicator();
-				}
-
 				if (preservePrependOffset) {
 					var currentMetrics = this.getScrollMetrics();
 					if (currentMetrics && currentMetrics.element) {
@@ -2614,7 +2908,7 @@
 			var requestData;
 			options = options || {};
 
-			if (!cfg.userId || this.fetchInFlight || this.sendInFlight || this.uploadInFlight || this.faqPendingKey) {
+			if (!cfg.userId || this.fetchInFlight || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || this.voiceRecording || this.voiceStartInFlight) {
 				return $.Deferred().resolve().promise();
 			}
 
@@ -2677,7 +2971,7 @@
 			var previewUrl = this.linkPreviewData && this.linkPreviewUrl === detectedUrl && this.linkPreviewDismissedUrl !== detectedUrl ? this.linkPreviewUrl : '';
 			var previewRemoved = detectedUrl && this.linkPreviewDismissedUrl === detectedUrl ? 1 : 0;
 
-			if (!cfg.userId || !message || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || !this.activeCanSend) {
+			if (!cfg.userId || !message || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || this.voiceRecording || this.voiceStartInFlight || !this.activeCanSend) {
 				return false;
 			}
 
@@ -2780,7 +3074,7 @@
 			var $faqButton = $('[data-chat-faq-key="' + faqKey + '"]').first();
 			var faqQuestionText = $.trim($faqButton.text());
 
-			if (!faqKey || this.fetchInFlight || this.sendInFlight || this.uploadInFlight || this.faqPendingKey) {
+			if (!faqKey || this.fetchInFlight || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || this.voiceRecording || this.voiceStartInFlight) {
 				return false;
 			}
 
@@ -2788,25 +3082,29 @@
 				return false;
 			}
 
+			this.faqPendingKey = faqKey;
 			this.setFaqButtonsDisabled(true);
 
 			this.requestFaqAction('faq_prompt', faqKey).done(function (payload) {
-				self.faqPendingKey = faqKey;
-				self.startTypedReply(payload && payload.faq_answer_text ? payload.faq_answer_text : '');
-				window.clearTimeout(self.faqReplyTimer);
-				self.faqReplyTimer = window.setTimeout(function () {
+				if (!payload || !payload.ok) {
 					self.faqPendingKey = '';
-					var shouldKeepBottom = self.shouldAutoScrollDuringFaqReply();
+					self.setFaqButtonsDisabled(false);
 					self.fetch({
 						force: true,
-						scrollToBottom: shouldKeepBottom
-					}).always(function () {
-						self.setFaqButtonsDisabled(false);
+						scrollToBottom: true
 					});
-				}, 3100);
+					return;
+				}
+				self.faqPendingKey = '';
+				self.setFaqButtonsDisabled(false);
+				self.scheduleSyncAfterSend();
 			}).fail(function () {
 				self.faqPendingKey = '';
 				self.setFaqButtonsDisabled(false);
+				self.fetch({
+					force: true,
+					scrollToBottom: true
+				});
 			});
 
 			return false;
@@ -2858,7 +3156,7 @@
 			var cfg = this.config();
 			var fileInput = document.getElementById('file');
 
-			if (!cfg.userId || !fileInput || !fileInput.files || !fileInput.files[0] || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || !this.activeCanSend) {
+			if (!cfg.userId || !fileInput || !fileInput.files || !fileInput.files[0] || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || this.voiceRecording || this.voiceStartInFlight || !this.activeCanSend) {
 				return false;
 			}
 
@@ -2984,6 +3282,11 @@
 			var nextConversationId = parseInt(conversationId || 0, 10) || 0;
 			var nextConversationType = String(conversationType || 'live_chat');
 			var self = this;
+
+			if (this.voiceRecording || this.voiceStartInFlight || this.uploadInFlight) {
+				this.showNotice(window.MESSENGER_BOOTSTRAP.voiceRecordBusyMessage || 'Finish sending the voice message first.');
+				return false;
+			}
 
 			this.activeConversationId = nextConversationId;
 			this.activeConversationType = nextConversationType;
@@ -3441,6 +3744,44 @@
 			$(document).on('click.messengerUi', '#button_upload2', function (event) {
 				event.preventDefault();
 				self.uploadAttachment();
+			});
+
+			$(document).on('pointerdown.messengerUi', '[data-messenger-voice-preview]', function (event) {
+				if (self.isDesktopVoiceToggleMode()) {
+					return;
+				}
+				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				self.voicePointerMode = true;
+				self.startVoiceRecording();
+			});
+
+			$(document).on('pointerup.messengerUi pointercancel.messengerUi', function (event) {
+				if (self.isDesktopVoiceToggleMode() || !self.voicePointerMode) {
+					return;
+				}
+				if (!self.voiceRecording && !self.voiceStartInFlight) {
+					return;
+				}
+				self.stopVoiceRecording(false);
+			});
+
+			$(document).on('click.messengerUi', '[data-messenger-voice-preview]', function (event) {
+				if (!self.isDesktopVoiceToggleMode()) {
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
+					return false;
+				}
+				if (self.voiceRecording || self.voiceStartInFlight) {
+					return self.stopVoiceRecording(false);
+				}
+				return self.startVoiceRecording();
 			});
 
 			$(document).on('visibilitychange.messengerUi', function () {
