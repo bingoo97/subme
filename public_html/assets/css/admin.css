@@ -2255,8 +2255,12 @@ body.admin-login-page{
 }
 
 .admin-chat-inbox__composer-voice.is-recording{
-    background:#111;
-    border-color:#111;
+    background:#d10d5a;
+    border-color:#d10d5a;
+    color:#fff;
+}
+
+.admin-chat-inbox__composer-voice.is-recording i{
     color:#fff;
 }
 
@@ -2387,8 +2391,7 @@ body.admin-login-page{
 	max-width:none;
 	min-width:0;
 	min-height:34px;
-	border-radius:4px;
-    border:1px solid #333;
+	border-radius: 999px;
 }
 
 .admin-chat-conversation__audio-duration{

@@ -3932,12 +3932,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 label = root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available only in direct live chat with the user.';
             } else if (!mediaSupported) {
                 label = root.getAttribute('data-chat-voice-unsupported') || 'This browser does not support voice messages.';
-            } else if (isDesktopVoiceToggleMode()) {
+            } else {
                 label = voiceRecording
                     ? (root.getAttribute('data-chat-voice-stop') || 'Click to stop recording')
                     : (root.getAttribute('data-chat-voice-start') || 'Click to start recording');
-            } else {
-                label = root.getAttribute('data-chat-voice-hold') || 'Hold to record a voice message';
             }
 
             voiceButton.classList.toggle('is-disabled', !canRecord && !voiceRecording);
@@ -3945,6 +3943,28 @@ document.addEventListener('DOMContentLoaded', function () {
             voiceButton.setAttribute('aria-disabled', !canRecord && !voiceRecording ? 'true' : 'false');
             voiceButton.setAttribute('title', label);
             voiceButton.setAttribute('aria-label', label);
+            updateVoiceButtonIcon();
+        }
+
+        function updateVoiceButtonIcon() {
+            var icon;
+
+            if (!voiceButton) {
+                return;
+            }
+
+            icon = voiceButton.querySelector('i');
+            if (!icon) {
+                return;
+            }
+
+            icon.classList.remove('bi-mic-fill', 'bi-stop-fill', 'bi-stop-circle-fill');
+            if (voiceRecording) {
+                icon.classList.add('bi-stop-circle-fill');
+                return;
+            }
+
+            icon.classList.add('bi-mic-fill');
         }
 
         function resetVoiceRecordingState() {
@@ -7099,25 +7119,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         if (voiceButton) {
-            voiceButton.addEventListener('pointerdown', function (event) {
-                if (isDesktopVoiceToggleMode()) {
-                    return;
-                }
-                if (voiceButton.classList.contains('is-disabled') || voiceButton.getAttribute('aria-disabled') === 'true') {
-                    return;
-                }
-                event.preventDefault();
-                event.stopPropagation();
-                voicePointerMode = true;
-                startVoiceRecording();
-            });
-
             voiceButton.addEventListener('click', function (event) {
-                if (!isDesktopVoiceToggleMode()) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    return false;
-                }
                 event.preventDefault();
                 event.stopPropagation();
                 if (voiceButton.classList.contains('is-disabled') || voiceButton.getAttribute('aria-disabled') === 'true') {
@@ -7129,28 +7131,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 return startVoiceRecording();
             });
         }
-
-        doc.addEventListener('pointerup', function () {
-            if (isDesktopVoiceToggleMode() || !voicePointerMode) {
-                return;
-            }
-            if (!voiceRecording && !voiceStartInFlight) {
-                voicePointerMode = false;
-                return;
-            }
-            stopVoiceRecording(false);
-        });
-
-        doc.addEventListener('pointercancel', function () {
-            if (isDesktopVoiceToggleMode() || !voicePointerMode) {
-                return;
-            }
-            if (!voiceRecording && !voiceStartInFlight) {
-                voicePointerMode = false;
-                return;
-            }
-            stopVoiceRecording(false);
-        });
 
         updateVoiceComposerState();
 

@@ -1649,6 +1649,21 @@
 			});
 		},
 
+		updateVoiceButtonIcon: function () {
+			var $icon = this.voiceButton().find('i').first();
+			if (!$icon.length) {
+				return;
+			}
+
+			$icon.removeClass('fa-microphone fa-stop fa-stop-circle');
+			if (this.voiceRecording) {
+				$icon.addClass('fa fa-stop-circle');
+				return;
+			}
+
+			$icon.addClass('fa fa-microphone');
+		},
+
 		prepareAudioPlayers: function () {
 			this.chatBox().find('[data-chat-audio-player]').each(function () {
 				var audio = this;
@@ -1973,11 +1988,9 @@
 				var canRecordVoice = featureEnabled && !disabled && activeType === 'live_chat' && !!window.MediaRecorder && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 				var disabledVoiceTooltip = String($voiceButton.attr('data-disabled-tooltip') || '');
 				var unavailableConversationLabel = window.MESSENGER_BOOTSTRAP.voiceUnavailableConversationLabel || 'Voice messages are available only in Support Chat.';
-				var activeVoiceLabel = this.isDesktopVoiceToggleMode()
-					? (this.voiceRecording
-						? (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStopLabel || 'Click to stop recording')
-						: (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStartLabel || 'Click to start recording'))
-					: (window.MESSENGER_BOOTSTRAP.voiceRecordLabel || 'Hold to record a voice message');
+				var activeVoiceLabel = this.voiceRecording
+					? (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStopLabel || 'Click to stop recording')
+					: (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStartLabel || 'Click to start recording');
 				var voiceLabel = !featureEnabled
 					? disabledVoiceTooltip
 					: (activeType !== 'live_chat' ? unavailableConversationLabel : activeVoiceLabel);
@@ -1987,6 +2000,7 @@
 				$voiceButton.attr('aria-disabled', !canRecordVoice ? 'true' : 'false');
 				$voiceButton.attr('title', voiceLabel);
 				$voiceButton.attr('aria-label', voiceLabel);
+				this.updateVoiceButtonIcon();
 			}
 
 			if (isBlockedCustomer) {
@@ -3844,76 +3858,13 @@
 				self.uploadAttachment();
 			});
 
-			$(document).on('pointerup.messengerUi pointercancel.messengerUi', function (event) {
-				if (self.isDesktopVoiceToggleMode() || !self.voicePointerMode) {
-					return;
-				}
-				if (!self.voiceRecording && !self.voiceStartInFlight) {
-					return;
-				}
-				self.stopVoiceRecording(false);
-			});
-
-			$(document).on('touchend.messengerUi touchcancel.messengerUi mouseup.messengerUi', function () {
-				if (self.isDesktopVoiceToggleMode() || !self.voicePointerMode) {
-					return;
-				}
-				if (!self.voiceRecording && !self.voiceStartInFlight) {
-					self.voicePointerMode = false;
-					return;
-				}
-				self.stopVoiceRecording(false);
-			});
-
-			if (this._voiceButtonNode && this._boundVoicePointerDownHandler) {
-				this._voiceButtonNode.removeEventListener('pointerdown', this._boundVoicePointerDownHandler);
-			}
-			if (this._voiceButtonNode && this._boundVoiceTouchStartHandler) {
-				this._voiceButtonNode.removeEventListener('touchstart', this._boundVoiceTouchStartHandler);
-				this._voiceButtonNode.removeEventListener('mousedown', this._boundVoiceTouchStartHandler);
-			}
 			if (this._voiceButtonNode && this._boundVoiceClickHandler) {
 				this._voiceButtonNode.removeEventListener('click', this._boundVoiceClickHandler);
 			}
 
 			this._voiceButtonNode = this.voiceButton().get(0) || null;
-			this._boundVoicePointerDownHandler = function (event) {
-				var $button = self.voiceButton();
-				if (self.isDesktopVoiceToggleMode()) {
-					return;
-				}
-				if (!$button.length || $button.hasClass('is-disabled') || $button.prop('disabled')) {
-					return;
-				}
-				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				self.voicePointerMode = true;
-				self.startVoiceRecording();
-			};
-			this._boundVoiceTouchStartHandler = function (event) {
-				var $button = self.voiceButton();
-				if (self.isDesktopVoiceToggleMode()) {
-					return;
-				}
-				if (!$button.length || $button.hasClass('is-disabled') || $button.prop('disabled')) {
-					return;
-				}
-				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				self.voicePointerMode = true;
-				self.startVoiceRecording();
-			};
 			this._boundVoiceClickHandler = function (event) {
 				var $button = self.voiceButton();
-				if (!self.isDesktopVoiceToggleMode()) {
-					return;
-				}
 				event.preventDefault();
 				event.stopPropagation();
 				if (!$button.length || $button.hasClass('is-disabled') || $button.prop('disabled')) {
@@ -3926,9 +3877,6 @@
 			};
 
 			if (this._voiceButtonNode) {
-				this._voiceButtonNode.addEventListener('pointerdown', this._boundVoicePointerDownHandler);
-				this._voiceButtonNode.addEventListener('touchstart', this._boundVoiceTouchStartHandler, { passive: false });
-				this._voiceButtonNode.addEventListener('mousedown', this._boundVoiceTouchStartHandler);
 				this._voiceButtonNode.addEventListener('click', this._boundVoiceClickHandler);
 			}
 
