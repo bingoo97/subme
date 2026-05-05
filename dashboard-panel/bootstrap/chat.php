@@ -149,6 +149,110 @@ if (!function_exists('chat_voice_message_retention_seconds')) {
     }
 }
 
+if (!function_exists('chat_voice_message_stream_url')) {
+    function chat_voice_message_stream_url(int $messageId, string $context = 'customer'): string
+    {
+        $messageId = max(0, $messageId);
+        if ($messageId <= 0) {
+            return '';
+        }
+
+        if ($context === 'admin') {
+            return '/admin/chat.php?action=voice_file&message_id=' . $messageId;
+        }
+
+        return 'check_chat.php?action=voice_file&message_id=' . $messageId;
+    }
+}
+
+if (!function_exists('chat_stream_audio_response')) {
+    function chat_stream_audio_response(string $absolutePath, string $mimeType = 'audio/webm'): void
+    {
+        $absolutePath = trim($absolutePath);
+        $mimeType = trim($mimeType) !== '' ? trim($mimeType) : 'application/octet-stream';
+
+        if ($absolutePath === '' || !is_file($absolutePath) || !is_readable($absolutePath)) {
+            http_response_code(404);
+            exit;
+        }
+
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
+
+        $fileSize = filesize($absolutePath);
+        $start = 0;
+        $end = max(0, $fileSize - 1);
+        $statusCode = 200;
+
+        if (isset($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/i', (string)$_SERVER['HTTP_RANGE'], $matches)) {
+            $rangeStart = $matches[1] !== '' ? (int)$matches[1] : null;
+            $rangeEnd = $matches[2] !== '' ? (int)$matches[2] : null;
+
+            if ($rangeStart === null && $rangeEnd !== null) {
+                $rangeStart = max(0, $fileSize - $rangeEnd);
+                $rangeEnd = $end;
+            } else {
+                if ($rangeStart === null) {
+                    $rangeStart = 0;
+                }
+                if ($rangeEnd === null || $rangeEnd > $end) {
+                    $rangeEnd = $end;
+                }
+            }
+
+            if ($rangeStart > $rangeEnd || $rangeStart < 0 || $rangeStart > $end) {
+                header('Content-Range: bytes */' . $fileSize);
+                http_response_code(416);
+                exit;
+            }
+
+            $start = $rangeStart;
+            $end = $rangeEnd;
+            $statusCode = 206;
+        }
+
+        $contentLength = ($end - $start) + 1;
+        if (function_exists('header_remove')) {
+            @header_remove('Content-Type');
+        }
+        http_response_code($statusCode);
+        header('Content-Type: ' . $mimeType);
+        header('Content-Length: ' . $contentLength);
+        header('Accept-Ranges: bytes');
+        header('Cache-Control: private, max-age=86400');
+        header('Content-Disposition: inline');
+        if ($statusCode === 206) {
+            header('Content-Range: bytes ' . $start . '-' . $end . '/' . $fileSize);
+        }
+
+        if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'HEAD') {
+            exit;
+        }
+
+        $handle = fopen($absolutePath, 'rb');
+        if ($handle === false) {
+            http_response_code(500);
+            exit;
+        }
+
+        fseek($handle, $start);
+        $remaining = $contentLength;
+        while (!feof($handle) && $remaining > 0) {
+            $chunkSize = (int)min(8192, $remaining);
+            $buffer = fread($handle, $chunkSize);
+            if ($buffer === false || $buffer === '') {
+                break;
+            }
+            echo $buffer;
+            $remaining -= strlen($buffer);
+            flush();
+        }
+        fclose($handle);
+        exit;
+    }
+}
+
 if (!function_exists('chat_voice_message_mime_map')) {
     function chat_voice_message_mime_map(): array
     {
@@ -590,6 +694,7 @@ if (!function_exists('chat_enrich_support_message_rows')) {
             $rows[$index]['is_audio_message'] = !empty($audioPayload['is_audio_message']);
             $rows[$index]['is_audio_expired'] = !empty($audioPayload['is_audio_expired']);
             $rows[$index]['audio_path'] = (string)($audioPayload['audio_path'] ?? '');
+            $rows[$index]['audio_stream_url'] = !empty($audioPayload['is_audio_message']) ? chat_voice_message_stream_url($messageId, 'customer') : '';
             $rows[$index]['audio_mime_type'] = (string)($audioPayload['audio_mime_type'] ?? '');
             $rows[$index]['audio_duration_seconds'] = (int)($audioPayload['audio_duration_seconds'] ?? 0);
             $rows[$index]['audio_duration_label'] = (string)($audioPayload['audio_duration_label'] ?? '');
@@ -1518,6 +1623,7 @@ if (!function_exists('chat_normalize_messages')) {
                 'is_audio_message' => !empty($audioPayload['is_audio_message']),
                 'is_audio_expired' => !empty($audioPayload['is_audio_expired']),
                 'audio_path' => (string)($audioPayload['audio_path'] ?? ''),
+                'audio_stream_url' => !empty($audioPayload['is_audio_message']) ? chat_voice_message_stream_url((int)($row['id'] ?? 0), 'customer') : '',
                 'audio_mime_type' => (string)($audioPayload['audio_mime_type'] ?? ''),
                 'audio_duration_seconds' => (int)($audioPayload['audio_duration_seconds'] ?? 0),
                 'audio_duration_label' => (string)($audioPayload['audio_duration_label'] ?? ''),

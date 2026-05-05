@@ -7,8 +7,6 @@ require_once __DIR__ . '/bootstrap.php';
 admin_send_security_headers();
 admin_start_session();
 
-header('Content-Type: application/json; charset=utf-8');
-
 $db = Mysql_ks::get_instance();
 $adminUser = admin_load_session_user($db);
 
@@ -25,8 +23,41 @@ $appSettings = is_array($appSettings) ? $appSettings : [];
 if (function_exists('chat_demo_showcase_sync')) {
     chat_demo_showcase_sync($db, $appSettings, ['emit_messages' => false, 'source' => 'admin_chat']);
 }
-$conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
+$conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
+
+if ($action === 'voice_file') {
+    $messageId = isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0;
+    if ($messageId <= 0) {
+        http_response_code(404);
+        exit;
+    }
+
+    $messageRow = $db->select_user(
+        "SELECT id, audio_path, audio_mime_type, message_type
+         FROM support_messages
+         WHERE id = {$messageId}
+         LIMIT 1"
+    );
+
+    if (!is_array($messageRow)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
+    $audioMimeType = trim((string)($messageRow['audio_mime_type'] ?? ''));
+    $messageType = trim((string)($messageRow['message_type'] ?? ''));
+    if ($audioPath === '' || !chat_voice_message_is_audio_type($messageType)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $absolutePath = app_chat_attachment_absolute_path($audioPath, true);
+    chat_stream_audio_response($absolutePath, $audioMimeType !== '' ? $audioMimeType : 'audio/webm');
+}
+
+header('Content-Type: application/json; charset=utf-8');
 $messageLimit = admin_chat_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0);
 $mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'voice_upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'toggle_reaction', 'set_customer_block_status', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
 

@@ -56,6 +56,46 @@ if (empty($user['logged']) || empty($_SESSION['id'])) {
     exit;
 }
 
+$action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
+
+if ($action === 'voice_file') {
+    $messageId = isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0;
+    if ($messageId <= 0) {
+        http_response_code(404);
+        exit;
+    }
+
+    $messageRow = $db->select_user(
+        "SELECT support_messages.id,
+                support_messages.audio_path,
+                support_messages.audio_mime_type,
+                support_messages.message_type,
+                support_conversations.customer_id
+         FROM support_messages
+         INNER JOIN support_conversations
+            ON support_conversations.id = support_messages.conversation_id
+         WHERE support_messages.id = {$messageId}
+           AND support_conversations.customer_id = " . (int)$_SESSION['id'] . "
+         LIMIT 1"
+    );
+
+    if (!is_array($messageRow)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
+    $audioMimeType = trim((string)($messageRow['audio_mime_type'] ?? ''));
+    $messageType = trim((string)($messageRow['message_type'] ?? ''));
+    if ($audioPath === '' || !chat_voice_message_is_audio_type($messageType)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $absolutePath = app_chat_attachment_absolute_path($audioPath, true);
+    chat_stream_audio_response($absolutePath, $audioMimeType !== '' ? $audioMimeType : 'audio/webm');
+}
+
 if (app_uses_v2_schema($db) && function_exists('chat_demo_showcase_sync')) {
     chat_demo_showcase_sync($db, is_array($settings ?? null) ? $settings : [], ['emit_messages' => false, 'source' => 'customer_chat_action']);
 }
@@ -634,7 +674,6 @@ $currentCustomerId = (int)$_SESSION['id'];
 $requestedConversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 $requestedConversationType = isset($_POST['conversation_type']) ? trim((string)$_POST['conversation_type']) : (isset($_GET['conversation_type']) ? trim((string)$_GET['conversation_type']) : '');
 $responseFormat = isset($_POST['format']) ? (string)$_POST['format'] : (isset($_GET['format']) ? (string)$_GET['format'] : 'html');
-$action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $faqKey = isset($_POST['faq_key']) ? trim((string)$_POST['faq_key']) : (isset($_GET['faq_key']) ? trim((string)$_GET['faq_key']) : '');
 $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : (isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0);
 $groupActionConversationId = 0;

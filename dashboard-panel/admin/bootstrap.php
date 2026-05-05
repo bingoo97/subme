@@ -14140,6 +14140,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                     $isCustomer = (string)($messageRow['sender_type'] ?? '') === 'customer';
                     $attachmentPath = trim((string)($messageRow['attachment_path'] ?? ''));
                     $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
+                    $audioStreamUrl = $audioPath !== '' ? chat_voice_message_stream_url((int)($messageRow['id'] ?? 0), 'admin') : '';
                     $audioMimeType = trim((string)($messageRow['audio_mime_type'] ?? ''));
                     $audioDurationLabel = trim((string)($messageRow['audio_duration_label'] ?? ''));
                     $messageBodyRaw = (string)($messageRow['message_body'] ?? '');
@@ -14239,7 +14240,7 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                                 <?php if ($isAudioMessage): ?>
                                     <div class="admin-chat-conversation__audio">
                                         <audio controls preload="metadata" class="admin-chat-conversation__audio-player" data-chat-audio-player>
-                                            <source src="<?php echo admin_e($audioPath); ?>"<?php if ($audioMimeType !== ''): ?> type="<?php echo admin_e($audioMimeType); ?>"<?php endif; ?>>
+                                            <source src="<?php echo admin_e($audioStreamUrl !== '' ? $audioStreamUrl : $audioPath); ?>"<?php if ($audioMimeType !== ''): ?> type="<?php echo admin_e($audioMimeType); ?>"<?php endif; ?>>
                                         </audio>
                                         <?php if ($audioDurationLabel !== ''): ?>
                                             <span class="admin-chat-conversation__audio-duration"><?php echo admin_e($audioDurationLabel); ?></span>
