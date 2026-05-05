@@ -3834,6 +3834,18 @@ document.addEventListener('DOMContentLoaded', function () {
             return String(root.getAttribute('data-chat-voice-enabled') || '0') === '1';
         }
 
+        function voiceConversationSupported() {
+            if (activeConversationType === 'live_chat') {
+                return activeConversationId > 0;
+            }
+
+            if (activeConversationType === 'group_chat') {
+                return activeConversationId > 0;
+            }
+
+            return false;
+        }
+
         function voiceMaxDurationSeconds() {
             return Math.max(10, parseInt(root.getAttribute('data-chat-voice-max-duration-seconds') || '30', 10) || 30);
         }
@@ -3913,7 +3925,7 @@ document.addEventListener('DOMContentLoaded', function () {
         function updateVoiceComposerState() {
             var featureEnabled;
             var mediaSupported;
-            var liveChatActive;
+            var voiceConversationActive;
             var canRecord;
             var label;
 
@@ -3923,13 +3935,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
             featureEnabled = voiceFeatureEnabled();
             mediaSupported = !!window.MediaRecorder && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-            liveChatActive = activeConversationType === 'live_chat' && activeConversationId > 0;
-            canRecord = featureEnabled && mediaSupported && liveChatActive && !voiceUploadInFlight;
+            voiceConversationActive = voiceConversationSupported();
+            canRecord = featureEnabled && mediaSupported && voiceConversationActive && !voiceUploadInFlight;
 
             if (!featureEnabled) {
                 label = root.getAttribute('data-chat-voice-disabled-tooltip') || 'Voice message recording is currently disabled.';
-            } else if (!liveChatActive) {
-                label = root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available only in direct live chat with the user.';
+            } else if (!voiceConversationActive) {
+                label = root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available in Support Chat, groups and 1:1 conversations, but not in Global Chat.';
             } else if (!mediaSupported) {
                 label = root.getAttribute('data-chat-voice-unsupported') || 'This browser does not support voice messages.';
             } else {
@@ -4072,8 +4084,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 return false;
             }
 
-            if (!(activeConversationType === 'live_chat' && activeConversationId > 0)) {
-                showComposerAlert(root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available only in direct live chat with the user.', true);
+            if (!voiceConversationSupported()) {
+                showComposerAlert(root.getAttribute('data-chat-voice-live-chat-only') || 'Voice messages are available in Support Chat, groups and 1:1 conversations, but not in Global Chat.', true);
                 return false;
             }
 

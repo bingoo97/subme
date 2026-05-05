@@ -614,9 +614,9 @@ if ($action === 'upload' && !empty($_FILES['file']['tmp_name'])) {
 }
 
 if ($action === 'voice_upload' && !empty($_FILES['voice_file']['tmp_name'])) {
-    if ($conversationType !== 'live_chat') {
+    if (!chat_voice_messages_supported_for_conversation_type($conversationType)) {
         http_response_code(422);
-        echo json_encode(['ok' => false, 'message' => 'Voice messages are available only in direct live chat.']);
+        echo json_encode(['ok' => false, 'message' => 'Voice messages are not available in this conversation.']);
         exit;
     }
 

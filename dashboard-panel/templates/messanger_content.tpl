@@ -228,7 +228,15 @@
             </div>
             <div class="admin-chat-inbox__conversation-body messenger-inbox__conversation-body" data-chat-conversation-body>
                 <div class="messenger-conversation-transition" data-chat-conversation-transition hidden aria-live="polite" aria-busy="true">
-                    <span class="messenger-conversation-transition__pulse" aria-hidden="true"></span>
+                    <span class="messenger-conversation-transition__matrix" aria-hidden="true">
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                        <span class="messenger-conversation-transition__matrix-bar"></span>
+                    </span>
                 </div>
                 <div class="messenger-conversation-stage" data-chat-conversation-stage>
         {/if}

@@ -67,21 +67,37 @@ if ($action === 'voice_file') {
 
     $messageRow = $db->select_user(
         "SELECT support_messages.id,
+                support_messages.conversation_id,
                 support_messages.audio_path,
                 support_messages.audio_mime_type,
                 support_messages.message_type,
-                support_conversations.customer_id
+                support_conversations.customer_id,
+                support_conversations.conversation_type
          FROM support_messages
          INNER JOIN support_conversations
             ON support_conversations.id = support_messages.conversation_id
          WHERE support_messages.id = {$messageId}
-           AND support_conversations.customer_id = " . (int)$_SESSION['id'] . "
          LIMIT 1"
     );
 
     if (!is_array($messageRow)) {
         http_response_code(404);
         exit;
+    }
+
+    $conversationId = (int)($messageRow['conversation_id'] ?? 0);
+    $conversationType = trim((string)($messageRow['conversation_type'] ?? 'live_chat'));
+    if ($conversationType === 'live_chat') {
+        if ((int)($messageRow['customer_id'] ?? 0) !== (int)$_SESSION['id']) {
+            http_response_code(404);
+            exit;
+        }
+    } else {
+        $groupConversation = $conversationId > 0 ? chat_group_accessible_for_customer($db, (int)$_SESSION['id'], $conversationId) : null;
+        if (!$groupConversation) {
+            http_response_code(404);
+            exit;
+        }
     }
 
     $audioPath = trim((string)($messageRow['audio_path'] ?? ''));
@@ -1151,10 +1167,6 @@ if (app_uses_v2_schema($db)) {
     }
 
     if ($action === 'voice_upload' && !empty($_FILES['voice_file']['tmp_name'])) {
-        if ($customerHasFullMessenger && $requestedConversationId > 0 && chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)) {
-            chat_json_response(['ok' => false, 'message' => 'Voice messages are only available in live chat right now.']);
-        }
-
         chat_require_rate_limit_slot($responseFormat);
         $durationSeconds = isset($_POST['audio_duration_seconds']) ? (int)$_POST['audio_duration_seconds'] : 0;
         $voicePayload = chat_store_uploaded_voice_message($_FILES['voice_file'], $currentCustomerId, $durationSeconds);
@@ -1166,17 +1178,53 @@ if (app_uses_v2_schema($db)) {
             exit;
         }
 
-        $supportConversationId = chat_find_or_create_conversation($db, $currentCustomerId);
         $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
-        $replyToMessageId = chat_validate_reply_target($db, $supportConversationId, $replyToMessageId) ?? 0;
-        chat_insert_customer_message(
-            $db,
-            $currentCustomerId,
-            '',
-            null,
-            $replyToMessageId > 0 ? $replyToMessageId : null,
-            $voicePayload
-        );
+        $groupConversation = $customerHasFullMessenger && $requestedConversationId > 0
+            ? chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId)
+            : null;
+
+        if ($groupConversation) {
+            $conversationType = trim((string)($groupConversation['conversation_type'] ?? 'group_chat'));
+            if (!chat_voice_messages_supported_for_conversation_type($conversationType)) {
+                chat_delete_uploaded_file((string)($voicePayload['audio_path'] ?? ''));
+                chat_json_response(['ok' => false, 'message' => 'Voice messages are not available in this conversation.']);
+            }
+
+            $replyToMessageId = chat_validate_reply_target($db, $requestedConversationId, $replyToMessageId) ?? 0;
+            if (!chat_insert_customer_group_message(
+                $db,
+                $requestedConversationId,
+                $currentCustomerId,
+                '',
+                null,
+                $replyToMessageId > 0 ? $replyToMessageId : null,
+                $voicePayload
+            )) {
+                chat_delete_uploaded_file((string)($voicePayload['audio_path'] ?? ''));
+                if ($responseFormat === 'json') {
+                    chat_json_response(['ok' => false, 'message' => 'You cannot send voice messages in this conversation right now.']);
+                }
+                echo '<p>You cannot send voice messages in this conversation right now.</p>';
+                exit;
+            }
+            chat_queue_group_customer_notifications_if_offline(
+                $db,
+                $requestedConversationId,
+                ['participant_type' => 'customer', 'customer_id' => $currentCustomerId, 'admin_user_id' => 0],
+                ''
+            );
+        } else {
+            $supportConversationId = chat_find_or_create_conversation($db, $currentCustomerId);
+            $replyToMessageId = chat_validate_reply_target($db, $supportConversationId, $replyToMessageId) ?? 0;
+            chat_insert_customer_message(
+                $db,
+                $currentCustomerId,
+                '',
+                null,
+                $replyToMessageId > 0 ? $replyToMessageId : null,
+                $voicePayload
+            );
+        }
         chat_register_customer_message_sent();
     }
 

@@ -165,6 +165,24 @@ if (!function_exists('chat_voice_message_stream_url')) {
     }
 }
 
+if (!function_exists('chat_voice_messages_supported_for_conversation_type')) {
+    function chat_voice_messages_supported_for_conversation_type(string $conversationType): bool
+    {
+        $conversationType = trim($conversationType);
+        if ($conversationType === 'live_chat') {
+            return true;
+        }
+
+        if (function_exists('chat_is_global_group_conversation_type') && chat_is_global_group_conversation_type($conversationType)) {
+            return false;
+        }
+
+        return function_exists('chat_is_group_like_conversation_type')
+            ? chat_is_group_like_conversation_type($conversationType)
+            : $conversationType === 'group_chat';
+    }
+}
+
 if (!function_exists('chat_stream_audio_response')) {
     function chat_stream_audio_response(string $absolutePath, string $mimeType = 'audio/webm'): void
     {

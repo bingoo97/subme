@@ -1592,7 +1592,7 @@
 			$stage.addClass('is-entering');
 			this.conversationTransitionTimer = window.setTimeout(function () {
 				self.conversationStage().removeClass('is-entering');
-			}, 280);
+			}, 160);
 		},
 
 		captureActiveAudioPlayers: function () {
@@ -1689,6 +1689,22 @@
 			return String(window.MESSENGER_BOOTSTRAP.voiceEnabled || '0') === '1';
 		},
 
+		voiceConversationSupported: function () {
+			var activeType = String(this.activeConversationType || this.contentRoot().attr('data-chat-active-conversation-type') || 'live_chat');
+			var activeId = parseInt(this.activeConversationId || this.contentRoot().attr('data-chat-active-conversation-id') || '0', 10) || 0;
+			var isGlobalGroup = String(this.contentRoot().attr('data-chat-is-global-group') || '0') === '1';
+
+			if (activeType === 'live_chat') {
+				return true;
+			}
+
+			if (activeType === 'group_chat' && activeId > 0 && !isGlobalGroup) {
+				return true;
+			}
+
+			return false;
+		},
+
 		voiceMinDurationSeconds: function () {
 			return Math.max(2, parseInt(window.MESSENGER_BOOTSTRAP.voiceMinDurationSeconds || 2, 10) || 2);
 		},
@@ -1778,7 +1794,7 @@
 				this.showNotice($('[data-messenger-voice-preview]').attr('data-disabled-tooltip') || 'Opcja nagrywania wiadomości głosowych jest obecnie wyłączona.');
 				return false;
 			}
-			if (this.voiceRecording || this.voiceStartInFlight || this.sendInFlight || this.uploadInFlight || !this.activeCanSend || this.activeConversationType !== 'live_chat') {
+			if (this.voiceRecording || this.voiceStartInFlight || this.sendInFlight || this.uploadInFlight || !this.activeCanSend || !this.voiceConversationSupported()) {
 				return false;
 			}
 			if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function' || typeof window.MediaRecorder === 'undefined') {
@@ -1985,15 +2001,15 @@
 			$uploadButton.prop('disabled', disabled);
 			if ($voiceButton.length) {
 				var featureEnabled = this.voiceFeatureEnabled();
-				var canRecordVoice = featureEnabled && !disabled && activeType === 'live_chat' && !!window.MediaRecorder && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+				var canRecordVoice = featureEnabled && !disabled && this.voiceConversationSupported() && !!window.MediaRecorder && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 				var disabledVoiceTooltip = String($voiceButton.attr('data-disabled-tooltip') || '');
-				var unavailableConversationLabel = window.MESSENGER_BOOTSTRAP.voiceUnavailableConversationLabel || 'Voice messages are available only in Support Chat.';
+				var unavailableConversationLabel = window.MESSENGER_BOOTSTRAP.voiceUnavailableConversationLabel || 'Voice messages are available in Support Chat, groups and 1:1 conversations, but not in Global Chat.';
 				var activeVoiceLabel = this.voiceRecording
 					? (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStopLabel || 'Click to stop recording')
 					: (window.MESSENGER_BOOTSTRAP.voiceRecordDesktopStartLabel || 'Click to start recording');
 				var voiceLabel = !featureEnabled
 					? disabledVoiceTooltip
-					: (activeType !== 'live_chat' ? unavailableConversationLabel : activeVoiceLabel);
+					: (!this.voiceConversationSupported() ? unavailableConversationLabel : activeVoiceLabel);
 				$voiceButton.toggleClass('is-disabled', !canRecordVoice);
 				$voiceButton.toggleClass('is-recording', !!this.voiceRecording);
 				$voiceButton.prop('disabled', !canRecordVoice && !this.voiceRecording);
@@ -3418,12 +3434,11 @@
 			}
 			this.fetch({
 				force: true,
+				markRead: true,
 				conversationId: nextConversationId,
 				conversationType: nextConversationType,
 				scrollToBottom: true,
 				animateConversation: true
-			}).done(function () {
-				self.markRead(nextConversationId, nextConversationType);
 			}).always(function () {
 				self.setConversationLoadingState(false);
 			});
