@@ -339,9 +339,7 @@
 						{/if}
 						{if $chat[i].is_audio_message|default:false && $chat[i].audio_path|default:'' ne ''}
 						<div class="messenger-audio">
-							<audio controls preload="metadata" class="messenger-audio__player" data-chat-audio-player>
-								<source src="{if $chat[i].audio_stream_url|default:'' ne ''}{$chat[i].audio_stream_url|escape:'html'}{else}{$chat[i].audio_path|escape:'html'}{/if}"{if $chat[i].audio_mime_type|default:'' ne ''} type="{$chat[i].audio_mime_type|escape:'html'}"{/if}>
-							</audio>
+							<audio controls preload="metadata" class="messenger-audio__player" data-chat-audio-player src="{if $chat[i].audio_stream_url|default:'' ne ''}{$chat[i].audio_stream_url|escape:'html'}{else}{$chat[i].audio_path|escape:'html'}{/if}"{if $chat[i].audio_mime_type|default:'' ne ''} type="{$chat[i].audio_mime_type|escape:'html'}"{/if}></audio>
 							{if $chat[i].audio_duration_label|default:'' ne ''}
 							<span class="messenger-audio__duration">{$chat[i].audio_duration_label|escape:'html'}</span>
 							{/if}

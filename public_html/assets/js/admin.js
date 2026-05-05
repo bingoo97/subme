@@ -4001,13 +4001,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
             postConversation('voice_upload', formData, true).then(function (payload) {
                 if (!payload.ok) {
+                    voiceUploadInFlight = false;
+                    updateVoiceComposerState();
                     showComposerAlert(payload.message || root.getAttribute('data-chat-voice-upload-failed') || 'Unable to upload the voice message.', true);
                     return;
                 }
+                voiceUploadInFlight = false;
+                updateVoiceComposerState();
                 clearReplyTarget();
                 showComposerAlert('', false);
                 renderConversation(payload, { scrollToBottom: true });
             }).catch(function () {
+                voiceUploadInFlight = false;
+                updateVoiceComposerState();
                 showComposerAlert(root.getAttribute('data-chat-voice-upload-failed') || 'Unable to upload the voice message.', true);
             }).finally(function () {
                 voiceUploadInFlight = false;
@@ -4247,6 +4253,30 @@ document.addEventListener('DOMContentLoaded', function () {
                         playResult.catch(function () {
                             return undefined;
                         });
+                    }
+                }
+            });
+        }
+
+        function prepareConversationAudioPlayers() {
+            if (!body) {
+                return;
+            }
+
+            qa('[data-chat-audio-player]', body).forEach(function (audio) {
+                if (!audio || audio.getAttribute('data-audio-prepared') === '1') {
+                    return;
+                }
+                audio.setAttribute('data-audio-prepared', '1');
+                audio.preload = 'metadata';
+                if (audio.currentSrc) {
+                    return;
+                }
+                if (typeof audio.load === 'function') {
+                    try {
+                        audio.load();
+                    } catch (error) {
+                        // ignore audio preload failures
                     }
                 }
             });
@@ -6116,6 +6146,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 body.innerHTML = payload.html || '';
                 lastRenderedConversationHtml = String(payload.html || '');
                 restoreConversationAudioPlayers(activeAudioPlayers);
+                prepareConversationAudioPlayers();
                 closeMessageActions();
             }
             if (body) {

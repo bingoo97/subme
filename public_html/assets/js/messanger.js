@@ -1649,6 +1649,27 @@
 			});
 		},
 
+		prepareAudioPlayers: function () {
+			this.chatBox().find('[data-chat-audio-player]').each(function () {
+				var audio = this;
+				if (!audio || audio.getAttribute('data-audio-prepared') === '1') {
+					return;
+				}
+				audio.setAttribute('data-audio-prepared', '1');
+				audio.preload = 'metadata';
+				if (audio.currentSrc) {
+					return;
+				}
+				if (typeof audio.load === 'function') {
+					try {
+						audio.load();
+					} catch (error) {
+						// ignore audio preload failures
+					}
+				}
+			});
+		},
+
 		voiceFeatureEnabled: function () {
 			return String(window.MESSENGER_BOOTSTRAP.voiceEnabled || '0') === '1';
 		},
@@ -1895,15 +1916,21 @@
 				data: formData
 			}).done(function (payload) {
 				if (payload && payload.ok) {
+					self.uploadInFlight = false;
+					self.updateComposerAvailability();
 					self.clearReplyTarget();
 					self.renderPayload(payload, {
 						force: true,
 						scrollToBottom: true
 					});
 				} else if (payload && payload.message) {
+					self.uploadInFlight = false;
+					self.updateComposerAvailability();
 					self.showNotice(payload.message);
 				}
 			}).fail(function () {
+				self.uploadInFlight = false;
+				self.updateComposerAvailability();
 				self.showNotice(window.MESSENGER_BOOTSTRAP.voiceUploadFailedMessage || 'Voice message upload failed.');
 			}).always(function () {
 				self.uploadInFlight = false;
@@ -2910,6 +2937,7 @@
 				this.chatBox().html(payload.html);
 				this.lastRenderedHtml = payload.html;
 				this.restoreActiveAudioPlayers(activeAudioPlayers);
+				this.prepareAudioPlayers();
 				this.closeMessageActions();
 				this.closeGroupMenu();
 				this.closeGroupSettingsMenu();
