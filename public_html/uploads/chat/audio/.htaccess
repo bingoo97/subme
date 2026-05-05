@@ -1,0 +1,7 @@
+<IfModule mod_mime.c>
+    AddType audio/webm .webm
+    AddType audio/ogg .ogg
+    AddType audio/mp4 .mp4 .m4a
+    AddType audio/mpeg .mp3
+    AddType audio/wav .wav
+</IfModule>

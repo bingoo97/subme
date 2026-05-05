@@ -3885,8 +3885,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     oscillator.frequency.exponentialRampToValueAtTime(988, startAt + 0.08);
                 }
                 gain.gain.setValueAtTime(0.0001, startAt);
-                gain.gain.exponentialRampToValueAtTime(0.045, startAt + 0.015);
-                gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.12);
+                gain.gain.exponentialRampToValueAtTime(0.095, startAt + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.14);
                 oscillator.connect(gain);
                 gain.connect(context.destination);
                 oscillator.start(startAt);
