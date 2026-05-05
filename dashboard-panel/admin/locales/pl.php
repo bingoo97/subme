@@ -577,7 +577,7 @@ return [
     'settings_messenger_voice_enabled' => 'Mikrofon w Messengerze',
     'settings_messenger_voice_enabled_help' => 'Jeśli ON, w polu wpisywania wiadomości pojawia się podgląd przycisku mikrofonu. Przycisk pozostaje na razie nieaktywny i pokazuje tylko planowany wygląd UI.',
     'settings_demo_messenger_showcase_enabled' => 'Demo Messenger showcase',
-    'settings_demo_messenger_showcase_enabled_help' => 'Tylko dla demo.subme.pro: odtwarza 20 przykładowych userów, konto demo@demo.demo, 2 grupy, 1 rozmowę 1:1 i neutralny ruch w Messengerze w tle. Global Chat dostaje nowe wpisy co 30 sekund, a grupy i 1:1 co 1 minutę. Jeśli ktoś usunie te konta lub rozmowy przy aktywnym switchu, system odtworzy je automatycznie.',
+    'settings_demo_messenger_showcase_enabled_help' => 'Tylko dla demo.subme.pro: odtwarza 20 przykładowych userów, konto demo@demo.demo, 1 grupę, 1 rozmowę 1:1 i neutralny ruch w Messengerze w tle. Global Chat dostaje nowe wpisy co 1 minutę, a grupa i 1:1 co 2 minuty. Jeśli ktoś usunie te konta lub rozmowy przy aktywnym switchu, system odtworzy je automatycznie.',
     'settings_reseller_group_chat_limit' => 'Max grup resellerów',
     'settings_reseller_group_chat_limit_help' => 'Ustaw od 0 do 10. Wartość 0 wyłącza tworzenie grup przez resellerów i ukrywa akcję tworzenia grup w panelu usera.',
     'settings_support_chat_retention' => 'Retencja wiadomości live chat',

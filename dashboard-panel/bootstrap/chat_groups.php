@@ -310,27 +310,27 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     function chat_demo_showcase_customer_specs(): array
     {
         return [
-            ['email' => 'demo@demo.demo', 'handle' => 'demo', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'alex.morgan@demo.demo', 'handle' => 'alexmorgan', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'sophie.carter@demo.demo', 'handle' => 'sophiecarter', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'liam.parker@demo.demo', 'handle' => 'liamparker', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'emma.bennett@demo.demo', 'handle' => 'emmabennett', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'noah.walker@demo.demo', 'handle' => 'noahwalker', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'mia.hughes@demo.demo', 'handle' => 'miahughes', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'oliver.ross@demo.demo', 'handle' => 'oliverross', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'ava.collins@demo.demo', 'handle' => 'avacollins', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'ethan.bailey@demo.demo', 'handle' => 'ethanbailey', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'grace.ward@demo.demo', 'handle' => 'graceward', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'lucas.brooks@demo.demo', 'handle' => 'lucasbrooks', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'chloe.reed@demo.demo', 'handle' => 'chloereed', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'jack.hayes@demo.demo', 'handle' => 'jackhayes', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'ella.foster@demo.demo', 'handle' => 'ellafoster', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'henry.price@demo.demo', 'handle' => 'henryprice', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'zoe.bryant@demo.demo', 'handle' => 'zoebryant', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'mason.cook@demo.demo', 'handle' => 'masoncook', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'lily.long@demo.demo', 'handle' => 'lilylong', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'owen.powell@demo.demo', 'handle' => 'owenpowell', 'password' => '1234', 'locale' => 'en'],
-            ['email' => 'ruby.barnes@demo.demo', 'handle' => 'rubybarnes', 'password' => '1234', 'locale' => 'en'],
+            ['email' => 'demo@demo.demo', 'handle' => 'demo', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'alex.morgan@demo.demo', 'handle' => 'alexmorgan', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'sophie.carter@demo.demo', 'handle' => 'sophiecarter', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'liam.parker@demo.demo', 'handle' => 'liamparker', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'emma.bennett@demo.demo', 'handle' => 'emmabennett', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'noah.walker@demo.demo', 'handle' => 'noahwalker', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'mia.hughes@demo.demo', 'handle' => 'miahughes', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'oliver.ross@demo.demo', 'handle' => 'oliverross', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'ava.collins@demo.demo', 'handle' => 'avacollins', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'ethan.bailey@demo.demo', 'handle' => 'ethanbailey', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'grace.ward@demo.demo', 'handle' => 'graceward', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'lucas.brooks@demo.demo', 'handle' => 'lucasbrooks', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'chloe.reed@demo.demo', 'handle' => 'chloereed', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'jack.hayes@demo.demo', 'handle' => 'jackhayes', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'ella.foster@demo.demo', 'handle' => 'ellafoster', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'henry.price@demo.demo', 'handle' => 'henryprice', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'zoe.bryant@demo.demo', 'handle' => 'zoebryant', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'mason.cook@demo.demo', 'handle' => 'masoncook', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'lily.long@demo.demo', 'handle' => 'lilylong', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'owen.powell@demo.demo', 'handle' => 'owenpowell', 'password' => '1234', 'locale' => 'pl'],
+            ['email' => 'ruby.barnes@demo.demo', 'handle' => 'rubybarnes', 'password' => '1234', 'locale' => 'pl'],
         ];
     }
 
@@ -338,7 +338,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         return [
             [
-                'title' => 'Streaming Crew',
+                'title' => 'Strefa streamerow',
                 'retention' => 1440,
                 'owner_email' => chat_demo_showcase_main_email(),
                 'member_emails' => [
@@ -365,26 +365,30 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     function chat_demo_showcase_message_pool(): array
     {
         return [
-            'Looks good here.',
-            'Nice setup.',
-            'All set.',
-            'Good idea 👍',
-            'Sounds good to me.',
-            'I like this view.',
-            'We can keep it simple.',
-            'That works.',
-            'Okay 🙂',
-            'Thanks, noted.',
-            'This looks clean.',
-            'Quick check, all good.',
-            'Sure, let us keep going.',
-            'Small update: still good here.',
-            'Great choice.',
-            'Looks smooth 👌',
-            'I am here.',
-            'Nice one.',
-            'Two words: very clean.',
-            'Works for me.',
+            'Wyglada dobrze.',
+            'Mozemy tak zostawic.',
+            'Super to wyglada 👍',
+            'Jest okej.',
+            'Dziala bez problemu.',
+            'Dobry kierunek.',
+            'To ma sens.',
+            'Ja bym tak zostawil.',
+            'Brzmi dobrze.',
+            'Dzieki, zapisane.',
+            'Ladny uklad.',
+            'Szybki test i wszystko gra.',
+            'Mozemy leciec dalej.',
+            'Maly update: nadal jest okej.',
+            'Dobry wybor.',
+            'Wyglada plynnie 👌',
+            'Jestem tutaj.',
+            'To jest przyjemne w odbiorze.',
+            'Dwa slowa: jest czysto.',
+            'Pasuje mi to.',
+            'Wchodze w to 🙂',
+            'Dajcie chwile, sprawdzam.',
+            'U mnie wszystko gra.',
+            'Spoko pomysl.',
         ];
     }
 
@@ -392,7 +396,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     {
         $messages = chat_demo_showcase_message_pool();
         if (!$messages) {
-            return 'Looks good here.';
+            return 'Wyglada dobrze.';
         }
 
         return (string)$messages[array_rand($messages)];
@@ -657,7 +661,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $conversation = chat_find_customer_direct_conversation_between($db, (int)$owner['id'], (int)$partner['id']);
         $created = false;
         if (!$conversation) {
-            $conversation = chat_demo_showcase_create_group_shell($db, (int)$owner['id'], 'Direct Chat', $retentionMinutes, true);
+            $conversation = chat_demo_showcase_create_group_shell($db, (int)$owner['id'], 'Rozmowa prywatna', $retentionMinutes, true);
             $created = true;
         }
         if (!is_array($conversation) || empty($conversation['id'])) {
@@ -667,7 +671,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         $conversationId = (int)($conversation['id'] ?? 0);
         $db->update_using_id(
             ['subject', 'group_name', 'message_retention_hours', 'message_retention_minutes', 'is_direct_conversation', 'status'],
-            ['Direct Chat', 'Direct Chat', chat_group_retention_storage_hours($retentionMinutes), $retentionMinutes, 1, 'open'],
+            ['Rozmowa prywatna', 'Rozmowa prywatna', chat_group_retention_storage_hours($retentionMinutes), $retentionMinutes, 1, 'open'],
             'support_conversations',
             $conversationId
         );
@@ -895,14 +899,14 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             if (
                 is_array($globalConversation)
                 && !empty($globalConversation['id'])
-                && chat_demo_showcase_acquire_tick_lock($db, 'demo_messenger_showcase_last_global_tick_at', 30, $currentTime)
+                && chat_demo_showcase_acquire_tick_lock($db, 'demo_messenger_showcase_last_global_tick_at', 60, $currentTime)
             ) {
                 if (chat_demo_showcase_emit_single_message($db, (int)$globalConversation['id'], array_keys($customersByEmail), $customersByEmail)) {
                     $generatedGlobalMessages++;
                 }
             }
 
-            if (chat_demo_showcase_acquire_tick_lock($db, 'demo_messenger_showcase_last_private_tick_at', 60, $currentTime)) {
+            if (chat_demo_showcase_acquire_tick_lock($db, 'demo_messenger_showcase_last_private_tick_at', 120, $currentTime)) {
                 foreach (chat_demo_showcase_group_specs() as $index => $groupSpec) {
                     if (
                         isset($groupConversations[$index]['id'])

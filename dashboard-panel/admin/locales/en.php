@@ -577,7 +577,7 @@ return [
     'settings_messenger_voice_enabled' => 'Messenger microphone UI',
     'settings_messenger_voice_enabled_help' => 'If ON, the Messenger composer shows a preview microphone button. The button stays inactive for now and only exposes the planned UI.',
     'settings_demo_messenger_showcase_enabled' => 'Demo messenger showcase',
-    'settings_demo_messenger_showcase_enabled_help' => 'Demo only for demo.subme.pro: recreates 20 sample users, the demo@demo.demo account, 2 groups, 1 direct chat and neutral Messenger traffic in the background. Global Chat receives new entries every 30 seconds, while groups and 1:1 chats update every 1 minute. If admins delete showcase users or chats while this switch stays ON, the system recreates them automatically.',
+    'settings_demo_messenger_showcase_enabled_help' => 'Demo only for demo.subme.pro: recreates 20 sample users, the demo@demo.demo account, 1 group, 1 direct chat and neutral Messenger traffic in the background. Global Chat receives new entries every 1 minute, while the group and 1:1 chat update every 2 minutes. If admins delete showcase users or chats while this switch stays ON, the system recreates them automatically.',
     'settings_reseller_group_chat_limit' => 'Max reseller group chats',
     'settings_reseller_group_chat_limit_help' => 'Set from 0 to 10. Value 0 disables group creation for reseller users and hides the create-group action in the user panel.',
     'settings_support_chat_retention' => 'Live chat message retention',
