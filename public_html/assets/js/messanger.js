@@ -1692,6 +1692,7 @@
 
 		startVoiceRecording: function () {
 			var self = this;
+			var mediaErrorMessage = '';
 			if (!this.voiceFeatureEnabled()) {
 				this.showNotice($('[data-messenger-voice-preview]').attr('data-disabled-tooltip') || 'Opcja nagrywania wiadomości głosowych jest obecnie wyłączona.');
 				return false;
@@ -1771,10 +1772,25 @@
 				if (self.voiceShouldStopAfterStart) {
 					self.stopVoiceRecording(false);
 				}
-			}).catch(function () {
+			}).catch(function (error) {
+				var errorName = error && error.name ? String(error.name) : '';
 				self.voiceStartInFlight = false;
 				self.voicePendingPointer = false;
-				self.showNotice(window.MESSENGER_BOOTSTRAP.voicePermissionDeniedMessage || 'Microphone access was denied.');
+				self.voicePointerMode = false;
+				if (window.isSecureContext === false) {
+					mediaErrorMessage = 'Mikrofon wymaga bezpiecznego połączenia HTTPS.';
+				} else if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
+					mediaErrorMessage = 'Nie wykryto mikrofonu w tym urządzeniu.';
+				} else if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
+					mediaErrorMessage = 'Mikrofon jest zajęty albo chwilowo niedostępny.';
+				} else if (errorName === 'SecurityError') {
+					mediaErrorMessage = 'Przeglądarka zablokowała dostęp do mikrofonu.';
+				} else if (errorName === 'AbortError') {
+					mediaErrorMessage = 'Nagrywanie zostało przerwane.';
+				} else {
+					mediaErrorMessage = window.MESSENGER_BOOTSTRAP.voicePermissionDeniedMessage || 'Microphone access was denied.';
+				}
+				self.showNotice(mediaErrorMessage);
 				self.updateComposerAvailability();
 			});
 
@@ -3753,6 +3769,25 @@
 				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
 					return;
 				}
+				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				self.voicePointerMode = true;
+				self.startVoiceRecording();
+			});
+
+			$(document).on('touchstart.messengerUi mousedown.messengerUi', '[data-messenger-voice-preview]', function (event) {
+				if (self.isDesktopVoiceToggleMode()) {
+					return;
+				}
+				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
+					return;
+				}
+				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
+					return;
+				}
 				event.preventDefault();
 				event.stopPropagation();
 				self.voicePointerMode = true;
@@ -3764,6 +3799,17 @@
 					return;
 				}
 				if (!self.voiceRecording && !self.voiceStartInFlight) {
+					return;
+				}
+				self.stopVoiceRecording(false);
+			});
+
+			$(document).on('touchend.messengerUi touchcancel.messengerUi mouseup.messengerUi', function () {
+				if (self.isDesktopVoiceToggleMode() || !self.voicePointerMode) {
+					return;
+				}
+				if (!self.voiceRecording && !self.voiceStartInFlight) {
+					self.voicePointerMode = false;
 					return;
 				}
 				self.stopVoiceRecording(false);
