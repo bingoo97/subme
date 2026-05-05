@@ -125,6 +125,7 @@ return [
     'chat_voice_permission_denied' => 'Dostęp do mikrofonu został odrzucony.',
     'chat_voice_record_failed' => 'Nie udało się nagrać wiadomości głosowej.',
     'chat_voice_upload_failed' => 'Nie udało się wysłać wiadomości głosowej.',
+    'chat_voice_too_short' => 'Przytrzymaj nagrywanie przez co najmniej 2 sekundy.',
     'chat_voice_busy' => 'Najpierw dokończ aktualne nagranie.',
     'chat_voice_status_recording' => 'Nagrywanie...',
     'chat_write_message' => 'Napisz wiadomość...',

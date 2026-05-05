@@ -124,6 +124,13 @@ if (!function_exists('chat_voice_message_max_duration_seconds')) {
     }
 }
 
+if (!function_exists('chat_voice_message_min_duration_seconds')) {
+    function chat_voice_message_min_duration_seconds(): int
+    {
+        return 2;
+    }
+}
+
 if (!function_exists('chat_voice_message_max_file_bytes')) {
     function chat_voice_message_max_file_bytes(?array $settings = null): int
     {
@@ -302,7 +309,7 @@ if (!function_exists('chat_store_uploaded_voice_message')) {
             || !is_uploaded_file($tmpPath)
             || $fileSize <= 0
             || $fileSize > chat_voice_message_max_file_bytes()
-            || $durationSeconds <= 0
+            || $durationSeconds < chat_voice_message_min_duration_seconds()
             || $durationSeconds > chat_voice_message_max_duration_seconds()
         ) {
             return null;

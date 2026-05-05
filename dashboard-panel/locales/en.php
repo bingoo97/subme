@@ -550,6 +550,7 @@ return [
         'chat_voice_button' => 'Voice message',
         'chat_voice_disabled_tooltip' => 'Voice message recording is currently disabled.',
         'chat_voice_coming_soon' => 'Voice message recording will be available soon.',
+        'chat_voice_too_short' => 'Hold the recording for at least 2 seconds.',
         'chat_upload_help' => 'Only image files are allowed: .jpg, .png, .gif. Larger images are automatically optimized before saving.',
         'chat_preview' => 'Preview',
         'chat_uploading' => 'Uploading image',

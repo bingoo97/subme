@@ -104,8 +104,10 @@
                         window.MESSENGER_BOOTSTRAP.voicePermissionDeniedMessage = '{$t.chat_voice_permission_denied|default:"Dostęp do mikrofonu został odrzucony."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.voiceRecordFailedMessage = '{$t.chat_voice_record_failed|default:"Nie udało się nagrać wiadomości głosowej."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.voiceUploadFailedMessage = '{$t.chat_voice_upload_failed|default:"Nie udało się wysłać wiadomości głosowej."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.voiceTooShortMessage = '{$t.chat_voice_too_short|default:"Przytrzymaj nagrywanie przez co najmniej 2 sekundy."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.voiceRecordBusyMessage = '{$t.chat_voice_busy|default:"Poczekaj, aż wiadomość głosowa się wyśle."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.voiceMaxDurationSeconds = {$settings.messenger_voice_max_duration_seconds|default:30};
+                        window.MESSENGER_BOOTSTRAP.voiceMinDurationSeconds = 2;
                     </script>
                     <div class="messenger-alert" id="messenger_alert" style="display:none;"></div>
                     <div class="messenger-compose">

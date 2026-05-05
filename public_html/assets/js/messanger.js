@@ -27,6 +27,7 @@
 		voiceShouldStopAfterStart: false,
 		voiceStartInFlight: false,
 		voicePointerMode: false,
+		voiceAudioContext: null,
 		lastMessageId: 0,
 		lastRenderedHtml: '',
 		faqPendingKey: '',
@@ -1652,8 +1653,52 @@
 			return String(window.MESSENGER_BOOTSTRAP.voiceEnabled || '0') === '1';
 		},
 
+		voiceMinDurationSeconds: function () {
+			return Math.max(2, parseInt(window.MESSENGER_BOOTSTRAP.voiceMinDurationSeconds || 2, 10) || 2);
+		},
+
 		isDesktopVoiceToggleMode: function () {
 			return !!(window.matchMedia && window.matchMedia('(pointer:fine)').matches);
+		},
+
+		playVoiceCue: function (kind) {
+			var ContextCtor = window.AudioContext || window.webkitAudioContext;
+			var context;
+			var oscillator;
+			var gain;
+			var startAt;
+			if (!ContextCtor) {
+				return;
+			}
+			try {
+				if (!this.voiceAudioContext) {
+					this.voiceAudioContext = new ContextCtor();
+				}
+				context = this.voiceAudioContext;
+				if (context.state === 'suspended' && typeof context.resume === 'function') {
+					context.resume().catch(function () {});
+				}
+				oscillator = context.createOscillator();
+				gain = context.createGain();
+				startAt = context.currentTime + 0.01;
+				oscillator.type = 'sine';
+				if (kind === 'stop') {
+					oscillator.frequency.setValueAtTime(988, startAt);
+					oscillator.frequency.exponentialRampToValueAtTime(740, startAt + 0.1);
+				} else {
+					oscillator.frequency.setValueAtTime(740, startAt);
+					oscillator.frequency.exponentialRampToValueAtTime(988, startAt + 0.08);
+				}
+				gain.gain.setValueAtTime(0.0001, startAt);
+				gain.gain.exponentialRampToValueAtTime(0.045, startAt + 0.015);
+				gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.12);
+				oscillator.connect(gain);
+				gain.connect(context.destination);
+				oscillator.start(startAt);
+				oscillator.stop(startAt + 0.13);
+			} catch (error) {
+				return;
+			}
 		},
 
 		resetVoiceRecordingState: function () {
@@ -1736,6 +1781,7 @@
 				self.voiceRecordStartedAt = Date.now();
 				self.voiceStatus().prop('hidden', false).addClass('is-recording');
 				self.updateVoiceTimer();
+				self.playVoiceCue('start');
 				window.clearInterval(self.voiceRecordTimer);
 				self.voiceRecordTimer = window.setInterval(function () {
 					self.updateVoiceTimer();
@@ -1748,11 +1794,18 @@
 					}
 				});
 				recorder.addEventListener('stop', function () {
-					var durationSeconds = Math.max(1, Math.round((Date.now() - self.voiceRecordStartedAt) / 1000));
+					var durationMs = Math.max(0, Date.now() - self.voiceRecordStartedAt);
+					var minDurationSeconds = self.voiceMinDurationSeconds();
+					var durationSeconds = Math.max(1, Math.round(durationMs / 1000));
 					var blob;
 					var fileName;
 					stopHandled = true;
 					if (!self.voiceChunks.length) {
+						self.resetVoiceRecordingState();
+						return;
+					}
+					if (durationMs < (minDurationSeconds * 1000)) {
+						self.showNotice(window.MESSENGER_BOOTSTRAP.voiceTooShortMessage || 'Przytrzymaj nagrywanie przez co najmniej 2 sekundy.');
 						self.resetVoiceRecordingState();
 						return;
 					}
@@ -1808,6 +1861,7 @@
 			if (!this.voiceRecorder || this.voiceRecorder.state !== 'recording') {
 				return false;
 			}
+			this.playVoiceCue('stop');
 			this.voiceRecorder.stop();
 			return false;
 		},

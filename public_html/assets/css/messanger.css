@@ -1145,6 +1145,7 @@
 	flex-direction:column;
 	align-items:stretch;
 	gap:10px;
+	position:relative;
 }
 
 .messenger-compose__preview{
@@ -1364,7 +1365,11 @@
 	display:flex;
 	align-items:center;
 	gap:8px;
-	margin-top:8px;
+	position:absolute;
+	left:0;
+	bottom:calc(100% + 10px);
+	z-index:8;
+	max-width:min(320px, calc(100% - 24px));
 	padding:6px 12px;
 	border-radius:999px;
 	background:#f7f7f8;

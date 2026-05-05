@@ -2134,6 +2134,7 @@ body.admin-login-page{
     padding:.85rem .9rem;
     border-top: 1px solid #ffffff;
     background:#fff;
+    position:relative;
 }
 
 .admin-chat-inbox__composer-alert{
@@ -2319,7 +2320,11 @@ body.admin-login-page{
     display:flex;
     align-items:center;
     gap:8px;
-    margin-bottom:8px;
+    position:absolute;
+    left:.9rem;
+    bottom:calc(100% + 10px);
+    z-index:8;
+    max-width:min(320px, calc(100% - 1.8rem));
     padding:8px 12px;
     border-radius:14px;
     background:#fff4f8;

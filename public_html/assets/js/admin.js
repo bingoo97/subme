@@ -3790,6 +3790,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var voiceStartInFlight = false;
         var voiceUploadInFlight = false;
         var voicePointerMode = false;
+        var voiceAudioContext = null;
         var paymentModals = {
             crypto: buildPaymentModalState('crypto'),
             bank: buildPaymentModalState('bank')
@@ -3847,6 +3848,52 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function voiceBusyMessage() {
             return root.getAttribute('data-chat-voice-busy') || 'Finish the current voice message first.';
+        }
+
+        function voiceMinDurationSeconds() {
+            return Math.max(2, parseInt(root.getAttribute('data-chat-voice-min-duration-seconds') || '2', 10) || 2);
+        }
+
+        function playVoiceCue(kind) {
+            var ContextCtor = window.AudioContext || window.webkitAudioContext;
+            var context;
+            var oscillator;
+            var gain;
+            var startAt;
+
+            if (!ContextCtor) {
+                return;
+            }
+
+            try {
+                if (!voiceAudioContext) {
+                    voiceAudioContext = new ContextCtor();
+                }
+                context = voiceAudioContext;
+                if (context.state === 'suspended' && typeof context.resume === 'function') {
+                    context.resume().catch(function () {});
+                }
+                oscillator = context.createOscillator();
+                gain = context.createGain();
+                startAt = context.currentTime + 0.01;
+                oscillator.type = 'sine';
+                if (kind === 'stop') {
+                    oscillator.frequency.setValueAtTime(988, startAt);
+                    oscillator.frequency.exponentialRampToValueAtTime(740, startAt + 0.1);
+                } else {
+                    oscillator.frequency.setValueAtTime(740, startAt);
+                    oscillator.frequency.exponentialRampToValueAtTime(988, startAt + 0.08);
+                }
+                gain.gain.setValueAtTime(0.0001, startAt);
+                gain.gain.exponentialRampToValueAtTime(0.045, startAt + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.12);
+                oscillator.connect(gain);
+                gain.connect(context.destination);
+                oscillator.start(startAt);
+                oscillator.stop(startAt + 0.13);
+            } catch (error) {
+                return;
+            }
         }
 
         function stopVoiceStreamTracks() {
@@ -3979,6 +4026,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!voiceRecorder || voiceRecorder.state !== 'recording') {
                 return false;
             }
+            playVoiceCue('stop');
             voiceRecorder.stop();
             return false;
         }
@@ -4040,6 +4088,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     setHidden(voiceStatus, false);
                 }
                 updateVoiceTimer();
+                playVoiceCue('start');
                 window.clearInterval(voiceRecordTimer);
                 voiceRecordTimer = window.setInterval(updateVoiceTimer, 250);
                 updateVoiceComposerState();
@@ -4051,12 +4100,19 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 });
                 recorder.addEventListener('stop', function () {
-                    var durationSeconds = Math.max(1, Math.round((Date.now() - voiceRecordStartedAt) / 1000));
+                    var durationMs = Math.max(0, Date.now() - voiceRecordStartedAt);
+                    var minDurationSeconds = voiceMinDurationSeconds();
+                    var durationSeconds = Math.max(1, Math.round(durationMs / 1000));
                     var blob;
                     var fileName;
                     stopHandled = true;
 
                     if (!voiceChunks.length) {
+                        resetVoiceRecordingState();
+                        return;
+                    }
+                    if (durationMs < (minDurationSeconds * 1000)) {
+                        showComposerAlert(root.getAttribute('data-chat-voice-too-short') || 'Hold the recording for at least 2 seconds.', true);
                         resetVoiceRecordingState();
                         return;
                     }

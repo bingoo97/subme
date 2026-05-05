@@ -561,6 +561,7 @@ return [
         'chat_voice_button' => 'Wiadomość głosowa',
         'chat_voice_disabled_tooltip' => 'Opcja nagrywania wiadomości głosowych jest obecnie wyłączona.',
         'chat_voice_coming_soon' => 'Nagrywanie wiadomości głosowych będzie dostępne wkrótce.',
+        'chat_voice_too_short' => 'Przytrzymaj nagrywanie przez co najmniej 2 sekundy.',
         'chat_upload_help' => 'Dozwolone są tylko pliki graficzne: .jpg, .png, .gif. Większe obrazy są automatycznie optymalizowane przed zapisaniem.',
         'chat_preview' => 'Podgląd',
         'chat_uploading' => 'Wysyłanie obrazu',
