@@ -3762,38 +3762,6 @@
 				self.uploadAttachment();
 			});
 
-			$(document).on('pointerdown.messengerUi', '[data-messenger-voice-preview]', function (event) {
-				if (self.isDesktopVoiceToggleMode()) {
-					return;
-				}
-				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
-					return;
-				}
-				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				self.voicePointerMode = true;
-				self.startVoiceRecording();
-			});
-
-			$(document).on('touchstart.messengerUi mousedown.messengerUi', '[data-messenger-voice-preview]', function (event) {
-				if (self.isDesktopVoiceToggleMode()) {
-					return;
-				}
-				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
-					return;
-				}
-				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
-					return;
-				}
-				event.preventDefault();
-				event.stopPropagation();
-				self.voicePointerMode = true;
-				self.startVoiceRecording();
-			});
-
 			$(document).on('pointerup.messengerUi pointercancel.messengerUi', function (event) {
 				if (self.isDesktopVoiceToggleMode() || !self.voicePointerMode) {
 					return;
@@ -3815,20 +3783,72 @@
 				self.stopVoiceRecording(false);
 			});
 
-			$(document).on('click.messengerUi', '[data-messenger-voice-preview]', function (event) {
+			if (this._voiceButtonNode && this._boundVoicePointerDownHandler) {
+				this._voiceButtonNode.removeEventListener('pointerdown', this._boundVoicePointerDownHandler);
+			}
+			if (this._voiceButtonNode && this._boundVoiceTouchStartHandler) {
+				this._voiceButtonNode.removeEventListener('touchstart', this._boundVoiceTouchStartHandler);
+				this._voiceButtonNode.removeEventListener('mousedown', this._boundVoiceTouchStartHandler);
+			}
+			if (this._voiceButtonNode && this._boundVoiceClickHandler) {
+				this._voiceButtonNode.removeEventListener('click', this._boundVoiceClickHandler);
+			}
+
+			this._voiceButtonNode = this.voiceButton().get(0) || null;
+			this._boundVoicePointerDownHandler = function (event) {
+				var $button = self.voiceButton();
+				if (self.isDesktopVoiceToggleMode()) {
+					return;
+				}
+				if (!$button.length || $button.hasClass('is-disabled') || $button.prop('disabled')) {
+					return;
+				}
+				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				self.voicePointerMode = true;
+				self.startVoiceRecording();
+			};
+			this._boundVoiceTouchStartHandler = function (event) {
+				var $button = self.voiceButton();
+				if (self.isDesktopVoiceToggleMode()) {
+					return;
+				}
+				if (!$button.length || $button.hasClass('is-disabled') || $button.prop('disabled')) {
+					return;
+				}
+				if (self.voicePointerMode || self.voiceRecording || self.voiceStartInFlight) {
+					return;
+				}
+				event.preventDefault();
+				event.stopPropagation();
+				self.voicePointerMode = true;
+				self.startVoiceRecording();
+			};
+			this._boundVoiceClickHandler = function (event) {
+				var $button = self.voiceButton();
 				if (!self.isDesktopVoiceToggleMode()) {
 					return;
 				}
 				event.preventDefault();
 				event.stopPropagation();
-				if ($(this).hasClass('is-disabled') || $(this).prop('disabled')) {
+				if (!$button.length || $button.hasClass('is-disabled') || $button.prop('disabled')) {
 					return false;
 				}
 				if (self.voiceRecording || self.voiceStartInFlight) {
 					return self.stopVoiceRecording(false);
 				}
 				return self.startVoiceRecording();
-			});
+			};
+
+			if (this._voiceButtonNode) {
+				this._voiceButtonNode.addEventListener('pointerdown', this._boundVoicePointerDownHandler);
+				this._voiceButtonNode.addEventListener('touchstart', this._boundVoiceTouchStartHandler, { passive: false });
+				this._voiceButtonNode.addEventListener('mousedown', this._boundVoiceTouchStartHandler);
+				this._voiceButtonNode.addEventListener('click', this._boundVoiceClickHandler);
+			}
 
 			$(document).on('visibilitychange.messengerUi', function () {
 				if (!document.hidden) {
