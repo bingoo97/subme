@@ -5700,10 +5700,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 if (createCustomerSendEmailInput && createCustomerSendEmailInput.checked) {
-                    successMessage += ' '
-                        + ((payload.email_notification && (payload.email_notification.ok || payload.email_notification.queued))
-                            ? (root.getAttribute('data-chat-create-user-email-queued') || 'Password email has been queued.')
-                            : (root.getAttribute('data-chat-create-user-email-failed') || 'Password email could not be queued.'));
+                    if (payload.email_notification && payload.email_notification.sent) {
+                        successMessage += ' ' + (root.getAttribute('data-chat-create-user-email-sent') || 'Password email has been sent.');
+                    } else if (payload.email_notification && (payload.email_notification.failed || payload.email_notification.status === 'failed')) {
+                        successMessage += ' ' + ((root.getAttribute('data-chat-create-user-email-failed') || 'Password email could not be queued.')
+                            + (payload.email_notification.last_error ? (' ' + String(payload.email_notification.last_error)) : ''));
+                    } else {
+                        successMessage += ' '
+                            + ((payload.email_notification && (payload.email_notification.ok || payload.email_notification.queued))
+                                ? (root.getAttribute('data-chat-create-user-email-queued') || 'Password email has been queued.')
+                                : (root.getAttribute('data-chat-create-user-email-failed') || 'Password email could not be queued.'));
+                    }
                 }
 
                 closeCreateCustomerModal();

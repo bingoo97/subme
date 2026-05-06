@@ -4798,6 +4798,12 @@ body.admin-login-page{
     box-shadow:none;
 }
 
+.admin-user-detail__side-column{
+    display:grid;
+    gap:1rem;
+    align-content:start;
+}
+
 .admin-user-detail__card-head{
     margin-bottom:1rem;
 }

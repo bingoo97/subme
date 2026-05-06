@@ -8788,7 +8788,7 @@ function admin_queue_customer_password_email(
     string $plainPassword,
     string $localeCode
 ): array {
-    return app_email_queue_template(
+    $result = app_email_queue_template(
         $db,
         'password-reset',
         $email,
@@ -8802,6 +8802,36 @@ function admin_queue_customer_password_email(
         true,
         $localeCode
     );
+
+    $queueId = (int)($result['queue_id'] ?? 0);
+    if ($queueId <= 0 || !schema_object_exists($db, 'outbound_email_queue')) {
+        return $result;
+    }
+
+    $queueRow = $db->select_user(
+        "SELECT status, last_error
+         FROM outbound_email_queue
+         WHERE id = {$queueId}
+         LIMIT 1"
+    );
+
+    if (!is_array($queueRow)) {
+        return $result;
+    }
+
+    $status = strtolower(trim((string)($queueRow['status'] ?? 'pending')));
+    $lastError = trim((string)($queueRow['last_error'] ?? ''));
+
+    $result['status'] = $status;
+    $result['sent'] = $status === 'sent';
+    $result['failed'] = $status === 'failed';
+    $result['last_error'] = $lastError;
+
+    if ($status === 'failed' && $lastError !== '') {
+        $result['message'] = $lastError;
+    }
+
+    return $result;
 }
 
 function admin_create_customer_account(
@@ -8926,6 +8956,58 @@ function admin_create_customer_account(
         'status' => $status,
         'email_notification' => $emailResult,
     ];
+}
+
+function admin_set_customer_password(
+    Mysql_ks $db,
+    int $customerId,
+    array $payload,
+    int $adminUserId,
+    string $ipAddress = ''
+): array {
+    if ($customerId <= 0 || !schema_object_exists($db, 'customers')) {
+        return ['ok' => false, 'message' => 'Customer not found.', 'message_key' => 'customer_not_found'];
+    }
+
+    $customer = app_find_customer_by_id($db, $customerId);
+    if (!$customer) {
+        return ['ok' => false, 'message' => 'Customer not found.', 'message_key' => 'customer_not_found'];
+    }
+
+    $password = trim((string)($payload['new_password'] ?? ''));
+    $repeatPassword = trim((string)($payload['repeat_password'] ?? ''));
+
+    if ($password === '') {
+        return ['ok' => false, 'message' => 'Enter a new password.', 'message_key' => 'change_password_error_new_required'];
+    }
+
+    if (strlen($password) < 8) {
+        return ['ok' => false, 'message' => 'New password must be at least 8 characters long.', 'message_key' => 'change_password_error_new_short'];
+    }
+
+    if (strlen($password) > 72) {
+        return ['ok' => false, 'message' => 'New password must be shorter than 72 characters.', 'message_key' => 'change_password_error_new_long'];
+    }
+
+    if ($password !== $repeatPassword) {
+        return ['ok' => false, 'message' => 'The new passwords do not match.', 'message_key' => 'change_password_error_mismatch'];
+    }
+
+    $updated = app_store_customer_password($db, $customerId, $password);
+    if (!$updated) {
+        return ['ok' => false, 'message' => 'Unable to save the new password.', 'message_key' => 'customer_password_save_error'];
+    }
+
+    admin_log_customer_and_admin(
+        $db,
+        $customerId,
+        $adminUserId,
+        'password_changed',
+        'Customer password changed by admin.',
+        $ipAddress
+    );
+
+    return ['ok' => true, 'message' => 'Customer password has been updated.', 'message_key' => 'customer_password_saved'];
 }
 
 function admin_delete_customer_account(Mysql_ks $db, int $customerId, int $adminUserId, string $ipAddress = ''): array
@@ -9215,8 +9297,19 @@ function admin_import_customer_accounts(
 
     $createdCount = 0;
     $skippedCount = 0;
+    $emailSentCount = 0;
     $emailQueuedCount = 0;
+    $emailFailedCount = 0;
     $errors = [];
+    $warnings = [];
+
+    $customerType = app_normalize_customer_type((string)($options['customer_type'] ?? 'client'));
+    if ($customerType === '') {
+        $customerType = 'client';
+    }
+    $sendPasswordEmail = !empty($options['send_password_email']);
+    $providerVisibilityFormPresent = !empty($options['provider_visibility_form_present']) ? 1 : 0;
+    $visibleProviderIds = array_map('intval', (array)($options['visible_provider_ids'] ?? []));
 
     foreach ((array)($parsed['items'] ?? []) as $item) {
         $email = strtolower(trim((string)($item['email'] ?? '')));
@@ -9236,7 +9329,10 @@ function admin_import_customer_accounts(
             [
                 'locale_code' => $localeCode,
                 'status' => $status,
-                'send_password_email' => true,
+                'customer_type' => $customerType,
+                'send_password_email' => $sendPasswordEmail,
+                'provider_visibility_form_present' => $providerVisibilityFormPresent,
+                'visible_provider_ids' => $visibleProviderIds,
             ],
             $adminUserId,
             $ipAddress
@@ -9244,8 +9340,17 @@ function admin_import_customer_accounts(
 
         if (!empty($result['ok'])) {
             $createdCount++;
-            if (!empty($result['email_notification']['ok']) || !empty($result['email_notification']['queued'])) {
-                $emailQueuedCount++;
+            if ($sendPasswordEmail) {
+                $emailNotification = (array)($result['email_notification'] ?? []);
+                if (!empty($emailNotification['sent'])) {
+                    $emailSentCount++;
+                } elseif (!empty($emailNotification['ok']) || !empty($emailNotification['queued'])) {
+                    $emailQueuedCount++;
+                } else {
+                    $emailFailedCount++;
+                    $failureMessage = trim((string)($emailNotification['last_error'] ?? $emailNotification['message'] ?? ''));
+                    $warnings[] = $email . ': ' . ($failureMessage !== '' ? $failureMessage : 'Password email could not be queued.');
+                }
             }
             continue;
         }
@@ -9259,8 +9364,16 @@ function admin_import_customer_accounts(
     if ($skippedCount > 0) {
         $message .= ' Skipped existing: ' . $skippedCount . '.';
     }
-    if ($emailQueuedCount > 0) {
-        $message .= ' Password emails queued: ' . $emailQueuedCount . '.';
+    if ($sendPasswordEmail) {
+        if ($emailSentCount > 0) {
+            $message .= ' Password emails sent: ' . $emailSentCount . '.';
+        }
+        if ($emailQueuedCount > 0) {
+            $message .= ' Password emails queued: ' . $emailQueuedCount . '.';
+        }
+        if ($emailFailedCount > 0) {
+            $message .= ' Password emails failed: ' . $emailFailedCount . '.';
+        }
     }
     if (!empty($parsed['detected_email_column_label'])) {
         $message .= ' Email column: ' . (string)$parsed['detected_email_column_label'] . '.';
@@ -9268,14 +9381,20 @@ function admin_import_customer_accounts(
     if ($errors) {
         $message .= ' Errors: ' . implode(' | ', array_slice($errors, 0, 3));
     }
+    if ($warnings) {
+        $message .= ' Warnings: ' . implode(' | ', array_slice($warnings, 0, 3));
+    }
 
     return [
         'ok' => $createdCount > 0 || $skippedCount > 0,
         'message' => $message,
         'created_count' => $createdCount,
         'skipped_count' => $skippedCount,
+        'email_sent_count' => $emailSentCount,
         'email_queued_count' => $emailQueuedCount,
+        'email_failed_count' => $emailFailedCount,
         'errors' => $errors,
+        'warnings' => $warnings,
         'detected_email_column_label' => (string)($parsed['detected_email_column_label'] ?? ''),
     ];
 }

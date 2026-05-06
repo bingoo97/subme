@@ -225,6 +225,22 @@ $adminActiveFullAdminCount = admin_active_full_admin_count($db);
 $adminHelpModalCanEdit = admin_user_can_access_route($adminUser, 'settings') && admin_sensitive_routes_unlocked();
 $adminCanManageUsers = admin_user_can_access_route($adminUser, 'users');
 
+$adminPasswordEmailNotice = static function (array $messages, array $emailNotification): string {
+    $lastError = trim((string)($emailNotification['last_error'] ?? $emailNotification['message'] ?? ''));
+    if (!empty($emailNotification['sent'])) {
+        return admin_t($messages, 'users_email_password_sent', 'Password email has been sent.');
+    }
+    if (!empty($emailNotification['failed'])) {
+        $base = admin_t($messages, 'users_email_password_queue_failed', 'Password email could not be queued.');
+        return $lastError !== '' ? ($base . ' ' . $lastError) : $base;
+    }
+    if (!empty($emailNotification['ok']) || !empty($emailNotification['queued'])) {
+        return admin_t($messages, 'users_email_password_queued', 'Password email has been queued.');
+    }
+    $base = admin_t($messages, 'users_email_password_queue_failed', 'Password email could not be queued.');
+    return $lastError !== '' ? ($base . ' ' . $lastError) : $base;
+};
+
 if (!admin_user_can_access_route($adminUser, $route)) {
     $blockedRoute = $route;
     $route = 'dashboard';
@@ -2883,6 +2899,12 @@ if ($route === 'users') {
         'source_text' => trim((string)($_POST['import_source_text'] ?? '')),
         'locale_code' => admin_normalize_locale((string)($_POST['import_locale_code'] ?? 'pl')),
         'status' => strtolower(trim((string)($_POST['import_status'] ?? 'active'))),
+        'customer_type' => (string)($_POST['import_customer_type'] ?? 'client'),
+        'send_password_email' => !array_key_exists('admin_import_customers', $_POST) || !empty($_POST['import_send_password_email']),
+        'provider_visibility_form_present' => 1,
+        'visible_provider_ids' => array_map('intval', (array)($_POST['visible_provider_ids'] ?? array_map(static function (array $providerRow): int {
+            return (int)($providerRow['id'] ?? 0);
+        }, $userQuickCreateProviderRows))),
     ];
 
     if (isset($_POST['admin_quick_create_customer'])) {
@@ -2915,9 +2937,7 @@ if ($route === 'users') {
                     . ' Email: <strong>' . admin_e((string)($quickCreateResult['email'] ?? '')) . '</strong>'
                     . ' Password: <strong>' . admin_e((string)($quickCreateResult['password'] ?? '')) . '</strong>.';
                 if (!empty($userQuickCreateState['send_password_email'])) {
-                    $emailNotificationText = !empty($quickCreateResult['email_notification']['ok']) || !empty($quickCreateResult['email_notification']['queued'])
-                        ? admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')
-                        : admin_t($messages, 'users_email_password_queue_failed', 'Password email could not be queued.');
+                    $emailNotificationText = $adminPasswordEmailNotice($messages, (array)($quickCreateResult['email_notification'] ?? []));
                     $pageAlert .= ' ' . $emailNotificationText;
                     $pageAlertHtml .= ' ' . admin_e($emailNotificationText);
                 }
@@ -2957,6 +2977,10 @@ if ($route === 'users') {
                 [
                     'locale_code' => (string)($userImportState['locale_code'] ?? 'pl'),
                     'status' => (string)($userImportState['status'] ?? 'active'),
+                    'customer_type' => (string)($userImportState['customer_type'] ?? 'client'),
+                    'send_password_email' => !empty($userImportState['send_password_email']),
+                    'provider_visibility_form_present' => !empty($userImportState['provider_visibility_form_present']) ? 1 : 0,
+                    'visible_provider_ids' => (array)($userImportState['visible_provider_ids'] ?? []),
                 ],
                 (int)($adminUser['id'] ?? 0),
                 $requestIp
@@ -3003,6 +3027,26 @@ if ($route === 'users') {
             );
             $pageAlert = (string)($balanceResult['message'] ?? '');
             $pageAlertType = !empty($balanceResult['ok']) ? 'success' : 'danger';
+        }
+    }
+
+    if ($selectedCustomerId > 0 && isset($_POST['admin_set_customer_password'])) {
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+            $pageAlertType = 'danger';
+        } else {
+            $passwordResult = admin_set_customer_password(
+                $db,
+                $selectedCustomerId,
+                $_POST,
+                (int)($adminUser['id'] ?? 0),
+                $requestIp
+            );
+            $passwordMessageKey = trim((string)($passwordResult['message_key'] ?? ''));
+            $pageAlert = $passwordMessageKey !== ''
+                ? admin_t($messages, $passwordMessageKey, (string)($passwordResult['message'] ?? ''))
+                : (string)($passwordResult['message'] ?? '');
+            $pageAlertType = !empty($passwordResult['ok']) ? 'success' : 'danger';
         }
     }
 
@@ -4567,6 +4611,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-chat-voice-min-duration-seconds="2"
                         data-chat-create-user-success="<?php echo admin_e(admin_t($messages, 'chat_create_user_success', 'User created successfully.')); ?>"
                         data-chat-create-user-error="<?php echo admin_e(admin_t($messages, 'chat_create_user_error', 'Unable to create the user.')); ?>"
+                        data-chat-create-user-email-sent="<?php echo admin_e(admin_t($messages, 'users_email_password_sent', 'Password email has been sent.')); ?>"
                         data-chat-create-user-email-queued="<?php echo admin_e(admin_t($messages, 'users_email_password_queued', 'Password email has been queued.')); ?>"
                         data-chat-create-user-email-failed="<?php echo admin_e(admin_t($messages, 'users_email_password_queue_failed', 'Password email could not be queued.')); ?>"
                         data-chat-create-user-group-hint="<?php echo admin_e(admin_t($messages, 'chat_create_user_group_hint', 'User created. Click Add to include them in the group.')); ?>"
@@ -7668,45 +7713,75 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </form>
                                                 </section>
 
-                                                <section class="admin-user-detail__card">
-                                                    <div class="admin-user-detail__card-head">
-                                                        <h4><?php echo admin_e(admin_t($messages, 'customer_balance_title', 'Balance')); ?></h4>
-                                                        <p><?php echo admin_e(admin_t($messages, 'customer_balance_intro', 'Add or deduct funds from the customer balance.')); ?></p>
-                                                    </div>
-
-                                                    <div class="admin-user-balance">
-                                                        <div class="admin-user-balance__value"><?php echo admin_e($adminDefaultCurrencySymbol . $selectedCustomerBalance); ?></div>
-                                                        <div class="admin-user-balance__code"><?php echo admin_e($adminDefaultCurrencyCode); ?></div>
-                                                    </div>
-
-                                                    <form method="post" class="admin-user-form">
-                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                        <div class="row g-3">
-                                                            <div class="col-md-4">
-                                                                <label class="form-label" for="adjustment_direction"><?php echo admin_e(admin_t($messages, 'customer_balance_action', 'Action')); ?></label>
-                                                                <select class="form-select" id="adjustment_direction" name="adjustment_direction">
-                                                                    <option value="credit"><?php echo admin_e(admin_t($messages, 'customer_balance_credit', 'Add funds')); ?></option>
-                                                                    <option value="debit"><?php echo admin_e(admin_t($messages, 'customer_balance_debit', 'Deduct funds')); ?></option>
-                                                                </select>
-                                                            </div>
-                                                            <div class="col-md-4">
-                                                                <label class="form-label" for="adjustment_amount"><?php echo admin_e(admin_t($messages, 'customer_balance_amount', 'Amount')); ?></label>
-                                                                <input type="text" class="form-control" id="adjustment_amount" name="adjustment_amount" placeholder="0.00" required>
-                                                            </div>
-                                                            <div class="col-md-4">
-                                                                <label class="form-label" for="adjustment_note"><?php echo admin_e(admin_t($messages, 'customer_balance_note', 'Note')); ?></label>
-                                                                <input type="text" class="form-control" id="adjustment_note" name="adjustment_note" placeholder="<?php echo admin_e(admin_t($messages, 'customer_balance_note_placeholder', 'Optional note')); ?>">
-                                                            </div>
+                                                <div class="admin-user-detail__side-column">
+                                                    <section class="admin-user-detail__card">
+                                                        <div class="admin-user-detail__card-head">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'customer_password_title', 'Set password')); ?></h4>
+                                                            <p><?php echo admin_e(admin_t($messages, 'customer_password_intro', 'Set a new password manually when you need to log in as this user or share access details again.')); ?></p>
                                                         </div>
 
-                                                        <div class="admin-editor-actions">
-                                                            <button type="submit" class="btn btn-dark" name="admin_adjust_customer_balance">
-                                                                <i class="bi bi-wallet2" aria-hidden="true"></i>
-                                                                <span><?php echo admin_e(admin_t($messages, 'customer_balance_save', 'Update balance')); ?></span>
-                                                            </button>
+                                                        <form method="post" class="admin-user-form">
+                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                            <div class="row g-3">
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="customer_new_password"><?php echo admin_e(admin_t($messages, 'customer_password_new', 'New password')); ?></label>
+                                                                    <input type="text" class="form-control" id="customer_new_password" name="new_password" autocomplete="new-password" placeholder="<?php echo admin_e(admin_t($messages, 'customer_password_placeholder', 'Enter a new password')); ?>">
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="customer_repeat_password"><?php echo admin_e(admin_t($messages, 'customer_password_repeat', 'Repeat new password')); ?></label>
+                                                                    <input type="text" class="form-control" id="customer_repeat_password" name="repeat_password" autocomplete="new-password" placeholder="<?php echo admin_e(admin_t($messages, 'customer_password_repeat_placeholder', 'Repeat the new password')); ?>">
+                                                                </div>
+                                                            </div>
+
+                                                            <div class="admin-editor-actions">
+                                                                <button type="submit" class="btn btn-dark" name="admin_set_customer_password">
+                                                                    <i class="bi bi-key" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'customer_password_save', 'Save new password')); ?></span>
+                                                                </button>
+                                                            </div>
+                                                        </form>
+                                                    </section>
+
+                                                    <section class="admin-user-detail__card">
+                                                        <div class="admin-user-detail__card-head">
+                                                            <h4><?php echo admin_e(admin_t($messages, 'customer_balance_title', 'Balance')); ?></h4>
+                                                            <p><?php echo admin_e(admin_t($messages, 'customer_balance_intro', 'Add or deduct funds from the customer balance.')); ?></p>
                                                         </div>
-                                                    </form>
-                                                </section>
+
+                                                        <div class="admin-user-balance">
+                                                            <div class="admin-user-balance__value"><?php echo admin_e($adminDefaultCurrencySymbol . $selectedCustomerBalance); ?></div>
+                                                            <div class="admin-user-balance__code"><?php echo admin_e($adminDefaultCurrencyCode); ?></div>
+                                                        </div>
+
+                                                        <form method="post" class="admin-user-form">
+                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                            <div class="row g-3">
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="adjustment_direction"><?php echo admin_e(admin_t($messages, 'customer_balance_action', 'Action')); ?></label>
+                                                                    <select class="form-select" id="adjustment_direction" name="adjustment_direction">
+                                                                        <option value="credit"><?php echo admin_e(admin_t($messages, 'customer_balance_credit', 'Add funds')); ?></option>
+                                                                        <option value="debit"><?php echo admin_e(admin_t($messages, 'customer_balance_debit', 'Deduct funds')); ?></option>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="adjustment_amount"><?php echo admin_e(admin_t($messages, 'customer_balance_amount', 'Amount')); ?></label>
+                                                                    <input type="text" class="form-control" id="adjustment_amount" name="adjustment_amount" placeholder="0.00" required>
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label" for="adjustment_note"><?php echo admin_e(admin_t($messages, 'customer_balance_note', 'Note')); ?></label>
+                                                                    <input type="text" class="form-control" id="adjustment_note" name="adjustment_note" placeholder="<?php echo admin_e(admin_t($messages, 'customer_balance_note_placeholder', 'Optional note')); ?>">
+                                                                </div>
+                                                            </div>
+
+                                                            <div class="admin-editor-actions">
+                                                                <button type="submit" class="btn btn-dark" name="admin_adjust_customer_balance">
+                                                                    <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'customer_balance_save', 'Update balance')); ?></span>
+                                                                </button>
+                                                            </div>
+                                                        </form>
+                                                    </section>
+                                                </div>
                                             </div>
 
                                             <div class="admin-user-detail__sections">
@@ -8544,14 +8619,58 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </select>
                                                                 </div>
                                                                 <div class="col-md-4">
+                                                                    <label class="form-label" for="import_customer_type"><?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?></label>
+                                                                    <select class="form-select" id="import_customer_type" name="import_customer_type">
+                                                                        <?php foreach (admin_customer_type_options((string)($userImportState['customer_type'] ?? 'client')) as $customerTypeOption): ?>
+                                                                            <option value="<?php echo admin_e($customerTypeOption); ?>"<?php echo (string)($userImportState['customer_type'] ?? 'client') === $customerTypeOption ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'customer_type_' . $customerTypeOption, ucfirst($customerTypeOption))); ?></option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-4">
                                                                     <label class="form-label" for="import_source_file"><?php echo admin_e(admin_t($messages, 'users_import_file_label', 'CSV / TXT file')); ?></label>
                                                                     <input type="file" class="form-control" id="import_source_file" name="import_source_file" accept=".csv,.txt,text/plain,text/csv">
+                                                                </div>
+                                                                <div class="col-md-4">
+                                                                    <label class="form-label d-block"><?php echo admin_e(admin_t($messages, 'users_email_password_label', 'Password email')); ?></label>
+                                                                    <div class="form-check form-switch mt-2">
+                                                                        <input class="form-check-input" type="checkbox" role="switch" id="import_send_password_email" name="import_send_password_email" value="1"<?php echo !array_key_exists('admin_import_customers', $_POST) || !empty($userImportState['send_password_email']) ? ' checked' : ''; ?>>
+                                                                        <label class="form-check-label" for="import_send_password_email"><?php echo admin_e(admin_t($messages, 'users_email_password_send', 'Send login email with password')); ?></label>
+                                                                    </div>
                                                                 </div>
                                                                 <div class="col-12">
                                                                     <label class="form-label" for="import_source_text"><?php echo admin_e(admin_t($messages, 'users_import_text_label', 'Paste content')); ?></label>
                                                                     <textarea class="form-control" id="import_source_text" name="import_source_text" rows="7" placeholder="<?php echo admin_e(admin_t($messages, 'users_import_placeholder', 'email@example.com\nsecond@example.com\n\nor CSV with an email column')); ?>"><?php echo admin_e((string)($userImportState['source_text'] ?? '')); ?></textarea>
                                                                     <div class="form-text"><?php echo admin_e(admin_t($messages, 'users_import_help', 'You can import one email per line or a CSV file. Email column detection works automatically.')); ?></div>
                                                                 </div>
+                                                                <?php if (!empty($userQuickCreateProviderRows)): ?>
+                                                                    <div class="col-12">
+                                                                        <div class="admin-user-provider-visibility">
+                                                                            <input type="hidden" name="provider_visibility_form_present" value="1">
+                                                                            <div class="admin-user-provider-visibility__head">
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'customer_provider_visibility_title', 'Provider visibility')); ?></strong>
+                                                                                <p><?php echo admin_e(admin_t($messages, 'users_import_provider_visibility_help', 'These provider permissions will be assigned to every imported user.')); ?></p>
+                                                                            </div>
+                                                                            <div class="admin-user-provider-visibility__grid">
+                                                                                <?php foreach ($userQuickCreateProviderRows as $providerVisibilityRow): ?>
+                                                                                    <?php
+                                                                                    $providerVisibilityId = (int)($providerVisibilityRow['id'] ?? 0);
+                                                                                    $providerVisibilityActive = !empty($providerVisibilityRow['is_active']);
+                                                                                    $providerVisible = in_array($providerVisibilityId, array_map('intval', (array)($userImportState['visible_provider_ids'] ?? [])), true);
+                                                                                    ?>
+                                                                                    <label class="admin-user-provider-visibility__item">
+                                                                                        <input type="checkbox" name="visible_provider_ids[]" value="<?php echo admin_e((string)$providerVisibilityId); ?>"<?php echo $providerVisible ? ' checked' : ''; ?>>
+                                                                                        <span class="admin-user-provider-visibility__copy">
+                                                                                            <span class="admin-user-provider-visibility__name"><?php echo admin_e((string)($providerVisibilityRow['name'] ?? 'Provider')); ?></span>
+                                                                                            <span class="admin-status-pill admin-status-pill--xs <?php echo $providerVisibilityActive ? 'admin-status-pill--available' : 'admin-status-pill--muted'; ?>">
+                                                                                                <?php echo admin_e($providerVisibilityActive ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_inactive', 'Inactive')); ?>
+                                                                                            </span>
+                                                                                        </span>
+                                                                                    </label>
+                                                                                <?php endforeach; ?>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                <?php endif; ?>
                                                             </div>
                                                             <div class="admin-editor-actions">
                                                                 <button type="submit" class="btn btn-dark" name="admin_import_customers">
