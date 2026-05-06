@@ -248,13 +248,25 @@ switch ($site) {
 							);
 
 							if ($check) {
-								app_delete_unpaid_order_payment_requests($db, $id, (int)$user["id"]);
-								if (schema_object_exists($db, 'order_status_events')) {
-									app_delete_records_by_ids($db, 'order_status_events', 'order_id', [$id]);
+								if (app_order_has_generated_payment_request($db, $id, (int)$user["id"])) {
+									$smarty->assign(
+										"alert_error",
+										localization_translate(
+											$t,
+											'orders_delete_blocked_payment_generated',
+											'You cannot remove this order because a payment request has already been generated for it.'
+										)
+									);
+									$smarty->display("alert.tpl");
+								} else {
+									app_delete_unpaid_order_payment_requests($db, $id, (int)$user["id"]);
+									if (schema_object_exists($db, 'order_status_events')) {
+										app_delete_records_by_ids($db, 'order_status_events', 'order_id', [$id]);
+									}
+									$db->delete_using_id("orders", $id);
+									$smarty->assign("alert", "Removed.");
+									$smarty->display("alert.tpl");
 								}
-								$db->delete_using_id("orders", $id);
-								$smarty->assign("alert", "Removed.");
-								$smarty->display("alert.tpl");
 							}
 						} else {
 							$check = $db->select("products_users", "*", "WHERE id='$id' AND user_id='{$user["id"]}'");

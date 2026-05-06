@@ -154,6 +154,15 @@ if ($wygrane) {
             && strtolower(trim((string)($wygrane[$i]['payment_status'] ?? ''))) === 'paid'
             && (int)($wygrane[$i]['shipment'] ?? 0) === 0
         ) ? 1 : 0;
+        $wygrane[$i]['has_generated_payment_request'] = app_uses_v2_schema($db)
+            ? (app_order_has_generated_payment_request($db, (int)($wygrane[$i]['id'] ?? 0), (int)$user['id']) ? 1 : 0)
+            : 0;
+        $wygrane[$i]['can_delete_order'] = (
+            (int)($wygrane[$i]['status'] ?? 0) === 0
+            && (int)($wygrane[$i]['shipment'] ?? 0) === 0
+            && empty($wygrane[$i]['payment_waiting_activation'])
+            && empty($wygrane[$i]['has_generated_payment_request'])
+        ) ? 1 : 0;
 
         if ($wygrane[$i]['date_add_s'] < $wygrane[$i]['date_end_s']) {
             $startDate = $wygrane[$i]['date_add_s'];

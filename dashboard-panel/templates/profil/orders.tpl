@@ -282,9 +282,15 @@
                                     </div>
                                     {if $can_pending_payment_actions}
                                         <div class="user-order-modal__danger-action">
+                                            {if $wygrane[i].can_delete_order|default:0}
                                             <a href="del-order-{$wygrane[i].id}" class="btn btn-danger btn-lg btn-block w-100 remove">
                                                 <i class="fa fa-trash" aria-hidden="true"></i> {$t.orders_action_remove|default:'Remove'}
                                             </a>
+                                            {elseif $wygrane[i].has_generated_payment_request|default:0}
+                                            <div class="alert alert-warning mb-0">
+                                                {$t.orders_delete_blocked_payment_generated|default:'You cannot remove this order because a payment request has already been generated for it.'}
+                                            </div>
+                                            {/if}
                                         </div>
                                     {/if}
                                 </div>
@@ -297,9 +303,15 @@
                                             <a href="order-payment-{$wygrane[i].id}" class="btn btn-dark btn-lg btn-block">
                                                 <i class="fa fa-credit-card" aria-hidden="true"></i> {$t.orders_action_payment|default:'Payment'}
                                             </a>
+                                            {if $wygrane[i].can_delete_order|default:0}
                                             <a href="del-order-{$wygrane[i].id}" class="btn btn-danger btn-lg btn-block remove">
                                                 <i class="fa fa-trash" aria-hidden="true"></i> {$t.orders_action_remove|default:'Remove'}
                                             </a>
+                                            {elseif $wygrane[i].has_generated_payment_request|default:0}
+                                            <div class="alert alert-warning mb-0">
+                                                {$t.orders_delete_blocked_payment_generated|default:'You cannot remove this order because a payment request has already been generated for it.'}
+                                            </div>
+                                            {/if}
                                         {/if}
                                         {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' neq 'credits'}
                                             <div class="user-order-modal__action-copy">

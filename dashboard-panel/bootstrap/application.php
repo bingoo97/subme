@@ -1843,6 +1843,45 @@ function app_payment_cancelled_statuses(): array
     return ['cancelled', 'rejected', 'failed'];
 }
 
+function app_order_has_generated_payment_request(Mysql_ks $db, int $orderId, int $customerId = 0): bool
+{
+    if ($orderId <= 0) {
+        return false;
+    }
+
+    $customerFilterSql = $customerId > 0 ? " AND customer_id = {$customerId}" : '';
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoRow = $db->select_user(
+            "SELECT id
+             FROM crypto_deposit_requests
+             WHERE order_id = {$orderId}{$customerFilterSql}
+               AND status NOT IN ('cancelled', 'rejected', 'failed')
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        if (is_array($cryptoRow) && !empty($cryptoRow['id'])) {
+            return true;
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankRow = $db->select_user(
+            "SELECT id
+             FROM bank_transfer_requests
+             WHERE order_id = {$orderId}{$customerFilterSql}
+               AND status NOT IN ('cancelled', 'rejected', 'failed')
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        if (is_array($bankRow) && !empty($bankRow['id'])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
 {
     if (schema_object_exists($db, 'bank_transfer_requests') && !schema_column_exists($db, 'bank_transfer_requests', 'cancelled_at')) {

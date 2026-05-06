@@ -359,6 +359,7 @@ return [
         'orders_action_extend_intro' => 'Your current subscription is still active. Extend it now to keep uninterrupted access to the same service.',
         'orders_action_renew_intro' => 'This subscription has already expired. Create a new payment request to renew access and restore the service.',
         'orders_action_remove' => 'Remove',
+        'orders_delete_blocked_payment_generated' => 'You cannot remove this order because a payment request has already been generated for it.',
         'orders_extensions' => 'Extensions',
         'orders_extension_entry_prefix' => 'Extend',
         'orders_extend_same_order_unavailable' => 'This order cannot be extended in place right now.',

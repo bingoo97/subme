@@ -366,6 +366,7 @@ return [
         'orders_action_extend_intro' => 'Twoja obecna subskrypcja jest nadal aktywna. Przedłuż ją teraz, aby zachować ciągłość dostępu bez przerwy.',
         'orders_action_renew_intro' => 'Ta subskrypcja już wygasła. Wygeneruj nową płatność, aby odnowić dostęp i przywrócić usługę.',
         'orders_action_remove' => 'Usuń',
+        'orders_delete_blocked_payment_generated' => 'Nie możesz usunąć tego zamówienia, ponieważ została już do niego wygenerowana płatność.',
         'orders_extensions' => 'Przedłużenia',
         'orders_extension_entry_prefix' => 'Extend',
         'orders_extend_same_order_unavailable' => 'Tego zamówienia nie można teraz przedłużyć w tym samym rekordzie.',
