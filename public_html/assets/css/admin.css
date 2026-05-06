@@ -2329,10 +2329,10 @@ body.admin-login-page{
     bottom:calc(100% + 10px);
     z-index:8;
     max-width:min(320px, calc(100% - 1.8rem));
-    padding:8px 12px;
-    border-radius:14px;
-    background:#fff4f8;
-    color:#7e1146;
+    padding:6px 12px;
+    border-radius:999px;
+    background:#f7f7f8;
+    color:#3b3b3b;
     font-size:12px;
     font-weight:600;
 }
