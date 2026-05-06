@@ -825,7 +825,7 @@
 .messenger-faq-prompts{
 	display:flex;
 	flex-direction:column;
-	gap:6px;
+	gap: 0;
 	margin: 0;
 }
 
