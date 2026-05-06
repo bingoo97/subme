@@ -248,6 +248,10 @@ switch ($site) {
 							);
 
 							if ($check) {
+								app_delete_unpaid_order_payment_requests($db, $id, (int)$user["id"]);
+								if (schema_object_exists($db, 'order_status_events')) {
+									app_delete_records_by_ids($db, 'order_status_events', 'order_id', [$id]);
+								}
 								$db->delete_using_id("orders", $id);
 								$smarty->assign("alert", "Removed.");
 								$smarty->display("alert.tpl");

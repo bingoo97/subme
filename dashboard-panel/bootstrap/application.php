@@ -1914,6 +1914,105 @@ function app_cancel_bank_transfer_requests(
     return $updated ? (int)$db->affected_rows : 0;
 }
 
+function app_delete_unpaid_order_payment_requests(
+    Mysql_ks $db,
+    int $orderId,
+    int $customerId = 0,
+    ?string $deletedAt = null
+): array {
+    if ($orderId <= 0) {
+        return [
+            'ok' => false,
+            'deleted_crypto_requests' => 0,
+            'deleted_bank_requests' => 0,
+            'message' => 'Order not found.',
+        ];
+    }
+
+    $safeNow = trim((string)$deletedAt);
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+
+    $deletedCryptoRequests = 0;
+    $deletedBankRequests = 0;
+    $sharedEnabled = !empty(app_fetch_settings($db)['crypto_wallet_shared_assignments_enabled']);
+    $customerFilterSql = $customerId > 0 ? ' AND customer_id = ' . $customerId : '';
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        app_cancel_crypto_deposit_requests(
+            $db,
+            "order_id = {$orderId}{$customerFilterSql}
+             AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')",
+            'Released after customer deleted unpaid order payment request',
+            $safeNow
+        );
+
+        $cryptoRows = $db->select_full_user(
+            "SELECT id, wallet_assignment_id
+             FROM crypto_deposit_requests
+             WHERE order_id = {$orderId}{$customerFilterSql}
+               AND status NOT IN ('approved', 'confirmed', 'paid', 'completed', 'archived')"
+        );
+
+        if ($cryptoRows) {
+            $cryptoIds = [];
+            foreach ($cryptoRows as $row) {
+                $requestId = (int)($row['id'] ?? 0);
+                $assignmentId = (int)($row['wallet_assignment_id'] ?? 0);
+                if ($requestId > 0) {
+                    $cryptoIds[$requestId] = $requestId;
+                }
+                if ($sharedEnabled && $assignmentId > 0) {
+                    app_release_crypto_wallet_assignment_if_unused($db, $assignmentId, 'Released after customer deleted unpaid order payment request');
+                }
+            }
+
+            if ($cryptoIds) {
+                $deleted = app_delete_records_by_ids($db, 'crypto_deposit_requests', 'id', array_values($cryptoIds));
+                $deletedCryptoRequests = $deleted !== null ? (int)$deleted : 0;
+            }
+        }
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        app_cancel_bank_transfer_requests(
+            $db,
+            "order_id = {$orderId}{$customerFilterSql}
+             AND status IN ('pending_payment', 'awaiting_review', 'expired')",
+            $safeNow
+        );
+
+        $bankRows = $db->select_full_user(
+            "SELECT id
+             FROM bank_transfer_requests
+             WHERE order_id = {$orderId}{$customerFilterSql}
+               AND status NOT IN ('approved', 'confirmed', 'paid', 'completed', 'archived')"
+        );
+
+        if ($bankRows) {
+            $bankIds = [];
+            foreach ($bankRows as $row) {
+                $requestId = (int)($row['id'] ?? 0);
+                if ($requestId > 0) {
+                    $bankIds[$requestId] = $requestId;
+                }
+            }
+            if ($bankIds) {
+                $deleted = app_delete_records_by_ids($db, 'bank_transfer_requests', 'id', array_values($bankIds));
+                $deletedBankRequests = $deleted !== null ? (int)$deleted : 0;
+            }
+        }
+    }
+
+    return [
+        'ok' => true,
+        'deleted_crypto_requests' => $deletedCryptoRequests,
+        'deleted_bank_requests' => $deletedBankRequests,
+        'message' => 'Order payment requests removed.',
+    ];
+}
+
 function app_expire_bank_transfer_requests(
     Mysql_ks $db,
     string $whereSql,
