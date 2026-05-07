@@ -12,6 +12,7 @@ app_ensure_customer_runtime_columns($db);
 app_ensure_product_provider_runtime_columns($db);
 admin_ensure_help_topics_runtime_table($db);
 $appSettings = admin_app_settings($db);
+$cryptoWalletSharedEnabled = admin_crypto_wallet_shared_assignments_enabled($appSettings);
 $cryptoWalletFreeCount = admin_crypto_wallet_free_count($db);
 $cryptoWalletPoolDepleted = $cryptoWalletFreeCount <= 0;
 $serviceCurrencies = admin_service_currency_rows($db);
@@ -10537,7 +10538,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div class="alert alert-danger" role="alert">
                                                     <?php echo admin_e(admin_t($messages, 'wallet_pool_empty_inline_alert', 'There are no free crypto wallet addresses in the database right now. Add or release wallet addresses so users can generate new payment requests.')); ?>
                                                 </div>
-                                            <?php elseif ($cryptoWalletFreeCount === 1): ?>
+                                            <?php elseif (!$cryptoWalletSharedEnabled && $cryptoWalletFreeCount === 1): ?>
                                                 <div class="alert alert-info" role="alert">
                                                     <?php echo admin_e(admin_t($messages, 'wallet_pool_low_inline_alert', 'Only 1 free crypto wallet address is left in the database. Add another address now to avoid blocking the next payment request.')); ?>
                                                 </div>

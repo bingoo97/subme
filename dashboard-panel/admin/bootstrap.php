@@ -7504,6 +7504,19 @@ function admin_crypto_wallet_free_count(Mysql_ks $db): int
     }
 
     app_sync_crypto_wallet_address_statuses($db);
+    $settings = admin_app_settings($db);
+    $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
+
+    if ($sharedEnabled) {
+        $row = $db->select_user(
+            "SELECT COUNT(*) AS total
+             FROM crypto_wallet_addresses
+             WHERE crypto_wallet_addresses.disabled_at IS NULL
+               AND crypto_wallet_addresses.status IN ('available', 'assigned')"
+        );
+
+        return (int)($row['total'] ?? 0);
+    }
 
     $row = $db->select_user(
         "SELECT COUNT(*) AS total
@@ -7679,6 +7692,22 @@ function admin_crypto_wallet_asset_summary_rows(Mysql_ks $db): array
         return [];
     }
 
+    $settings = admin_app_settings($db);
+    $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
+    $availableCountSql = $sharedEnabled
+        ? "CASE
+                WHEN crypto_wallet_addresses.disabled_at IS NULL
+                 AND crypto_wallet_addresses.status IN ('available', 'assigned')
+                THEN 1
+                ELSE 0
+           END"
+        : "CASE
+                WHEN crypto_wallet_addresses.disabled_at IS NULL
+                 AND crypto_wallet_addresses.status = 'available'
+                THEN 1
+                ELSE 0
+           END";
+
     return $db->select_full_user(
         "SELECT
             crypto_assets.id AS asset_id,
@@ -7686,12 +7715,7 @@ function admin_crypto_wallet_asset_summary_rows(Mysql_ks $db): array
             crypto_assets.name AS asset_name,
             crypto_assets.logo_url AS asset_logo_url,
             COALESCE(SUM(
-                CASE
-                    WHEN crypto_wallet_addresses.disabled_at IS NULL
-                     AND crypto_wallet_addresses.status = 'available'
-                    THEN 1
-                    ELSE 0
-                END
+                {$availableCountSql}
             ), 0) AS available_count,
             COUNT(crypto_wallet_addresses.id) AS total_count
          FROM crypto_assets

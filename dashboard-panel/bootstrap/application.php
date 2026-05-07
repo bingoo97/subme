@@ -1340,6 +1340,7 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
 
     app_release_stale_auto_crypto_wallet_assignments($db);
     app_sync_crypto_wallet_address_statuses($db);
+    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
 
     $row = $db->select_user(
         "SELECT
@@ -1364,9 +1365,9 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
          WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
            AND crypto_wallet_addresses.disabled_at IS NULL
            AND crypto_wallet_addresses.status IN ('available', 'assigned')
-           AND blocking_assignment.id IS NULL
-           AND open_request.id IS NULL
-           AND NOT EXISTS (
+           AND (" . ($sharedEnabled ? '1=1' : 'blocking_assignment.id IS NULL') . ")
+           AND (" . ($sharedEnabled ? '1=1' : 'open_request.id IS NULL') . ")
+           AND (" . ($sharedEnabled ? '1=1' : "NOT EXISTS (
                 SELECT 1
                 FROM crypto_deposit_requests AS historical_request
                 LEFT JOIN crypto_wallet_assignments AS historical_assignment
@@ -1377,7 +1378,7 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
                 )
                   AND historical_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
                 LIMIT 1
-           )
+           )") . ")
          ORDER BY
             CASE WHEN crypto_wallet_addresses.status = 'available' THEN 0 ELSE 1 END ASC,
             crypto_wallet_addresses.is_reusable DESC,
@@ -1409,6 +1410,7 @@ function app_assign_customer_crypto_wallet(
         return 0;
     }
 
+    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
     $db->query('START TRANSACTION');
 
     $wallet = $db->select_user(
@@ -1423,24 +1425,26 @@ function app_assign_customer_crypto_wallet(
         return 0;
     }
 
-    $conflictingAssignment = $db->select_user(
-        "SELECT id, customer_id
-         FROM crypto_wallet_assignments
-         WHERE wallet_address_id = {$walletId}
-           AND customer_id <> {$customerId}
-           AND status IN ('reserved', 'active')
-         ORDER BY id DESC
-         LIMIT 1
-         FOR UPDATE"
-    );
-    if (is_array($conflictingAssignment) && !empty($conflictingAssignment['id'])) {
-        $db->query('ROLLBACK');
-        return 0;
-    }
+    if (!$sharedEnabled) {
+        $conflictingAssignment = $db->select_user(
+            "SELECT id, customer_id
+             FROM crypto_wallet_assignments
+             WHERE wallet_address_id = {$walletId}
+               AND customer_id <> {$customerId}
+               AND status IN ('reserved', 'active')
+             ORDER BY id DESC
+             LIMIT 1
+             FOR UPDATE"
+        );
+        if (is_array($conflictingAssignment) && !empty($conflictingAssignment['id'])) {
+            $db->query('ROLLBACK');
+            return 0;
+        }
 
-    if (app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $walletId, $customerId)) {
-        $db->query('ROLLBACK');
-        return 0;
+        if (app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $walletId, $customerId)) {
+            $db->query('ROLLBACK');
+            return 0;
+        }
     }
 
     $existing = $db->select_user(
@@ -1458,7 +1462,6 @@ function app_assign_customer_crypto_wallet(
         return (int)$existing['id'];
     }
 
-    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
     if (!$sharedEnabled && !empty($wallet['crypto_asset_id'])) {
         $canonicalAssignment = app_enforce_single_customer_crypto_wallet_per_asset(
             $db,
