@@ -7390,6 +7390,13 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     color:#15181f;
 }
 
+.admin-payment-amount__requested{
+    color:#7c8496;
+    font-size:11px;
+    line-height:1.35;
+    text-align:center;
+}
+
 .admin-payments-actions{
     display:flex;
     flex-wrap:wrap;
@@ -7473,6 +7480,23 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     color:#92400e;
     background:#fffbeb;
     border-color:rgba(245, 158, 11, 0.28);
+}
+
+.admin-payment-mismatch-alert{
+    margin-top:.75rem;
+    border-width:1px;
+    border-radius:14px;
+}
+
+.admin-payment-mismatch-field{
+    border:2px solid #dc2626 !important;
+    color:#991b1b !important;
+    background:#fff5f5 !important;
+}
+
+.admin-payment-mismatch-field:focus{
+    border-color:#dc2626 !important;
+    box-shadow:0 0 0 .18rem rgba(220, 38, 38, 0.12) !important;
 }
 
 .admin-payments-row--attention td{

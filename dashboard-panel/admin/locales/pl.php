@@ -1245,6 +1245,7 @@ return [
     'payment_requested_crypto_amount_label' => 'Żądana kwota krypto',
     'payment_received_amount_label' => 'Kwota faktycznie zaksięgowana',
     'payment_received_crypto_amount_label' => 'Faktycznie otrzymane krypto',
+    'payment_amount_mismatch_warning' => 'Wpłacona kwota różni się od żądanej. Sprawdź płatność dokładnie przed zapisaniem lub zatwierdzeniem.',
     'payment_expired_info_line_1' => 'Ten request płatności wygasł po czasie, ale nadal możesz sprawdzić, czy środki dotarły.',
     'payment_expired_info_line_2' => 'Zatwierdź go, jeśli klient zapłacił, odnowienie przeliczy kurs ponownie, a anulowanie przeniesie request do koszyka anulowanych.',
     'payment_open_cancel_hint' => 'Użyj Anuluj, jeśli klient chce zrezygnować i nie wysłał jeszcze żadnych środków.',

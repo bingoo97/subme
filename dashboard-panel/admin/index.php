@@ -8101,7 +8101,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         $paymentTitle = $paymentType === 'crypto'
                                                                             ? trim(($paymentAssetName !== '' ? $paymentAssetName : strtoupper($paymentAssetCode)) . ($paymentAssetCode !== '' ? ' (' . strtoupper($paymentAssetCode) . ')' : ''))
                                                                             : $paymentTypeLabel;
-                                                                        $paymentAmountLabel = admin_format_money_value($row['amount_value'] ?? null, (string)($row['currency_code'] ?? ''));
+                                                                        $paymentRequestedAmountRaw = $row['requested_amount_value'] ?? ($row['amount_value'] ?? null);
+                                                                        $paymentReceivedAmountRaw = $row['received_fiat_amount'] ?? null;
+                                                                        $paymentHasApprovedAmount = $paymentReceivedAmountRaw !== null && $paymentReceivedAmountRaw !== '' && is_numeric((string)$paymentReceivedAmountRaw);
+                                                                        $paymentPrimaryAmountLabel = admin_format_money_value(
+                                                                            $paymentHasApprovedAmount ? $paymentReceivedAmountRaw : $paymentRequestedAmountRaw,
+                                                                            (string)($row['currency_code'] ?? '')
+                                                                        );
+                                                                        $paymentRequestedAmountLabel = admin_format_money_value(
+                                                                            $paymentRequestedAmountRaw,
+                                                                            (string)($row['currency_code'] ?? '')
+                                                                        );
                                                                         $paymentCryptoAmount = trim((string)($row['crypto_value'] ?? ''));
                                                                         if ($paymentType === 'crypto' && $paymentCryptoAmount !== '' && is_numeric($paymentCryptoAmount)) {
                                                                             $paymentCryptoAmount = rtrim(rtrim(number_format((float)$paymentCryptoAmount, 8, '.', ''), '0'), '.');
@@ -8172,7 +8182,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 </div>
                                                                             </td>
                                                                             <td>
-                                                                                <strong class="admin-user-detail-table__amount"><?php echo admin_e($paymentAmountLabel); ?></strong>
+                                                                                <strong class="admin-user-detail-table__amount"><?php echo admin_e($paymentPrimaryAmountLabel); ?></strong>
+                                                                                <?php if ($paymentHasApprovedAmount): ?>
+                                                                                    <span class="admin-user-detail-table__muted"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?>: <?php echo admin_e($paymentRequestedAmountLabel); ?></span>
+                                                                                <?php endif; ?>
                                                                             </td>
                                                                             <td>
                                                                                 <div class="admin-user-detail-table__actions">
@@ -9136,6 +9149,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $paymentReceivedCryptoLabel = $paymentEditorType === 'crypto' && isset($paymentEditor['received_crypto_amount']) && $paymentEditor['received_crypto_amount'] !== null && $paymentEditor['received_crypto_amount'] !== ''
                                             ? admin_decimal_input_value($paymentEditor['received_crypto_amount'], 8) . ' ' . strtoupper(trim((string)($paymentEditor['asset_code'] ?? '')))
                                             : '';
+                                        $paymentRequestedAmountRaw = $paymentEditor['amount_value'] ?? null;
+                                        $paymentReceivedAmountRaw = $paymentEditor['received_fiat_amount'] ?? null;
+                                        $paymentAmountsMismatch = false;
+                                        if (
+                                            $paymentEditorType === 'crypto'
+                                            && $paymentReceivedAmountRaw !== null
+                                            && $paymentReceivedAmountRaw !== ''
+                                            && is_numeric((string)$paymentRequestedAmountRaw)
+                                            && is_numeric((string)$paymentReceivedAmountRaw)
+                                        ) {
+                                            $paymentAmountsMismatch = abs((float)$paymentRequestedAmountRaw - (float)$paymentReceivedAmountRaw) >= 0.01;
+                                        }
+                                        $paymentMismatchFieldClass = $paymentAmountsMismatch ? ' admin-payment-mismatch-field' : '';
                                         $paymentReferenceLabel = trim((string)($paymentEditor['payment_reference'] ?? ($paymentEditor['wallet_address'] ?? '')));
                                         $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
                                         $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
@@ -9279,6 +9305,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </option>
                                                             <?php endforeach; ?>
                                                         </select>
+                                                        <?php if ($paymentAmountsMismatch): ?>
+                                                            <div class="alert alert-warning admin-payment-mismatch-alert mb-0">
+                                                                <?php echo admin_e(admin_t($messages, 'payment_amount_mismatch_warning', 'The credited amount differs from the requested amount. Check the payment carefully before saving or approving it.')); ?>
+                                                            </div>
+                                                        <?php endif; ?>
                                                     </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
@@ -9325,7 +9356,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?></label>
                                                             <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
-                                                                <input type="text" class="form-control" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
+                                                                <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
                                                             <?php else: ?>
                                                                 <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>" readonly>
                                                             <?php endif; ?>
@@ -9341,7 +9372,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <?php if ($paymentEditorType === 'crypto'): ?>
                                                             <div class="col-md-6">
                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_received_amount_label', 'Received amount')); ?></label>
-                                                                <input type="text" class="form-control" value="<?php echo admin_e($paymentReceivedAmountLabel); ?>" readonly>
+                                                                <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" value="<?php echo admin_e($paymentReceivedAmountLabel); ?>" readonly>
                                                             </div>
                                                             <div class="col-md-6">
                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_received_crypto_amount_label', 'Received crypto amount')); ?></label>
@@ -9746,9 +9777,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             ?>
                                                             <tr class="<?php echo $needsAttention ? 'admin-payments-row--attention' : ''; ?><?php echo $isExpiredQueue ? ' admin-payments-row--expired' : ''; ?>">
                                                                 <?php
-                                                                $paymentRequestedLabel = admin_compact_datetime_label((string)($row['requested_at'] ?? ''));
-                                                                $paymentRequestedIsToday = $requestedTimestamp > 0 && date('Y-m-d', $requestedTimestamp) === date('Y-m-d');
-                                                                ?>
+                                                            $paymentRequestedLabel = admin_compact_datetime_label((string)($row['requested_at'] ?? ''));
+                                                            $paymentRequestedIsToday = $requestedTimestamp > 0 && date('Y-m-d', $requestedTimestamp) === date('Y-m-d');
+                                                            $paymentRequestedAmountRaw = $row['requested_amount_value'] ?? ($row['amount_value'] ?? null);
+                                                            $paymentReceivedAmountRaw = $row['received_fiat_amount'] ?? null;
+                                                            $paymentHasApprovedAmount = $paymentReceivedAmountRaw !== null && $paymentReceivedAmountRaw !== '' && is_numeric((string)$paymentReceivedAmountRaw);
+                                                            $paymentPrimaryAmountLabel = admin_format_money_value_with_symbol(
+                                                                $paymentHasApprovedAmount ? $paymentReceivedAmountRaw : $paymentRequestedAmountRaw,
+                                                                $paymentRowCurrencyCode,
+                                                                $paymentRowCurrencySymbol
+                                                            );
+                                                            $paymentRequestedAmountLabel = admin_format_money_value_with_symbol(
+                                                                $paymentRequestedAmountRaw,
+                                                                $paymentRowCurrencyCode,
+                                                                $paymentRowCurrencySymbol
+                                                            );
+                                                            ?>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
                                                                     <strong class="admin-payments-table__date<?php echo $paymentRequestedIsToday ? ' admin-payments-table__date--today' : ''; ?>"><?php echo admin_e($paymentRequestedLabel); ?></strong>
                                                                 </td>
@@ -9797,7 +9841,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </td>
                                                                 <td class="admin-payments-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
                                                                     <div class="admin-payment-amount">
-                                                                        <strong class="<?php echo $isArchivedPayment ? 'text-danger' : ($needsAttention ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($paymentAmountLabel); ?></strong>
+                                                                        <strong class="<?php echo $isArchivedPayment ? 'text-danger' : ($needsAttention ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($paymentPrimaryAmountLabel); ?></strong>
+                                                                        <?php if ($paymentHasApprovedAmount): ?>
+                                                                            <span class="admin-payment-amount__requested"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?>: <?php echo admin_e($paymentRequestedAmountLabel); ?></span>
+                                                                        <?php endif; ?>
                                                                         <?php if ($paymentCountdownLabel !== '' && $needsAttention): ?>
                                                                             <span class="admin-status-pill <?php echo $isExpiredQueue ? 'admin-status-pill--danger' : 'admin-status-pill--warning'; ?>">
                                                                                 <?php echo admin_e($paymentCountdownLabel); ?>

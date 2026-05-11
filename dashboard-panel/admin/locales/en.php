@@ -1245,6 +1245,7 @@ return [
     'payment_requested_crypto_amount_label' => 'Requested crypto amount',
     'payment_received_amount_label' => 'Actually credited amount',
     'payment_received_crypto_amount_label' => 'Actually received crypto',
+    'payment_amount_mismatch_warning' => 'The credited amount differs from the requested amount. Check the payment carefully before saving or approving it.',
     'payment_expired_info_line_1' => 'This payment request expired after the time limit, but you can still verify whether the funds arrived.',
     'payment_expired_info_line_2' => 'Approve it if the customer paid, renew it to recalculate the rate or cancel it to move it to cancelled queue.',
     'payment_open_cancel_hint' => 'Use Cancel if the customer wants to resign and did not send any funds yet.',
