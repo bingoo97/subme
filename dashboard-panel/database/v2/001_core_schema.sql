@@ -474,6 +474,8 @@ CREATE TABLE `crypto_deposit_requests` (
   `fiat_currency_id` TINYINT UNSIGNED NOT NULL,
   `exchange_rate` DECIMAL(18,8) NOT NULL,
   `requested_crypto_amount` DECIMAL(18,8) NOT NULL,
+  `received_crypto_amount` DECIMAL(18,8) DEFAULT NULL,
+  `received_fiat_amount` DECIMAL(10,2) DEFAULT NULL,
   `assignment_mode` VARCHAR(20) NOT NULL DEFAULT 'manual',
   `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
   `created_by_admin_user_id` INT UNSIGNED DEFAULT NULL,

@@ -1887,6 +1887,24 @@ function app_order_has_generated_payment_request(Mysql_ks $db, int $orderId, int
 
 function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
 {
+    if (schema_object_exists($db, 'crypto_deposit_requests') && !schema_column_exists($db, 'crypto_deposit_requests', 'received_crypto_amount')) {
+        $db->query(
+            "ALTER TABLE crypto_deposit_requests
+             ADD COLUMN received_crypto_amount DECIMAL(18,8) DEFAULT NULL
+             AFTER requested_crypto_amount"
+        );
+        schema_forget_column_cache('crypto_deposit_requests', 'received_crypto_amount');
+    }
+
+    if (schema_object_exists($db, 'crypto_deposit_requests') && !schema_column_exists($db, 'crypto_deposit_requests', 'received_fiat_amount')) {
+        $db->query(
+            "ALTER TABLE crypto_deposit_requests
+             ADD COLUMN received_fiat_amount DECIMAL(10,2) DEFAULT NULL
+             AFTER received_crypto_amount"
+        );
+        schema_forget_column_cache('crypto_deposit_requests', 'received_fiat_amount');
+    }
+
     if (schema_object_exists($db, 'bank_transfer_requests') && !schema_column_exists($db, 'bank_transfer_requests', 'cancelled_at')) {
         $db->query(
             "ALTER TABLE bank_transfer_requests
@@ -5147,6 +5165,7 @@ function app_crypto_daily_backup_fetch_rows(Mysql_ks $db, string $reportDate): a
         return [];
     }
 
+    app_ensure_payment_request_runtime_columns($db);
     $safeReportDate = $db->escape($reportDate);
     $rows = $db->select_full_user(
         "SELECT
@@ -5155,8 +5174,8 @@ function app_crypto_daily_backup_fetch_rows(Mysql_ks $db, string $reportDate): a
             crypto_deposit_requests.customer_id,
             customers.email AS customer_email,
             crypto_assets.code AS crypto_ticker,
-            COALESCE(tx.total_amount_crypto, crypto_deposit_requests.requested_crypto_amount, 0) AS amount_crypto,
-            crypto_deposit_requests.requested_fiat_amount AS fiat_amount,
+            COALESCE(crypto_deposit_requests.received_crypto_amount, tx.total_amount_crypto, crypto_deposit_requests.requested_crypto_amount, 0) AS amount_crypto,
+            COALESCE(crypto_deposit_requests.received_fiat_amount, crypto_deposit_requests.requested_fiat_amount, 0) AS fiat_amount,
             currencies.code AS fiat_currency_code,
             crypto_wallet_addresses.address AS wallet_address,
             COALESCE(tx.transaction_hashes, '') AS transaction_hashes,
@@ -8164,7 +8183,7 @@ function app_delete_stale_cancelled_payment_requests(Mysql_ks $db, ?string $now 
              FROM crypto_deposit_requests
              WHERE status = 'cancelled'
                AND cancelled_at IS NOT NULL
-               AND cancelled_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
+               AND cancelled_at <= DATE_SUB('{$safeNowSql}', INTERVAL 72 HOUR)"
         );
         foreach ((array)$cryptoRows as $row) {
             $deleted = $db->delete_using_id('crypto_deposit_requests', (int)($row['id'] ?? 0));
@@ -8180,7 +8199,7 @@ function app_delete_stale_cancelled_payment_requests(Mysql_ks $db, ?string $now 
              FROM bank_transfer_requests
              WHERE status = 'cancelled'
                AND cancelled_at IS NOT NULL
-               AND cancelled_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
+               AND cancelled_at <= DATE_SUB('{$safeNowSql}', INTERVAL 72 HOUR)"
         );
         foreach ((array)$bankRows as $row) {
             $deleted = $db->delete_using_id('bank_transfer_requests', (int)($row['id'] ?? 0));
@@ -8793,6 +8812,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     }
 
     $settings = app_fetch_settings($db);
+    app_ensure_payment_request_runtime_columns($db);
 
     $email = app_email_process_queue($db, $emailLimit);
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);

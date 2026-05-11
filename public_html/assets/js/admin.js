@@ -3216,6 +3216,479 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
+        var cryptoAcceptModalController = (function () {
+            var modalNode = q('[data-admin-crypto-accept-modal]');
+            var modalInstance = modalNode && hasBootstrap && window.bootstrap && typeof window.bootstrap.Modal !== 'undefined'
+                ? window.bootstrap.Modal.getOrCreateInstance(modalNode)
+                : null;
+            var handleLink = modalNode ? q('[data-admin-crypto-accept-handle-link]', modalNode) : null;
+            var handleText = modalNode ? q('[data-admin-crypto-accept-handle-text]', modalNode) : null;
+            var walletLabel = modalNode ? q('[data-admin-crypto-accept-wallet-label]', modalNode) : null;
+            var emailNode = modalNode ? q('[data-admin-crypto-accept-email]', modalNode) : null;
+            var cryptoLabel = modalNode ? q('[data-admin-crypto-accept-crypto-label]', modalNode) : null;
+            var statusNode = modalNode ? q('[data-admin-crypto-accept-status]', modalNode) : null;
+            var topupBadge = modalNode ? q('[data-admin-crypto-accept-topup-badge]', modalNode) : null;
+            var fiatLabel = modalNode ? q('[data-admin-crypto-accept-fiat-label]', modalNode) : null;
+            var timeWrap = modalNode ? q('[data-admin-crypto-accept-time-wrap]', modalNode) : null;
+            var timeNode = modalNode ? q('[data-admin-crypto-accept-time]', modalNode) : null;
+            var explorerLink = modalNode ? q('[data-admin-crypto-accept-address-link]', modalNode) : null;
+            var explorerText = modalNode ? q('[data-admin-crypto-accept-address-text]', modalNode) : null;
+            var explorerAddressNodes = modalNode ? qa('[data-admin-crypto-accept-address]', modalNode) : [];
+            var explorerPanel = modalNode ? q('[data-admin-crypto-accept-explorer-panel]', modalNode) : null;
+            var logoNode = modalNode ? q('[data-admin-crypto-accept-logo]', modalNode) : null;
+            var step1Node = modalNode ? q('[data-admin-crypto-accept-step1]', modalNode) : null;
+            var step2Node = modalNode ? q('[data-admin-crypto-accept-step2]', modalNode) : null;
+            var warningNode = modalNode ? q('[data-admin-crypto-accept-underpaid]', modalNode) : null;
+            var cryptoInput = modalNode ? q('[data-admin-crypto-accept-crypto-input]', modalNode) : null;
+            var fiatInput = modalNode ? q('[data-admin-crypto-accept-fiat-input]', modalNode) : null;
+            var cryptoInputLabel = modalNode ? q('[data-admin-crypto-accept-crypto-input-label]', modalNode) : null;
+            var submitButton = modalNode ? q('[data-admin-crypto-accept-submit]', modalNode) : null;
+            var previewUrl = modalNode ? String(modalNode.getAttribute('data-preview-url') || '').trim() : '';
+            var loadingPreviewText = modalNode ? String(modalNode.getAttribute('data-loading-preview-text') || 'Loading recent transactions...') : 'Loading recent transactions...';
+            var previewErrorText = modalNode ? String(modalNode.getAttribute('data-preview-error-text') || 'Unable to load recent transactions right now.') : 'Unable to load recent transactions right now.';
+            var openExplorerText = modalNode ? String(modalNode.getAttribute('data-open-explorer-text') || 'Check in explorer') : 'Check in explorer';
+            var state = {
+                button: null,
+                form: null,
+                ajax: false,
+                flyout: null,
+                payload: null,
+                fiatManual: false,
+                submitting: false,
+                previewRequestToken: 0
+            };
+
+            if (!modalNode || !cryptoInput || !fiatInput || !submitButton) {
+                return null;
+            }
+
+            function parseNumeric(value) {
+                var normalized = String(value == null ? '' : value).replace(',', '.').trim();
+                var parsed = parseFloat(normalized);
+                return isFinite(parsed) ? parsed : 0;
+            }
+
+            function formatCryptoValue(value) {
+                var numeric = parseNumeric(value);
+                var label;
+
+                if (!isFinite(numeric) || numeric <= 0) {
+                    return '0';
+                }
+
+                label = numeric.toFixed(8).replace(/\.?0+$/, '');
+                return label === '-0' ? '0' : label;
+            }
+
+            function formatFiatValue(value) {
+                var numeric = parseNumeric(value);
+                if (!isFinite(numeric) || numeric <= 0) {
+                    return '0.00';
+                }
+                return numeric.toFixed(2);
+            }
+
+            function formatFiatLabelValue(value, payload) {
+                var amountLabel = formatFiatValue(value);
+                var symbol = payload ? String(payload.currency_symbol || '').trim() : '';
+                var code = payload ? String(payload.currency_code || '').trim() : '';
+                if (symbol) {
+                    return amountLabel + ' ' + symbol;
+                }
+                if (code) {
+                    return amountLabel + ' ' + code;
+                }
+                return amountLabel;
+            }
+
+            function ensureHiddenInput(form, name, value) {
+                var field = q('input[name="' + name + '"]', form);
+                if (!field) {
+                    field = document.createElement('input');
+                    field.type = 'hidden';
+                    field.name = name;
+                    form.appendChild(field);
+                }
+                field.value = String(value == null ? '' : value);
+            }
+
+            function clearState() {
+                state.button = null;
+                state.form = null;
+                state.ajax = false;
+                state.flyout = null;
+                state.payload = null;
+                state.fiatManual = false;
+                state.submitting = false;
+                state.previewRequestToken += 1;
+                submitButton.disabled = false;
+                if (explorerPanel) {
+                    explorerPanel.innerHTML = '<div class="admin-crypto-accept-modal__explorer-loading">' + escapeHtml(loadingPreviewText) + '</div>';
+                }
+            }
+
+            function hideModal() {
+                if (modalInstance) {
+                    modalInstance.hide();
+                    return;
+                }
+                setHidden(modalNode, true);
+                modalNode.classList.remove('show');
+                clearState();
+            }
+
+            function showModal() {
+                if (modalInstance) {
+                    modalInstance.show();
+                    return;
+                }
+                setHidden(modalNode, false);
+                modalNode.classList.add('show');
+            }
+
+            function fillIdentity(payload) {
+                var handle = String(payload.customer_handle || '').trim();
+                var email = String(payload.customer_email || '').trim();
+                var wallet = String(payload.wallet_label || '').trim();
+                var profileUrl = String(payload.customer_url || '').trim();
+                var displayFallback = handle || email || '#';
+
+                setHidden(handleLink, true);
+                setHidden(handleText, true);
+
+                if (profileUrl && handle !== '') {
+                    handleLink.textContent = handle;
+                    handleLink.setAttribute('href', profileUrl);
+                    setHidden(handleLink, false);
+                } else {
+                    handleText.textContent = displayFallback;
+                    setHidden(handleText, false);
+                }
+
+                if (walletLabel) {
+                    walletLabel.textContent = wallet;
+                    setHidden(walletLabel, false);
+                } else {
+                    setHidden(walletLabel, true);
+                }
+
+                if (emailNode) {
+                    emailNode.textContent = email;
+                }
+            }
+
+            function fillWalletAddress(payload) {
+                var address = String(payload.wallet_address_compact || payload.wallet_address || '').trim();
+                var explorerUrl = String(payload.explorer_url || '').trim();
+
+                explorerAddressNodes.forEach(function (node) {
+                    node.textContent = address;
+                });
+
+                if (explorerUrl !== '') {
+                    if (explorerLink) {
+                        explorerLink.setAttribute('href', explorerUrl);
+                        explorerLink.setAttribute('target', '_blank');
+                        explorerLink.setAttribute('rel', 'noopener noreferrer');
+                    }
+                    setHidden(explorerLink, false);
+                    setHidden(explorerText, true);
+                } else {
+                    setHidden(explorerLink, true);
+                    setHidden(explorerText, address === '');
+                }
+            }
+
+            function renderPreviewLoading() {
+                if (!explorerPanel) {
+                    return;
+                }
+                explorerPanel.innerHTML = '<div class="admin-crypto-accept-modal__explorer-loading">' + escapeHtml(loadingPreviewText) + '</div>';
+            }
+
+            function renderPreviewError(message, explorerUrl) {
+                var html = ''
+                    + '<div class="admin-crypto-preview admin-crypto-preview--fallback">'
+                    + '<div class="admin-crypto-preview__empty">'
+                    + '<div class="admin-crypto-preview__empty-title">' + escapeHtml(message || previewErrorText) + '</div>'
+                    + (explorerUrl
+                        ? '<a href="' + escapeHtml(explorerUrl) + '" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark btn-sm admin-crypto-preview__fallback-link">' + escapeHtml(openExplorerText) + '</a>'
+                        : '')
+                    + '</div>'
+                    + '</div>';
+
+                if (explorerPanel) {
+                    explorerPanel.innerHTML = html;
+                }
+            }
+
+            function loadPreview() {
+                var activeForm = state.form;
+                var currentPayload = state.payload || {};
+                var requestToken;
+                var submitData;
+
+                if (!explorerPanel) {
+                    return;
+                }
+
+                if (!activeForm || !previewUrl) {
+                    renderPreviewError(previewErrorText, String(currentPayload.explorer_url || '').trim());
+                    return;
+                }
+
+                requestToken = state.previewRequestToken + 1;
+                state.previewRequestToken = requestToken;
+                renderPreviewLoading();
+
+                submitData = new URLSearchParams(new FormData(activeForm));
+                submitData.set('admin_crypto_address_preview_ajax', '1');
+
+                fetch(previewUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    credentials: 'same-origin',
+                    body: submitData.toString()
+                }).then(function (response) {
+                    return response.json().catch(function () {
+                        return { ok: false, message: previewErrorText };
+                    });
+                }).then(function (responsePayload) {
+                    if (requestToken !== state.previewRequestToken) {
+                        return;
+                    }
+                    if (!responsePayload || !responsePayload.ok || !String(responsePayload.html || '').trim()) {
+                        renderPreviewError(
+                            responsePayload && responsePayload.message ? responsePayload.message : previewErrorText,
+                            String((responsePayload && responsePayload.explorer_url) || currentPayload.explorer_url || '').trim()
+                        );
+                        return;
+                    }
+                    explorerPanel.innerHTML = String(responsePayload.html || '');
+                }).catch(function () {
+                    if (requestToken !== state.previewRequestToken) {
+                        return;
+                    }
+                    renderPreviewError(previewErrorText, String(currentPayload.explorer_url || '').trim());
+                });
+            }
+
+            function updateComputedFields() {
+                var payload = state.payload || {};
+                var rate = parseNumeric(payload.exchange_rate);
+                var assetCode = String(payload.asset_code || payload.asset_name || 'Crypto').trim();
+                var currentCrypto = formatCryptoValue(cryptoInput.value);
+                var currentFiat;
+                var requestedFiat;
+
+                if (!state.fiatManual && rate > 0) {
+                    fiatInput.value = formatFiatValue(parseNumeric(cryptoInput.value) * rate);
+                }
+
+                currentFiat = parseNumeric(fiatInput.value);
+                requestedFiat = parseNumeric(payload.requested_fiat_amount);
+
+                cryptoLabel.textContent = currentCrypto + (assetCode ? ' ' + assetCode : '');
+                fiatLabel.textContent = formatFiatLabelValue(currentFiat, payload);
+
+                if (timeNode) {
+                    timeNode.textContent = String(payload.requested_at_label || '').trim();
+                }
+                setHidden(timeWrap, String(payload.requested_at_label || '').trim() === '');
+
+                setHidden(
+                    warningNode,
+                    !((parseInt(payload.order_id, 10) || 0) > 0 && currentFiat > 0 && requestedFiat > 0 && (currentFiat + 0.004) < requestedFiat)
+                );
+            }
+
+            function populate(payload) {
+                var assetCode = String(payload.asset_code || payload.asset_name || 'Crypto').trim();
+                var cryptoLabelTemplate = modalNode.getAttribute('data-received-crypto-label') || 'Received {asset}';
+                var statusLabel = String(payload.status_label || '').trim();
+                var topupText = modalNode.getAttribute('data-topup-badge') || '';
+                var receivedCrypto = String(payload.received_crypto_amount || payload.requested_crypto_amount || '').trim();
+                var receivedFiat = String(payload.received_fiat_amount || payload.requested_fiat_amount || '').trim();
+                var logoUrl = String(payload.asset_logo_url || '').trim();
+
+                state.payload = payload;
+                state.fiatManual = false;
+
+                if (cryptoInputLabel) {
+                    cryptoInputLabel.textContent = cryptoLabelTemplate.replace('{asset}', assetCode || 'Crypto');
+                }
+                if (statusNode) {
+                    statusNode.textContent = statusLabel;
+                }
+                if (topupBadge) {
+                    topupBadge.textContent = topupText;
+                    setHidden(topupBadge, !payload.is_topup);
+                }
+
+                if (logoNode && logoUrl !== '') {
+                    logoNode.setAttribute('src', logoUrl);
+                    logoNode.setAttribute('alt', assetCode || 'Crypto');
+                    setHidden(logoNode, false);
+                } else if (logoNode) {
+                    logoNode.removeAttribute('src');
+                    setHidden(logoNode, true);
+                }
+
+                fillIdentity(payload);
+                fillWalletAddress(payload);
+                loadPreview();
+
+                if (step1Node) {
+                    step1Node.textContent = modalNode.getAttribute('data-step1') || step1Node.textContent;
+                }
+                if (step2Node) {
+                    step2Node.textContent = modalNode.getAttribute('data-step2') || step2Node.textContent;
+                }
+
+                cryptoInput.value = receivedCrypto !== '' ? receivedCrypto : String(payload.requested_crypto_amount || '');
+                fiatInput.value = receivedFiat !== '' ? receivedFiat : String(payload.requested_fiat_amount || '');
+                updateComputedFields();
+            }
+
+            function parseButtonPayload(button) {
+                var raw = button ? String(button.getAttribute('data-admin-crypto-accept-payload') || '').trim() : '';
+                if (!raw) {
+                    return null;
+                }
+                try {
+                    return JSON.parse(raw);
+                } catch (error) {
+                    return null;
+                }
+            }
+
+            function submit() {
+                var cryptoValue = formatCryptoValue(cryptoInput.value);
+                var fiatValue = formatFiatValue(fiatInput.value);
+                var invalidCryptoText = modalNode.getAttribute('data-invalid-crypto-text') || 'Enter the amount of crypto you actually received.';
+                var invalidFiatText = modalNode.getAttribute('data-invalid-fiat-text') || 'Enter the FIAT amount you want to credit.';
+                var actionUrl;
+                var submitData;
+                var activeButton;
+                var activeFlyout;
+                var activeForm;
+
+                if (!state.form || !state.button || state.submitting) {
+                    return;
+                }
+                if (parseNumeric(cryptoValue) <= 0) {
+                    window.alert(invalidCryptoText);
+                    cryptoInput.focus();
+                    return;
+                }
+                if (parseNumeric(fiatValue) <= 0) {
+                    window.alert(invalidFiatText);
+                    fiatInput.focus();
+                    return;
+                }
+
+                state.submitting = true;
+                submitButton.disabled = true;
+
+                if (state.ajax) {
+                    activeButton = state.button;
+                    activeFlyout = state.flyout;
+                    actionUrl = state.form.getAttribute('action') || window.location.href;
+                    submitData = new URLSearchParams(new FormData(state.form));
+                    submitData.set('admin_payment_quick_action_ajax', '1');
+                    submitData.set('received_crypto_amount', cryptoValue);
+                    submitData.set('received_fiat_amount', fiatValue);
+                    activeButton.disabled = true;
+
+                    fetch(actionUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                        credentials: 'same-origin',
+                        body: submitData.toString()
+                    }).then(function (response) {
+                        return response.json().catch(function () {
+                            return { ok: false, message: 'Invalid JSON response.' };
+                        });
+                    }).then(function (payload) {
+                        state.submitting = false;
+                        submitButton.disabled = false;
+                        activeButton.disabled = false;
+                        if (!payload || !payload.ok) {
+                            window.alert((payload && payload.message) ? payload.message : 'Unable to accept payment.');
+                            return;
+                        }
+                        hideModal();
+                        moveAcceptedPaymentToOrders(activeFlyout, activeButton, payload);
+                    }).catch(function () {
+                        state.submitting = false;
+                        submitButton.disabled = false;
+                        activeButton.disabled = false;
+                        window.alert('Unable to accept payment.');
+                    });
+                    return;
+                }
+
+                activeForm = state.form;
+                activeButton = state.button;
+                ensureHiddenInput(activeForm, 'received_crypto_amount', cryptoValue);
+                ensureHiddenInput(activeForm, 'received_fiat_amount', fiatValue);
+                hideModal();
+
+                if (typeof activeForm.requestSubmit === 'function') {
+                    activeForm.requestSubmit(activeButton);
+                    return;
+                }
+
+                if (activeButton.name) {
+                    ensureHiddenInput(activeForm, activeButton.name, activeButton.value);
+                }
+                activeForm.submit();
+            }
+
+            cryptoInput.addEventListener('input', function () {
+                updateComputedFields();
+            });
+
+            fiatInput.addEventListener('input', function () {
+                state.fiatManual = true;
+                updateComputedFields();
+            });
+
+            submitButton.addEventListener('click', function (event) {
+                event.preventDefault();
+                submit();
+            });
+
+            if (modalNode.addEventListener) {
+                modalNode.addEventListener('hidden.bs.modal', function () {
+                    clearState();
+                });
+            }
+
+            return {
+                open: function (button, form, options) {
+                    var payload = parseButtonPayload(button);
+                    if (!payload) {
+                        return false;
+                    }
+
+                    state.button = button;
+                    state.form = form;
+                    state.ajax = !!(options && options.ajax);
+                    state.flyout = options && options.flyout ? options.flyout : null;
+                    state.submitting = false;
+                    submitButton.disabled = false;
+                    populate(payload);
+                    showModal();
+                    window.setTimeout(function () {
+                        cryptoInput.focus();
+                        cryptoInput.select();
+                    }, 40);
+                    return true;
+                }
+            };
+        })();
+
         function closeFlyout(flyout) {
             if (!flyout) {
                 return;
@@ -3308,6 +3781,15 @@ document.addEventListener('DOMContentLoaded', function () {
                     event.preventDefault();
                     event.stopPropagation();
 
+                    if (button.hasAttribute('data-admin-crypto-accept-trigger') && cryptoAcceptModalController) {
+                        if (cryptoAcceptModalController.open(button, form, {
+                            ajax: button.hasAttribute('data-admin-topbar-payment-accept-ajax'),
+                            flyout: flyout
+                        })) {
+                            return;
+                        }
+                    }
+
                     if (confirmMessage && !window.confirm(confirmMessage)) {
                         return;
                     }
@@ -3398,6 +3880,29 @@ document.addEventListener('DOMContentLoaded', function () {
                     });
                 }
             }
+        });
+
+        qa('button[data-admin-crypto-accept-trigger]').forEach(function (button) {
+            if (closest(button, '[data-admin-topbar-flyout]')) {
+                return;
+            }
+
+            button.addEventListener('click', function (event) {
+                var form = closest(button, 'form');
+                if (!form || !cryptoAcceptModalController) {
+                    return;
+                }
+
+                if (!cryptoAcceptModalController.open(button, form, {
+                    ajax: button.hasAttribute('data-admin-topbar-payment-accept-ajax'),
+                    flyout: null
+                })) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+            });
         });
 
         qa('[data-admin-converter-root]').forEach(function (root) {

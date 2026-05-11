@@ -429,6 +429,50 @@ if (isset($_POST['admin_save_personal_notes_ajax'])) {
     exit;
 }
 
+if (isset($_POST['admin_crypto_address_preview_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $previewPaymentType = strtolower(trim((string)($_POST['payment_type'] ?? '')));
+    if (!in_array($previewPaymentType, ['crypto', 'crypto_topup'], true)) {
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_accept_modal_explorer_unavailable', 'Explorer preview is not available for this payment.'),
+        ]);
+        exit;
+    }
+
+    $previewPaymentId = (int)($_POST['payment_id'] ?? 0);
+    $previewPayment = admin_payment_find($db, $previewPaymentType, $previewPaymentId);
+    if (!is_array($previewPayment) || empty($previewPayment['id'])) {
+        http_response_code(404);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_not_found', 'Payment not found.'),
+        ]);
+        exit;
+    }
+
+    $previewPayload = admin_crypto_accept_preview_payload($db, $previewPayment, $messages, 24);
+    $previewHtml = admin_render_crypto_accept_explorer_panel($previewPayload);
+
+    echo json_encode([
+        'ok' => true,
+        'html' => $previewHtml,
+        'explorer_url' => (string)($previewPayload['explorer_url'] ?? ''),
+    ]);
+    exit;
+}
+
 if (isset($_POST['admin_topbar_order_action'])) {
     if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
@@ -3347,7 +3391,8 @@ if ($route === 'payments') {
             $paymentEditorId,
             (string)($_POST['quick_action'] ?? ''),
             (int)($adminUser['id'] ?? 0),
-            $requestIp
+            $requestIp,
+            $_POST
         );
 
         if (empty($quickActionResult['ok'])) {
@@ -3460,7 +3505,8 @@ if ($route === 'payments') {
                 $paymentEditorId,
                 (string)($_POST['quick_action'] ?? ''),
                 (int)($adminUser['id'] ?? 0),
-                $requestIp
+                $requestIp,
+                $_POST
             );
 
             if (!empty($quickActionResult['ok'])) {
@@ -4062,6 +4108,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 $paymentPublicHandle = trim((string)($paymentRow['public_handle'] ?? ''));
                                                 $paymentCanAcceptAll = in_array($paymentType, ['crypto', 'crypto_topup', 'bank'], true)
                                                     && in_array(strtolower(trim((string)($paymentRow['status'] ?? ''))), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true);
+                                                $paymentAcceptPayloadJson = '{}';
+                                                if ($paymentType === 'crypto') {
+                                                    $paymentAcceptPayloadJsonRaw = json_encode(admin_build_crypto_accept_payload($paymentRow, $messages), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                                                    if (is_string($paymentAcceptPayloadJsonRaw) && $paymentAcceptPayloadJsonRaw !== '') {
+                                                        $paymentAcceptPayloadJson = $paymentAcceptPayloadJsonRaw;
+                                                    }
+                                                }
                                                 ?>
                                                 <article class="admin-topbar-notifications__item" data-admin-topbar-payment-item data-payment-id="<?php echo admin_e((string)($paymentRow['id'] ?? 0)); ?>">
                                                     <div class="admin-topbar-notifications__item-main">
@@ -4140,7 +4193,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
                                                                         <input type="hidden" name="redirect_to" value="<?php echo admin_e((string)($_SERVER['REQUEST_URI'] ?? '/admin/')); ?>">
-                                                                        <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" data-admin-topbar-payment-submit data-admin-topbar-payment-accept-ajax title="<?php echo admin_e(admin_t($messages, 'topbar_payment_accept_all', 'Accept payment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_payment_accept_all', 'Accept payment')); ?>">
+                                                                        <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" data-admin-topbar-payment-submit data-admin-topbar-payment-accept-ajax<?php if ($paymentType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentAcceptPayloadJson); ?>"<?php endif; ?> title="<?php echo admin_e(admin_t($messages, 'topbar_payment_accept_all', 'Accept payment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_payment_accept_all', 'Accept payment')); ?>">
                                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                                         </button>
                                                                     </form>
@@ -5172,6 +5225,107 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     </div>
                 </div>
             </header>
+
+            <div
+                class="modal fade"
+                id="adminCryptoAcceptModal"
+                tabindex="-1"
+                aria-hidden="true"
+                data-admin-crypto-accept-modal
+                data-title="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_title', 'Accept crypto payment')); ?>"
+                data-step1="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_explorer', 'Step 1: Check in explorer whether the customer payment arrived.')); ?>"
+                data-step2="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_confirm', 'Step 2: Confirm the amount you actually received.')); ?>"
+                data-received-crypto-label="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_crypto_label', 'Received {asset}', ['asset' => '{asset}'])); ?>"
+                data-received-fiat-label="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_fiat_label', 'Amount to credit in FIAT')); ?>"
+                data-fiat-hint="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?>"
+                data-underpaid-warning="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_underpaid_warning', 'Warning: if the customer paid less and you credit less balance, they may not have enough funds to buy the selected order.')); ?>"
+                data-topup-badge="<?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?>"
+                data-cancel-text="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"
+                data-accept-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_submit', 'Accept payment')); ?>"
+                data-invalid-crypto-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_invalid_crypto', 'Enter the amount of crypto you actually received.')); ?>"
+                data-invalid-fiat-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_invalid_fiat', 'Enter the FIAT amount you want to credit.')); ?>"
+                data-loading-preview-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_loading_preview', 'Loading recent transactions...')); ?>"
+                data-preview-error-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_preview_error', 'Unable to load recent transactions for this address right now.')); ?>"
+                data-open-explorer-text="<?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?>"
+                data-preview-url="/admin/">
+                <div class="modal-dialog modal-dialog-centered modal-lg admin-crypto-accept-modal__dialog">
+                    <div class="modal-content admin-crypto-accept-modal">
+                        <div class="modal-header">
+                            <div>
+                                <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_title', 'Accept crypto payment')); ?></h5>
+                                <p class="admin-crypto-accept-modal__intro mb-0"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_intro', 'Quick confirmation for the payment after checking the explorer.')); ?></p>
+                            </div>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
+                        </div>
+                        <div class="modal-body admin-crypto-accept-modal__body">
+                            <div class="admin-crypto-accept-modal__layout">
+                                <div class="admin-crypto-accept-modal__content-col">
+                                    <article class="admin-topbar-notifications__item admin-crypto-accept-modal__preview" data-admin-crypto-accept-preview>
+                                        <div class="admin-topbar-notifications__item-main">
+                                            <div class="admin-topbar-notifications__item-head">
+                                                <img src="" alt="" class="admin-topbar-notifications__title-logo" data-admin-crypto-accept-logo hidden>
+                                                <strong data-admin-crypto-accept-crypto-label></strong>
+                                                <span class="admin-status-pill admin-status-pill--warning" data-admin-crypto-accept-status></span>
+                                                <span class="admin-topbar-notifications__topup-badge" data-admin-crypto-accept-topup-badge hidden><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?></span>
+                                            </div>
+                                            <div class="admin-crypto-accept-modal__identity">
+                                                <div class="admin-crypto-accept-modal__identity-line">
+                                                    <a href="#" class="admin-topbar-notifications__payment-handle" data-admin-crypto-accept-handle-link hidden></a>
+                                                    <span class="admin-topbar-notifications__payment-handle" data-admin-crypto-accept-handle-text hidden></span>
+                                                    <span class="admin-status-pill admin-status-pill--muted" data-admin-crypto-accept-wallet-label hidden></span>
+                                                </div>
+                                                <div class="admin-topbar-notifications__payment-email" data-admin-crypto-accept-email></div>
+                                            </div>
+                                            <div class="admin-crypto-accept-modal__meta">
+                                                <span data-admin-crypto-accept-fiat-label></span>
+                                                <span data-admin-crypto-accept-time-wrap hidden> · <span data-admin-crypto-accept-time></span></span>
+                                            </div>
+                                            <div class="admin-topbar-notifications__wallet-row">
+                                                <a href="#" class="admin-topbar-notifications__wallet-link" data-admin-crypto-accept-address-link hidden><code data-admin-crypto-accept-address></code></a>
+                                                <span class="admin-topbar-notifications__wallet-link" data-admin-crypto-accept-address-text hidden><code data-admin-crypto-accept-address></code></span>
+                                            </div>
+                                            <div class="admin-topbar-notifications__steps-label"><?php echo admin_e(admin_t($messages, 'topbar_payment_steps', 'Steps to verify')); ?></div>
+                                            <div class="admin-topbar-notifications__task-list">
+                                                <span data-admin-crypto-accept-step1><?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_explorer', 'Step 1: Check in explorer whether the customer payment arrived.')); ?></span>
+                                                <span data-admin-crypto-accept-step2><?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_confirm', 'Step 2: Confirm the amount you actually received.')); ?></span>
+                                            </div>
+                                        </div>
+                                    </article>
+
+                                    <div class="alert alert-warning admin-crypto-accept-modal__warning" data-admin-crypto-accept-underpaid hidden>
+                                        <?php echo admin_e(admin_t($messages, 'payment_accept_modal_underpaid_warning', 'Warning: if the customer paid less and you credit less balance, they may not have enough funds to buy the selected order.')); ?>
+                                    </div>
+
+                                    <div class="admin-crypto-accept-modal__fields">
+                                        <label class="admin-crypto-accept-modal__field">
+                                            <span class="admin-crypto-accept-modal__field-label" data-admin-crypto-accept-crypto-input-label><?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_crypto_label', 'Received {asset}', ['asset' => 'Crypto'])); ?></span>
+                                            <input type="number" min="0.00000001" step="0.00000001" class="form-control form-control-lg" data-admin-crypto-accept-crypto-input inputmode="decimal">
+                                        </label>
+                                        <label class="admin-crypto-accept-modal__field">
+                                            <span class="admin-crypto-accept-modal__field-label"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_fiat_label', 'Amount to credit in FIAT')); ?></span>
+                                            <input type="number" min="0.01" step="0.01" class="form-control form-control-lg" data-admin-crypto-accept-fiat-input inputmode="decimal">
+                                        </label>
+                                    </div>
+
+                                    <div class="admin-crypto-accept-modal__hint"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?></div>
+                                </div>
+
+                                <aside class="admin-crypto-accept-modal__explorer-col">
+                                    <div class="admin-crypto-accept-modal__explorer-panel" data-admin-crypto-accept-explorer-panel>
+                                        <div class="admin-crypto-accept-modal__explorer-loading">
+                                            <?php echo admin_e(admin_t($messages, 'payment_accept_modal_loading_preview', 'Loading recent transactions...')); ?>
+                                        </div>
+                                    </div>
+                                </aside>
+                            </div>
+                        </div>
+                        <div class="modal-footer admin-crypto-accept-modal__footer">
+                            <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'close', 'Close')); ?></button>
+                            <button type="button" class="btn btn-success btn-lg admin-crypto-accept-modal__submit" data-admin-crypto-accept-submit><?php echo admin_e(admin_t($messages, 'payment_accept_modal_submit', 'Accept payment')); ?></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <main class="admin-content">
                 <?php if ($pageAlert !== ''): ?>
@@ -8968,6 +9122,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $paymentEditorCurrencyCode,
                                             $paymentEditorCurrencySymbol
                                         );
+                                        $paymentReceivedAmountLabel = '';
+                                        if ($paymentEditorType === 'crypto' && isset($paymentEditor['received_fiat_amount']) && $paymentEditor['received_fiat_amount'] !== null && $paymentEditor['received_fiat_amount'] !== '') {
+                                            $paymentReceivedAmountLabel = admin_format_money_value_with_symbol(
+                                                $paymentEditor['received_fiat_amount'],
+                                                $paymentEditorCurrencyCode,
+                                                $paymentEditorCurrencySymbol
+                                            );
+                                        }
+                                        $paymentRequestedCryptoLabel = $paymentEditorType === 'crypto' && isset($paymentEditor['amount_crypto']) && trim((string)$paymentEditor['amount_crypto']) !== ''
+                                            ? admin_decimal_input_value($paymentEditor['amount_crypto'], 8) . ' ' . strtoupper(trim((string)($paymentEditor['asset_code'] ?? '')))
+                                            : '';
+                                        $paymentReceivedCryptoLabel = $paymentEditorType === 'crypto' && isset($paymentEditor['received_crypto_amount']) && $paymentEditor['received_crypto_amount'] !== null && $paymentEditor['received_crypto_amount'] !== ''
+                                            ? admin_decimal_input_value($paymentEditor['received_crypto_amount'], 8) . ' ' . strtoupper(trim((string)($paymentEditor['asset_code'] ?? '')))
+                                            : '';
                                         $paymentReferenceLabel = trim((string)($paymentEditor['payment_reference'] ?? ($paymentEditor['wallet_address'] ?? '')));
                                         $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
                                         $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
@@ -8981,6 +9149,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $paymentWalletPanelUrl = ((int)($paymentEditor['wallet_address_id'] ?? 0) > 0)
                                             ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($paymentEditor['wallet_address_id'] ?? 0)
                                             : '';
+                                        $paymentEditorAcceptPayloadJson = '{}';
+                                        if ($paymentEditorType === 'crypto') {
+                                            $paymentEditorAcceptPayloadJsonRaw = json_encode(admin_build_crypto_accept_payload($paymentEditor, $messages), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                                            if (is_string($paymentEditorAcceptPayloadJsonRaw) && $paymentEditorAcceptPayloadJsonRaw !== '') {
+                                                $paymentEditorAcceptPayloadJson = $paymentEditorAcceptPayloadJsonRaw;
+                                            }
+                                        }
                                         ?>
                                         <div class="admin-editor-page admin-payments-page">
                                             <div class="admin-editor-page__header">
@@ -9037,7 +9212,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         'saved_payment' => 1,
                                                     ])); ?>">
                                                     <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
-                                                        <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept">
+                                                        <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept"<?php if ($paymentEditorType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentEditorAcceptPayloadJson); ?>"<?php endif; ?>>
                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
@@ -9070,7 +9245,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="admin-payments-summary-card">
                                                     <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></span>
-                                                    <strong><?php echo admin_e($paymentAmountLabel); ?></strong>
+                                                    <strong><?php echo admin_e($paymentReceivedAmountLabel !== '' ? $paymentReceivedAmountLabel : $paymentAmountLabel); ?></strong>
+                                                    <?php if ($paymentReceivedAmountLabel !== ''): ?>
+                                                        <small class="text-muted d-block"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?>: <?php echo admin_e($paymentAmountLabel); ?></small>
+                                                    <?php endif; ?>
                                                 </div>
                                             </div>
 
@@ -9145,7 +9323,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <input type="text" class="form-control" value="<?php echo admin_e(trim((string)($paymentEditor['asset_code'] ?? '') . ' ' . (string)($paymentEditor['asset_name'] ?? ''))); ?>" readonly>
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
+                                                            <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?></label>
                                                             <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
                                                                 <input type="text" class="form-control" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
                                                             <?php else: ?>
@@ -9153,13 +9331,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php endif; ?>
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_crypto_amount', 'Crypto amount')); ?></label>
+                                                            <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_requested_crypto_amount_label', 'Requested crypto amount')); ?></label>
                                                             <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
                                                                 <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
                                                             <?php else: ?>
                                                                 <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
                                                             <?php endif; ?>
                                                         </div>
+                                                        <?php if ($paymentEditorType === 'crypto'): ?>
+                                                            <div class="col-md-6">
+                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_received_amount_label', 'Received amount')); ?></label>
+                                                                <input type="text" class="form-control" value="<?php echo admin_e($paymentReceivedAmountLabel); ?>" readonly>
+                                                            </div>
+                                                            <div class="col-md-6">
+                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_received_crypto_amount_label', 'Received crypto amount')); ?></label>
+                                                                <input type="text" class="form-control" value="<?php echo admin_e($paymentReceivedCryptoLabel); ?>" readonly>
+                                                            </div>
+                                                        <?php endif; ?>
                                                         <?php if ($paymentEditorType === 'crypto'): ?>
                                                             <div class="col-md-6">
                                                                 <label class="form-label" for="payment_reference"><?php echo admin_e(admin_t($messages, 'payment_reference_label', 'Payment reference')); ?></label>
@@ -9538,6 +9726,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             $canRenew = $paymentType !== 'crypto_topup' && $isExpiredPayment;
                                                             $canDeleteCancelled = $paymentType !== 'crypto_topup' && $isCancelledPayment;
                                                             $canArchive = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true);
+                                                            $paymentAcceptPayloadJson = '{}';
+                                                            if ($paymentType === 'crypto') {
+                                                                $paymentAcceptPayloadJsonRaw = json_encode(admin_build_crypto_accept_payload($row, $messages), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                                                                if (is_string($paymentAcceptPayloadJsonRaw) && $paymentAcceptPayloadJsonRaw !== '') {
+                                                                    $paymentAcceptPayloadJson = $paymentAcceptPayloadJsonRaw;
+                                                                }
+                                                            }
                                                             $expiresLabel = '-';
                                                             if ($expiresTimestamp > 0) {
                                                                 if ($isExpiredQueue) {
@@ -9641,7 +9836,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="accept">
+                                                                                        <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="accept"<?php if ($paymentType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentAcceptPayloadJson); ?>"<?php endif; ?>>
                                                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                                                         </button>
                                                                                     </form>
