@@ -2995,6 +2995,7 @@ function admin_customer_order_rows(Mysql_ks $db, int $customerId, int $limit = 1
             orders.fulfillment_status,
             orders.payment_method,
             orders.total_amount,
+            orders.support_note,
             orders.created_at,
             orders.expires_at,
             currencies.code AS currency_code,
