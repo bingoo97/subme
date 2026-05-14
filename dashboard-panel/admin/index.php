@@ -8021,6 +8021,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-user-detail-status">
                                                                                     <span class="admin-status-pill <?php echo admin_e($orderStatusClass); ?>"><?php echo admin_e($statusLabel); ?></span>
                                                                                     <span class="admin-user-detail-table__muted"><?php echo admin_e($paymentLabel); ?> / <?php echo admin_e($fulfillmentLabel); ?></span>
+                                                                                    <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                                                        <div class="admin-order-summary__note admin-order-summary__note--warning admin-user-detail-status__note">
+                                                                                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                                                                            <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                                                        </div>
+                                                                                    <?php endif; ?>
                                                                                 </div>
                                                                             </td>
                                                                             <td>

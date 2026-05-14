@@ -4951,6 +4951,10 @@ body.admin-login-page{
     min-width:0;
 }
 
+.admin-user-detail-status__note{
+    margin-top:.3rem;
+}
+
 .admin-user-detail-table__primary-link{
     font-weight:800;
 }
