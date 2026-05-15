@@ -4396,6 +4396,15 @@ function app_ensure_customer_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('customers', 'locale_code');
     }
 
+    if (!schema_column_exists($db, 'customers', 'last_seen_at')) {
+        @$db->query(
+            "ALTER TABLE customers
+             ADD COLUMN last_seen_at DATETIME DEFAULT NULL
+             AFTER last_login_at"
+        );
+        schema_forget_column_cache('customers', 'last_seen_at');
+    }
+
     if (schema_column_exists($db, 'customers', 'public_handle')) {
         app_backfill_missing_customer_public_handles($db);
     }
@@ -9547,11 +9556,24 @@ function app_update_customer_locale(Mysql_ks $db, int $customerId, string $local
 function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $currentTime, string $clientIp): void
 {
     if (app_uses_v2_schema($db)) {
+        app_ensure_customer_runtime_columns($db);
         $sessionCustomerId = isset($_SESSION['customer_login_state_customer_id']) ? (int)$_SESSION['customer_login_state_customer_id'] : 0;
         $needsLoginSync = !empty($_SESSION['customer_login_state_needs_sync']) || $sessionCustomerId !== $customerId;
+        $currentTimestamp = strtotime($currentTime);
+        if ($currentTimestamp === false) {
+            $currentTimestamp = time();
+        }
+        $lastTouchTs = isset($_SESSION['customer_last_seen_touch_ts']) ? (int)$_SESSION['customer_last_seen_touch_ts'] : 0;
+        $shouldTouchLastSeen = $lastTouchTs <= 0 || ($currentTimestamp - $lastTouchTs) >= 60;
 
         if ($needsLoginSync) {
-            $db->update_using_id(['last_login_at', 'ip_address'], [$currentTime, $clientIp], 'customers', $customerId);
+            $loginFields = ['last_login_at', 'ip_address'];
+            $loginValues = [$currentTime, $clientIp];
+            if (schema_column_exists($db, 'customers', 'last_seen_at')) {
+                $loginFields[] = 'last_seen_at';
+                $loginValues[] = $currentTime;
+            }
+            $db->update_using_id($loginFields, $loginValues, 'customers', $customerId);
             if (
                 $customerId > 0
                 && function_exists('app_fetch_settings')
@@ -9571,11 +9593,13 @@ function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $
                     }
                 }
             }
+        } elseif ($shouldTouchLastSeen && schema_column_exists($db, 'customers', 'last_seen_at')) {
+            $db->update_using_id(['last_seen_at', 'ip_address'], [$currentTime, $clientIp], 'customers', $customerId);
         }
 
         $_SESSION['customer_login_state_needs_sync'] = 0;
         $_SESSION['customer_login_state_customer_id'] = $customerId;
-        $_SESSION['customer_last_seen_touch_ts'] = time();
+        $_SESSION['customer_last_seen_touch_ts'] = $currentTimestamp;
         return;
     }
 

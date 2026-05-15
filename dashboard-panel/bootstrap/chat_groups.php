@@ -1993,7 +1993,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         $rows = $db->select_full_user(
-            "SELECT id, email, public_handle, avatar_url, customer_type, status, last_login_at
+            "SELECT id, email, public_handle, avatar_url, customer_type, status, last_login_at, last_seen_at
              FROM customers
              WHERE status = 'active'
              ORDER BY id ASC"
@@ -2044,6 +2044,44 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         return date('Y-m-d H:i:s', $lastLoginTimestamp);
     }
 
+    function chat_global_group_join_notice_grace_minutes(): int
+    {
+        return 15;
+    }
+
+    function chat_global_group_customer_recently_present(Mysql_ks $db, array $customerRow, int $graceMinutes = 15): bool
+    {
+        $graceMinutes = max(1, $graceMinutes);
+        $currentTime = time();
+        $recentThreshold = $graceMinutes * 60;
+        $customerId = (int)($customerRow['id'] ?? 0);
+
+        $lastSeenAt = trim((string)($customerRow['last_seen_at'] ?? ''));
+        if ($lastSeenAt === '') {
+            $lastSeenAt = trim((string)($customerRow['last_login_at'] ?? ''));
+        }
+
+        $lastSeenTimestamp = $lastSeenAt !== '' ? strtotime($lastSeenAt) : false;
+        if ($lastSeenTimestamp !== false && ($currentTime - $lastSeenTimestamp) <= $recentThreshold) {
+            return true;
+        }
+
+        if ($customerId > 0 && schema_object_exists($db, 'user_online')) {
+            $onlineEntry = $db->select_user(
+                "SELECT id
+                 FROM user_online
+                 WHERE user = {$customerId}
+                   AND status = 1
+                 LIMIT 1"
+            );
+            if (is_array($onlineEntry) && !empty($onlineEntry['id'])) {
+                return $lastSeenTimestamp === false || ($currentTime - $lastSeenTimestamp) <= $recentThreshold;
+            }
+        }
+
+        return false;
+    }
+
     function chat_global_group_repair_join_notices(Mysql_ks $db, int $conversationId, array $eligibleCustomers = [], int $windowHours = 24): void
     {
         if ($conversationId <= 0 || !schema_object_exists($db, 'support_messages')) {
@@ -2063,12 +2101,18 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         $customerJoinMap = [];
+        $graceMinutes = chat_global_group_join_notice_grace_minutes();
+        $graceSeconds = $graceMinutes * 60;
+        $currentTime = time();
         foreach ($eligibleCustomers as $customerRow) {
             $label = chat_customer_display_label_from_row($customerRow);
             if ($label === '') {
                 continue;
             }
-            $customerJoinMap[$label] = chat_global_group_recent_join_notice_timestamp($customerRow, $windowHours);
+            $customerJoinMap[$label] = [
+                'timestamp' => chat_global_group_recent_join_notice_timestamp($customerRow, $windowHours),
+                'recently_present' => chat_global_group_customer_recently_present($db, $customerRow, $graceMinutes),
+            ];
         }
 
         $deleteIds = [];
@@ -2084,7 +2128,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             }
 
             $label = trim((string)($matches[1] ?? ''));
-            $expectedTimestamp = $label !== '' ? trim((string)($customerJoinMap[$label] ?? '')) : '';
+            $expected = $label !== '' && isset($customerJoinMap[$label]) && is_array($customerJoinMap[$label])
+                ? $customerJoinMap[$label]
+                : [];
+            $expectedTimestamp = trim((string)($expected['timestamp'] ?? ''));
+            $recentlyPresent = !empty($expected['recently_present']);
             if ($expectedTimestamp === '') {
                 $deleteIds[] = $messageId;
                 continue;
@@ -2093,6 +2141,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $existingTimestamp = strtotime((string)($row['created_at'] ?? ''));
             $targetTimestamp = strtotime($expectedTimestamp);
             if ($existingTimestamp === false || $targetTimestamp === false) {
+                continue;
+            }
+
+            if (!$recentlyPresent && ($currentTime - $existingTimestamp) >= $graceSeconds) {
+                $deleteIds[] = $messageId;
                 continue;
             }
 
@@ -2244,7 +2297,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
             $label = chat_customer_display_label_from_row($customerRow);
             $joinedAt = chat_global_group_recent_join_notice_timestamp($customerRow, 24);
-            if ($label !== '' && $joinedAt !== '') {
+            if ($label !== '' && $joinedAt !== '' && chat_global_group_customer_recently_present($db, $customerRow, chat_global_group_join_notice_grace_minutes())) {
                 $shouldInsertJoinNotice = $isNewMember
                     || !chat_global_group_has_join_notice($db, $conversationId, $label, $joinedAt, 5);
                 if ($shouldInsertJoinNotice) {
