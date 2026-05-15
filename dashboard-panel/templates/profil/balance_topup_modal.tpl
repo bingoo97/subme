@@ -15,6 +15,10 @@
                 </div>
                 {/if}
                 <p class="balance-topup-modal__intro">{$t.balance_topup_modal_intro|default:'Choose the payment method, cryptocurrency and top-up amount.'}</p>
+                <p class="balance-topup-modal__order-note">
+                    {$t.balance_topup_modal_orders_note|default:'If you only need to pay for one subscription, use the payment option in:'}
+                    <a href="/orders" class="balance-topup-modal__order-link">{$t.balance_topup_modal_orders_note_link|default:'Orders -> Payment'}</a>
+                </p>
 
                 {if $balance_topup_pending_order_payment}
                 <div class="alert alert-warning payment-support-alert">

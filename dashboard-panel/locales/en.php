@@ -73,6 +73,8 @@ return [
         'top_up' => 'Top up',
         'balance_topup_modal_title' => 'Top up balance',
         'balance_topup_modal_intro' => 'Choose the payment method, cryptocurrency and top-up amount.',
+        'balance_topup_modal_orders_note' => 'If you only need to pay for one subscription, use the payment option in:',
+        'balance_topup_modal_orders_note_link' => 'Orders -> Payment',
         'payment_test_mode_notice_title' => 'Payment test mode',
         'payment_test_mode_notice_text' => 'You can still generate payment requests and test the full flow, but please do not send any money right now. The payment details are displayed for testing only.',
         'balance_topup_amount_step_title' => 'Enter top-up amount',

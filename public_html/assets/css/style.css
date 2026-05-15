@@ -4385,6 +4385,26 @@ body.app-modal-layer-active .messenger-profile-modal.is-open{
 	line-height:1.6;
 }
 
+.balance-topup-modal__order-note{
+	margin:0 0 18px;
+	color:#cf102d;
+	font-size:14px;
+	font-weight:700;
+	line-height:1.55;
+}
+
+.balance-topup-modal__order-link{
+	color:#111111;
+	font-weight:800;
+	text-decoration:none;
+}
+
+.balance-topup-modal__order-link:hover,
+.balance-topup-modal__order-link:focus{
+	color:#111111;
+	text-decoration:underline;
+}
+
 .balance-topup-step{
 	display:none;
 }
