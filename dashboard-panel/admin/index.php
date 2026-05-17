@@ -225,6 +225,7 @@ $adminUserRows = admin_user_rows($db);
 $adminActiveFullAdminCount = admin_active_full_admin_count($db);
 $adminHelpModalCanEdit = admin_user_can_access_route($adminUser, 'settings') && admin_sensitive_routes_unlocked();
 $adminCanManageUsers = admin_user_can_access_route($adminUser, 'users');
+$cryptoPreviewStatusRows = [];
 
 $adminPasswordEmailNotice = static function (array $messages, array $emailNotification): string {
     $lastError = trim((string)($emailNotification['last_error'] ?? $emailNotification['message'] ?? ''));
@@ -839,6 +840,17 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $pageAlertType = 'danger';
             }
         }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_refresh_crypto_preview_status'])) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $cryptoPreviewStatusRows = admin_crypto_preview_network_status_rows($messages, true);
+        $pageAlert = admin_t($messages, 'settings_crypto_preview_status_refresh_success', 'Crypto preview network status has been refreshed.');
+        $pageAlertType = 'success';
     }
 }
 
@@ -12314,6 +12326,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <ul class="nav nav-tabs admin-settings-tabs" id="adminSettingsTabs" role="tablist">
                                                 <li class="nav-item" role="presentation"><button class="nav-link active" id="admin-settings-site-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-site-pane" type="button" role="tab" aria-controls="admin-settings-site-pane" aria-selected="true"><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-features-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-features-pane" type="button" role="tab" aria-controls="admin-settings-features-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_features_title', 'Payments and assignment rules')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-crypto-preview-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-crypto-preview-pane" type="button" role="tab" aria-controls="admin-settings-crypto-preview-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_title', 'Crypto preview status')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-smtp-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-smtp-pane" type="button" role="tab" aria-controls="admin-settings-smtp-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-runner-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-runner-pane" type="button" role="tab" aria-controls="admin-settings-runner-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-backup-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-backup-pane" type="button" role="tab" aria-controls="admin-settings-backup-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></button></li>
@@ -12694,6 +12707,65 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <button type="submit" class="btn btn-dark btn-lg" name="admin_save_feature_settings"><?php echo admin_e(admin_t($messages, 'settings_save_features', 'Save service settings')); ?></button>
                                             </div>
                                         </form>
+                                    </div>
+
+                                            </div>
+                                            <div class="tab-pane fade" id="admin-settings-crypto-preview-pane" role="tabpanel" aria-labelledby="admin-settings-crypto-preview-tab" tabindex="0">
+                                    <div class="admin-settings-access">
+                                        <div class="admin-settings-access__copy">
+                                            <h3><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_title', 'Crypto preview status')); ?></h3>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_intro', 'Check whether external blockchain services respond correctly and whether the payment-accept modal can load recent transactions before approval. Results are cached for 5 minutes to avoid unnecessary load.')); ?></p>
+                                        </div>
+
+                                        <?php if (!$cryptoPreviewStatusRows): ?>
+                                            <?php $cryptoPreviewStatusRows = admin_crypto_preview_network_status_rows($messages, false); ?>
+                                        <?php endif; ?>
+
+                                        <form method="post" class="admin-settings-access__form" autocomplete="off">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="admin-settings-access__actions mt-0 mb-3">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_refresh_crypto_preview_status"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_refresh', 'Refresh status')); ?></button>
+                                            </div>
+                                        </form>
+
+                                        <?php if ($cryptoPreviewStatusRows): ?>
+                                            <div class="admin-crypto-network-status-grid">
+                                                <?php foreach ($cryptoPreviewStatusRows as $statusRow): ?>
+                                                    <div class="admin-crypto-network-status-card admin-crypto-network-status-card--<?php echo admin_e((string)($statusRow['key'] ?? 'default')); ?>">
+                                                        <div class="admin-crypto-network-status-card__header">
+                                                            <div>
+                                                                <div class="admin-crypto-network-status-card__asset"><?php echo admin_e((string)($statusRow['asset_label'] ?? 'CRYPTO')); ?></div>
+                                                                <div class="admin-crypto-network-status-card__network"><?php echo admin_e((string)($statusRow['network_label'] ?? '')); ?></div>
+                                                            </div>
+                                                            <span class="admin-status-pill <?php echo (($statusRow['status_code'] ?? '') === 'available') ? 'admin-status-pill--available' : ((($statusRow['status_code'] ?? '') === 'warning') ? 'admin-status-pill--warning' : 'admin-status-pill--danger'); ?>">
+                                                                <?php echo admin_e((string)($statusRow['status_label'] ?? '')); ?>
+                                                            </span>
+                                                        </div>
+                                                        <div class="admin-crypto-network-status-card__provider"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_provider_prefix', 'Provider:')); ?> <?php echo admin_e((string)($statusRow['provider_label'] ?? '')); ?></div>
+                                                        <div class="admin-crypto-network-status-card__message"><?php echo admin_e((string)($statusRow['message'] ?? '')); ?></div>
+                                                        <div class="admin-crypto-network-status-card__meta">
+                                                            <span><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_checked_at', 'Checked')); ?>: <?php echo admin_e((string)($statusRow['checked_at_label'] ?? '')); ?></span>
+                                                            <span><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_latency', 'Latency')); ?>: <?php echo admin_e((string)((int)($statusRow['latency_ms'] ?? 0))); ?> ms</span>
+                                                        </div>
+                                                        <?php $statusChecks = (array)($statusRow['checks'] ?? []); ?>
+                                                        <?php if ($statusChecks): ?>
+                                                            <div class="admin-crypto-network-status-card__checks">
+                                                                <?php foreach ($statusChecks as $statusCheck): ?>
+                                                                    <div class="admin-crypto-network-status-card__check">
+                                                                        <span class="admin-status-pill <?php echo !empty($statusCheck['ok']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                            <?php echo admin_e((string)($statusCheck['label'] ?? 'Check')); ?>
+                                                                        </span>
+                                                                        <div class="admin-crypto-network-status-card__check-detail"><?php echo admin_e((string)($statusCheck['detail'] ?? '')); ?></div>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_empty', 'No status rows available yet.')); ?></div>
+                                        <?php endif; ?>
                                     </div>
 
                                             </div>

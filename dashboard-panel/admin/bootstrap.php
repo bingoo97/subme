@@ -6431,6 +6431,281 @@ function admin_crypto_accept_preview_db_rows(Mysql_ks $db, array $paymentRow, in
     return $result;
 }
 
+function admin_crypto_accept_preview_known_token_contract(string $assetCode, string $networkCode): string
+{
+    $assetCode = strtoupper(trim($assetCode));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code($networkCode, $assetCode);
+
+    $map = [
+        'ethereum' => [
+            'USDT' => '0xdac17f958d2ee523a2206206994597c13d831ec7',
+            'USDC' => '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        ],
+    ];
+
+    return $map[$networkCode][$assetCode] ?? '';
+}
+
+function admin_crypto_accept_preview_normalize_network_code(string $networkCode, string $assetCode = ''): string
+{
+    $assetCode = strtoupper(trim($assetCode));
+    $networkCode = strtolower(trim($networkCode));
+
+    $aliases = [
+        'btc' => 'bitcoin',
+        'eth' => 'ethereum',
+        'erc20' => 'ethereum',
+        'doge' => 'dogecoin',
+        'sol' => 'solana',
+        'trc20' => 'tron',
+        'bep20' => 'bnb',
+    ];
+
+    if (isset($aliases[$networkCode])) {
+        return $aliases[$networkCode];
+    }
+
+    if ($networkCode === '') {
+        if ($assetCode === 'BTC') {
+            return 'bitcoin';
+        }
+        if ($assetCode === 'ETH') {
+            return 'ethereum';
+        }
+        if ($assetCode === 'DOGE') {
+            return 'dogecoin';
+        }
+        if ($assetCode === 'SOL') {
+            return 'solana';
+        }
+    }
+
+    return $networkCode;
+}
+
+function admin_crypto_accept_preview_decimal_from_raw($rawValue, int $decimals = 8): float
+{
+    if ($rawValue === null || $rawValue === '') {
+        return 0.0;
+    }
+
+    if (!is_numeric((string)$rawValue)) {
+        return 0.0;
+    }
+
+    $raw = preg_replace('/[^0-9]/', '', (string)$rawValue);
+    if ($raw === '') {
+        return 0.0;
+    }
+
+    $decimals = max(0, $decimals);
+    if ($decimals === 0) {
+        return (float)$raw;
+    }
+
+    if (strlen($raw) <= $decimals) {
+        $formatted = '0.' . str_pad($raw, $decimals, '0', STR_PAD_LEFT);
+    } else {
+        $formatted = substr($raw, 0, -$decimals) . '.' . substr($raw, -$decimals);
+    }
+
+    return (float)$formatted;
+}
+
+function admin_crypto_accept_preview_eth_token_rows(array $paymentRow, int $windowHours = 24): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    $walletAddressCompare = strtolower($walletAddress);
+    $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
+    $tokenContract = admin_crypto_accept_preview_known_token_contract($assetCode, $networkCode);
+    if ($walletAddress === '' || $networkCode !== 'ethereum' || $tokenContract === '') {
+        return [];
+    }
+
+    $windowHours = max(1, min(72, $windowHours));
+    $cacheKey = 'eth_token_history_' . sha1($walletAddress . '|' . $assetCode . '|' . $networkCode . '|window:' . $windowHours);
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
+    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+        return $cached['rows'];
+    }
+
+    $payload = admin_http_json('https://api.ethplorer.io/getAddressHistory/' . rawurlencode($walletAddress) . '?apiKey=freekey&limit=100');
+    if (!is_array($payload) || empty($payload['operations']) || !is_array($payload['operations'])) {
+        return [];
+    }
+
+    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $cutoff = time() - ($windowHours * 3600);
+    $rows = [];
+
+    foreach ($payload['operations'] as $operation) {
+        $timestamp = (int)($operation['timestamp'] ?? 0);
+        $tokenInfo = isset($operation['tokenInfo']) && is_array($operation['tokenInfo']) ? $operation['tokenInfo'] : [];
+        $operationContract = strtolower(trim((string)($tokenInfo['address'] ?? '')));
+        if ($timestamp <= 0 || $timestamp < $cutoff || $operationContract !== $tokenContract) {
+            continue;
+        }
+
+        $fromAddress = trim((string)($operation['from'] ?? ''));
+        $toAddress = trim((string)($operation['to'] ?? ''));
+        $fromAddressCompare = strtolower($fromAddress);
+        $toAddressCompare = strtolower($toAddress);
+        $direction = $toAddressCompare === $walletAddressCompare ? 'incoming' : ($fromAddressCompare === $walletAddressCompare ? 'outgoing' : '');
+        if ($direction === '') {
+            continue;
+        }
+
+        $decimals = isset($tokenInfo['decimals']) ? (int)$tokenInfo['decimals'] : 6;
+        $amountCrypto = admin_crypto_accept_preview_decimal_from_raw((string)($operation['value'] ?? ''), $decimals);
+        if ($amountCrypto <= 0) {
+            continue;
+        }
+
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $hash = trim((string)($operation['transactionHash'] ?? ''));
+        $rows[] = [
+            'hash' => $hash,
+            'hash_compact' => $hash !== '' ? admin_compact_wallet_address($hash, 6, 4) : '',
+            'hash_url' => $hash !== '' ? admin_crypto_transaction_explorer_url($assetCode, $networkCode, $hash) : '',
+            'direction' => $direction,
+            'direction_label' => $direction === 'incoming' ? 'Incoming' : 'Outgoing',
+            'direction_icon' => $direction === 'incoming' ? 'bi-arrow-down-left' : 'bi-arrow-up-right',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' ' . $assetCode,
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => 0,
+            'confirmations_label' => '',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => $toAddress !== '' ? admin_compact_wallet_address($toAddress, 8, 5) : '',
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => $direction,
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'remote',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    return $rows;
+}
+
+function admin_crypto_accept_preview_eth_native_rows(array $paymentRow, int $windowHours = 24): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    $walletAddressCompare = strtolower($walletAddress);
+    $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
+    if ($walletAddress === '' || $networkCode !== 'ethereum' || $assetCode !== 'ETH') {
+        return [];
+    }
+
+    $windowHours = max(1, min(72, $windowHours));
+    $cacheKey = 'eth_native_history_' . sha1($walletAddress . '|' . $assetCode . '|' . $networkCode . '|window:' . $windowHours);
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
+    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+        return $cached['rows'];
+    }
+
+    $payload = admin_http_json('https://api.ethplorer.io/getAddressTransactions/' . rawurlencode($walletAddress) . '?apiKey=freekey&limit=100&showZeroValues=true');
+    if (!is_array($payload)) {
+        return [];
+    }
+
+    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $cutoff = time() - ($windowHours * 3600);
+    $rows = [];
+
+    foreach ($payload as $transaction) {
+        if (!is_array($transaction)) {
+            continue;
+        }
+
+        $timestamp = (int)($transaction['timestamp'] ?? 0);
+        if ($timestamp <= 0 || $timestamp < $cutoff) {
+            continue;
+        }
+
+        $fromAddress = trim((string)($transaction['from'] ?? ''));
+        $toAddress = trim((string)($transaction['to'] ?? ''));
+        $fromAddressCompare = strtolower($fromAddress);
+        $toAddressCompare = strtolower($toAddress);
+        $direction = $toAddressCompare === $walletAddressCompare ? 'incoming' : ($fromAddressCompare === $walletAddressCompare ? 'outgoing' : '');
+        if ($direction === '') {
+            continue;
+        }
+
+        $amountCrypto = (float)($transaction['value'] ?? 0);
+        if ($amountCrypto <= 0) {
+            continue;
+        }
+
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $hash = trim((string)($transaction['hash'] ?? ''));
+        $rows[] = [
+            'hash' => $hash,
+            'hash_compact' => $hash !== '' ? admin_compact_wallet_address($hash, 6, 4) : '',
+            'hash_url' => $hash !== '' ? admin_crypto_transaction_explorer_url($assetCode, $networkCode, $hash) : '',
+            'direction' => $direction,
+            'direction_label' => $direction === 'incoming' ? 'Incoming' : 'Outgoing',
+            'direction_icon' => $direction === 'incoming' ? 'bi-arrow-down-left' : 'bi-arrow-up-right',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' ETH',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => 0,
+            'confirmations_label' => '',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => $toAddress !== '' ? admin_compact_wallet_address($toAddress, 8, 5) : '',
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => $direction,
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'remote',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    return $rows;
+}
+
 function admin_crypto_accept_preview_btc_remote_rows(array $paymentRow, int $windowHours = 24): array
 {
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
@@ -6555,15 +6830,345 @@ function admin_crypto_accept_preview_btc_remote_rows(array $paymentRow, int $win
     return $rows;
 }
 
+function admin_crypto_accept_preview_doge_remote_rows(array $paymentRow, int $windowHours = 24): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    if ($walletAddress === '') {
+        return [];
+    }
+
+    $windowHours = max(1, min(72, $windowHours));
+    $cacheKey = 'doge_full_' . sha1($walletAddress . '|window:' . $windowHours);
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
+    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+        return $cached['rows'];
+    }
+
+    $payload = admin_http_json('https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($walletAddress) . '/full?limit=25');
+    if (!is_array($payload) || empty($payload['txs']) || !is_array($payload['txs'])) {
+        return [];
+    }
+
+    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $cutoff = time() - ($windowHours * 3600);
+    $walletAddressLower = strtolower($walletAddress);
+    $rows = [];
+
+    foreach ($payload['txs'] as $tx) {
+        $receivedAt = trim((string)($tx['confirmed'] ?? ''));
+        if ($receivedAt === '') {
+            $receivedAt = trim((string)($tx['received'] ?? ''));
+        }
+        $timestamp = $receivedAt !== '' ? (int)strtotime($receivedAt) : 0;
+        if ($timestamp <= 0 || $timestamp < $cutoff) {
+            continue;
+        }
+
+        $inputValueSats = 0.0;
+        $outputToWalletSats = 0.0;
+        $outputExternalSats = 0.0;
+        $fromAddress = '';
+        $toAddress = '';
+
+        if (!empty($tx['inputs']) && is_array($tx['inputs'])) {
+            foreach ($tx['inputs'] as $input) {
+                $addresses = isset($input['addresses']) && is_array($input['addresses']) ? $input['addresses'] : [];
+                foreach ($addresses as $address) {
+                    $address = trim((string)$address);
+                    if ($address === '') {
+                        continue;
+                    }
+                    if ($fromAddress === '' && strtolower($address) !== $walletAddressLower) {
+                        $fromAddress = $address;
+                    }
+                    if (strtolower($address) === $walletAddressLower) {
+                        $inputValueSats += (float)($input['output_value'] ?? 0);
+                    }
+                }
+            }
+        }
+
+        if (!empty($tx['outputs']) && is_array($tx['outputs'])) {
+            foreach ($tx['outputs'] as $output) {
+                $value = (float)($output['value'] ?? 0);
+                $addresses = isset($output['addresses']) && is_array($output['addresses']) ? $output['addresses'] : [];
+                $isWalletOutput = false;
+                foreach ($addresses as $address) {
+                    $address = trim((string)$address);
+                    if ($address === '') {
+                        continue;
+                    }
+                    if (strtolower($address) === $walletAddressLower) {
+                        $isWalletOutput = true;
+                    } elseif ($toAddress === '') {
+                        $toAddress = $address;
+                    }
+                }
+                if ($isWalletOutput) {
+                    $outputToWalletSats += $value;
+                } else {
+                    $outputExternalSats += $value;
+                }
+            }
+        }
+
+        $direction = 'incoming';
+        $amountSats = $outputToWalletSats;
+        if ($inputValueSats > 0 && $outputExternalSats > 0) {
+            $direction = 'outgoing';
+            $amountSats = $outputExternalSats;
+            $fromAddress = $walletAddress;
+        } elseif ($inputValueSats > 0 && $outputToWalletSats > 0 && $outputExternalSats <= 0) {
+            $direction = 'outgoing';
+            $amountSats = (float)($tx['fees'] ?? 0);
+            $fromAddress = $walletAddress;
+            $toAddress = $walletAddress;
+        } else {
+            $toAddress = $walletAddress;
+        }
+
+        $amountCrypto = $amountSats / 100000000;
+        if ($amountCrypto <= 0) {
+            continue;
+        }
+
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $hash = trim((string)($tx['hash'] ?? ''));
+        $confirmations = max(0, (int)($tx['confirmations'] ?? 0));
+        $rows[] = [
+            'hash' => $hash,
+            'hash_compact' => $hash !== '' ? admin_compact_wallet_address($hash, 6, 4) : '',
+            'hash_url' => $hash !== '' ? admin_crypto_transaction_explorer_url('DOGE', (string)($paymentRow['network_code'] ?? ''), $hash) : '',
+            'direction' => $direction,
+            'direction_label' => $direction === 'incoming' ? 'Incoming' : 'Outgoing',
+            'direction_icon' => $direction === 'incoming' ? 'bi-arrow-down-left' : 'bi-arrow-up-right',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' DOGE',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => !empty($tx['fees']) ? ('Fee ' . admin_decimal_input_value(((float)$tx['fees']) / 100000000, 8) . ' DOGE') : '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => $confirmations,
+            'confirmations_label' => $confirmations > 0 ? ($confirmations . ' conf') : 'Unconfirmed',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => $toAddress !== '' ? admin_compact_wallet_address($toAddress, 8, 5) : '',
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => $direction,
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'remote',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    return $rows;
+}
+
+function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHours = 24): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
+    if ($walletAddress === '' || $networkCode !== 'solana' || $assetCode !== 'SOL') {
+        return [];
+    }
+
+    $windowHours = max(1, min(72, $windowHours));
+    $cacheKey = 'sol_native_history_' . sha1($walletAddress . '|window:' . $windowHours);
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
+    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+        return $cached['rows'];
+    }
+
+    $signaturePayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'getSignaturesForAddress',
+        'params' => [
+            $walletAddress,
+            [
+                'commitment' => 'finalized',
+                'limit' => 12,
+            ],
+        ],
+    ]);
+    $signatureRows = isset($signaturePayload['result']) && is_array($signaturePayload['result'])
+        ? $signaturePayload['result']
+        : [];
+    if (!$signatureRows) {
+        return [];
+    }
+
+    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $cutoff = time() - ($windowHours * 3600);
+    $rows = [];
+
+    foreach ($signatureRows as $signatureRow) {
+        if (!is_array($signatureRow) || !empty($signatureRow['err'])) {
+            continue;
+        }
+
+        $timestamp = (int)($signatureRow['blockTime'] ?? 0);
+        if ($timestamp <= 0 || $timestamp < $cutoff) {
+            continue;
+        }
+
+        $signature = trim((string)($signatureRow['signature'] ?? ''));
+        if ($signature === '') {
+            continue;
+        }
+
+        $transactionPayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'getTransaction',
+            'params' => [
+                $signature,
+                [
+                    'encoding' => 'jsonParsed',
+                    'maxSupportedTransactionVersion' => 0,
+                ],
+            ],
+        ]);
+        $transaction = isset($transactionPayload['result']) && is_array($transactionPayload['result'])
+            ? $transactionPayload['result']
+            : null;
+        if (!$transaction) {
+            continue;
+        }
+
+        $message = isset($transaction['transaction']['message']) && is_array($transaction['transaction']['message'])
+            ? $transaction['transaction']['message']
+            : [];
+        $meta = isset($transaction['meta']) && is_array($transaction['meta']) ? $transaction['meta'] : [];
+        $accountKeys = isset($message['accountKeys']) && is_array($message['accountKeys']) ? $message['accountKeys'] : [];
+        $walletIndex = null;
+        foreach ($accountKeys as $index => $accountKey) {
+            $pubkey = is_array($accountKey) ? trim((string)($accountKey['pubkey'] ?? '')) : trim((string)$accountKey);
+            if ($pubkey === $walletAddress) {
+                $walletIndex = (int)$index;
+                break;
+            }
+        }
+        if ($walletIndex === null) {
+            continue;
+        }
+
+        $preBalances = isset($meta['preBalances']) && is_array($meta['preBalances']) ? $meta['preBalances'] : [];
+        $postBalances = isset($meta['postBalances']) && is_array($meta['postBalances']) ? $meta['postBalances'] : [];
+        $preLamports = isset($preBalances[$walletIndex]) ? (float)$preBalances[$walletIndex] : 0.0;
+        $postLamports = isset($postBalances[$walletIndex]) ? (float)$postBalances[$walletIndex] : 0.0;
+        $deltaLamports = $postLamports - $preLamports;
+        if ($deltaLamports == 0.0) {
+            continue;
+        }
+
+        $direction = $deltaLamports > 0 ? 'incoming' : 'outgoing';
+        $amountCrypto = abs($deltaLamports) / 1000000000;
+        if ($amountCrypto <= 0) {
+            continue;
+        }
+
+        $fromAddress = '';
+        $toAddress = '';
+        $instructions = isset($message['instructions']) && is_array($message['instructions']) ? $message['instructions'] : [];
+        foreach ($instructions as $instruction) {
+            $parsed = isset($instruction['parsed']) && is_array($instruction['parsed']) ? $instruction['parsed'] : [];
+            $info = isset($parsed['info']) && is_array($parsed['info']) ? $parsed['info'] : [];
+            $source = trim((string)($info['source'] ?? ($info['from'] ?? '')));
+            $destination = trim((string)($info['destination'] ?? ($info['to'] ?? '')));
+            if ($direction === 'incoming' && $destination === $walletAddress) {
+                $fromAddress = $source;
+                $toAddress = $destination;
+                break;
+            }
+            if ($direction === 'outgoing' && $source === $walletAddress) {
+                $fromAddress = $source;
+                $toAddress = $destination;
+                break;
+            }
+        }
+        if ($direction === 'incoming' && $toAddress === '') {
+            $toAddress = $walletAddress;
+        }
+        if ($direction === 'outgoing' && $fromAddress === '') {
+            $fromAddress = $walletAddress;
+        }
+
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $feeLamports = isset($meta['fee']) ? (float)$meta['fee'] : 0.0;
+        $statusLabel = trim((string)($signatureRow['confirmationStatus'] ?? ''));
+        $rows[] = [
+            'hash' => $signature,
+            'hash_compact' => admin_compact_wallet_address($signature, 6, 4),
+            'hash_url' => admin_crypto_transaction_explorer_url($assetCode, $networkCode, $signature),
+            'direction' => $direction,
+            'direction_label' => $direction === 'incoming' ? 'Incoming' : 'Outgoing',
+            'direction_icon' => $direction === 'incoming' ? 'bi-arrow-down-left' : 'bi-arrow-up-right',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' SOL',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => $feeLamports > 0 ? ('Fee ' . admin_decimal_input_value($feeLamports / 1000000000, 8) . ' SOL') : '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => 0,
+            'confirmations_label' => $statusLabel !== '' ? ucfirst($statusLabel) : '',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => $toAddress !== '' ? admin_compact_wallet_address($toAddress, 8, 5) : '',
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => $direction,
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'remote',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    return $rows;
+}
+
 function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
 {
     $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
-    if ($assetCode !== 'BTC' || $walletAddress === '') {
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
+    if ($walletAddress === '') {
         return ['crypto' => '', 'fiat' => ''];
     }
 
-    $cacheKey = 'btc_balance_' . sha1($walletAddress);
+    $cacheKey = 'wallet_balance_' . sha1($assetCode . '|' . $networkCode . '|' . $walletAddress);
     $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
     if (is_array($cached)) {
         return [
@@ -6572,15 +7177,57 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
         ];
     }
 
-    $payload = admin_http_json('https://blockchain.info/rawaddr/' . rawurlencode($walletAddress) . '?limit=1&offset=0');
-    if (!is_array($payload)) {
-        return ['crypto' => '', 'fiat' => ''];
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $balanceCrypto = 0.0;
+
+    if ($assetCode === 'BTC' || $networkCode === 'bitcoin') {
+        $payload = admin_http_json('https://blockchain.info/rawaddr/' . rawurlencode($walletAddress) . '?limit=1&offset=0');
+        if (is_array($payload) && isset($payload['final_balance'])) {
+            $balanceCrypto = (float)$payload['final_balance'] / 100000000;
+        }
+    } elseif ($assetCode === 'DOGE' || $networkCode === 'dogecoin') {
+        $payload = admin_http_json('https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($walletAddress) . '/balance');
+        if (is_array($payload) && isset($payload['final_balance'])) {
+            $balanceCrypto = (float)$payload['final_balance'] / 100000000;
+        }
+    } elseif ($networkCode === 'ethereum') {
+        if ($assetCode === 'ETH') {
+            $payload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($walletAddress) . '?apiKey=freekey');
+            if (is_array($payload) && !empty($payload['ETH']['rawBalance'])) {
+                $balanceCrypto = admin_crypto_accept_preview_decimal_from_raw((string)$payload['ETH']['rawBalance'], 18);
+            }
+        } else {
+            $tokenContract = admin_crypto_accept_preview_known_token_contract($assetCode, $networkCode);
+            if ($tokenContract !== '') {
+                $payload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($walletAddress) . '?apiKey=freekey&token=' . rawurlencode($tokenContract));
+                if (is_array($payload) && !empty($payload['tokens']) && is_array($payload['tokens'])) {
+                    foreach ($payload['tokens'] as $tokenRow) {
+                        $tokenInfo = isset($tokenRow['tokenInfo']) && is_array($tokenRow['tokenInfo']) ? $tokenRow['tokenInfo'] : [];
+                        if (strtolower(trim((string)($tokenInfo['address'] ?? ''))) !== $tokenContract) {
+                            continue;
+                        }
+                        $decimals = isset($tokenInfo['decimals']) ? (int)$tokenInfo['decimals'] : 6;
+                        $rawBalance = $tokenRow['rawBalance'] ?? ($tokenRow['balance'] ?? '');
+                        $balanceCrypto = admin_crypto_accept_preview_decimal_from_raw($rawBalance, $decimals);
+                        break;
+                    }
+                }
+            }
+        }
+    } elseif ($assetCode === 'SOL' || $networkCode === 'solana') {
+        $payload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'getBalance',
+            'params' => [$walletAddress],
+        ]);
+        if (is_array($payload) && isset($payload['result']['value'])) {
+            $balanceCrypto = ((float)$payload['result']['value']) / 1000000000;
+        }
     }
 
-    $balanceCrypto = isset($payload['final_balance']) ? ((float)$payload['final_balance'] / 100000000) : 0.0;
-    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
     $balance = [
-        'crypto' => $balanceCrypto > 0 ? (admin_decimal_input_value($balanceCrypto, 8) . ' BTC') : '',
+        'crypto' => $balanceCrypto > 0 ? (admin_decimal_input_value($balanceCrypto, 8) . ' ' . ($assetCode !== '' ? $assetCode : 'CRYPTO')) : '',
         'fiat' => ($balanceCrypto > 0 && $lockedRate > 0)
             ? admin_format_money_value_with_symbol(round($balanceCrypto * $lockedRate, 2), (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? ''))
             : '',
@@ -6593,12 +7240,20 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
 function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, array $messages, int $windowHours = 24): array
 {
     $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
-    $networkCode = strtolower(trim((string)($paymentRow['network_code'] ?? '')));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
     $transactions = admin_crypto_accept_preview_db_rows($db, $paymentRow, $windowHours);
 
     if (!$transactions && ($assetCode === 'BTC' || $networkCode === 'bitcoin')) {
         $transactions = admin_crypto_accept_preview_btc_remote_rows($paymentRow, $windowHours);
+    } elseif (!$transactions && ($assetCode === 'DOGE' || $networkCode === 'dogecoin')) {
+        $transactions = admin_crypto_accept_preview_doge_remote_rows($paymentRow, $windowHours);
+    } elseif (!$transactions && $networkCode === 'ethereum' && $assetCode === 'ETH') {
+        $transactions = admin_crypto_accept_preview_eth_native_rows($paymentRow, $windowHours);
+    } elseif (!$transactions && $networkCode === 'ethereum') {
+        $transactions = admin_crypto_accept_preview_eth_token_rows($paymentRow, $windowHours);
+    } elseif (!$transactions && ($assetCode === 'SOL' || $networkCode === 'solana')) {
+        $transactions = admin_crypto_accept_preview_sol_rows($paymentRow, $windowHours);
     }
 
     $bestIndex = null;
@@ -6651,6 +7306,255 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         'soft' => $theme['soft'],
         'transactions' => $transactions,
     ];
+}
+
+function admin_crypto_preview_network_probe_btc(): array
+{
+    $sampleAddress = '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa';
+    $balancePayload = admin_http_json('https://blockchain.info/rawaddr/' . rawurlencode($sampleAddress) . '?limit=1&offset=0');
+    $latestBlockPayload = admin_http_json('https://blockchain.info/latestblock');
+
+    $historyOk = is_array($balancePayload) && isset($balancePayload['txs']) && is_array($balancePayload['txs']);
+    $balanceOk = is_array($balancePayload) && array_key_exists('final_balance', $balancePayload);
+    $confirmationsOk = is_array($latestBlockPayload) && (int)($latestBlockPayload['height'] ?? 0) > 0;
+
+    return [
+        'ok' => $historyOk || $balanceOk || $confirmationsOk,
+        'ready' => $historyOk && $balanceOk && $confirmationsOk,
+        'message' => $historyOk && $balanceOk && $confirmationsOk
+            ? 'Historia transakcji, saldo i wysokość bloku odpowiadają poprawnie.'
+            : 'Jedna z usług BTC nie odpowiedziała poprawnie.',
+        'checks' => [
+            ['label' => 'Historia', 'ok' => $historyOk, 'detail' => $historyOk ? 'Ostatnie transakcje dostępne.' : 'Brak odpowiedzi historii.'],
+            ['label' => 'Saldo', 'ok' => $balanceOk, 'detail' => $balanceOk ? 'Saldo portfela można odczytać.' : 'Brak odpowiedzi salda.'],
+            ['label' => 'Potwierdzenia', 'ok' => $confirmationsOk, 'detail' => $confirmationsOk ? 'Wysokość bloku jest dostępna.' : 'Brak wysokości bloku.'],
+        ],
+    ];
+}
+
+function admin_crypto_preview_network_probe_doge(): array
+{
+    $sampleAddress = 'DNrVShF3dp1gj6KaPGfR6ADdhU4WQEE3yX';
+    $balancePayload = admin_http_json('https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($sampleAddress) . '/balance');
+    $historyPayload = admin_http_json('https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($sampleAddress) . '/full?limit=1');
+
+    $historyOk = is_array($historyPayload) && array_key_exists('txs', $historyPayload) && is_array($historyPayload['txs']);
+    $balanceOk = is_array($balancePayload) && array_key_exists('final_balance', $balancePayload);
+
+    return [
+        'ok' => $historyOk || $balanceOk,
+        'ready' => $historyOk && $balanceOk,
+        'message' => $historyOk && $balanceOk
+            ? 'BlockCypher zwraca historię i saldo dla Dogecoin.'
+            : 'Dogecoin preview nie ma pełnej odpowiedzi z BlockCypher.',
+        'checks' => [
+            ['label' => 'Historia', 'ok' => $historyOk, 'detail' => $historyOk ? 'Ostatnie transakcje DOGE są dostępne.' : 'Brak historii DOGE.'],
+            ['label' => 'Saldo', 'ok' => $balanceOk, 'detail' => $balanceOk ? 'Saldo DOGE można odczytać.' : 'Brak odpowiedzi salda DOGE.'],
+        ],
+    ];
+}
+
+function admin_crypto_preview_network_probe_eth(): array
+{
+    $sampleAddress = '0xb297cacf0f91c86dd9d2fb47c6d12783121ab780';
+    $txPayload = admin_http_json('https://api.ethplorer.io/getAddressTransactions/' . rawurlencode($sampleAddress) . '?apiKey=freekey&limit=1&showZeroValues=true');
+    $balancePayload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($sampleAddress) . '?apiKey=freekey');
+
+    $historyOk = is_array($txPayload);
+    $balanceOk = is_array($balancePayload) && (isset($balancePayload['ETH']) || isset($balancePayload['address']));
+
+    return [
+        'ok' => $historyOk || $balanceOk,
+        'ready' => $historyOk && $balanceOk,
+        'message' => $historyOk && $balanceOk
+            ? 'Ethplorer zwraca natywne transakcje ETH i saldo.'
+            : 'Ethereum preview nie ma pełnej odpowiedzi z Ethplorer.',
+        'checks' => [
+            ['label' => 'Historia', 'ok' => $historyOk, 'detail' => $historyOk ? 'Ostatnie transakcje ETH są dostępne.' : 'Brak historii ETH.'],
+            ['label' => 'Saldo', 'ok' => $balanceOk, 'detail' => $balanceOk ? 'Saldo ETH można odczytać.' : 'Brak odpowiedzi salda ETH.'],
+        ],
+    ];
+}
+
+function admin_crypto_preview_network_probe_usdt_erc20(): array
+{
+    $sampleAddress = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
+    $tokenContract = admin_crypto_accept_preview_known_token_contract('USDT', 'ethereum');
+    $historyPayload = admin_http_json('https://api.ethplorer.io/getAddressHistory/' . rawurlencode($sampleAddress) . '?apiKey=freekey&limit=100');
+    $balancePayload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($sampleAddress) . '?apiKey=freekey&token=' . rawurlencode($tokenContract));
+
+    $historyOk = false;
+    if (is_array($historyPayload) && isset($historyPayload['operations']) && is_array($historyPayload['operations'])) {
+        foreach ($historyPayload['operations'] as $operation) {
+            $tokenInfo = isset($operation['tokenInfo']) && is_array($operation['tokenInfo']) ? $operation['tokenInfo'] : [];
+            if (strtolower(trim((string)($tokenInfo['address'] ?? ''))) === $tokenContract) {
+                $historyOk = true;
+                break;
+            }
+        }
+    }
+
+    $balanceOk = false;
+    if (is_array($balancePayload) && isset($balancePayload['tokens']) && is_array($balancePayload['tokens'])) {
+        foreach ($balancePayload['tokens'] as $tokenRow) {
+            $tokenInfo = isset($tokenRow['tokenInfo']) && is_array($tokenRow['tokenInfo']) ? $tokenRow['tokenInfo'] : [];
+            if (strtolower(trim((string)($tokenInfo['address'] ?? ''))) === $tokenContract) {
+                $balanceOk = true;
+                break;
+            }
+        }
+    }
+
+    return [
+        'ok' => $historyOk || $balanceOk,
+        'ready' => $historyOk && $balanceOk,
+        'message' => $historyOk && $balanceOk
+            ? 'USDT ERC-20 preview jest gotowy: historia tokenów i saldo odpowiadają.'
+            : 'USDT ERC-20 preview nie ma pełnej odpowiedzi z Ethplorer.',
+        'checks' => [
+            ['label' => 'Historia', 'ok' => $historyOk, 'detail' => $historyOk ? 'Historia operacji tokena jest dostępna.' : 'Brak historii USDT ERC-20.'],
+            ['label' => 'Saldo', 'ok' => $balanceOk, 'detail' => $balanceOk ? 'Saldo tokena można odczytać.' : 'Brak odpowiedzi salda USDT ERC-20.'],
+        ],
+    ];
+}
+
+function admin_crypto_preview_network_probe_sol(): array
+{
+    $sampleAddress = 'Vote111111111111111111111111111111111111111';
+    $balancePayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'getBalance',
+        'params' => [$sampleAddress],
+    ]);
+    $signaturesPayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'getSignaturesForAddress',
+        'params' => [
+            $sampleAddress,
+            [
+                'commitment' => 'finalized',
+                'limit' => 1,
+            ],
+        ],
+    ]);
+
+    $balanceOk = is_array($balancePayload) && isset($balancePayload['result']['value']);
+    $historyOk = is_array($signaturesPayload) && isset($signaturesPayload['result']) && is_array($signaturesPayload['result']);
+    $transactionOk = false;
+    if ($historyOk && !empty($signaturesPayload['result'][0]['signature'])) {
+        $transactionPayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'getTransaction',
+            'params' => [
+                (string)$signaturesPayload['result'][0]['signature'],
+                [
+                    'encoding' => 'jsonParsed',
+                    'maxSupportedTransactionVersion' => 0,
+                ],
+            ],
+        ]);
+        $transactionOk = is_array($transactionPayload) && !empty($transactionPayload['result']);
+    }
+
+    return [
+        'ok' => $balanceOk || $historyOk || $transactionOk,
+        'ready' => $balanceOk && $historyOk && $transactionOk,
+        'message' => $balanceOk && $historyOk && $transactionOk
+            ? 'Solana RPC zwraca saldo, podpisy i szczegóły transakcji.'
+            : 'Solana preview nie ma jeszcze pełnej odpowiedzi z RPC.',
+        'checks' => [
+            ['label' => 'Historia', 'ok' => $historyOk, 'detail' => $historyOk ? 'Podpisy transakcji są dostępne.' : 'Brak podpisów transakcji.'],
+            ['label' => 'Saldo', 'ok' => $balanceOk, 'detail' => $balanceOk ? 'Saldo SOL można odczytać.' : 'Brak odpowiedzi salda SOL.'],
+            ['label' => 'Szczegóły', 'ok' => $transactionOk, 'detail' => $transactionOk ? 'Szczegóły transakcji są dostępne.' : 'Brak szczegółów transakcji SOL.'],
+        ],
+    ];
+}
+
+function admin_crypto_preview_network_status_rows(array $messages = [], bool $forceRefresh = false): array
+{
+    $cacheKey = 'crypto_preview_network_status_rows_v1';
+    if (!$forceRefresh) {
+        $cached = admin_crypto_accept_preview_cache_read($cacheKey, 300);
+        if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+            return $cached['rows'];
+        }
+    }
+
+    $checks = [
+        [
+            'key' => 'btc',
+            'asset_label' => 'BTC',
+            'network_label' => 'Bitcoin',
+            'provider_label' => 'Blockchain.info',
+            'probe' => 'admin_crypto_preview_network_probe_btc',
+        ],
+        [
+            'key' => 'doge',
+            'asset_label' => 'DOGE',
+            'network_label' => 'Dogecoin',
+            'provider_label' => 'BlockCypher',
+            'probe' => 'admin_crypto_preview_network_probe_doge',
+        ],
+        [
+            'key' => 'eth',
+            'asset_label' => 'ETH',
+            'network_label' => 'Ethereum',
+            'provider_label' => 'Ethplorer',
+            'probe' => 'admin_crypto_preview_network_probe_eth',
+        ],
+        [
+            'key' => 'usdt_erc20',
+            'asset_label' => 'USDT',
+            'network_label' => 'ERC-20',
+            'provider_label' => 'Ethplorer',
+            'probe' => 'admin_crypto_preview_network_probe_usdt_erc20',
+        ],
+        [
+            'key' => 'sol',
+            'asset_label' => 'SOL',
+            'network_label' => 'Solana',
+            'provider_label' => 'Solana RPC',
+            'probe' => 'admin_crypto_preview_network_probe_sol',
+        ],
+    ];
+
+    $checkedAt = gmdate('Y-m-d H:i:s');
+    $rows = [];
+    foreach ($checks as $definition) {
+        $startedAt = microtime(true);
+        $probeResult = call_user_func($definition['probe']);
+        $latencyMs = (int)round((microtime(true) - $startedAt) * 1000);
+        $ready = !empty($probeResult['ready']);
+        $ok = !empty($probeResult['ok']);
+        $statusCode = $ready ? 'available' : ($ok ? 'warning' : 'danger');
+        $statusLabel = $ready
+            ? admin_t($messages, 'settings_crypto_preview_status_ready', 'Ready')
+            : ($ok
+                ? admin_t($messages, 'settings_crypto_preview_status_partial', 'Partial')
+                : admin_t($messages, 'settings_crypto_preview_status_error', 'Error'));
+
+        $rows[] = [
+            'key' => (string)$definition['key'],
+            'asset_label' => (string)$definition['asset_label'],
+            'network_label' => (string)$definition['network_label'],
+            'provider_label' => (string)$definition['provider_label'],
+            'status_code' => $statusCode,
+            'status_label' => $statusLabel,
+            'ready' => $ready,
+            'ok' => $ok,
+            'message' => trim((string)($probeResult['message'] ?? '')),
+            'checks' => isset($probeResult['checks']) && is_array($probeResult['checks']) ? $probeResult['checks'] : [],
+            'latency_ms' => $latencyMs,
+            'checked_at' => $checkedAt,
+            'checked_at_label' => app_format_utc_datetime_local($checkedAt, 'd.m.Y H:i:s'),
+        ];
+    }
+
+    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    return $rows;
 }
 
 function admin_render_crypto_accept_explorer_panel(array $preview): string
@@ -8590,6 +9494,63 @@ function admin_http_json(string $url): ?array
             'method' => 'GET',
             'timeout' => 20,
             'header' => "Accept: application/json\r\nUser-Agent: Reseller-Admin/1.0\r\n",
+        ],
+    ]);
+
+    $response = @file_get_contents($url, false, $context);
+    if (!is_string($response) || $response === '') {
+        return null;
+    }
+
+    $decoded = json_decode($response, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+function admin_http_post_json(string $url, array $payload): ?array
+{
+    if ($url === '') {
+        return null;
+    }
+
+    $jsonPayload = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($jsonPayload) || $jsonPayload === '') {
+        return null;
+    }
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                'User-Agent: Reseller-Admin/1.0',
+            ],
+        ]);
+
+        $response = curl_exec($ch);
+        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($response) || $response === '' || $httpCode >= 400) {
+            return null;
+        }
+
+        $decoded = json_decode($response, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'timeout' => 20,
+            'header' => "Accept: application/json\r\nContent-Type: application/json\r\nUser-Agent: Reseller-Admin/1.0\r\n",
+            'content' => $jsonPayload,
         ],
     ]);
 

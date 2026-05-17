@@ -9513,6 +9513,99 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     margin-top:1rem;
 }
 
+.admin-crypto-network-status-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));
+    gap:1rem;
+}
+
+.admin-crypto-network-status-card{
+    display:flex;
+    flex-direction:column;
+    gap:.7rem;
+    min-width:0;
+    padding:1rem;
+    border-radius:18px;
+    background:#fff;
+    border:1px solid rgba(15, 23, 42, 0.08);
+}
+
+.admin-crypto-network-status-card__header{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:.75rem;
+}
+
+.admin-crypto-network-status-card__asset{
+    font-size:1.05rem;
+    font-weight:900;
+    line-height:1.1;
+}
+
+.admin-crypto-network-status-card__network{
+    margin-top:.15rem;
+    color:#667085;
+    font-size:.82rem;
+    font-weight:700;
+}
+
+.admin-crypto-network-status-card__provider{
+    color:#344054;
+    font-size:.8rem;
+    font-weight:800;
+}
+
+.admin-crypto-network-status-card__message{
+    color:#101828;
+    font-size:.88rem;
+    line-height:1.45;
+}
+
+.admin-crypto-network-status-card__meta{
+    display:flex;
+    flex-wrap:wrap;
+    gap:.45rem .9rem;
+    color:#667085;
+    font-size:.78rem;
+    font-weight:700;
+}
+
+.admin-crypto-network-status-card__checks{
+    display:flex;
+    flex-direction:column;
+    gap:.55rem;
+}
+
+.admin-crypto-network-status-card__check{
+    display:flex;
+    flex-direction:column;
+    gap:.22rem;
+}
+
+.admin-crypto-network-status-card__check-detail{
+    color:#667085;
+    font-size:.78rem;
+    line-height:1.4;
+}
+
+.admin-crypto-network-status-card--btc{
+    background:linear-gradient(180deg, rgba(255, 247, 237, 0.98), #fff);
+}
+
+.admin-crypto-network-status-card--doge{
+    background:linear-gradient(180deg, rgba(245, 240, 224, 0.98), #fff);
+}
+
+.admin-crypto-network-status-card--eth,
+.admin-crypto-network-status-card--usdt_erc20{
+    background:linear-gradient(180deg, rgba(240, 244, 248, 0.98), #fff);
+}
+
+.admin-crypto-network-status-card--sol{
+    background:linear-gradient(180deg, rgba(237, 255, 251, 0.98), #fff);
+}
+
 .admin-settings-logo-field__actions{
     display:flex;
     justify-content:flex-end;
