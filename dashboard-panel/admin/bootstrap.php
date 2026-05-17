@@ -7168,7 +7168,7 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
         return ['crypto' => '', 'fiat' => ''];
     }
 
-    $cacheKey = 'wallet_balance_' . sha1($assetCode . '|' . $networkCode . '|' . $walletAddress);
+    $cacheKey = 'wallet_balance_v2_' . sha1($assetCode . '|' . $networkCode . '|' . $walletAddress);
     $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
     if (is_array($cached)) {
         return [
@@ -7200,8 +7200,19 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
             $tokenContract = admin_crypto_accept_preview_known_token_contract($assetCode, $networkCode);
             if ($tokenContract !== '') {
                 $payload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($walletAddress) . '?apiKey=freekey&token=' . rawurlencode($tokenContract));
-                if (is_array($payload) && !empty($payload['tokens']) && is_array($payload['tokens'])) {
-                    foreach ($payload['tokens'] as $tokenRow) {
+                $tokenRows = is_array($payload) && !empty($payload['tokens']) && is_array($payload['tokens'])
+                    ? $payload['tokens']
+                    : [];
+
+                if (!$tokenRows) {
+                    $fallbackPayload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($walletAddress) . '?apiKey=freekey');
+                    $tokenRows = is_array($fallbackPayload) && !empty($fallbackPayload['tokens']) && is_array($fallbackPayload['tokens'])
+                        ? $fallbackPayload['tokens']
+                        : [];
+                }
+
+                if ($tokenRows) {
+                    foreach ($tokenRows as $tokenRow) {
                         $tokenInfo = isset($tokenRow['tokenInfo']) && is_array($tokenRow['tokenInfo']) ? $tokenRow['tokenInfo'] : [];
                         if (strtolower(trim((string)($tokenInfo['address'] ?? ''))) !== $tokenContract) {
                             continue;
@@ -7381,7 +7392,6 @@ function admin_crypto_preview_network_probe_usdt_erc20(): array
     $sampleAddress = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
     $tokenContract = admin_crypto_accept_preview_known_token_contract('USDT', 'ethereum');
     $historyPayload = admin_http_json('https://api.ethplorer.io/getAddressHistory/' . rawurlencode($sampleAddress) . '?apiKey=freekey&limit=100');
-    $balancePayload = admin_http_json('https://api.ethplorer.io/getAddressInfo/' . rawurlencode($sampleAddress) . '?apiKey=freekey&token=' . rawurlencode($tokenContract));
 
     $historyOk = false;
     if (is_array($historyPayload) && isset($historyPayload['operations']) && is_array($historyPayload['operations'])) {
@@ -7394,16 +7404,13 @@ function admin_crypto_preview_network_probe_usdt_erc20(): array
         }
     }
 
-    $balanceOk = false;
-    if (is_array($balancePayload) && isset($balancePayload['tokens']) && is_array($balancePayload['tokens'])) {
-        foreach ($balancePayload['tokens'] as $tokenRow) {
-            $tokenInfo = isset($tokenRow['tokenInfo']) && is_array($tokenRow['tokenInfo']) ? $tokenRow['tokenInfo'] : [];
-            if (strtolower(trim((string)($tokenInfo['address'] ?? ''))) === $tokenContract) {
-                $balanceOk = true;
-                break;
-            }
-        }
-    }
+    $balancePreview = admin_crypto_accept_preview_wallet_balance([
+        'asset_code' => 'USDT',
+        'network_code' => 'ethereum',
+        'wallet_address' => $sampleAddress,
+        'exchange_rate' => 1,
+    ]);
+    $balanceOk = trim((string)($balancePreview['crypto'] ?? '')) !== '';
 
     return [
         'ok' => $historyOk || $balanceOk,
@@ -7475,7 +7482,7 @@ function admin_crypto_preview_network_probe_sol(): array
 
 function admin_crypto_preview_network_status_rows(array $messages = [], bool $forceRefresh = false): array
 {
-    $cacheKey = 'crypto_preview_network_status_rows_v1';
+    $cacheKey = 'crypto_preview_network_status_rows_v2';
     if (!$forceRefresh) {
         $cached = admin_crypto_accept_preview_cache_read($cacheKey, 300);
         if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
