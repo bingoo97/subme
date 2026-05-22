@@ -1230,8 +1230,12 @@ if (app_uses_v2_schema($db)) {
 
     if ($action === 'faq_prompt' && isset($selectedFaqPrompt)) {
         chat_require_rate_limit_slot($responseFormat);
+        $faqReplyMessage = chat_build_faq_card_message($selectedFaqPrompt);
+        if ($faqReplyMessage === '') {
+            $faqReplyMessage = (string)$selectedFaqPrompt['answer'];
+        }
         chat_insert_customer_message($db, $currentCustomerId, (string)$selectedFaqPrompt['title']);
-        chat_insert_support_message($db, $currentCustomerId, (string)$selectedFaqPrompt['answer']);
+        chat_insert_support_message($db, $currentCustomerId, $faqReplyMessage);
         chat_register_customer_message_sent();
     }
 
@@ -1280,6 +1284,10 @@ if (app_uses_v2_schema($db)) {
 
     if ($action === 'faq_prompt' && isset($selectedFaqPrompt)) {
         chat_require_rate_limit_slot($responseFormat);
+        $faqReplyMessage = chat_build_faq_card_message($selectedFaqPrompt);
+        if ($faqReplyMessage === '') {
+            $faqReplyMessage = (string)$selectedFaqPrompt['answer'];
+        }
         $db->insert(
             ['user1', 'user2', 'tresc', 'data', 'status'],
             [$currentCustomerId, chat_first_admin_id($db), (string)$selectedFaqPrompt['title'], date('Y-m-d H:i:s'), 0],
@@ -1287,7 +1295,7 @@ if (app_uses_v2_schema($db)) {
         );
         $db->insert(
             ['user1', 'user2', 'tresc', 'data', 'status'],
-            [chat_first_admin_id($db), $currentCustomerId, (string)$selectedFaqPrompt['answer'], date('Y-m-d H:i:s'), 1],
+            [chat_first_admin_id($db), $currentCustomerId, $faqReplyMessage, date('Y-m-d H:i:s'), 1],
             'produkty_chat'
         );
         chat_register_customer_message_sent();

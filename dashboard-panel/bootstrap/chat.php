@@ -1301,6 +1301,372 @@ if (!function_exists('chat_fetch_link_preview')) {
 }
 
 if (!function_exists('chat_format_message_html')) {
+    function chat_html_url_is_safe(string $value, bool $allowDataImages = false): bool
+    {
+        $url = trim($value);
+        if ($url === '') {
+            return false;
+        }
+
+        $lower = strtolower($url);
+        if ($allowDataImages && strpos($lower, 'data:image/') === 0) {
+            return true;
+        }
+
+        if (
+            preg_match('/^[a-z][a-z0-9+.-]*:/i', $url) !== 1
+            && strpos($lower, '//') !== 0
+            && preg_match('/\s/', $url) !== 1
+            && preg_match('/^[.\/A-Za-z0-9_~%+\-?&=#@(),!$*;\'\[\]]+$/', $url) === 1
+        ) {
+            return true;
+        }
+
+        return strpos($lower, 'http://') === 0
+            || strpos($lower, 'https://') === 0
+            || strpos($lower, 'mailto:') === 0
+            || strpos($lower, 'tel:') === 0
+            || strpos($lower, '/') === 0
+            || strpos($lower, '#') === 0;
+    }
+
+    function chat_sanitize_inline_style(string $value): string
+    {
+        $allowedProperties = [
+            'text-align' => true,
+            'color' => true,
+            'background' => true,
+            'background-color' => true,
+            'font-size' => true,
+            'font-weight' => true,
+            'font-style' => true,
+            'font-family' => true,
+            'line-height' => true,
+            'letter-spacing' => true,
+            'text-decoration' => true,
+            'text-transform' => true,
+            'white-space' => true,
+            'display' => true,
+            'width' => true,
+            'min-width' => true,
+            'max-width' => true,
+            'height' => true,
+            'min-height' => true,
+            'max-height' => true,
+            'margin' => true,
+            'margin-top' => true,
+            'margin-right' => true,
+            'margin-bottom' => true,
+            'margin-left' => true,
+            'padding' => true,
+            'padding-top' => true,
+            'padding-right' => true,
+            'padding-bottom' => true,
+            'padding-left' => true,
+            'border' => true,
+            'border-top' => true,
+            'border-right' => true,
+            'border-bottom' => true,
+            'border-left' => true,
+            'border-color' => true,
+            'border-width' => true,
+            'border-style' => true,
+            'border-radius' => true,
+            'box-shadow' => true,
+            'opacity' => true,
+            'overflow' => true,
+            'overflow-x' => true,
+            'overflow-y' => true,
+            'float' => true,
+            'clear' => true,
+        ];
+        $safeDeclarations = [];
+
+        foreach (explode(';', $value) as $declaration) {
+            $parts = explode(':', (string)$declaration, 2);
+            $property = strtolower(trim((string)($parts[0] ?? '')));
+            $propertyValue = trim((string)($parts[1] ?? ''));
+            $normalizedValue = preg_replace('/\s+/u', ' ', $propertyValue) ?? $propertyValue;
+
+            if ($property === '' || $normalizedValue === '' || !isset($allowedProperties[$property])) {
+                continue;
+            }
+
+            if (preg_match('/(expression\s*\(|javascript\s*:|vbscript\s*:|data\s*:|url\s*\(|@import|behavior\s*:)/i', $normalizedValue) === 1) {
+                continue;
+            }
+
+            if (preg_match('/^[#(),.%+\-\/:\w\s"\'!]+$/u', $normalizedValue) !== 1) {
+                continue;
+            }
+
+            $safeDeclarations[] = $property . ':' . $normalizedValue;
+        }
+
+        return implode(';', $safeDeclarations) . ($safeDeclarations ? ';' : '');
+    }
+
+    function chat_sanitize_class_names(string $value): string
+    {
+        $tokens = preg_split('/\s+/u', trim($value)) ?: [];
+        $safeTokens = [];
+        foreach ($tokens as $token) {
+            $token = trim((string)$token);
+            if ($token !== '' && preg_match('/^[A-Za-z0-9_-]+$/', $token) === 1) {
+                $safeTokens[] = $token;
+            }
+        }
+
+        return implode(' ', array_values(array_unique($safeTokens)));
+    }
+
+    function chat_dom_inner_html(DOMNode $node): string
+    {
+        $html = '';
+        $ownerDocument = $node->ownerDocument;
+        if (!$ownerDocument) {
+            return $html;
+        }
+
+        foreach ($node->childNodes as $childNode) {
+            $html .= $ownerDocument->saveHTML($childNode);
+        }
+
+        return $html;
+    }
+
+    function chat_sanitize_rich_content_html(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $allowedTags = [
+            'P' => true,
+            'BR' => true,
+            'HR' => true,
+            'STRONG' => true,
+            'B' => true,
+            'EM' => true,
+            'I' => true,
+            'U' => true,
+            'H1' => true,
+            'H2' => true,
+            'H3' => true,
+            'H4' => true,
+            'H5' => true,
+            'H6' => true,
+            'UL' => true,
+            'OL' => true,
+            'LI' => true,
+            'BLOCKQUOTE' => true,
+            'A' => true,
+            'IMG' => true,
+            'VIDEO' => true,
+            'DIV' => true,
+            'SPAN' => true,
+            'TABLE' => true,
+            'THEAD' => true,
+            'TBODY' => true,
+            'TR' => true,
+            'TD' => true,
+            'TH' => true,
+        ];
+        $removeTags = [
+            'SCRIPT' => true,
+            'STYLE' => true,
+            'IFRAME' => true,
+            'OBJECT' => true,
+            'EMBED' => true,
+            'FORM' => true,
+            'INPUT' => true,
+            'BUTTON' => true,
+            'TEXTAREA' => true,
+            'SELECT' => true,
+            'OPTION' => true,
+        ];
+
+        if (!class_exists('DOMDocument')) {
+            return strip_tags(
+                $html,
+                '<p><br><hr><strong><b><em><i><u><h1><h2><h3><h4><h5><h6><ul><ol><li><blockquote><a><img><video><div><span><table><thead><tbody><tr><td><th>'
+            );
+        }
+
+        $dom = new DOMDocument();
+        $previousState = libxml_use_internal_errors(true);
+        $loaded = $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div id="chat-rich-root">' . $html . '</div>',
+            LIBXML_NOWARNING | LIBXML_NOERROR
+        );
+        libxml_clear_errors();
+        libxml_use_internal_errors($previousState);
+
+        if (!$loaded) {
+            return strip_tags(
+                $html,
+                '<p><br><hr><strong><b><em><i><u><h1><h2><h3><h4><h5><h6><ul><ol><li><blockquote><a><img><video><div><span><table><thead><tbody><tr><td><th>'
+            );
+        }
+
+        $root = $dom->getElementById('chat-rich-root');
+        if (!$root instanceof DOMElement) {
+            return '';
+        }
+
+        $walk = function (DOMNode $node) use (&$walk, $dom, $allowedTags, $removeTags): void {
+            $children = [];
+            foreach ($node->childNodes as $childNode) {
+                $children[] = $childNode;
+            }
+
+            foreach ($children as $childNode) {
+                if ($childNode instanceof DOMComment) {
+                    $node->removeChild($childNode);
+                    continue;
+                }
+
+                if (!($childNode instanceof DOMElement)) {
+                    continue;
+                }
+
+                $tagName = strtoupper($childNode->tagName);
+                if (!isset($allowedTags[$tagName])) {
+                    if (isset($removeTags[$tagName])) {
+                        $node->removeChild($childNode);
+                        continue;
+                    }
+
+                    while ($childNode->firstChild) {
+                        $node->insertBefore($childNode->firstChild, $childNode);
+                    }
+                    $node->removeChild($childNode);
+                    continue;
+                }
+
+                $attributes = [];
+                foreach ($childNode->attributes ?? [] as $attributeNode) {
+                    $attributes[] = $attributeNode;
+                }
+
+                foreach ($attributes as $attributeNode) {
+                    $attributeName = strtolower((string)$attributeNode->nodeName);
+                    $attributeValue = (string)$attributeNode->nodeValue;
+
+                    if (strpos($attributeName, 'on') === 0) {
+                        $childNode->removeAttributeNode($attributeNode);
+                        continue;
+                    }
+
+                    if ($tagName === 'A' && $attributeName === 'href') {
+                        if (!chat_html_url_is_safe($attributeValue, false)) {
+                            $childNode->removeAttributeNode($attributeNode);
+                        }
+                        continue;
+                    }
+
+                    if ($tagName === 'IMG' && $attributeName === 'src') {
+                        if (!chat_html_url_is_safe($attributeValue, true)) {
+                            $node->removeChild($childNode);
+                            continue 2;
+                        }
+                        continue;
+                    }
+
+                    if ($tagName === 'VIDEO' && ($attributeName === 'src' || $attributeName === 'poster')) {
+                        if (!chat_html_url_is_safe($attributeValue, false)) {
+                            $childNode->removeAttributeNode($attributeNode);
+                        }
+                        continue;
+                    }
+
+                    if ($attributeName === 'style') {
+                        $safeStyle = chat_sanitize_inline_style($attributeValue);
+                        if ($safeStyle !== '') {
+                            $childNode->setAttribute('style', $safeStyle);
+                        } else {
+                            $childNode->removeAttributeNode($attributeNode);
+                        }
+                        continue;
+                    }
+
+                    if ($attributeName === 'class') {
+                        $safeClasses = chat_sanitize_class_names($attributeValue);
+                        if ($safeClasses !== '') {
+                            $childNode->setAttribute('class', $safeClasses);
+                        } else {
+                            $childNode->removeAttributeNode($attributeNode);
+                        }
+                        continue;
+                    }
+
+                    if ($tagName === 'A' && in_array($attributeName, ['target', 'rel', 'title'], true)) {
+                        continue;
+                    }
+
+                    if ($tagName === 'IMG' && in_array($attributeName, ['alt', 'title', 'width', 'height', 'loading'], true)) {
+                        continue;
+                    }
+
+                    if ($tagName === 'VIDEO' && in_array($attributeName, ['controls', 'preload', 'playsinline', 'muted', 'loop', 'autoplay', 'width', 'height'], true)) {
+                        continue;
+                    }
+
+                    if (in_array($tagName, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH'], true) && in_array($attributeName, ['colspan', 'rowspan', 'scope', 'width', 'height'], true)) {
+                        continue;
+                    }
+
+                    $childNode->removeAttributeNode($attributeNode);
+                }
+
+                if ($tagName === 'A') {
+                    if ($childNode->getAttribute('href') !== '' && $childNode->getAttribute('target') === '') {
+                        $childNode->setAttribute('target', '_blank');
+                    }
+                    if ($childNode->getAttribute('href') !== '') {
+                        $childNode->setAttribute('rel', 'noopener noreferrer');
+                    }
+                }
+
+                $walk($childNode);
+            }
+        };
+
+        $walk($root);
+
+        return trim(chat_dom_inner_html($root));
+    }
+
+    function chat_faq_card_html(array $payload): string
+    {
+        if (($payload['kind'] ?? '') !== 'faq_rich') {
+            return '';
+        }
+
+        $html = chat_sanitize_rich_content_html((string)($payload['html'] ?? ''));
+        if ($html === '') {
+            return '';
+        }
+
+        return '<div class="chat-faq-card">' . $html . '</div>';
+    }
+
+    function chat_build_faq_card_message(array $prompt): string
+    {
+        $answerHtml = trim((string)($prompt['answer_html'] ?? ''));
+        if ($answerHtml === '' || !function_exists('app_chat_card_encode')) {
+            return '';
+        }
+
+        $payload = [
+            'kind' => 'faq_rich',
+            'html' => $answerHtml,
+        ];
+
+        return app_chat_card_encode($payload);
+    }
+
     function chat_system_notice_text(string $messageBody): string
     {
         if (strpos($messageBody, '[system_notice]') !== 0) {
@@ -1459,6 +1825,11 @@ if (!function_exists('chat_format_message_html')) {
 
         $cardPayload = function_exists('app_chat_card_decode') ? app_chat_card_decode($messageBody) : null;
         if (is_array($cardPayload)) {
+            $cardHtml = chat_faq_card_html($cardPayload);
+            if ($cardHtml !== '') {
+                return $cardHtml;
+            }
+
             $cardHtml = chat_payment_card_html($cardPayload);
             if ($cardHtml !== '') {
                 return $cardHtml;
@@ -1810,8 +2181,9 @@ if (!function_exists('chat_load_faq_prompts')) {
             }
 
             $title = trim(html_entity_decode(strip_tags((string)$page['title']), ENT_QUOTES));
+            $answerHtml = chat_sanitize_rich_content_html((string)$page['body']);
             $answer = chat_page_plain_text((string)$page['body']);
-            if ($title === '' || $answer === '') {
+            if ($title === '' || ($answer === '' && $answerHtml === '')) {
                 continue;
             }
 
@@ -1821,6 +2193,7 @@ if (!function_exists('chat_load_faq_prompts')) {
                 'slug' => (string)$page['slug'],
                 'title' => $title,
                 'answer' => $answer,
+                'answer_html' => $answerHtml,
             ];
         }
 

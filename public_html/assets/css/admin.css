@@ -2622,9 +2622,14 @@ body.admin-login-page{
     line-height:1.2 !important;
 }
 
-.admin-chat-conversation__text a{
+.admin-chat-conversation__text a:not(.btn){
     color:inherit;
     text-decoration:underline;
+}
+
+.admin-chat-conversation__text .btn,
+.admin-chat-conversation__text a.btn{
+    text-decoration:none !important;
 }
 
 .admin-chat-conversation__message.is-focused .admin-chat-conversation__bubble{
@@ -3838,6 +3843,100 @@ body.admin-login-page{
 .chat-link-preview__message{
     margin:0 0 10px;
     line-height:1.55;
+}
+
+.chat-faq-card{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    max-width:100%;
+    font-size:12px;
+    line-height:1.6;
+}
+
+.chat-faq-card > *:first-child{
+    margin-top:0 !important;
+}
+
+.chat-faq-card > *:last-child{
+    margin-bottom:0 !important;
+}
+
+.chat-faq-card h1,
+.chat-faq-card h2,
+.chat-faq-card h3,
+.chat-faq-card h4,
+.chat-faq-card h5,
+.chat-faq-card h6{
+    margin:0 0 6px;
+    line-height:1.3;
+    font-weight:700;
+}
+
+.chat-faq-card h1{font-size:19px;}
+.chat-faq-card h2{font-size:17px;}
+.chat-faq-card h3{font-size:15px;}
+.chat-faq-card h4,
+.chat-faq-card h5,
+.chat-faq-card h6{font-size:13px;}
+
+.chat-faq-card p,
+.chat-faq-card ul,
+.chat-faq-card ol,
+.chat-faq-card blockquote,
+.chat-faq-card table,
+.chat-faq-card video{
+    margin:0;
+}
+
+.chat-faq-card ul,
+.chat-faq-card ol{
+    padding-left:18px;
+}
+
+.chat-faq-card blockquote{
+    padding:10px 12px;
+    border-left:3px solid rgba(17,17,17,.14);
+    border-radius:10px;
+    background:rgba(17,17,17,.05);
+}
+
+.chat-faq-card a:not(.btn){
+    color:inherit;
+    text-decoration:underline;
+    word-break:break-word;
+}
+
+.chat-faq-card img,
+.chat-faq-card video{
+    display:block;
+    max-width:100% !important;
+    height:auto;
+    border-radius:12px;
+}
+
+.chat-faq-card table{
+    display:block;
+    width:100%;
+    max-width:100%;
+    overflow-x:auto;
+    border-collapse:collapse;
+}
+
+.chat-faq-card td,
+.chat-faq-card th{
+    padding:6px 8px;
+    border:1px solid rgba(17,17,17,.12);
+    vertical-align:top;
+}
+
+.chat-faq-card .btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    max-width:100%;
+    white-space:normal;
+    text-decoration:none !important;
 }
 
 @media (max-width: 640px){
