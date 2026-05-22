@@ -1475,7 +1475,7 @@ function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 
     return $providers;
 }
 
-function admin_dashboard_chart_path(array $series, int $width = 640, int $height = 240, int $paddingX = 20, int $paddingY = 18): string
+function admin_dashboard_chart_path(array $series, int $width = 640, int $height = 240, int $paddingX = 28, int $paddingY = 18): string
 {
     $points = admin_dashboard_chart_points($series, $width, $height, $paddingX, $paddingY);
     if (!$points) {
@@ -1500,7 +1500,7 @@ function admin_dashboard_chart_path(array $series, int $width = 640, int $height
     return implode(' ', $commands);
 }
 
-function admin_dashboard_chart_points(array $series, int $width = 640, int $height = 240, int $paddingX = 20, int $paddingY = 18): array
+function admin_dashboard_chart_points(array $series, int $width = 640, int $height = 240, int $paddingX = 28, int $paddingY = 18): array
 {
     if (!$series) {
         return [];
@@ -1533,7 +1533,7 @@ function admin_dashboard_chart_points(array $series, int $width = 640, int $heig
     return $points;
 }
 
-function admin_dashboard_chart_area_path(array $series, int $width = 640, int $height = 240, int $paddingX = 20, int $paddingY = 18): string
+function admin_dashboard_chart_area_path(array $series, int $width = 640, int $height = 240, int $paddingX = 28, int $paddingY = 18): string
 {
     $points = admin_dashboard_chart_points($series, $width, $height, $paddingX, $paddingY);
     if (!$points) {

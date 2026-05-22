@@ -5460,12 +5460,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             }
                             $chartTrendDirection = $chartTrendDelta > 0 ? 'up' : ($chartTrendDelta < 0 ? 'down' : 'flat');
                             $chartTrendPrefix = $chartTrendPercent > 0 ? '+' : '';
-                            $chartGridRows = 4;
+                            $chartGridRows = $chartMaxOrders <= 3 ? ($chartMaxOrders + 1) : 4;
                             $chartTooltipWidth = 144;
                             $chartTooltipHeight = 52;
                             $chartTooltipHalfWidth = (float)($chartTooltipWidth / 2);
-                            $chartTooltipMinX = 20.0 + $chartTooltipHalfWidth;
-                            $chartTooltipMaxX = 620.0 - $chartTooltipHalfWidth;
+                            $chartTooltipMinX = 28.0 + $chartTooltipHalfWidth;
+                            $chartTooltipMaxX = 612.0 - $chartTooltipHalfWidth;
                             ?>
                             <div class="admin-dashboard-chart">
                                 <div class="admin-dashboard-chart__summary">
@@ -5493,7 +5493,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
                                 </div>
                                 <div class="admin-dashboard-chart__canvas">
-                                    <svg viewBox="0 0 640 240" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
+                                    <svg viewBox="0 0 640 252" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
                                         <defs>
                                             <linearGradient id="adminDashboardChartArea" x1="0%" y1="0%" x2="0%" y2="100%">
                                                 <stop offset="0%" stop-color="#111827" stop-opacity="0.28"></stop>
@@ -5519,8 +5519,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $gridY = 20 + ($gridRatio * 200);
                                             $gridValue = (int)round($chartMaxOrders * (1 - $gridRatio));
                                             ?>
-                                            <line x1="20" y1="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" x2="620" y2="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" class="admin-dashboard-chart__grid"></line>
-                                            <text x="16" y="<?php echo admin_e(number_format($gridY + 4, 2, '.', '')); ?>" text-anchor="end" class="admin-dashboard-chart__value-label"><?php echo admin_e((string)$gridValue); ?></text>
+                                            <line x1="28" y1="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" x2="612" y2="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" class="admin-dashboard-chart__grid"></line>
+                                            <text x="20" y="<?php echo admin_e(number_format($gridY + 4, 2, '.', '')); ?>" text-anchor="end" class="admin-dashboard-chart__value-label"><?php echo admin_e((string)$gridValue); ?></text>
                                         <?php endfor; ?>
                                         <path d="<?php echo admin_e($dashboardSalesSeriesAreaPath); ?>" class="admin-dashboard-chart__area"></path>
                                         <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line-glow"></path>
@@ -5555,8 +5555,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </g>
                                         <?php endforeach; ?>
                                         <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
-                                            <?php if ($pointIndex % 4 === 0 || $pointIndex === count($dashboardSalesSeriesPoints) - 1): ?>
-                                                <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="236" text-anchor="middle" class="admin-dashboard-chart__label"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
+                                            <?php
+                                            $chartLastLabelIndex = count($dashboardSalesSeriesPoints) - 1;
+                                            $showChartLabel = $pointIndex === 0
+                                                || $pointIndex === $chartLastLabelIndex
+                                                || ($pointIndex % 4 === 0 && $pointIndex < ($chartLastLabelIndex - 2));
+                                            if ($showChartLabel):
+                                                $chartLabelAnchor = $pointIndex === 0
+                                                    ? 'start'
+                                                    : ($pointIndex === $chartLastLabelIndex ? 'end' : 'middle');
+                                                $chartLabelClass = 'admin-dashboard-chart__label';
+                                                if ($pointIndex === 0) {
+                                                    $chartLabelClass .= ' is-first';
+                                                } elseif ($pointIndex === $chartLastLabelIndex) {
+                                                    $chartLabelClass .= ' is-last';
+                                                }
+                                            ?>
+                                                <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="242" text-anchor="<?php echo admin_e($chartLabelAnchor); ?>" class="<?php echo admin_e($chartLabelClass); ?>"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
                                             <?php endif; ?>
                                         <?php endforeach; ?>
                                     </svg>

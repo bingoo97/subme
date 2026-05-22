@@ -6234,6 +6234,14 @@ body.admin-login-page .alert.alert-danger::before{
     font-weight:700;
 }
 
+.admin-dashboard-chart__label.is-first{
+    transform:translateX(2px);
+}
+
+.admin-dashboard-chart__label.is-last{
+    transform:translateX(-2px);
+}
+
 .admin-dashboard-chart__tooltip{
     fill:rgba(255,255,255,.96);
     stroke:rgba(15,23,42,.1);
