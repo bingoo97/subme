@@ -1659,8 +1659,13 @@ if (!function_exists('chat_format_message_html')) {
             return '';
         }
 
+        $previewText = chat_preview_normalize_text(strip_tags($answerHtml), 140);
+        $title = trim((string)($prompt['title'] ?? ''));
+
         $payload = [
             'kind' => 'faq_rich',
+            'title' => $title,
+            'preview_text' => $previewText,
             'html' => $answerHtml,
         ];
 
@@ -1932,6 +1937,31 @@ if (!function_exists('chat_message_preview_text')) {
                     return $title;
                 }
                 return 'Shared link';
+            }
+
+            if ($kind === 'faq_rich') {
+                $previewText = trim((string)($payload['preview_text'] ?? ''));
+                if ($previewText !== '') {
+                    return $previewText;
+                }
+
+                $title = trim((string)($payload['title'] ?? ''));
+                if ($title !== '') {
+                    return $title;
+                }
+
+                $html = trim((string)($payload['html'] ?? ''));
+                if ($html !== '') {
+                    $normalized = chat_preview_normalize_text(strip_tags($html), 140);
+                    if ($normalized !== '') {
+                        return $normalized;
+                    }
+                    if (stripos($html, '<img') !== false) {
+                        return $defaultAttachmentLabel;
+                    }
+                }
+
+                return 'FAQ';
             }
         }
 
