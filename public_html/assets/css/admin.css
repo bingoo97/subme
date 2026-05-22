@@ -2632,6 +2632,36 @@ body.admin-login-page{
     text-decoration:none !important;
 }
 
+.admin-chat-conversation__text .btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    max-width:100%;
+    white-space:normal;
+}
+
+.admin-chat-conversation__text .btn-primary,
+.admin-chat-conversation__text .btn-danger,
+.admin-chat-conversation__text .btn-dark,
+.admin-chat-conversation__text .btn-success,
+.admin-chat-conversation__text .btn-info,
+.admin-chat-conversation__text .btn-warning{
+    color:#fff !important;
+}
+
+.admin-chat-conversation__text .btn-default,
+.admin-chat-conversation__text .btn-light{
+    color:#111 !important;
+}
+
+.admin-chat-conversation__text img,
+.admin-chat-conversation__text video{
+    display:block;
+    max-width:100% !important;
+    height:auto;
+    border-radius:12px;
+}
+
 .admin-chat-conversation__message.is-focused .admin-chat-conversation__bubble{
     box-shadow:0 0 0 2px rgba(195,16,113,.22);
 }
