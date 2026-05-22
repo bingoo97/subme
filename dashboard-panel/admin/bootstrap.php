@@ -1477,37 +1477,24 @@ function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 
 
 function admin_dashboard_chart_path(array $series, int $width = 640, int $height = 240, int $paddingX = 20, int $paddingY = 18): string
 {
-    if (!$series) {
+    $points = admin_dashboard_chart_points($series, $width, $height, $paddingX, $paddingY);
+    if (!$points) {
         return '';
     }
 
-    $maxValue = 0;
-    foreach ($series as $point) {
-        $maxValue = max($maxValue, (int)($point['paid_orders'] ?? 0));
-    }
-    if ($maxValue <= 0) {
-        $maxValue = 1;
+    if (count($points) === 1) {
+        return 'M ' . number_format((float)$points[0]['x'], 2, '.', '') . ' ' . number_format((float)$points[0]['y'], 2, '.', '');
     }
 
-    $count = count($series);
-    if ($count === 1) {
-        $x = (float)($width / 2);
-        $y = (float)($height - $paddingY);
-        return 'M ' . number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '');
-    }
+    $firstPoint = $points[0];
+    $commands = [
+        'M ' . number_format((float)$firstPoint['x'], 2, '.', '') . ' ' . number_format((float)$firstPoint['y'], 2, '.', ''),
+    ];
 
-    $plotWidth = max(1, $width - ($paddingX * 2));
-    $plotHeight = max(1, $height - ($paddingY * 2));
-    $stepX = $plotWidth / max(1, $count - 1);
-    $commands = [];
-
-    foreach ($series as $index => $point) {
-        $value = (int)($point['paid_orders'] ?? 0);
-        $x = $paddingX + ($index * $stepX);
-        $y = $height - $paddingY - (($value / $maxValue) * $plotHeight);
-        $commands[] = ($index === 0 ? 'M ' : 'L ')
-            . number_format($x, 2, '.', '') . ' '
-            . number_format($y, 2, '.', '');
+    foreach (array_slice($points, 1) as $point) {
+        $commands[] = 'L '
+            . number_format((float)$point['x'], 2, '.', '') . ' '
+            . number_format((float)$point['y'], 2, '.', '');
     }
 
     return implode(' ', $commands);
@@ -1544,6 +1531,28 @@ function admin_dashboard_chart_points(array $series, int $width = 640, int $heig
     }
 
     return $points;
+}
+
+function admin_dashboard_chart_area_path(array $series, int $width = 640, int $height = 240, int $paddingX = 20, int $paddingY = 18): string
+{
+    $points = admin_dashboard_chart_points($series, $width, $height, $paddingX, $paddingY);
+    if (!$points) {
+        return '';
+    }
+
+    $linePath = admin_dashboard_chart_path($series, $width, $height, $paddingX, $paddingY);
+    if ($linePath === '') {
+        return '';
+    }
+
+    $baselineY = $height - $paddingY;
+    $lastPoint = $points[count($points) - 1];
+    $firstPoint = $points[0];
+
+    return $linePath
+        . ' L ' . number_format((float)$lastPoint['x'], 2, '.', '') . ' ' . number_format((float)$baselineY, 2, '.', '')
+        . ' L ' . number_format((float)$firstPoint['x'], 2, '.', '') . ' ' . number_format((float)$baselineY, 2, '.', '')
+        . ' Z';
 }
 
 function admin_dashboard_donut_segments(array $products, float $radius = 42.0, float $circumference = 263.8937829): array

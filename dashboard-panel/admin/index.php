@@ -3671,6 +3671,7 @@ $metrics = admin_dashboard_metrics($db);
 $dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
 $dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
 $dashboardSalesSeriesPath = admin_dashboard_chart_path($dashboardSalesSeries);
+$dashboardSalesSeriesAreaPath = admin_dashboard_chart_area_path($dashboardSalesSeries);
 $dashboardSalesSeriesPoints = admin_dashboard_chart_points($dashboardSalesSeries);
 $dashboardChangeLogGroups = admin_dashboard_change_log_grouped_rows($db, 120);
 $dashboardProviderBreakdowns = admin_dashboard_provider_breakdowns($db, 6, 4);
@@ -5420,33 +5421,138 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <?php if ($dashboardSalesSeries): ?>
                             <?php
                             $chartMaxOrders = 0;
+                            $chartTotalOrders = 0;
                             $chartRevenueTotal = 0.0;
+                            $chartPeakDayLabel = '';
+                            $chartPeakDayDate = '';
                             foreach ($dashboardSalesSeries as $chartPoint) {
-                                $chartMaxOrders = max($chartMaxOrders, (int)($chartPoint['paid_orders'] ?? 0));
+                                $pointOrders = (int)($chartPoint['paid_orders'] ?? 0);
+                                if ($pointOrders >= $chartMaxOrders) {
+                                    $chartMaxOrders = $pointOrders;
+                                    $chartPeakDayLabel = (string)($chartPoint['short_label'] ?? '');
+                                    $chartPeakDayDate = (string)($chartPoint['date'] ?? '');
+                                }
+                                $chartTotalOrders += $pointOrders;
                                 $chartRevenueTotal += (float)($chartPoint['paid_revenue'] ?? 0);
                             }
                             $chartMaxOrders = max(1, $chartMaxOrders);
+                            $chartAverageOrders = count($dashboardSalesSeries) > 0 ? ($chartTotalOrders / count($dashboardSalesSeries)) : 0;
+                            $chartLatestSeriesRow = $dashboardSalesSeries ? $dashboardSalesSeries[count($dashboardSalesSeries) - 1] : [];
+                            $chartLatestPoint = $dashboardSalesSeriesPoints ? $dashboardSalesSeriesPoints[count($dashboardSalesSeriesPoints) - 1] : null;
+                            $chartLatestOrders = (int)($chartLatestSeriesRow['paid_orders'] ?? 0);
+                            $chartLatestRevenue = (float)($chartLatestSeriesRow['paid_revenue'] ?? 0);
+                            $chartLatestLabel = (string)($chartLatestSeriesRow['short_label'] ?? '');
+                            $chartRecentOrders = 0;
+                            $chartPreviousOrders = 0;
+                            foreach (array_slice($dashboardSalesSeries, -7) as $chartPoint) {
+                                $chartRecentOrders += (int)($chartPoint['paid_orders'] ?? 0);
+                            }
+                            foreach (array_slice($dashboardSalesSeries, -14, 7) as $chartPoint) {
+                                $chartPreviousOrders += (int)($chartPoint['paid_orders'] ?? 0);
+                            }
+                            $chartTrendDelta = $chartRecentOrders - $chartPreviousOrders;
+                            if ($chartPreviousOrders > 0) {
+                                $chartTrendPercent = ($chartTrendDelta / $chartPreviousOrders) * 100;
+                            } elseif ($chartRecentOrders > 0) {
+                                $chartTrendPercent = 100;
+                            } else {
+                                $chartTrendPercent = 0;
+                            }
+                            $chartTrendDirection = $chartTrendDelta > 0 ? 'up' : ($chartTrendDelta < 0 ? 'down' : 'flat');
+                            $chartTrendPrefix = $chartTrendPercent > 0 ? '+' : '';
+                            $chartGridRows = 4;
+                            $chartTooltipWidth = 144;
+                            $chartTooltipHeight = 52;
+                            $chartTooltipHalfWidth = (float)($chartTooltipWidth / 2);
+                            $chartTooltipMinX = 20.0 + $chartTooltipHalfWidth;
+                            $chartTooltipMaxX = 620.0 - $chartTooltipHalfWidth;
                             ?>
                             <div class="admin-dashboard-chart">
                                 <div class="admin-dashboard-chart__summary">
-                                    <div class="admin-dashboard-chart__summary-item">
+                                    <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
                                         <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
                                         <strong><?php echo admin_e(admin_format_money_value_with_symbol($chartRevenueTotal, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></strong>
+                                        <small><?php echo admin_e((string)$chartTotalOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
+                                    </div>
+                                    <div class="admin-dashboard-chart__summary-item">
+                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_average_day', 'Avg/day')); ?></span>
+                                        <strong><?php echo admin_e(number_format($chartAverageOrders, 1, '.', '')); ?></strong>
+                                        <small><?php echo admin_e(admin_t($messages, 'dashboard_chart_last_day', 'Latest day') . ': ' . $chartLatestLabel); ?></small>
                                     </div>
                                     <div class="admin-dashboard-chart__summary-item">
                                         <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_max_orders', 'Best day')); ?></span>
                                         <strong><?php echo admin_e((string)$chartMaxOrders); ?></strong>
+                                        <small><?php echo admin_e($chartPeakDayLabel !== '' ? $chartPeakDayLabel : $chartPeakDayDate); ?></small>
+                                    </div>
+                                    <div class="admin-dashboard-chart__summary-item">
+                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_trend_compare', 'vs previous 7d')); ?></span>
+                                        <strong class="admin-dashboard-chart__trend admin-dashboard-chart__trend--<?php echo admin_e($chartTrendDirection); ?>">
+                                            <?php echo admin_e($chartTrendPrefix . number_format($chartTrendPercent, 0, '.', '') . '%'); ?>
+                                        </strong>
+                                        <small><?php echo admin_e((string)$chartRecentOrders . ' / ' . (string)$chartPreviousOrders . ' ' . admin_t($messages, 'dashboard_chart_orders_short', 'orders')); ?></small>
                                     </div>
                                 </div>
                                 <div class="admin-dashboard-chart__canvas">
                                     <svg viewBox="0 0 640 240" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
-                                        <line x1="20" y1="220" x2="620" y2="220" class="admin-dashboard-chart__axis"></line>
-                                        <line x1="20" y1="20" x2="20" y2="220" class="admin-dashboard-chart__axis"></line>
+                                        <defs>
+                                            <linearGradient id="adminDashboardChartArea" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                <stop offset="0%" stop-color="#111827" stop-opacity="0.28"></stop>
+                                                <stop offset="70%" stop-color="#6b7280" stop-opacity="0.08"></stop>
+                                                <stop offset="100%" stop-color="#ffffff" stop-opacity="0"></stop>
+                                            </linearGradient>
+                                            <linearGradient id="adminDashboardChartLine" x1="0%" y1="0%" x2="100%" y2="0%">
+                                                <stop offset="0%" stop-color="#111827"></stop>
+                                                <stop offset="55%" stop-color="#334155"></stop>
+                                                <stop offset="100%" stop-color="#9f1239"></stop>
+                                            </linearGradient>
+                                            <filter id="adminDashboardChartGlow" x="-20%" y="-20%" width="140%" height="140%">
+                                                <feGaussianBlur stdDeviation="6" result="blur"></feGaussianBlur>
+                                                <feMerge>
+                                                    <feMergeNode in="blur"></feMergeNode>
+                                                    <feMergeNode in="SourceGraphic"></feMergeNode>
+                                                </feMerge>
+                                            </filter>
+                                        </defs>
+                                        <?php for ($gridIndex = 0; $gridIndex < $chartGridRows; $gridIndex++): ?>
+                                            <?php
+                                            $gridRatio = $chartGridRows > 1 ? ($gridIndex / ($chartGridRows - 1)) : 0;
+                                            $gridY = 20 + ($gridRatio * 200);
+                                            $gridValue = (int)round($chartMaxOrders * (1 - $gridRatio));
+                                            ?>
+                                            <line x1="20" y1="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" x2="620" y2="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" class="admin-dashboard-chart__grid"></line>
+                                            <text x="16" y="<?php echo admin_e(number_format($gridY + 4, 2, '.', '')); ?>" text-anchor="end" class="admin-dashboard-chart__value-label"><?php echo admin_e((string)$gridValue); ?></text>
+                                        <?php endfor; ?>
+                                        <path d="<?php echo admin_e($dashboardSalesSeriesAreaPath); ?>" class="admin-dashboard-chart__area"></path>
+                                        <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line-glow"></path>
                                         <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line"></path>
                                         <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
-                                            <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="4" class="admin-dashboard-chart__point">
-                                                <title><?php echo admin_e(($dashboardSalesSeries[$pointIndex]['short_label'] ?? '') . ': ' . (string)($chartPoint['value'] ?? 0)); ?></title>
-                                            </circle>
+                                            <?php
+                                            $isLastPoint = $pointIndex === count($dashboardSalesSeriesPoints) - 1;
+                                            $pointSeriesRow = $dashboardSalesSeries[$pointIndex] ?? [];
+                                            $pointRevenue = (float)($pointSeriesRow['paid_revenue'] ?? 0);
+                                            $pointOrders = (int)($chartPoint['value'] ?? 0);
+                                            $pointLabel = (string)($pointSeriesRow['short_label'] ?? ($chartPoint['label'] ?? ''));
+                                            $pointTooltipCenterX = min(
+                                                $chartTooltipMaxX,
+                                                max($chartTooltipMinX, (float)($chartPoint['x'] ?? 0))
+                                            );
+                                            $pointTooltipX = $pointTooltipCenterX - $chartTooltipHalfWidth;
+                                            $pointTooltipY = max(16, (float)($chartPoint['y'] ?? 0) - 62);
+                                            ?>
+                                            <?php if ($isLastPoint): ?>
+                                                <line x1="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y1="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" x2="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y2="220" class="admin-dashboard-chart__focus-line"></line>
+                                            <?php endif; ?>
+                                            <g class="admin-dashboard-chart__point-group">
+                                                <rect x="<?php echo admin_e(number_format($pointTooltipX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY, 2, '.', '')); ?>" width="<?php echo admin_e((string)$chartTooltipWidth); ?>" height="<?php echo admin_e(number_format(((float)$chartPoint['y'] ?? 0) - $pointTooltipY + 16, 2, '.', '')); ?>" class="admin-dashboard-chart__hover-target"></rect>
+                                                <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="<?php echo $isLastPoint ? '8' : '4'; ?>" class="admin-dashboard-chart__point<?php echo $isLastPoint ? ' is-last' : ''; ?>">
+                                                    <title><?php echo admin_e($pointLabel . ': ' . (string)$pointOrders); ?></title>
+                                                </circle>
+                                                <g class="admin-dashboard-chart__hover-tooltip">
+                                                    <rect x="<?php echo admin_e(number_format($pointTooltipX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY, 2, '.', '')); ?>" width="<?php echo admin_e((string)$chartTooltipWidth); ?>" height="<?php echo admin_e((string)$chartTooltipHeight); ?>" rx="16" class="admin-dashboard-chart__tooltip"></rect>
+                                                    <text x="<?php echo admin_e(number_format($pointTooltipCenterX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY + 21, 2, '.', '')); ?>" text-anchor="middle" class="admin-dashboard-chart__tooltip-meta"><?php echo admin_e($pointLabel); ?></text>
+                                                    <text x="<?php echo admin_e(number_format($pointTooltipCenterX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY + 38, 2, '.', '')); ?>" text-anchor="middle" class="admin-dashboard-chart__tooltip-value"><?php echo admin_e((string)$pointOrders . ' ' . admin_t($messages, 'dashboard_chart_orders_short', 'orders') . ' · ' . admin_format_money_value_with_symbol($pointRevenue, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></text>
+                                                </g>
+                                            </g>
                                         <?php endforeach; ?>
                                         <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
                                             <?php if ($pointIndex % 4 === 0 || $pointIndex === count($dashboardSalesSeriesPoints) - 1): ?>
