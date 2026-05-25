@@ -6218,8 +6218,8 @@ body.admin-login-page .alert.alert-danger::before{
 }
 
 .admin-dashboard-chart__hover-target{
-    fill:#fff;
-    opacity:0;
+    fill:transparent;
+    pointer-events:all;
 }
 
 .admin-dashboard-chart__focus-line{
