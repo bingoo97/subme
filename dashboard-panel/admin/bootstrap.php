@@ -618,12 +618,12 @@ function admin_user_can_access_route(array $adminUser, string $route): bool
 
 function admin_sensitive_routes(): array
 {
-    return ['settings', 'email-templates'];
+    return [];
 }
 
 function admin_route_requires_sensitive_unlock(string $route): bool
 {
-    return in_array($route, admin_sensitive_routes(), true);
+    return false;
 }
 
 function admin_sensitive_route_password(): string
@@ -633,18 +633,11 @@ function admin_sensitive_route_password(): string
 
 function admin_sensitive_routes_unlocked(): bool
 {
-    return !empty($_SESSION['admin_sensitive_routes_unlocked']);
+    return true;
 }
 
 function admin_unlock_sensitive_routes(string $password): bool
 {
-    $provided = trim($password);
-    $expected = admin_sensitive_route_password();
-
-    if ($provided === '' || !hash_equals($expected, $provided)) {
-        return false;
-    }
-
     $_SESSION['admin_sensitive_routes_unlocked'] = 1;
     return true;
 }

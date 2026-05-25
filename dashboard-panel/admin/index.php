@@ -187,6 +187,8 @@ if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
 }
 
 $route = admin_normalize_route($_GET['page'] ?? 'dashboard');
+$settingsAdminMode = strtolower(trim((string)($_GET['admin'] ?? ''))) === 'true';
+$settingsAdminUrlSuffix = $settingsAdminMode ? '&admin=true' : '';
 $pageAlert = '';
 $pageAlertHtml = '';
 $pageAlertType = 'success';
@@ -226,6 +228,27 @@ $adminActiveFullAdminCount = admin_active_full_admin_count($db);
 $adminHelpModalCanEdit = admin_user_can_access_route($adminUser, 'settings') && admin_sensitive_routes_unlocked();
 $adminCanManageUsers = admin_user_can_access_route($adminUser, 'users');
 $cryptoPreviewStatusRows = [];
+$settingsProtectedFeatureEditEnabled = $settingsAdminMode;
+$manualDatabaseBackupInfo = app_database_backup_latest_info();
+$isAjaxRequest = strtolower(trim((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''))) === 'xmlhttprequest';
+
+if ($route === 'settings' && isset($_GET['download_latest_database_backup'])) {
+    if (!admin_csrf_is_valid($_GET['_csrf'] ?? '')) {
+        http_response_code(403);
+        exit;
+    }
+
+    $manualDatabaseBackupInfo = app_database_backup_latest_info();
+    if (empty($manualDatabaseBackupInfo['exists']) || !is_file((string)($manualDatabaseBackupInfo['path'] ?? ''))) {
+        http_response_code(404);
+        exit;
+    }
+
+    app_stream_database_sql_backup_file(
+        (string)$manualDatabaseBackupInfo['path'],
+        (string)$manualDatabaseBackupInfo['download_name']
+    );
+}
 
 $adminPasswordEmailNotice = static function (array $messages, array $emailNotification): string {
     $lastError = trim((string)($emailNotification['last_error'] ?? $emailNotification['message'] ?? ''));
@@ -594,7 +617,7 @@ if ($route === 'settings' && isset($_POST['admin_create_admin_user'])) {
     } else {
         $createAdminResult = admin_create_admin_user($db, $_POST, (int)($adminUser['id'] ?? 0), $requestIp);
         if (!empty($createAdminResult['ok'])) {
-            header('Location: /admin/?page=settings&created_admin=1');
+            header('Location: /admin/?page=settings' . $settingsAdminUrlSuffix . '&created_admin=1');
             exit;
         }
 
@@ -605,7 +628,10 @@ if ($route === 'settings' && isset($_POST['admin_create_admin_user'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_update_admin_user'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
@@ -618,7 +644,7 @@ if ($route === 'settings' && isset($_POST['admin_update_admin_user'])) {
         );
 
         if (!empty($updateAdminResult['ok'])) {
-            header('Location: /admin/?page=settings&updated_admin=1');
+            header('Location: /admin/?page=settings' . $settingsAdminUrlSuffix . '&updated_admin=1');
             exit;
         }
 
@@ -629,7 +655,10 @@ if ($route === 'settings' && isset($_POST['admin_update_admin_user'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_delete_admin_user'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
@@ -641,7 +670,7 @@ if ($route === 'settings' && isset($_POST['admin_delete_admin_user'])) {
         );
 
         if (!empty($deleteAdminResult['ok'])) {
-            header('Location: /admin/?page=settings&deleted_admin=1');
+            header('Location: /admin/?page=settings' . $settingsAdminUrlSuffix . '&deleted_admin=1');
             exit;
         }
 
@@ -741,6 +770,14 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         }
         if (!in_array($selectedCurrencyId, $allowedCurrencyIds, true)) {
             $selectedCurrencyId = 1;
+        }
+
+        if (!$settingsProtectedFeatureEditEnabled) {
+            $registrationEnabled = !empty($appSettings['registration_enabled']) ? 1 : 0;
+            $referralsEnabled = admin_referrals_enabled($appSettings) ? 1 : 0;
+            $customerTypeSwitchEnabled = admin_customer_type_switch_enabled($appSettings) ? 1 : 0;
+            $pageGuidanceEnabled = admin_page_guidance_enabled($appSettings) ? 1 : 0;
+            $paymentTestModeNoticeEnabled = admin_payment_test_mode_notice_enabled($appSettings) ? 1 : 0;
         }
 
         if ($cryptoDailyBackupEmail !== '' && filter_var($cryptoDailyBackupEmail, FILTER_VALIDATE_EMAIL) === false) {
@@ -880,6 +917,14 @@ if ($route === 'settings' && isset($_POST['admin_save_site_settings'])) {
         $appsUrlInput = $siteSettingsFormState['apps_url'];
         $siteLogoUrlInput = $siteSettingsFormState['site_logo_url'];
         $supportEmailInput = $siteSettingsFormState['support_email'];
+
+        if (!$settingsAdminMode) {
+            $siteTitleInput = trim((string)($appSettings['site_title'] ?? ''));
+            $siteUrlInput = trim((string)($appSettings['site_url'] ?? ''));
+            $supportEmailInput = strtolower(trim((string)($appSettings['support_email'] ?? '')));
+            $siteSettingsFormState['site_description'] = trim((string)($appSettings['site_description'] ?? ''));
+            $siteSettingsFormState['site_keywords'] = trim((string)($appSettings['site_keywords'] ?? ''));
+        }
 
         if ($siteNameInput === '') {
             $pageAlert = admin_t($messages, 'settings_site_name_required', 'Page name is required.');
@@ -1173,6 +1218,10 @@ if ($route === 'products' && isset($_POST['admin_product_provider_logo_ajax'])) 
 }
 
 if ($route === 'settings' && isset($_POST['admin_save_smtp_settings'])) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } else {
     $smtpFormState = [
         'smtp_host' => trim((string)($_POST['smtp_host'] ?? '')),
         'smtp_port' => trim((string)($_POST['smtp_port'] ?? '')),
@@ -1229,10 +1278,14 @@ if ($route === 'settings' && isset($_POST['admin_save_smtp_settings'])) {
             }
         }
     }
+    }
 }
 
 if ($route === 'settings' && isset($_POST['admin_run_maintenance_cycle'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
@@ -1263,13 +1316,70 @@ if ($route === 'settings' && isset($_POST['admin_run_maintenance_cycle'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_download_database_backup'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        if ($isAjaxRequest) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.'),
+            ]);
+            exit;
+        }
+
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        if ($isAjaxRequest) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'ok' => false,
+                'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+            ]);
+            exit;
+        }
+
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
-        $downloadFilename = 'database-backup-' . date('Ymd-His') . '.sql';
-        app_update_manual_database_backup_timestamp($db);
-        app_stream_database_sql_backup($db, $downloadFilename);
+        ob_start();
+        $backupResult = app_generate_database_sql_backup_file($db);
+        $unexpectedOutput = trim((string)ob_get_clean());
+        $manualDatabaseBackupInfo = app_database_backup_latest_info();
+
+        if ($unexpectedOutput !== '' && empty($backupResult['ok'])) {
+            $backupResult['message'] = trim((string)($backupResult['message'] ?? '') . ' ' . $unexpectedOutput);
+        }
+
+        if ($isAjaxRequest) {
+            $backupPayload = null;
+            if (!empty($backupResult['ok']) && !empty($manualDatabaseBackupInfo['exists'])) {
+                $downloadUrl = '/admin/?page=settings&download_latest_database_backup=1&_csrf=' . rawurlencode($csrfToken);
+                $generatedAt = trim((string)($manualDatabaseBackupInfo['generated_at'] ?? ''));
+                $backupPayload = [
+                    'name' => (string)($manualDatabaseBackupInfo['download_name'] ?? 'latest-database-backup.sql'),
+                    'generated_at' => $generatedAt,
+                    'generated_at_label' => $generatedAt !== '' ? date('d.m.Y H:i:s', strtotime($generatedAt)) : '',
+                    'size_label' => (string)($manualDatabaseBackupInfo['size_label'] ?? '0 B'),
+                    'download_url' => $downloadUrl,
+                ];
+            }
+
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'ok' => !empty($backupResult['ok']),
+                'message' => (string)($backupResult['message'] ?? admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.')),
+                'backup' => $backupPayload,
+            ]);
+            exit;
+        }
+
+        if (!empty($backupResult['ok'])) {
+            $pageAlert = (string)($backupResult['message'] ?? admin_t($messages, 'settings_database_backup_success', 'SQL backup created successfully.'));
+            $pageAlertType = 'success';
+        } else {
+            $pageAlert = (string)($backupResult['message'] ?? admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.'));
+            $pageAlertType = 'danger';
+        }
     }
 }
 
@@ -1279,13 +1389,16 @@ if ($route === 'settings' && isset($_POST['admin_create_dashboard_change_log_ent
         'change_text' => trim((string)($_POST['change_text'] ?? '')),
     ];
 
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
         $createResult = admin_create_dashboard_change_log_entry($db, $_POST, (int)($adminUser['id'] ?? 0));
         if (!empty($createResult['ok'])) {
-            header('Location: /admin/?page=settings&created_dashboard_change_log=1');
+            header('Location: /admin/?page=settings' . $settingsAdminUrlSuffix . '&created_dashboard_change_log=1');
             exit;
         }
 
@@ -1295,13 +1408,16 @@ if ($route === 'settings' && isset($_POST['admin_create_dashboard_change_log_ent
 }
 
 if ($route === 'settings' && isset($_POST['admin_delete_dashboard_change_log_entry'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
         $deleteResult = admin_delete_dashboard_change_log_entry($db, (int)($_POST['change_log_id'] ?? 0));
         if (!empty($deleteResult['ok'])) {
-            header('Location: /admin/?page=settings&deleted_dashboard_change_log=1');
+            header('Location: /admin/?page=settings' . $settingsAdminUrlSuffix . '&deleted_dashboard_change_log=1');
             exit;
         }
 
@@ -1311,7 +1427,10 @@ if ($route === 'settings' && isset($_POST['admin_delete_dashboard_change_log_ent
 }
 
 if ($route === 'settings' && isset($_POST['admin_clear_history_now'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } elseif (trim((string)($_POST['danger_confirmation'] ?? '')) !== 'CLEAR HISTORY') {
@@ -1329,7 +1448,10 @@ if ($route === 'settings' && isset($_POST['admin_clear_history_now'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_reset_sample_data_now'])) {
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } elseif (trim((string)($_POST['danger_confirmation'] ?? '')) !== 'DELETE SAMPLE DATA') {
@@ -5460,12 +5582,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             }
                             $chartTrendDirection = $chartTrendDelta > 0 ? 'up' : ($chartTrendDelta < 0 ? 'down' : 'flat');
                             $chartTrendPrefix = $chartTrendPercent > 0 ? '+' : '';
-                            $chartGridRows = $chartMaxOrders <= 3 ? ($chartMaxOrders + 1) : 4;
+                            $chartScaleMaxOrders = max(1, $chartMaxOrders);
+                            if ($chartMaxOrders <= 0) {
+                                $chartPeakDayLabel = '-';
+                                $chartPeakDayDate = '';
+                            }
+                            $chartGridRows = $chartScaleMaxOrders <= 3 ? ($chartScaleMaxOrders + 1) : 4;
                             $chartTooltipWidth = 144;
                             $chartTooltipHeight = 52;
                             $chartTooltipHalfWidth = (float)($chartTooltipWidth / 2);
                             $chartTooltipMinX = 28.0 + $chartTooltipHalfWidth;
                             $chartTooltipMaxX = 612.0 - $chartTooltipHalfWidth;
+                            $chartPlotTop = 18.0;
+                            $chartPlotBottom = 222.0;
+                            $chartPlotHeight = $chartPlotBottom - $chartPlotTop;
                             ?>
                             <div class="admin-dashboard-chart">
                                 <div class="admin-dashboard-chart__summary">
@@ -5516,8 +5646,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php for ($gridIndex = 0; $gridIndex < $chartGridRows; $gridIndex++): ?>
                                             <?php
                                             $gridRatio = $chartGridRows > 1 ? ($gridIndex / ($chartGridRows - 1)) : 0;
-                                            $gridY = 20 + ($gridRatio * 200);
-                                            $gridValue = (int)round($chartMaxOrders * (1 - $gridRatio));
+                                            $gridY = $chartPlotTop + ($gridRatio * $chartPlotHeight);
+                                            $gridValue = (int)round($chartScaleMaxOrders * (1 - $gridRatio));
                                             ?>
                                             <line x1="28" y1="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" x2="612" y2="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" class="admin-dashboard-chart__grid"></line>
                                             <text x="20" y="<?php echo admin_e(number_format($gridY + 4, 2, '.', '')); ?>" text-anchor="end" class="admin-dashboard-chart__value-label"><?php echo admin_e((string)$gridValue); ?></text>
@@ -5540,7 +5670,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $pointTooltipY = max(16, (float)($chartPoint['y'] ?? 0) - 62);
                                             ?>
                                             <?php if ($isLastPoint): ?>
-                                                <line x1="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y1="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" x2="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y2="220" class="admin-dashboard-chart__focus-line"></line>
+                                                <line x1="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y1="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" x2="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y2="<?php echo admin_e(number_format($chartPlotBottom, 2, '.', '')); ?>" class="admin-dashboard-chart__focus-line"></line>
                                             <?php endif; ?>
                                             <g class="admin-dashboard-chart__point-group">
                                                 <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="<?php echo $isLastPoint ? '14' : '11'; ?>" class="admin-dashboard-chart__hover-target"></circle>
@@ -12441,6 +12571,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     break;
 
                                 case 'settings':
+                                    $settingsProtectedFeatureDisabledAttr = !$settingsProtectedFeatureEditEnabled ? ' disabled' : '';
+                                    $settingsProtectedSiteFieldDisabledAttr = !$settingsAdminMode ? ' disabled' : '';
+                                    $settingsAdminModeUrl = '/admin/?page=settings&admin=true';
+                                    $settingsAdminModeHintVisible = strtolower(trim((string)($adminUser['login_name'] ?? ''))) === 'admin';
                                     ?>
                                     <div class="admin-settings-tabs-wrap">
                                         <div class="admin-settings-tabs-scroller">
@@ -12448,11 +12582,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <li class="nav-item" role="presentation"><button class="nav-link active" id="admin-settings-site-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-site-pane" type="button" role="tab" aria-controls="admin-settings-site-pane" aria-selected="true"><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-features-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-features-pane" type="button" role="tab" aria-controls="admin-settings-features-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_features_title', 'Payments and assignment rules')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-crypto-preview-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-crypto-preview-pane" type="button" role="tab" aria-controls="admin-settings-crypto-preview-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_title', 'Crypto preview status')); ?></button></li>
+                                                <?php if ($settingsAdminMode): ?>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-smtp-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-smtp-pane" type="button" role="tab" aria-controls="admin-settings-smtp-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-runner-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-runner-pane" type="button" role="tab" aria-controls="admin-settings-runner-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-backup-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-backup-pane" type="button" role="tab" aria-controls="admin-settings-backup-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-change-log-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-change-log-pane" type="button" role="tab" aria-controls="admin-settings-change-log-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_change_log_title', 'Wprowadzone zmiany')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-danger-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-danger-pane" type="button" role="tab" aria-controls="admin-settings-danger-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_danger_zone_title', 'Safety zone')); ?></button></li>
+                                                <?php endif; ?>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-language-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-language-pane" type="button" role="tab" aria-controls="admin-settings-language-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_language_title', 'Panel language')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-profile-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-profile-pane" type="button" role="tab" aria-controls="admin-settings-profile-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_profile_title', 'Live chat profile')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-access-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-access-pane" type="button" role="tab" aria-controls="admin-settings-access-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_access_title', 'Administrator access')); ?></button></li>
@@ -12467,6 +12603,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <p><?php echo admin_e(admin_t($messages, 'settings_site_intro', 'Update the public page name, URL, support email and basic SEO data used across the service.')); ?></p>
                                         </div>
 
+                                        <?php if (!$settingsAdminMode && $settingsAdminModeHintVisible): ?>
+                                            <div class="alert alert-warning">
+                                                <?php echo admin_e(admin_t($messages, 'settings_admin_mode_notice', 'Advanced tabs and selected settings are locked in the standard view. Open the admin mode URL to manage protected options.')); ?>
+                                                <a href="<?php echo admin_e($settingsAdminModeUrl); ?>" class="alert-link"><?php echo admin_e(admin_t($messages, 'settings_admin_mode_notice_link', 'Open admin mode')); ?></a>
+                                            </div>
+                                        <?php endif; ?>
+
                                         <form method="post" class="admin-settings-access__form" autocomplete="off">
                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                             <div class="row g-3">
@@ -12476,15 +12619,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="col-md-6">
                                                     <label class="form-label" for="site_title"><?php echo admin_e(admin_t($messages, 'settings_site_page_title', 'Page title')); ?></label>
-                                                    <input type="text" class="form-control" id="site_title" name="site_title" value="<?php echo admin_e((string)$siteSettingsFormState['site_title']); ?>" placeholder="Reseller panel" required>
+                                                    <input type="text" class="form-control" id="site_title" name="site_title" value="<?php echo admin_e((string)$siteSettingsFormState['site_title']); ?>" placeholder="Reseller panel" required<?php echo $settingsProtectedSiteFieldDisabledAttr; ?>>
                                                 </div>
                                                 <div class="col-md-8">
                                                     <label class="form-label" for="site_url"><?php echo admin_e(admin_t($messages, 'settings_site_url', 'Page URL')); ?></label>
-                                                    <input type="url" class="form-control" id="site_url" name="site_url" value="<?php echo admin_e((string)$siteSettingsFormState['site_url']); ?>" placeholder="https://example.com" required>
+                                                    <input type="url" class="form-control" id="site_url" name="site_url" value="<?php echo admin_e((string)$siteSettingsFormState['site_url']); ?>" placeholder="https://example.com" required<?php echo $settingsProtectedSiteFieldDisabledAttr; ?>>
                                                 </div>
                                                 <div class="col-md-4">
                                                     <label class="form-label" for="support_email"><?php echo admin_e(admin_t($messages, 'settings_support_email', 'Support email')); ?></label>
-                                                    <input type="email" class="form-control" id="support_email" name="support_email" value="<?php echo admin_e((string)$siteSettingsFormState['support_email']); ?>" placeholder="support@example.com" required>
+                                                    <input type="email" class="form-control" id="support_email" name="support_email" value="<?php echo admin_e((string)$siteSettingsFormState['support_email']); ?>" placeholder="support@example.com" required<?php echo $settingsProtectedSiteFieldDisabledAttr; ?>>
                                                 </div>
                                                 <div class="col-12">
                                                     <label class="form-label" for="apps_url"><?php echo admin_e(admin_t($messages, 'settings_apps_url', 'Apps URL')); ?></label>
@@ -12553,11 +12696,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="col-md-12">
                                                     <label class="form-label" for="site_description"><?php echo admin_e(admin_t($messages, 'settings_site_description', 'Description')); ?></label>
-                                                    <textarea class="form-control" id="site_description" name="site_description" rows="3" placeholder="<?php echo admin_e(admin_t($messages, 'settings_site_description_placeholder', 'Short public description used in page metadata.')); ?>"><?php echo admin_e((string)$siteSettingsFormState['site_description']); ?></textarea>
+                                                    <textarea class="form-control" id="site_description" name="site_description" rows="3" placeholder="<?php echo admin_e(admin_t($messages, 'settings_site_description_placeholder', 'Short public description used in page metadata.')); ?>"<?php echo $settingsProtectedSiteFieldDisabledAttr; ?>><?php echo admin_e((string)$siteSettingsFormState['site_description']); ?></textarea>
                                                 </div>
                                                 <div class="col-md-12">
                                                     <label class="form-label" for="site_keywords"><?php echo admin_e(admin_t($messages, 'settings_site_keywords', 'Keywords')); ?></label>
-                                                    <input type="text" class="form-control" id="site_keywords" name="site_keywords" value="<?php echo admin_e((string)$siteSettingsFormState['site_keywords']); ?>" placeholder="iptv, reseller, subscriptions">
+                                                    <input type="text" class="form-control" id="site_keywords" name="site_keywords" value="<?php echo admin_e((string)$siteSettingsFormState['site_keywords']); ?>" placeholder="iptv, reseller, subscriptions"<?php echo $settingsProtectedSiteFieldDisabledAttr; ?>>
                                                 </div>
                                             </div>
                                             <hr>
@@ -12587,7 +12730,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" role="switch" id="registration_enabled" name="registration_enabled"<?php echo !empty($appSettings['registration_enabled']) ? ' checked' : ''; ?>>
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="registration_enabled" name="registration_enabled"<?php echo !empty($appSettings['registration_enabled']) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                         <label class="form-check-label" for="registration_enabled"><?php echo admin_e(admin_t($messages, 'settings_registration_enabled', 'Registration ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_registration_enabled_help', 'If OFF, users cannot create new accounts from the public site.')); ?></small>
@@ -12717,7 +12860,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" role="switch" id="referrals_enabled" name="referrals_enabled"<?php echo admin_referrals_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="referrals_enabled" name="referrals_enabled"<?php echo admin_referrals_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                         <label class="form-check-label" for="referrals_enabled"><?php echo admin_e(admin_t($messages, 'settings_referrals_enabled', 'Referrals ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_referrals_enabled_help', 'If OFF, referral links and the referrals page are hidden and new registrations are not attached to referrers.')); ?></small>
@@ -12731,7 +12874,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_type_switch_enabled" name="customer_type_switch_enabled"<?php echo admin_customer_type_switch_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="customer_type_switch_enabled" name="customer_type_switch_enabled"<?php echo admin_customer_type_switch_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                         <label class="form-check-label" for="customer_type_switch_enabled"><?php echo admin_e(admin_t($messages, 'settings_customer_type_switch_enabled', 'Homepage client/reseller test switch')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_type_switch_enabled_help', 'If OFF, the user test switch for changing account mode between client and reseller is hidden on the homepage.')); ?></small>
@@ -12745,14 +12888,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" role="switch" id="page_guidance_enabled" name="page_guidance_enabled"<?php echo admin_page_guidance_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="page_guidance_enabled" name="page_guidance_enabled"<?php echo admin_page_guidance_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                         <label class="form-check-label" for="page_guidance_enabled"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled', 'Page guidance and homepage overview')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled_help', 'If OFF, the blue help box under pages and the large homepage overview for guests are hidden.')); ?></small>
                                                 </div>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" role="switch" id="payment_test_mode_notice_enabled" name="payment_test_mode_notice_enabled"<?php echo admin_payment_test_mode_notice_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="payment_test_mode_notice_enabled" name="payment_test_mode_notice_enabled"<?php echo admin_payment_test_mode_notice_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                         <label class="form-check-label" for="payment_test_mode_notice_enabled"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled', 'Payment test mode warning')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled_help', 'If ON, users still can generate bank and crypto payment requests, but a yellow warning says the service is in test mode and they should not send any money.')); ?></small>
@@ -12822,6 +12965,47 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_bank_account_shared_assignments_enabled_help', 'If OFF, one bank account can be assigned to one user only.')); ?></small>
                                                 </div>
+                                                <div class="col-12">
+                                                    <div class="admin-settings-table-wrap">
+                                                        <div class="admin-settings-access__copy">
+                                                            <h3><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></h3>
+                                                            <p><?php echo admin_e(admin_t($messages, 'settings_database_backup_latest_intro', 'The latest ready SQL backup can be downloaded below. Creating a new backup remains available only in admin mode.')); ?></p>
+                                                        </div>
+                                                        <div class="table-responsive">
+                                                            <table class="table admin-table align-middle">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_name', 'Name')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                                        <th><?php echo admin_e(admin_t($messages, 'col_size', 'Size')); ?></th>
+                                                                        <th class="text-end"><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody
+                                                                    data-admin-database-backup-latest-body
+                                                                    data-empty-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_empty', 'No SQL backup has been created yet.')); ?>"
+                                                                    data-download-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_download_latest', 'Download')); ?>">
+                                                                    <?php if (!empty($manualDatabaseBackupInfo['exists'])): ?>
+                                                                        <tr>
+                                                                            <td><?php echo admin_e((string)($manualDatabaseBackupInfo['download_name'] ?? 'latest-database-backup.sql')); ?></td>
+                                                                            <td><?php echo admin_e(!empty($manualDatabaseBackupInfo['generated_at']) ? date('d.m.Y H:i:s', strtotime((string)$manualDatabaseBackupInfo['generated_at'])) : ''); ?></td>
+                                                                            <td><?php echo admin_e((string)($manualDatabaseBackupInfo['size_label'] ?? '0 B')); ?></td>
+                                                                            <td class="text-end">
+                                                                                <a class="btn btn-success btn-sm" href="/admin/?page=settings&amp;download_latest_database_backup=1&amp;_csrf=<?php echo admin_e(rawurlencode($csrfToken)); ?>">
+                                                                                    <?php echo admin_e(admin_t($messages, 'settings_database_backup_download_latest', 'Download')); ?>
+                                                                                </a>
+                                                                            </td>
+                                                                        </tr>
+                                                                    <?php else: ?>
+                                                                        <tr>
+                                                                            <td colspan="4" class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_empty', 'No SQL backup has been created yet.')); ?></td>
+                                                                        </tr>
+                                                                    <?php endif; ?>
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
                                             <hr>
                                             <div class="admin-settings-access__actions">
@@ -12890,6 +13074,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
 
                                             </div>
+                                            <?php if ($settingsAdminMode): ?>
                                             <div class="tab-pane fade" id="admin-settings-smtp-pane" role="tabpanel" aria-labelledby="admin-settings-smtp-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
@@ -12953,19 +13138,33 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></h3>
-                                            <p><?php echo admin_e(admin_t($messages, 'settings_database_backup_intro', 'Download a full SQL backup of the current database to your disk with one click.')); ?></p>
+                                            <p><?php echo admin_e(admin_t($messages, 'settings_database_backup_intro', 'Create one fresh SQL backup on the server and download the latest ready file when needed.')); ?></p>
                                         </div>
 
-                                        <form method="post" class="admin-settings-access__form">
+                                        <form
+                                            method="post"
+                                            class="admin-settings-access__form"
+                                            data-admin-database-backup-form
+                                            data-running-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_running', 'Creating SQL backup...')); ?>"
+                                            data-success-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_success', 'SQL backup created successfully.')); ?>"
+                                            data-error-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.')); ?>">
                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                             <div class="row g-3">
                                                 <div class="col-12">
-                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_help', 'The exported file contains tables, views and data, so it can be used later as a technical restore point.')); ?></small>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_help', 'Only one latest SQL backup is kept on the server. Creating a new version replaces the previous file.')); ?></small>
+                                                </div>
+                                                <div class="col-12" hidden data-admin-database-backup-progress>
+                                                    <div class="admin-settings-backup-progress">
+                                                        <div class="progress" role="progressbar" aria-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_progress_label', 'Backup progress')); ?>" aria-valuemin="0" aria-valuemax="100">
+                                                            <div class="progress-bar bg-danger" style="width: 0%" data-admin-database-backup-progress-bar>0%</div>
+                                                        </div>
+                                                        <div class="admin-settings-backup-progress__status" data-admin-database-backup-status><?php echo admin_e(admin_t($messages, 'settings_database_backup_progress_idle', 'Ready to create a new SQL backup.')); ?></div>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <hr>
                                             <div class="admin-settings-access__actions">
-                                                <button type="submit" class="btn btn-outline-dark btn-lg" name="admin_download_database_backup"><?php echo admin_e(admin_t($messages, 'settings_database_backup_button', 'Download SQL backup')); ?></button>
+                                                <button type="submit" class="btn btn-danger btn-lg" name="admin_download_database_backup" data-admin-database-backup-submit><?php echo admin_e(admin_t($messages, 'settings_database_backup_button', 'Create SQL backup')); ?></button>
                                             </div>
                                         </form>
                                     </div>
@@ -13109,6 +13308,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
 
                                             </div>
+                                            <?php endif; ?>
                                             <div class="tab-pane fade" id="admin-settings-language-pane" role="tabpanel" aria-labelledby="admin-settings-language-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
@@ -13252,14 +13452,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php echo admin_e((string)($adminRow['last_login_at'] ?: '----')); ?>
                                                                 </td>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>" class="text-end">
-                                                                    <div class="d-flex justify-content-end gap-2 flex-wrap">
-                                                                        <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#adminEditModal<?php echo admin_e((string)$adminRow['id']); ?>">
-                                                                            <?php echo admin_e(admin_t($messages, 'admin_edit_button', 'Edit')); ?>
-                                                                        </button>
-                                                                        <button type="button" class="btn btn-outline-danger btn-sm"<?php echo $adminRowDeleteProtected ? ' disabled' : ''; ?> data-bs-toggle="modal" data-bs-target="#adminDeleteModal<?php echo admin_e((string)$adminRow['id']); ?>">
-                                                                            <?php echo admin_e(admin_t($messages, 'admin_delete_button', 'Delete')); ?>
-                                                                        </button>
-                                                                    </div>
+                                                                    <?php if ($settingsAdminMode): ?>
+                                                                        <div class="d-flex justify-content-end gap-2 flex-wrap">
+                                                                            <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#adminEditModal<?php echo admin_e((string)$adminRow['id']); ?>">
+                                                                                <?php echo admin_e(admin_t($messages, 'admin_edit_button', 'Edit')); ?>
+                                                                            </button>
+                                                                            <button type="button" class="btn btn-outline-danger btn-sm"<?php echo $adminRowDeleteProtected ? ' disabled' : ''; ?> data-bs-toggle="modal" data-bs-target="#adminDeleteModal<?php echo admin_e((string)$adminRow['id']); ?>">
+                                                                                <?php echo admin_e(admin_t($messages, 'admin_delete_button', 'Delete')); ?>
+                                                                            </button>
+                                                                        </div>
+                                                                    <?php else: ?>
+                                                                        <span class="text-muted">-</span>
+                                                                    <?php endif; ?>
                                                                 </td>
                                                             </tr>
                                                         <?php endforeach; ?>
@@ -13267,6 +13471,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </table>
                                             </div>
 
+                                            <?php if ($settingsAdminMode): ?>
                                             <?php foreach ($adminUserRows as $adminRow): ?>
                                                 <?php
                                                 $adminRowIsFullBoss = (int)($adminRow['role_access_level'] ?? 0) >= 1000 && (string)($adminRow['status'] ?? 'active') === 'active';
@@ -13371,6 +13576,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                 </div>
                                             <?php endforeach; ?>
+                                            <?php endif; ?>
                                         <?php endif; ?>
 
                                         <form method="post" class="admin-settings-access__form">

@@ -9779,6 +9779,31 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     margin-top:1rem;
 }
 
+.admin-settings-backup-progress{
+    display:flex;
+    flex-direction:column;
+    gap:.6rem;
+}
+
+.admin-settings-backup-progress .progress{
+    height:1rem;
+    border-radius:999px;
+    overflow:hidden;
+    background:#f2f4f7;
+}
+
+.admin-settings-backup-progress .progress-bar{
+    font-size:.78rem;
+    font-weight:700;
+    line-height:1rem;
+    transition:width .22s ease;
+}
+
+.admin-settings-backup-progress__status{
+    font-size:.92rem;
+    color:#4b5563;
+}
+
 .admin-crypto-network-status-grid{
     display:grid;
     grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));

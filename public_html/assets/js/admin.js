@@ -1362,6 +1362,130 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initSettingsBackupGenerator() {
+        var form = q('[data-admin-database-backup-form]');
+        var progressWrap = form ? q('[data-admin-database-backup-progress]', form) : null;
+        var progressBar = form ? q('[data-admin-database-backup-progress-bar]', form) : null;
+        var statusNode = form ? q('[data-admin-database-backup-status]', form) : null;
+        var submitButton = form ? q('[data-admin-database-backup-submit]', form) : null;
+        var latestBody = q('[data-admin-database-backup-latest-body]');
+        var running = false;
+        var progressTimer = 0;
+        var progressValue = 0;
+        var originalButtonText = submitButton ? submitButton.textContent : '';
+        var runningLabel = String(form ? (form.getAttribute('data-running-label') || '') : '').trim() || 'Creating SQL backup...';
+        var successLabel = String(form ? (form.getAttribute('data-success-label') || '') : '').trim() || 'SQL backup created successfully.';
+        var errorLabel = String(form ? (form.getAttribute('data-error-label') || '') : '').trim() || 'Unable to create the SQL backup.';
+
+        if (!form || !progressWrap || !progressBar || !statusNode || !submitButton || !latestBody) {
+            return;
+        }
+
+        function setProgressState(percent, message, tone) {
+            var safePercent = Math.max(0, Math.min(100, parseInt(percent, 10) || 0));
+            progressBar.style.width = safePercent + '%';
+            progressBar.textContent = safePercent + '%';
+            progressBar.setAttribute('aria-valuenow', String(safePercent));
+            progressBar.classList.remove('bg-danger', 'bg-success');
+            progressBar.classList.add(tone === 'success' ? 'bg-success' : 'bg-danger');
+            if (typeof message === 'string' && message.trim()) {
+                statusNode.textContent = message.trim();
+            }
+        }
+
+        function renderLatestBackupRow(backup) {
+            var downloadLabel = String(latestBody.getAttribute('data-download-label') || 'Download');
+            var emptyLabel = String(latestBody.getAttribute('data-empty-label') || 'No SQL backup has been created yet.');
+
+            if (!backup || !backup.download_url) {
+                latestBody.innerHTML = '<tr><td colspan="4" class="text-muted">' + escapeHtml(emptyLabel) + '</td></tr>';
+                return;
+            }
+
+            latestBody.innerHTML = ''
+                + '<tr>'
+                + '<td>' + escapeHtml(backup.name || 'latest-database-backup.sql') + '</td>'
+                + '<td>' + escapeHtml(backup.generated_at_label || '') + '</td>'
+                + '<td>' + escapeHtml(backup.size_label || '0 B') + '</td>'
+                + '<td class="text-end"><a class="btn btn-success btn-sm" href="' + escapeHtml(backup.download_url || '#') + '">' + escapeHtml(downloadLabel) + '</a></td>'
+                + '</tr>';
+        }
+
+        form.addEventListener('submit', function (event) {
+            var formData;
+
+            event.preventDefault();
+            if (running) {
+                return;
+            }
+
+            running = true;
+            progressValue = 4;
+            submitButton.disabled = true;
+            submitButton.textContent = originalButtonText || submitButton.textContent;
+            setHidden(progressWrap, false);
+            setProgressState(progressValue, runningLabel, 'danger');
+
+            window.clearInterval(progressTimer);
+            progressTimer = window.setInterval(function () {
+                if (progressValue >= 92) {
+                    return;
+                }
+
+                if (progressValue < 38) {
+                    progressValue += 7;
+                } else if (progressValue < 74) {
+                    progressValue += 4;
+                } else {
+                    progressValue += 2;
+                }
+
+                if (progressValue > 92) {
+                    progressValue = 92;
+                }
+
+                setProgressState(progressValue, runningLabel, 'danger');
+            }, 220);
+
+            formData = new FormData(form);
+            formData.append('admin_download_database_backup', '1');
+
+            fetch(form.getAttribute('action') || window.location.href, {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json'
+                }
+            })
+                .then(function (response) {
+                    return response.json().catch(function () {
+                        return { ok: false, message: 'Invalid JSON response.' };
+                    });
+                })
+                .then(function (payload) {
+                    window.clearInterval(progressTimer);
+                    running = false;
+                    submitButton.disabled = false;
+
+                    if (payload && payload.ok) {
+                        setProgressState(100, String(payload.message || successLabel), 'success');
+                        renderLatestBackupRow(payload.backup || null);
+                        return;
+                    }
+
+                    setProgressState(Math.max(progressValue, 12), String((payload && payload.message) || errorLabel), 'danger');
+                })
+                .catch(function () {
+                    window.clearInterval(progressTimer);
+                    running = false;
+                    submitButton.disabled = false;
+                    setProgressState(Math.max(progressValue, 12), errorLabel, 'danger');
+                });
+        });
+    }
+
     function initProviderUrlReplacement() {
         qa('[data-provider-url-replacement-scope]').forEach(function (scope) {
             var toggle = q('[data-provider-url-replacement-toggle]', scope);
@@ -8313,6 +8437,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     initSidebarAndDropdowns();
     initDangerForms();
+    initSettingsBackupGenerator();
     initProviderUrlReplacement();
     initProviderLogoManagers();
     initProductTypeForms();
