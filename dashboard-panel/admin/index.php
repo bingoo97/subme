@@ -11,6 +11,7 @@ $db = Mysql_ks::get_instance();
 app_ensure_customer_runtime_columns($db);
 app_ensure_product_provider_runtime_columns($db);
 admin_ensure_help_topics_runtime_table($db);
+admin_ensure_help_videos_runtime_table($db);
 $appSettings = admin_app_settings($db);
 $cryptoWalletSharedEnabled = admin_crypto_wallet_shared_assignments_enabled($appSettings);
 $cryptoWalletFreeCount = admin_crypto_wallet_free_count($db);
@@ -1643,6 +1644,16 @@ $helpFormState = [
     'sort_order' => 100,
     'is_active' => 1,
 ];
+$helpVideoEditorId = 0;
+$helpVideoEditor = null;
+$helpVideoShowCreate = false;
+$helpVideoFormState = [
+    'title' => '',
+    'video_url' => '',
+    'description_html' => '',
+    'sort_order' => 100,
+    'is_active' => 1,
+];
 $dashboardChangeLogFormState = [
     'change_date' => date('Y-m-d'),
     'change_text' => '',
@@ -1759,6 +1770,21 @@ if ($route === 'help' && isset($_GET['saved_help_topic'])) {
 
 if ($route === 'help' && isset($_GET['deleted_help_topic'])) {
     $pageAlert = admin_t($messages, 'help_delete_success', 'Help topic deleted successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'help' && isset($_GET['created_help_video'])) {
+    $pageAlert = admin_t($messages, 'help_video_create_success', 'Video tutorial created successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'help' && isset($_GET['saved_help_video'])) {
+    $pageAlert = admin_t($messages, 'help_video_save_success', 'Video tutorial saved successfully.');
+    $pageAlertType = 'success';
+}
+
+if ($route === 'help' && isset($_GET['deleted_help_video'])) {
+    $pageAlert = admin_t($messages, 'help_video_delete_success', 'Video tutorial deleted successfully.');
     $pageAlertType = 'success';
 }
 
@@ -2620,6 +2646,90 @@ if ($route === 'help') {
 
     $helpEditorId = isset($_GET['edit_help']) ? (int)$_GET['edit_help'] : 0;
     $helpShowCreate = (string)($_GET['view'] ?? '') === 'create';
+    $helpVideoEditorId = isset($_GET['edit_help_video']) ? (int)$_GET['edit_help_video'] : 0;
+    $helpVideoShowCreate = (string)($_GET['view'] ?? '') === 'create_help_video';
+
+    if (!$settingsAdminMode) {
+        $helpVideoShowCreate = false;
+    }
+
+    if (isset($_POST['admin_create_help_video'])) {
+        $helpVideoShowCreate = true;
+        $helpVideoFormState = [
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'video_url' => trim((string)($_POST['video_url'] ?? '')),
+            'description_html' => (string)($_POST['description_html'] ?? ''),
+            'sort_order' => (int)($_POST['sort_order'] ?? 100),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'csrf_invalid', 'Session expired. Refresh and try again.');
+            $pageAlertType = 'danger';
+        } elseif (!$settingsAdminMode) {
+            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
+            $pageAlertType = 'danger';
+            $helpVideoShowCreate = false;
+        } else {
+            $createVideoResult = admin_create_help_video($db, $_POST);
+            if (!empty($createVideoResult['ok']) && !empty($createVideoResult['help_video_id'])) {
+                header('Location: /admin/?page=help&edit_help_video=' . (int)$createVideoResult['help_video_id'] . $settingsAdminUrlSuffix . '&created_help_video=1');
+                exit;
+            }
+
+            $pageAlert = (string)($createVideoResult['message'] ?? admin_t($messages, 'help_video_create_error', 'Unable to create video tutorial.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_save_help_video'])) {
+        $helpVideoEditorId = (int)($_POST['help_video_id'] ?? 0);
+        $helpVideoFormState = [
+            'title' => trim((string)($_POST['title'] ?? '')),
+            'video_url' => trim((string)($_POST['video_url'] ?? '')),
+            'description_html' => (string)($_POST['description_html'] ?? ''),
+            'sort_order' => (int)($_POST['sort_order'] ?? 100),
+            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
+        ];
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'csrf_invalid', 'Session expired. Refresh and try again.');
+            $pageAlertType = 'danger';
+        } elseif (!$settingsAdminMode) {
+            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
+            $pageAlertType = 'danger';
+        } else {
+            $saveVideoResult = admin_save_help_video($db, $helpVideoEditorId, $_POST);
+            if (!empty($saveVideoResult['ok'])) {
+                header('Location: /admin/?page=help&edit_help_video=' . $helpVideoEditorId . $settingsAdminUrlSuffix . '&saved_help_video=1');
+                exit;
+            }
+
+            $pageAlert = (string)($saveVideoResult['message'] ?? admin_t($messages, 'help_video_save_error', 'Unable to save video tutorial.'));
+            $pageAlertType = 'danger';
+        }
+    }
+
+    if (isset($_POST['admin_delete_help_video'])) {
+        $helpVideoEditorId = (int)($_POST['help_video_id'] ?? 0);
+
+        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+            $pageAlert = admin_t($messages, 'csrf_invalid', 'Session expired. Refresh and try again.');
+            $pageAlertType = 'danger';
+        } elseif (!$settingsAdminMode) {
+            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
+            $pageAlertType = 'danger';
+        } else {
+            $deleteVideoResult = admin_delete_help_video($db, $helpVideoEditorId);
+            if (!empty($deleteVideoResult['ok'])) {
+                header('Location: /admin/?page=help' . $settingsAdminUrlSuffix . '&deleted_help_video=1');
+                exit;
+            }
+
+            $pageAlert = (string)($deleteVideoResult['message'] ?? admin_t($messages, 'help_video_delete_error', 'Unable to delete video tutorial.'));
+            $pageAlertType = 'danger';
+        }
+    }
 
     if (isset($_POST['admin_create_help_topic'])) {
         $helpShowCreate = true;
@@ -2639,7 +2749,7 @@ if ($route === 'help') {
         } else {
             $createResult = admin_create_help_topic($db, $_POST);
             if (!empty($createResult['ok']) && !empty($createResult['help_topic_id'])) {
-                header('Location: /admin/?page=help&edit_help=' . (int)$createResult['help_topic_id'] . '&help_list_page=' . $helpListPage . '&created_help_topic=1');
+                header('Location: /admin/?page=help&edit_help=' . (int)$createResult['help_topic_id'] . '&help_list_page=' . $helpListPage . $settingsAdminUrlSuffix . '&created_help_topic=1');
                 exit;
             }
 
@@ -2663,10 +2773,13 @@ if ($route === 'help') {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
+        } elseif (!$settingsAdminMode) {
+            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
+            $pageAlertType = 'danger';
         } else {
             $saveResult = admin_save_help_topic($db, $helpEditorId, $_POST);
             if (!empty($saveResult['ok'])) {
-                header('Location: /admin/?page=help&edit_help=' . $helpEditorId . '&help_list_page=' . $helpListPage . '&saved_help_topic=1');
+                header('Location: /admin/?page=help&edit_help=' . $helpEditorId . '&help_list_page=' . $helpListPage . $settingsAdminUrlSuffix . '&saved_help_topic=1');
                 exit;
             }
 
@@ -2682,10 +2795,13 @@ if ($route === 'help') {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
+        } elseif (!$settingsAdminMode) {
+            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
+            $pageAlertType = 'danger';
         } else {
             $deleteResult = admin_delete_help_topic($db, $helpEditorId);
             if (!empty($deleteResult['ok'])) {
-                header('Location: /admin/?page=help&help_list_page=' . $helpListPage . '&deleted_help_topic=1');
+                header('Location: /admin/?page=help&help_list_page=' . $helpListPage . $settingsAdminUrlSuffix . '&deleted_help_topic=1');
                 exit;
             }
 
@@ -2695,11 +2811,28 @@ if ($route === 'help') {
     }
 
     if ($helpEditorId > 0) {
-        $helpEditor = admin_help_topic_find($db, $helpEditorId);
-        if (!$helpEditor) {
+        if (!$settingsAdminMode) {
             $helpEditorId = 0;
-        } elseif (isset($_POST['admin_save_help_topic'])) {
-            $helpEditor = array_merge($helpEditor, $helpFormState);
+        } else {
+            $helpEditor = admin_help_topic_find($db, $helpEditorId);
+            if (!$helpEditor) {
+                $helpEditorId = 0;
+            } elseif (isset($_POST['admin_save_help_topic'])) {
+                $helpEditor = array_merge($helpEditor, $helpFormState);
+            }
+        }
+    }
+
+    if ($helpVideoEditorId > 0) {
+        if (!$settingsAdminMode) {
+            $helpVideoEditorId = 0;
+        } else {
+            $helpVideoEditor = admin_help_video_find($db, $helpVideoEditorId);
+            if (!$helpVideoEditor) {
+                $helpVideoEditorId = 0;
+            } elseif (isset($_POST['admin_save_help_video'])) {
+                $helpVideoEditor = array_merge($helpVideoEditor, $helpVideoFormState);
+            }
         }
     }
 }
@@ -12354,6 +12487,128 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     break;
 
                                 case 'help':
+                                    if ($helpVideoShowCreate):
+                                        $helpVideoDraft = $helpVideoFormState;
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'help_video_create_title', 'Add video tutorial')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=help<?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_help', 'Back to help')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="help_video_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="help_video_title" name="title" value="<?php echo admin_e((string)($helpVideoDraft['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-2">
+                                                        <label class="form-label" for="help_video_sort_order"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?></label>
+                                                        <input type="number" class="form-control" id="help_video_sort_order" name="sort_order" value="<?php echo admin_e((string)($helpVideoDraft['sort_order'] ?? 100)); ?>">
+                                                    </div>
+                                                    <div class="col-md-2">
+                                                        <label class="form-label" for="help_video_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="help_video_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($helpVideoDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($helpVideoDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="help_video_url"><?php echo admin_e(admin_t($messages, 'help_video_url_label', 'Direct video URL')); ?></label>
+                                                        <input type="url" class="form-control" id="help_video_url" name="video_url" value="<?php echo admin_e((string)($helpVideoDraft['video_url'] ?? '')); ?>" placeholder="https://example.com/videos/tutorial-01.mp4" required>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'help_video_url_help', 'Paste a direct MP4, WEBM or similar video file URL. The player is shown directly on this page for every admin.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="help_video_description"><?php echo admin_e(admin_t($messages, 'help_video_description_label', 'Short description')); ?></label>
+                                                        <textarea class="form-control" id="help_video_description" name="description_html" rows="8" data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="0"><?php echo admin_e((string)($helpVideoDraft['description_html'] ?? '')); ?></textarea>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'help_video_description_help', 'Optional short notes under the player, for example what this tutorial shows and for whom it is useful.')); ?></small>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_help_video">
+                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'help_video_create_button', 'Create video tutorial')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
+                                    if ($helpVideoEditorId > 0 && is_array($helpVideoEditor) && !empty($helpVideoEditor['id'])):
+                                        ?>
+                                        <div class="admin-editor-page">
+                                            <div class="admin-editor-page__header">
+                                                <div>
+                                                    <h3><?php echo admin_e(admin_t($messages, 'help_video_editor_title', 'Edit video tutorial')); ?></h3>
+                                                </div>
+                                                <a href="/admin/?page=help<?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-outline-dark btn-sm">
+                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_help', 'Back to help')); ?></span>
+                                                </a>
+                                            </div>
+
+                                            <form method="post" class="admin-editor-form">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <input type="hidden" name="help_video_id" value="<?php echo admin_e((string)$helpVideoEditor['id']); ?>">
+
+                                                <div class="row g-3">
+                                                    <div class="col-md-8">
+                                                        <label class="form-label" for="help_video_title"><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></label>
+                                                        <input type="text" class="form-control" id="help_video_title" name="title" value="<?php echo admin_e((string)($helpVideoEditor['title'] ?? '')); ?>" required>
+                                                    </div>
+                                                    <div class="col-md-2">
+                                                        <label class="form-label" for="help_video_sort_order"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?></label>
+                                                        <input type="number" class="form-control" id="help_video_sort_order" name="sort_order" value="<?php echo admin_e((string)($helpVideoEditor['sort_order'] ?? 100)); ?>">
+                                                    </div>
+                                                    <div class="col-md-2">
+                                                        <label class="form-label" for="help_video_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
+                                                        <select class="form-select" id="help_video_status" name="is_active">
+                                                            <option value="1"<?php echo !empty($helpVideoEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
+                                                            <option value="0"<?php echo empty($helpVideoEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="help_video_url"><?php echo admin_e(admin_t($messages, 'help_video_url_label', 'Direct video URL')); ?></label>
+                                                        <input type="url" class="form-control" id="help_video_url" name="video_url" value="<?php echo admin_e((string)($helpVideoEditor['video_url'] ?? '')); ?>" placeholder="https://example.com/videos/tutorial-01.mp4" required>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'help_video_url_help', 'Paste a direct MP4, WEBM or similar video file URL. The player is shown directly on this page for every admin.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="help_video_description"><?php echo admin_e(admin_t($messages, 'help_video_description_label', 'Short description')); ?></label>
+                                                        <textarea class="form-control" id="help_video_description" name="description_html" rows="8" data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="0"><?php echo admin_e((string)($helpVideoEditor['description_html'] ?? '')); ?></textarea>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'help_video_description_help', 'Optional short notes under the player, for example what this tutorial shows and for whom it is useful.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($helpVideoEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
+                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($helpVideoEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
+                                                    </div>
+                                                </div>
+
+                                                <div class="admin-editor-actions">
+                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_help_video">
+                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
+                                                        <span><?php echo admin_e(admin_t($messages, 'help_video_save_button', 'Save video tutorial')); ?></span>
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                        <?php
+                                        break;
+                                    endif;
+
                                     if ($helpShowCreate):
                                         $helpDraft = $helpFormState;
                                         ?>
@@ -12362,7 +12617,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'help_create_title', 'Add help topic')); ?></h3>
                                                 </div>
-                                                <a href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                <a href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'back_to_help', 'Back to help')); ?></span>
                                                 </a>
@@ -12426,7 +12681,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'help_editor_title', 'Edit help topic')); ?></h3>
                                                 </div>
-                                                <a href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                <a href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'back_to_help', 'Back to help')); ?></span>
                                                 </a>
@@ -12493,13 +12748,77 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     endif;
 
                                     $helpRows = admin_help_topic_rows($db, $helpListPerPage, ($helpListPage - 1) * $helpListPerPage);
+                                    $helpVideoRows = admin_help_video_rows($db, false);
                                     ?>
-                                    <div class="admin-section-actions">
-                                        <a href="/admin/?page=help&amp;view=create&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?>" class="btn btn-dark">
-                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
-                                            <span><?php echo admin_e(admin_t($messages, 'help_add_new', 'Add help topic')); ?></span>
-                                        </a>
-                                    </div>
+                                    <section class="admin-help-videos-panel">
+                                        <div class="admin-help-videos-panel__header">
+                                            <div>
+                                                <h3><?php echo admin_e(admin_t($messages, 'help_video_section_title', 'Video tutorial')); ?></h3>
+                                                <p><?php echo admin_e(admin_t($messages, 'help_video_section_intro', 'Add short onboarding recordings for admins. Each entry shows a direct player so the team can quickly learn users, payments and orders.')); ?></p>
+                                            </div>
+                                            <?php if ($settingsAdminMode): ?>
+                                                <a href="/admin/?page=help<?php echo admin_e($settingsAdminUrlSuffix); ?>&amp;view=create_help_video" class="btn btn-dark">
+                                                    <i class="bi bi-camera-video" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'help_video_add_new', 'Add video tutorial')); ?></span>
+                                                </a>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <?php if ($helpVideoRows): ?>
+                                            <div class="admin-help-videos-grid">
+                                                <?php foreach ($helpVideoRows as $videoRow): ?>
+                                                    <article class="admin-help-video-card">
+                                                        <div class="admin-help-video-card__content">
+                                                            <div class="admin-help-video-card__meta">
+                                                                <span class="admin-status-pill <?php echo !empty($videoRow['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
+                                                                    <?php echo admin_e(!empty($videoRow['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
+                                                                </span>
+                                                                <span class="admin-help-video-card__date"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated') . ': ' . substr((string)($videoRow['updated_at'] ?? ''), 0, 10)); ?></span>
+                                                            </div>
+                                                            <h4><?php echo admin_e((string)($videoRow['title'] ?? '')); ?></h4>
+                                                        </div>
+                                                        <div class="admin-help-video-card__player">
+                                                            <video controls preload="metadata" playsinline src="<?php echo admin_e((string)($videoRow['video_url'] ?? '')); ?>"></video>
+                                                        </div>
+                                                        <div class="admin-help-video-card__content">
+                                                            <?php if (trim((string)($videoRow['description_html'] ?? '')) !== ''): ?>
+                                                                <div class="admin-help-video-card__description"><?php echo (string)$videoRow['description_html']; ?></div>
+                                                            <?php endif; ?>
+                                                            <?php if ($settingsAdminMode): ?>
+                                                                <div class="admin-wallet-actions">
+                                                                    <a href="/admin/?page=help&amp;edit_help_video=<?php echo admin_e((string)$videoRow['id']); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-dark btn-sm">
+                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                    </a>
+                                                                    <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'help_video_delete_confirm', 'Delete this video tutorial?')); ?>');">
+                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                        <input type="hidden" name="help_video_id" value="<?php echo admin_e((string)$videoRow['id']); ?>">
+                                                                        <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_help_video" title="<?php echo admin_e(admin_t($messages, 'help_video_delete_button', 'Delete video tutorial')); ?>">
+                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </form>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </article>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'help_video_empty', 'No video tutorials yet. Add your first short onboarding recording here.')); ?></div>
+                                        <?php endif; ?>
+                                    </section>
+
+                                    <section class="admin-help-topics-panel">
+                                        <div class="admin-help-topics-panel__header">
+                                            <div>
+                                                <h3><?php echo admin_e(admin_t($messages, 'help_topics_section_title', 'Admin tutorial')); ?></h3>
+                                                <p><?php echo admin_e(admin_t($messages, 'help_topics_section_intro', 'Short written topics shown in the floating help modal.')); ?></p>
+                                            </div>
+                                            <a href="/admin/?page=help&amp;view=create&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-dark">
+                                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                <span><?php echo admin_e(admin_t($messages, 'help_add_new', 'Add help topic')); ?></span>
+                                            </a>
+                                        </div>
+
                                     <?php if ($helpRows): ?>
                                         <div class="table-responsive">
                                             <table class="table admin-table align-middle">
@@ -12534,19 +12853,21 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <?php echo admin_e(substr((string)($row['updated_at'] ?? ''), 0, 16)); ?>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                <div class="admin-wallet-actions">
-                                                                    <a href="/admin/?page=help&amp;edit_help=<?php echo admin_e((string)$row['id']); ?>&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?>" class="btn btn-dark btn-sm">
-                                                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
-                                                                    </a>
-                                                                    <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'help_delete_confirm', 'Delete this help topic?')); ?>');">
-                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                                        <input type="hidden" name="help_id" value="<?php echo admin_e((string)$row['id']); ?>">
-                                                                        <input type="hidden" name="help_list_page" value="<?php echo admin_e((string)$helpListPage); ?>">
-                                                                        <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_help_topic" title="<?php echo admin_e(admin_t($messages, 'help_delete_button', 'Delete help topic')); ?>">
-                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
-                                                                        </button>
-                                                                    </form>
-                                                                </div>
+                                                                <?php if ($settingsAdminMode): ?>
+                                                                    <div class="admin-wallet-actions">
+                                                                        <a href="/admin/?page=help&amp;edit_help=<?php echo admin_e((string)$row['id']); ?>&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-dark btn-sm">
+                                                                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                                        </a>
+                                                                        <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'help_delete_confirm', 'Delete this help topic?')); ?>');">
+                                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                                            <input type="hidden" name="help_id" value="<?php echo admin_e((string)$row['id']); ?>">
+                                                                            <input type="hidden" name="help_list_page" value="<?php echo admin_e((string)$helpListPage); ?>">
+                                                                            <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_help_topic" title="<?php echo admin_e(admin_t($messages, 'help_delete_button', 'Delete help topic')); ?>">
+                                                                                <i class="bi bi-trash" aria-hidden="true"></i>
+                                                                            </button>
+                                                                        </form>
+                                                                    </div>
+                                                                <?php endif; ?>
                                                             </td>
                                                         </tr>
                                                     <?php endforeach; ?>
@@ -12558,7 +12879,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <ul class="pagination admin-pagination">
                                                     <?php for ($pageNumber = 1; $pageNumber <= $helpListTotalPages; $pageNumber++): ?>
                                                         <li class="page-item<?php echo $pageNumber === $helpListPage ? ' active' : ''; ?>">
-                                                            <a class="page-link" href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                            <a class="page-link" href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$pageNumber); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
                                                         </li>
                                                     <?php endfor; ?>
                                                 </ul>
@@ -12568,6 +12889,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
                                     <?php
                                     endif;
+                                    ?>
+                                    </section>
+                                    <?php
                                     break;
 
                                 case 'settings':

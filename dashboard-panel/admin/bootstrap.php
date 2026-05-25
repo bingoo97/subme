@@ -18145,6 +18145,173 @@ function admin_delete_help_topic(Mysql_ks $db, int $topicId): array
     ];
 }
 
+function admin_ensure_help_videos_runtime_table(Mysql_ks $db): void
+{
+    static $ready = false;
+    if ($ready && schema_object_exists($db, 'admin_help_videos')) {
+        return;
+    }
+
+    if (!schema_object_exists($db, 'admin_help_videos')) {
+        $db->query(
+            "CREATE TABLE IF NOT EXISTS admin_help_videos (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                title VARCHAR(191) NOT NULL,
+                video_url VARCHAR(1000) NOT NULL,
+                description_html LONGTEXT DEFAULT NULL,
+                sort_order INT NOT NULL DEFAULT 100,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY idx_admin_help_videos_active_sort (is_active, sort_order, id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_help_videos']);
+    }
+
+    if (!schema_object_exists($db, 'admin_help_videos')) {
+        return;
+    }
+
+    $ready = true;
+}
+
+function admin_help_video_normalize_url(string $url): string
+{
+    $url = trim($url);
+    if ($url === '') {
+        return '';
+    }
+
+    if (!preg_match('~^https?://~i', $url)) {
+        return '';
+    }
+
+    return $url;
+}
+
+function admin_help_video_rows(Mysql_ks $db, bool $activeOnly = false): array
+{
+    admin_ensure_help_videos_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_videos')) {
+        return [];
+    }
+
+    $whereSql = $activeOnly ? 'WHERE is_active = 1' : '';
+
+    return $db->select_full_user(
+        "SELECT id, title, video_url, description_html, sort_order, is_active, created_at, updated_at
+         FROM admin_help_videos
+         {$whereSql}
+         ORDER BY sort_order ASC, id ASC"
+    );
+}
+
+function admin_help_video_find(Mysql_ks $db, int $videoId): ?array
+{
+    admin_ensure_help_videos_runtime_table($db);
+    if ($videoId <= 0 || !schema_object_exists($db, 'admin_help_videos')) {
+        return null;
+    }
+
+    $row = $db->select_user(
+        "SELECT id, title, video_url, description_html, sort_order, is_active, created_at, updated_at
+         FROM admin_help_videos
+         WHERE id = {$videoId}
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']) ? $row : null;
+}
+
+function admin_create_help_video(Mysql_ks $db, array $input): array
+{
+    admin_ensure_help_videos_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_videos')) {
+        return ['ok' => false, 'message' => 'Video tutorial storage is not available.'];
+    }
+
+    $title = trim((string)($input['title'] ?? ''));
+    $videoUrl = admin_help_video_normalize_url((string)($input['video_url'] ?? ''));
+    $descriptionHtml = trim((string)($input['description_html'] ?? ''));
+    $sortOrder = (int)($input['sort_order'] ?? 100);
+    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($title === '') {
+        return ['ok' => false, 'message' => 'Video tutorial title is required.'];
+    }
+
+    if ($videoUrl === '') {
+        return ['ok' => false, 'message' => 'A direct video URL is required.'];
+    }
+
+    $inserted = $db->insert(
+        ['title', 'video_url', 'description_html', 'sort_order', 'is_active'],
+        [$title, $videoUrl, $descriptionHtml, $sortOrder, $isActive],
+        'admin_help_videos'
+    );
+
+    if (!$inserted) {
+        return ['ok' => false, 'message' => 'Unable to create video tutorial.'];
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Video tutorial created successfully.',
+        'help_video_id' => (int)$db->id(),
+    ];
+}
+
+function admin_save_help_video(Mysql_ks $db, int $videoId, array $input): array
+{
+    $video = admin_help_video_find($db, $videoId);
+    if (!is_array($video) || empty($video['id'])) {
+        return ['ok' => false, 'message' => 'Video tutorial not found.'];
+    }
+
+    $title = trim((string)($input['title'] ?? ''));
+    $videoUrl = admin_help_video_normalize_url((string)($input['video_url'] ?? ''));
+    $descriptionHtml = trim((string)($input['description_html'] ?? ''));
+    $sortOrder = (int)($input['sort_order'] ?? 100);
+    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+
+    if ($title === '') {
+        return ['ok' => false, 'message' => 'Video tutorial title is required.'];
+    }
+
+    if ($videoUrl === '') {
+        return ['ok' => false, 'message' => 'A direct video URL is required.'];
+    }
+
+    $updated = $db->update_using_id(
+        ['title', 'video_url', 'description_html', 'sort_order', 'is_active'],
+        [$title, $videoUrl, $descriptionHtml, $sortOrder, $isActive],
+        'admin_help_videos',
+        $videoId
+    );
+
+    return [
+        'ok' => (bool)$updated,
+        'message' => $updated ? 'Video tutorial saved successfully.' : 'Unable to save video tutorial.',
+    ];
+}
+
+function admin_delete_help_video(Mysql_ks $db, int $videoId): array
+{
+    $video = admin_help_video_find($db, $videoId);
+    if (!is_array($video) || empty($video['id'])) {
+        return ['ok' => false, 'message' => 'Video tutorial not found.'];
+    }
+
+    $deleted = $db->delete_using_id('admin_help_videos', $videoId);
+
+    return [
+        'ok' => (bool)$deleted,
+        'message' => $deleted ? 'Video tutorial deleted successfully.' : 'Unable to delete video tutorial.',
+    ];
+}
+
 function admin_settings_rows(Mysql_ks $db): array
 {
     $settings = admin_app_settings($db);
