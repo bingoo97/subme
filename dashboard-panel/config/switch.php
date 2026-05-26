@@ -4,6 +4,10 @@
 	$appInstructionRoutes = ['instruction-smart-iptv', 'instruction-ott-player', 'instruction-newlook'];
 	$currentStaticPageLocale = isset($currentLocale) ? (string)$currentLocale : (string)($_SESSION['lang'] ?? 'en');
 	$customStaticPage = app_static_page_find_for_route($db, (string)$site, $currentStaticPageLocale);
+	if (is_array($customStaticPage) && app_static_page_normalize_menu_section((string)($customStaticPage['menu_section'] ?? 'other')) === 'applications' && !app_application_instructions_enabled($settings)) {
+		header('Location: /instructions');
+		exit;
+	}
 	if ($site === 'apps' && !app_apps_page_enabled($settings)) {
 		header('Location: /');
 		exit;

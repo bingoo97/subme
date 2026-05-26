@@ -276,7 +276,51 @@ if (!function_exists('app_ensure_static_pages_runtime_columns')) {
             $db->query("UPDATE static_pages SET locale_code = 'pl' WHERE slug REGEXP '-pl$'");
         }
 
+        if (!schema_column_exists($db, 'static_pages', 'menu_section')) {
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_section VARCHAR(30) NOT NULL DEFAULT 'other' AFTER locale_code");
+            schema_forget_column_cache('static_pages', 'menu_section');
+        }
+
+        if (!schema_column_exists($db, 'static_pages', 'menu_title')) {
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_title VARCHAR(191) DEFAULT NULL AFTER menu_section");
+            schema_forget_column_cache('static_pages', 'menu_title');
+        }
+
+        if (!schema_column_exists($db, 'static_pages', 'menu_logo_url')) {
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_logo_url VARCHAR(255) DEFAULT NULL AFTER menu_title");
+            schema_forget_column_cache('static_pages', 'menu_logo_url');
+        }
+
+        if (!schema_column_exists($db, 'static_pages', 'menu_sort_order')) {
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_sort_order INT NOT NULL DEFAULT 100 AFTER menu_logo_url");
+            schema_forget_column_cache('static_pages', 'menu_sort_order');
+        }
+
+        if (schema_column_exists($db, 'static_pages', 'menu_section')) {
+            $db->query("UPDATE static_pages SET menu_section = 'other' WHERE menu_section IS NULL OR menu_section = ''");
+        }
+
+        if (schema_column_exists($db, 'static_pages', 'menu_sort_order')) {
+            $db->query("UPDATE static_pages SET menu_sort_order = 100 WHERE menu_sort_order IS NULL OR menu_sort_order < 0");
+        }
+
         $done = true;
+    }
+}
+
+if (!function_exists('app_static_page_base_slug')) {
+    function app_static_page_base_slug(string $slug): string
+    {
+        $slug = strtolower(trim($slug));
+        return preg_replace('/-(pl|en)$/', '', $slug) ?? $slug;
+    }
+}
+
+if (!function_exists('app_static_page_normalize_menu_section')) {
+    function app_static_page_normalize_menu_section(?string $section): string
+    {
+        $section = strtolower(trim((string)$section));
+        return in_array($section, ['menu', 'payments', 'applications'], true) ? $section : 'other';
     }
 }
 
@@ -288,31 +332,49 @@ if (!function_exists('app_instruction_guides_seed_data')) {
                 'href' => '/instruction-trust-wallet',
                 'icon' => 'fa-shield',
                 'title' => localization_translate($messages, 'instructions_trust_wallet'),
+                'logo' => 'img/crypto/exchanges/trust.png',
+                'menu_section' => 'payments',
+                'menu_sort_order' => 10,
             ],
             [
                 'href' => '/instruction-revolut',
                 'icon' => 'fa-university',
                 'title' => localization_translate($messages, 'instructions_revolut'),
+                'logo' => 'img/crypto/exchanges/revo.png',
+                'menu_section' => 'payments',
+                'menu_sort_order' => 20,
             ],
             [
                 'href' => '/instruction-crypto-exchange',
                 'icon' => 'fa-exchange',
                 'title' => localization_translate($messages, 'instructions_crypto_exchange'),
-            ],
-            [
-                'href' => '/instruction-smart-iptv',
-                'icon' => 'fa-television',
-                'title' => localization_translate($messages, 'instructions_smart_iptv'),
+                'logo' => 'img/crypto/exchanges/cex.jpg',
+                'menu_section' => 'payments',
+                'menu_sort_order' => 30,
             ],
             [
                 'href' => '/instruction-ott-player',
                 'icon' => 'fa-play-circle',
                 'title' => localization_translate($messages, 'instructions_ott_player'),
+                'logo' => '/img/ott/logo-ott.jpg',
+                'menu_section' => 'applications',
+                'menu_sort_order' => 10,
             ],
             [
                 'href' => '/instruction-newlook',
                 'icon' => 'fa-eye',
                 'title' => localization_translate($messages, 'instructions_newlook'),
+                'logo' => '/img/new_look.png',
+                'menu_section' => 'applications',
+                'menu_sort_order' => 20,
+            ],
+            [
+                'href' => '/instruction-smart-iptv',
+                'icon' => 'fa-television',
+                'title' => localization_translate($messages, 'instructions_smart_iptv'),
+                'logo' => '/img/logo_smart.png',
+                'menu_section' => 'applications',
+                'menu_sort_order' => 30,
             ],
         ];
 
@@ -371,22 +433,14 @@ if (!function_exists('app_render_instruction_guides_markup')) {
         $href = (string)($guide['href'] ?? '');
         $title = htmlspecialchars((string)($guide['title'] ?? ''), ENT_QUOTES, 'UTF-8');
         $icon = htmlspecialchars((string)($guide['icon'] ?? 'fa-file-text-o'), ENT_QUOTES, 'UTF-8');
+        $logo = app_format_logo_path((string)($guide['logo'] ?? ''));
+        $hasLogo = trim((string)($guide['logo'] ?? '')) !== '';
         ?>
         <div class="col-sm-12">
             <a href="<?php echo htmlspecialchars($href, ENT_QUOTES, 'UTF-8'); ?>" title="<?php echo $title; ?>">
                 <div class="one_box">
-                    <?php if ($href === '/instruction-trust-wallet'): ?>
-                        <img src="img/crypto/exchanges/trust.png" class="exchange-logo-lg" alt="Trust Wallet" />
-                    <?php elseif ($href === '/instruction-revolut'): ?>
-                        <img src="img/crypto/exchanges/revo.png" class="exchange-logo-lg" alt="Revolut" />
-                    <?php elseif ($href === '/instruction-crypto-exchange'): ?>
-                        <img src="img/crypto/exchanges/cex.jpg" class="exchange-logo-lg" alt="Crypto Exchange" />
-                    <?php elseif ($href === '/instruction-smart-iptv'): ?>
-                        <img src="/img/logo_smart.png" class="exchange-logo-lg" alt="Smart IPTV" />
-                    <?php elseif ($href === '/instruction-ott-player'): ?>
-                        <img src="/img/ott/logo-ott.jpg" class="exchange-logo-lg" alt="OTT Player" />
-                    <?php elseif ($href === '/instruction-newlook'): ?>
-                        <img src="/img/new_look.png" class="exchange-logo-lg" alt="NewLook" />
+                    <?php if ($hasLogo): ?>
+                        <img src="<?php echo htmlspecialchars($logo, ENT_QUOTES, 'UTF-8'); ?>" class="exchange-logo-lg" alt="<?php echo $title; ?>" />
                     <?php else: ?>
                         <i class="fa <?php echo $icon; ?>" aria-hidden="true"></i>
                     <?php endif; ?>
@@ -398,6 +452,97 @@ if (!function_exists('app_render_instruction_guides_markup')) {
 </div>
         <?php
         return trim((string)ob_get_clean());
+    }
+}
+
+if (!function_exists('app_instruction_guides_from_static_pages')) {
+    function app_instruction_guides_from_static_pages(Mysql_ks $db, array $messages, string $localeCode, bool $applicationInstructionsEnabled = true): array
+    {
+        $fallback = app_instruction_guides_seed_data($messages, $applicationInstructionsEnabled);
+        if (!schema_object_exists($db, 'static_pages')) {
+            return $fallback;
+        }
+
+        app_ensure_system_content_pages_runtime($db);
+        $localeCode = app_static_page_normalize_locale($localeCode);
+        $safeLocaleCode = $db->escape($localeCode);
+        $rows = $db->select_full_user(
+            "SELECT id, slug, title, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order
+             FROM static_pages
+             WHERE page_type = 'page'
+               AND is_active = 1
+               AND locale_code = '{$safeLocaleCode}'
+               AND menu_section IN ('payments', 'applications')
+             ORDER BY menu_section ASC, menu_sort_order ASC, id ASC"
+        );
+
+        if (!is_array($rows) || $rows === []) {
+            return $fallback;
+        }
+
+        $guides = [];
+        foreach ($rows as $row) {
+            $menuSection = app_static_page_normalize_menu_section((string)($row['menu_section'] ?? 'other'));
+            if ($menuSection === 'other' || ($menuSection === 'applications' && !$applicationInstructionsEnabled)) {
+                continue;
+            }
+
+            $baseSlug = app_static_page_base_slug((string)($row['slug'] ?? ''));
+            if ($baseSlug === '') {
+                continue;
+            }
+
+            $guideTitle = trim((string)($row['menu_title'] ?? ''));
+            if ($guideTitle === '') {
+                $guideTitle = trim((string)($row['title'] ?? ''));
+            }
+            if ($guideTitle === '') {
+                continue;
+            }
+
+            $guides[] = [
+                'href' => '/' . $baseSlug,
+                'icon' => $menuSection === 'payments' ? 'fa-credit-card' : 'fa-file-text-o',
+                'title' => $guideTitle,
+                'logo' => (string)($row['menu_logo_url'] ?? ''),
+                'menu_section' => $menuSection,
+                'menu_sort_order' => (int)($row['menu_sort_order'] ?? 100),
+                'id' => (int)($row['id'] ?? 0),
+            ];
+        }
+
+        if ($guides === []) {
+            return $fallback;
+        }
+
+        usort($guides, static function (array $left, array $right): int {
+            $sectionOrder = [
+                'payments' => 10,
+                'applications' => 20,
+            ];
+            $leftSectionOrder = (int)($sectionOrder[(string)($left['menu_section'] ?? '')] ?? 999);
+            $rightSectionOrder = (int)($sectionOrder[(string)($right['menu_section'] ?? '')] ?? 999);
+            if ($leftSectionOrder !== $rightSectionOrder) {
+                return $leftSectionOrder <=> $rightSectionOrder;
+            }
+
+            $leftSortOrder = (int)($left['menu_sort_order'] ?? 100);
+            $rightSortOrder = (int)($right['menu_sort_order'] ?? 100);
+            if ($leftSortOrder !== $rightSortOrder) {
+                return $leftSortOrder <=> $rightSortOrder;
+            }
+
+            $leftTitle = mb_strtolower(trim((string)($left['title'] ?? '')), 'UTF-8');
+            $rightTitle = mb_strtolower(trim((string)($right['title'] ?? '')), 'UTF-8');
+            $titleCompare = strcmp($leftTitle, $rightTitle);
+            if ($titleCompare !== 0) {
+                return $titleCompare;
+            }
+
+            return ((int)($left['id'] ?? 0)) <=> ((int)($right['id'] ?? 0));
+        });
+
+        return $guides;
     }
 }
 
@@ -793,41 +938,73 @@ if (!function_exists('app_ensure_system_content_pages_runtime')) {
                     'slug' => app_static_page_locale_slug('instructions', $localeCode),
                     'title' => localization_translate($messages, 'instructions_title', 'Instructions'),
                     'body' => app_static_page_body_instructions($messages),
+                    'menu_section' => 'menu',
+                    'menu_title' => localization_translate($messages, 'instructions_title', 'Instructions'),
+                    'menu_logo_url' => '',
+                    'menu_sort_order' => 20,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('apps', $localeCode),
                     'title' => localization_translate($messages, 'apps_title', 'Apps'),
                     'body' => app_static_page_body_apps_materialized($messages, true),
+                    'menu_section' => 'menu',
+                    'menu_title' => localization_translate($messages, 'apps_title', 'Apps'),
+                    'menu_logo_url' => '',
+                    'menu_sort_order' => 10,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('instruction-trust-wallet', $localeCode),
                     'title' => localization_translate($messages, 'instructions_trust_wallet', 'Trust Wallet'),
                     'body' => app_static_page_body_instruction_trust_wallet($messages),
+                    'menu_section' => 'payments',
+                    'menu_title' => localization_translate($messages, 'instructions_trust_wallet', 'Trust Wallet'),
+                    'menu_logo_url' => 'img/crypto/exchanges/trust.png',
+                    'menu_sort_order' => 10,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('instruction-revolut', $localeCode),
                     'title' => localization_translate($messages, 'instructions_revolut', 'Revolut'),
                     'body' => app_static_page_body_instruction_revolut($messages),
+                    'menu_section' => 'payments',
+                    'menu_title' => localization_translate($messages, 'instructions_revolut', 'Revolut'),
+                    'menu_logo_url' => 'img/crypto/exchanges/revo.png',
+                    'menu_sort_order' => 20,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('instruction-crypto-exchange', $localeCode),
                     'title' => localization_translate($messages, 'instructions_crypto_exchange', 'Crypto exchange'),
                     'body' => app_static_page_body_instruction_crypto_exchange(),
+                    'menu_section' => 'payments',
+                    'menu_title' => localization_translate($messages, 'instructions_crypto_exchange', 'Crypto exchange'),
+                    'menu_logo_url' => 'img/crypto/exchanges/cex.jpg',
+                    'menu_sort_order' => 30,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('instruction-ott-player', $localeCode),
                     'title' => localization_translate($messages, 'instructions_ott_player', 'OTT Player'),
                     'body' => app_static_page_body_instruction_ott_player(),
+                    'menu_section' => 'applications',
+                    'menu_title' => localization_translate($messages, 'instructions_ott_player', 'OTT Player'),
+                    'menu_logo_url' => '/img/ott/logo-ott.jpg',
+                    'menu_sort_order' => 10,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('instruction-smart-iptv', $localeCode),
                     'title' => localization_translate($messages, 'instructions_smart_iptv', 'Smart IPTV'),
                     'body' => app_static_page_body_instruction_smart_iptv(),
+                    'menu_section' => 'applications',
+                    'menu_title' => localization_translate($messages, 'instructions_smart_iptv', 'Smart IPTV'),
+                    'menu_logo_url' => '/img/logo_smart.png',
+                    'menu_sort_order' => 30,
                 ],
                 [
                     'slug' => app_static_page_locale_slug('instruction-newlook', $localeCode),
                     'title' => localization_translate($messages, 'instructions_newlook', 'NewLook'),
                     'body' => app_static_page_body_instruction_newlook(),
+                    'menu_section' => 'applications',
+                    'menu_title' => localization_translate($messages, 'instructions_newlook', 'NewLook'),
+                    'menu_logo_url' => '/img/new_look.png',
+                    'menu_sort_order' => 20,
                 ],
             ];
 
@@ -836,19 +1013,52 @@ if (!function_exists('app_ensure_system_content_pages_runtime')) {
                 $existing = $db->select_user(
                     "SELECT id
                             , body
+                            , menu_section
+                            , menu_title
+                            , menu_logo_url
+                            , menu_sort_order
                      FROM static_pages
                      WHERE slug = '{$safeSlug}'
                      LIMIT 1"
                 );
 
                 if (is_array($existing) && !empty($existing['id'])) {
+                    $updateColumns = [];
+                    $updateValues = [];
+
                     if (
                         (string)$row['slug'] === app_static_page_locale_slug('apps', $localeCode)
                         && strpos((string)($existing['body'] ?? ''), '{{apps_table}}') !== false
                     ) {
+                        $updateColumns[] = 'body';
+                        $updateValues[] = (string)$row['body'];
+                    }
+
+                    foreach (['menu_section', 'menu_title', 'menu_logo_url', 'menu_sort_order'] as $field) {
+                        if (!array_key_exists($field, $row)) {
+                            continue;
+                        }
+
+                        $currentValue = $existing[$field] ?? null;
+                        $defaultValue = $row[$field];
+                        $shouldUpdate = false;
+
+                        if ($field === 'menu_sort_order') {
+                            $shouldUpdate = (int)$currentValue <= 0;
+                        } else {
+                            $shouldUpdate = trim((string)$currentValue) === '';
+                        }
+
+                        if ($shouldUpdate) {
+                            $updateColumns[] = $field;
+                            $updateValues[] = $defaultValue;
+                        }
+                    }
+
+                    if ($updateColumns !== []) {
                         $db->update_using_id(
-                            ['body'],
-                            [(string)$row['body']],
+                            $updateColumns,
+                            $updateValues,
                             'static_pages',
                             (int)$existing['id']
                         );
@@ -857,13 +1067,17 @@ if (!function_exists('app_ensure_system_content_pages_runtime')) {
                 }
 
                 $db->insert(
-                    ['slug', 'title', 'body', 'page_type', 'locale_code', 'is_system', 'is_active'],
+                    ['slug', 'title', 'body', 'page_type', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_sort_order', 'is_system', 'is_active'],
                     [
                         (string)$row['slug'],
                         (string)$row['title'],
                         (string)$row['body'],
                         'page',
                         $localeCode,
+                        (string)($row['menu_section'] ?? 'other'),
+                        (string)($row['menu_title'] ?? ''),
+                        (string)($row['menu_logo_url'] ?? ''),
+                        (int)($row['menu_sort_order'] ?? 100),
                         1,
                         1,
                     ],
@@ -904,7 +1118,7 @@ if (!function_exists('app_static_page_find_for_route')) {
             $seen[$candidateSlug] = true;
             $safeSlug = $db->escape($candidateSlug);
             $row = $db->select_user(
-                "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
+                "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
                  FROM static_pages
                  WHERE slug = '{$safeSlug}'
                    AND page_type = 'page'

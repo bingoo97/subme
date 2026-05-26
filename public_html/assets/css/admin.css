@@ -5984,6 +5984,31 @@ body.admin-login-page{
     border-top:1px solid #d9dee8;
 }
 
+.admin-page-logo-preview{
+    display:flex;
+    align-items:center;
+    gap:1rem;
+    padding:1rem;
+    border:1px solid #e5e7eb;
+    border-radius:16px;
+    background:#f8fafc;
+}
+
+.admin-page-logo-preview img{
+    display:block;
+    width:72px;
+    height:72px;
+    object-fit:contain;
+    border-radius:14px;
+    background:#fff;
+    border:1px solid #e5e7eb;
+    padding:.45rem;
+}
+
+.admin-page-logo-preview__meta{
+    min-width:0;
+}
+
 .admin-status-pill--xs{
     padding:.15rem .35rem;
     font-size:.65rem;

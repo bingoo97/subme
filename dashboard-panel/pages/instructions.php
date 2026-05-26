@@ -10,7 +10,7 @@ $applicationInstructionsEnabled = app_application_instructions_enabled($appSetti
 app_ensure_system_content_pages_runtime($db);
 $currentStaticPageLocale = app_static_page_normalize_locale($currentLocale ?? ($user['locale_code'] ?? 'en'));
 
-$instructionGuides = app_instruction_guides_seed_data($t, $applicationInstructionsEnabled);
+$instructionGuides = app_instruction_guides_from_static_pages($db, $t, $currentStaticPageLocale, $applicationInstructionsEnabled);
 $instructionGuides = array_values(array_filter($instructionGuides, static function (array $guide) use ($db, $currentStaticPageLocale): bool {
     $href = trim((string)($guide['href'] ?? ''));
     $route = ltrim((string)parse_url($href, PHP_URL_PATH), '/');

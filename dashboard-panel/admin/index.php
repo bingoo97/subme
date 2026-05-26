@@ -1629,6 +1629,10 @@ $pageFormState = [
     'locale_code' => 'pl',
     'title' => '',
     'slug' => '',
+    'menu_section' => 'other',
+    'menu_title' => '',
+    'menu_logo_url' => '',
+    'menu_sort_order' => 100,
     'body' => '',
     'is_active' => 1,
 ];
@@ -2582,6 +2586,10 @@ if ($route === 'pages') {
             'locale_code' => admin_page_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
             'title' => trim((string)($_POST['title'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
+            'menu_section' => admin_page_normalize_section((string)($_POST['menu_section'] ?? 'other')),
+            'menu_title' => trim((string)($_POST['menu_title'] ?? '')),
+            'menu_logo_url' => trim((string)($_POST['existing_menu_logo_url'] ?? '')),
+            'menu_sort_order' => max(0, (int)($_POST['menu_sort_order'] ?? 100)),
             'body' => trim((string)($_POST['body'] ?? '')),
             'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
         ];
@@ -2590,7 +2598,7 @@ if ($route === 'pages') {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
         } else {
-            $createResult = admin_create_page($db, $_POST);
+            $createResult = admin_create_page($db, $_POST, $_FILES, (int)($adminUser['id'] ?? 0));
             if (!empty($createResult['ok']) && !empty($createResult['page_id'])) {
                 $pageRedirectLocaleTab = admin_page_normalize_locale((string)($pageFormState['locale_code'] ?? $pageLocaleTab));
                 header('Location: /admin/?page=pages&edit_page=' . (int)$createResult['page_id'] . '&page_list_page=' . $pageListPage . '&page_locale_tab=' . rawurlencode($pageRedirectLocaleTab) . '&created_page=1');
@@ -2610,6 +2618,10 @@ if ($route === 'pages') {
             'locale_code' => admin_page_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
             'title' => trim((string)($_POST['title'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
+            'menu_section' => admin_page_normalize_section((string)($_POST['menu_section'] ?? 'other')),
+            'menu_title' => trim((string)($_POST['menu_title'] ?? '')),
+            'menu_logo_url' => '',
+            'menu_sort_order' => max(0, (int)($_POST['menu_sort_order'] ?? 100)),
             'body' => trim((string)($_POST['body'] ?? '')),
             'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
         ];
@@ -2618,7 +2630,7 @@ if ($route === 'pages') {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
         } else {
-            $saveResult = admin_save_page($db, $pageEditorId, $_POST);
+            $saveResult = admin_save_page($db, $pageEditorId, $_POST, $_FILES, (int)($adminUser['id'] ?? 0));
             if (!empty($saveResult['ok'])) {
                 $pageRedirectLocaleTab = admin_page_normalize_locale((string)($pageFormState['locale_code'] ?? $pageLocaleTab));
                 header('Location: /admin/?page=pages&edit_page=' . $pageEditorId . '&page_list_page=' . $pageListPage . '&page_locale_tab=' . rawurlencode($pageRedirectLocaleTab) . '&saved_page=1');
@@ -6336,17 +6348,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <?php foreach ($orderRows as $row): ?>
                                                         <?php
                                                         $orderId = (int)$row['id'];
-                                                        $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
-                                                        $orderTitle = trim((string)($row['provider_name'] ?? ''));
-                                                        if ($durationLabel !== '') {
-                                                            $orderTitle = trim($orderTitle . ' ' . $durationLabel);
-                                                        }
+                                                        $orderTitle = admin_order_product_title($row, $messages);
                                                         $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                                         $orderStatusVisual = admin_order_status_visual($row);
                                                         $orderProgress = admin_order_progress_data($row);
-                                                        $orderCreatedTimestamp = !empty($row['created_at']) ? strtotime((string)$row['created_at']) : 0;
                                                         $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
-                                                        $orderCreatedIsToday = $orderCreatedTimestamp > 0 && date('Y-m-d', $orderCreatedTimestamp) === date('Y-m-d');
+                                                        $orderCreatedIsToday = admin_is_current_day_datetime((string)($row['created_at'] ?? ''));
                                                         $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
                                                         $orderWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
                                                         $orderWalletLabel = trim((string)($row['wallet_label'] ?? ''));
@@ -6573,17 +6580,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <?php foreach ($orderRows as $row): ?>
                                                         <?php
                                                         $orderId = (int)$row['id'];
-                                                        $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
-                                                        $orderTitle = trim((string)($row['provider_name'] ?? ''));
-                                                        if ($durationLabel !== '') {
-                                                            $orderTitle = trim($orderTitle . ' ' . $durationLabel);
-                                                        }
+                                                        $orderTitle = admin_order_product_title($row, $messages);
                                                         $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                                         $orderStatusVisual = admin_order_status_visual($row);
                                                         $orderProgress = admin_order_progress_data($row);
-                                                        $orderCreatedTimestamp = !empty($row['created_at']) ? strtotime((string)$row['created_at']) : 0;
                                                         $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
-                                                        $orderCreatedIsToday = $orderCreatedTimestamp > 0 && date('Y-m-d', $orderCreatedTimestamp) === date('Y-m-d');
+                                                        $orderCreatedIsToday = admin_is_current_day_datetime((string)($row['created_at'] ?? ''));
                                                         $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
                                                         $orderWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
                                                         $orderWalletLabel = trim((string)($row['wallet_label'] ?? ''));
@@ -6718,11 +6720,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <?php foreach ($orderRows as $row): ?>
                                         <?php
                                         $orderId = (int)$row['id'];
-                                        $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
-                                        $orderTitle = trim((string)($row['provider_name'] ?? ''));
-                                        if ($durationLabel !== '') {
-                                            $orderTitle = trim($orderTitle . ' ' . $durationLabel);
-                                        }
+                                        $orderTitle = admin_order_product_title($row, $messages);
                                         $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
                                         $orderStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
                                         $paymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
@@ -12309,10 +12307,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </a>
                                             </div>
 
-                                            <form method="post" class="admin-editor-form">
+                                            <form method="post" class="admin-editor-form" enctype="multipart/form-data">
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
                                                 <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
+                                                <input type="hidden" name="menu_sort_order" value="<?php echo admin_e((string)($pageDraft['menu_sort_order'] ?? 100)); ?>">
 
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
@@ -12338,9 +12337,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <option value="0"<?php echo empty($pageDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
                                                         </select>
                                                     </div>
-                                                    <div class="col-md-8">
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_menu_section"><?php echo admin_e(admin_t($messages, 'page_section_label', 'Instruction section')); ?></label>
+                                                        <select class="form-select" id="content_page_menu_section" name="menu_section">
+                                                            <option value="other"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'other' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_other', 'Other page')); ?></option>
+                                                            <option value="payments"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'payments' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_payments', 'Payments - Instructions')); ?></option>
+                                                            <option value="applications"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'applications' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_applications', 'Applications - Instructions')); ?></option>
+                                                        </select>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_section_help', 'Choose Payments or Applications if this page should appear as a one_box tile on /instructions.')); ?></div>
+                                                    </div>
+                                                    <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="content_page_menu_title"><?php echo admin_e(admin_t($messages, 'page_menu_title_label', 'Tile name')); ?></label>
+                                                        <input type="text" class="form-control" id="content_page_menu_title" name="menu_title" value="<?php echo admin_e((string)($pageDraft['menu_title'] ?? '')); ?>" placeholder="<?php echo admin_e((string)($pageDraft['title'] ?? '')); ?>">
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_title_help', 'Shown as the one_box title in the user interface. Leave empty to use the page title.')); ?></div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="content_page_menu_logo"><?php echo admin_e(admin_t($messages, 'page_menu_logo_label', 'Tile logo')); ?></label>
+                                                        <input type="file" class="form-control" id="content_page_menu_logo" name="menu_logo_file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml">
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_logo_help', 'Optional logo shown above the one_box title. Best for Payments and Applications instruction tiles.')); ?></div>
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="content_page_body"><?php echo admin_e(admin_t($messages, 'page_body_label', 'Content')); ?></label>
@@ -12374,11 +12392,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </a>
                                             </div>
 
-                                            <form method="post" class="admin-editor-form">
+                                            <form method="post" class="admin-editor-form" enctype="multipart/form-data">
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="page_id" value="<?php echo admin_e((string)$pageEditor['id']); ?>">
                                                 <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
                                                 <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
+                                                <input type="hidden" name="menu_sort_order" value="<?php echo admin_e((string)($pageEditor['menu_sort_order'] ?? 100)); ?>">
+                                                <input type="hidden" name="existing_menu_logo_url" value="<?php echo admin_e((string)($pageEditor['menu_logo_url'] ?? '')); ?>">
 
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
@@ -12405,6 +12425,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </select>
                                                     </div>
                                                     <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_menu_section"><?php echo admin_e(admin_t($messages, 'page_section_label', 'Instruction section')); ?></label>
+                                                        <select class="form-select" id="content_page_menu_section" name="menu_section">
+                                                            <option value="other"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'other' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_other', 'Other page')); ?></option>
+                                                            <option value="payments"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'payments' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_payments', 'Payments - Instructions')); ?></option>
+                                                            <option value="applications"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'applications' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_applications', 'Applications - Instructions')); ?></option>
+                                                        </select>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_section_help', 'Choose Payments or Applications if this page should appear as a one_box tile on /instructions.')); ?></div>
+                                                    </div>
+                                                    <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?>" readonly>
                                                     </div>
@@ -12412,6 +12441,31 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_system_label', 'System entry')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e(!empty($pageEditor['is_system']) ? admin_t($messages, 'page_system_yes', 'Yes') : admin_t($messages, 'page_system_no', 'No')); ?>" readonly>
                                                     </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="content_page_menu_title"><?php echo admin_e(admin_t($messages, 'page_menu_title_label', 'Tile name')); ?></label>
+                                                        <input type="text" class="form-control" id="content_page_menu_title" name="menu_title" value="<?php echo admin_e((string)($pageEditor['menu_title'] ?? '')); ?>" placeholder="<?php echo admin_e((string)($pageEditor['title'] ?? '')); ?>">
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_title_help', 'Shown as the one_box title in the user interface. Leave empty to use the page title.')); ?></div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="content_page_menu_logo"><?php echo admin_e(admin_t($messages, 'page_menu_logo_label', 'Tile logo')); ?></label>
+                                                        <input type="file" class="form-control" id="content_page_menu_logo" name="menu_logo_file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml">
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_logo_help', 'Optional logo shown above the one_box title. Best for Payments and Applications instruction tiles.')); ?></div>
+                                                    </div>
+                                                    <?php if (!empty($pageEditor['menu_logo_url'])): ?>
+                                                        <div class="col-12">
+                                                            <div class="admin-page-logo-preview">
+                                                                <img src="<?php echo admin_e(app_format_logo_path((string)($pageEditor['menu_logo_url'] ?? ''))); ?>" alt="<?php echo admin_e(admin_t($messages, 'page_menu_logo_current', 'Current tile logo')); ?>">
+                                                                <div class="admin-page-logo-preview__meta">
+                                                                    <div class="fw-semibold"><?php echo admin_e(admin_t($messages, 'page_menu_logo_current', 'Current tile logo')); ?></div>
+                                                                    <div class="text-body-secondary small"><?php echo admin_e((string)$pageEditor['menu_logo_url']); ?></div>
+                                                                    <label class="form-check mt-2 mb-0">
+                                                                        <input class="form-check-input" type="checkbox" name="remove_menu_logo" value="1">
+                                                                        <span class="form-check-label"><?php echo admin_e(admin_t($messages, 'page_remove_logo_label', 'Remove current tile logo')); ?></span>
+                                                                    </label>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    <?php endif; ?>
                                                     <div class="col-12">
                                                         <label class="form-label" for="content_page_body"><?php echo admin_e(admin_t($messages, 'page_body_label', 'Content')); ?></label>
                                                         <textarea class="form-control" id="content_page_body" name="body" rows="12" required data-admin-rich-editor="1" data-admin-rich-editor-images="0" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($pageEditor['body'] ?? '')); ?></textarea>
@@ -12503,7 +12557,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?>">
                                                                 <div class="d-flex flex-column gap-1">
                                                                     <span><?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?></span>
-                                                                    <span class="text-body-secondary small"><?php echo admin_e(!empty($row['is_system']) ? admin_t($messages, 'page_system_yes', 'Yes') : admin_t($messages, 'page_system_no', 'No')); ?></span>
+                                                                    <span class="text-body-secondary small"><?php echo admin_e(admin_page_group_title(admin_page_group_key((array)$row), $messages)); ?></span>
                                                                 </div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">

@@ -2706,21 +2706,45 @@ function admin_compact_datetime_label(?string $value): string
         return '';
     }
 
-    $timestamp = strtotime($value);
-    if ($timestamp === false) {
+    try {
+        $timezone = function_exists('app_runtime_timezone_name')
+            ? new DateTimeZone(app_runtime_timezone_name())
+            : new DateTimeZone(date_default_timezone_get());
+        $date = new DateTimeImmutable($value, $timezone);
+    } catch (Throwable $exception) {
         return $value;
     }
 
-    $today = date('Y-m-d');
-    if (date('Y-m-d', $timestamp) === $today) {
-        return date('H:i', $timestamp);
+    $today = (new DateTimeImmutable('now', $timezone))->format('Y-m-d');
+    if ($date->format('Y-m-d') === $today) {
+        return $date->format('H:i');
     }
 
-    if (date('Y', $timestamp) === date('Y')) {
-        return date('d.m', $timestamp);
+    if ($date->format('Y') === (new DateTimeImmutable('now', $timezone))->format('Y')) {
+        return $date->format('d.m');
     }
 
-    return date('d.m.y', $timestamp);
+    return $date->format('d.m.y');
+}
+
+function admin_is_current_day_datetime(?string $value): bool
+{
+    $value = trim((string)$value);
+    if ($value === '') {
+        return false;
+    }
+
+    try {
+        $timezone = function_exists('app_runtime_timezone_name')
+            ? new DateTimeZone(app_runtime_timezone_name())
+            : new DateTimeZone(date_default_timezone_get());
+        $date = new DateTimeImmutable($value, $timezone);
+        $today = new DateTimeImmutable('now', $timezone);
+    } catch (Throwable $exception) {
+        return false;
+    }
+
+    return $date->format('Y-m-d') === $today->format('Y-m-d');
 }
 
 function admin_country_flag_url(string $countryCode): string
@@ -9973,6 +9997,47 @@ function admin_format_product_option_label(array $productRow): string
     return trim($label);
 }
 
+function admin_order_product_title(array $orderRow, ?array $messages = null): string
+{
+    $provider = trim((string)($orderRow['provider_name'] ?? ''));
+    $productName = trim((string)($orderRow['product_name'] ?? ''));
+    $productType = admin_normalize_product_type((string)($orderRow['product_type'] ?? 'subscription'));
+    $durationLabel = admin_duration_label_from_hours((int)($orderRow['duration_hours'] ?? 0));
+
+    if ($productType === 'credits') {
+        if ($productName !== '') {
+            return $productName;
+        }
+        if ($provider !== '') {
+            return $provider;
+        }
+
+        return $messages !== null
+            ? admin_t($messages, 'product_type_credits', 'Credits')
+            : 'Credits';
+    }
+
+    if ($provider !== '' && $productName !== '') {
+        return $provider . ' / ' . $productName;
+    }
+    if ($productName !== '') {
+        return $productName;
+    }
+    if ($provider !== '' && $durationLabel !== '') {
+        return trim($provider . ' ' . $durationLabel);
+    }
+    if ($provider !== '') {
+        return $provider;
+    }
+    if ($durationLabel !== '') {
+        return $durationLabel;
+    }
+
+    return $messages !== null
+        ? admin_t($messages, 'col_product', 'Product')
+        : 'Product';
+}
+
 function admin_product_basic_row(Mysql_ks $db, int $productId): ?array
 {
     if ($productId <= 0 || !schema_object_exists($db, 'products')) {
@@ -14727,22 +14792,26 @@ function admin_format_last_login_date(?string $timestamp): string
         return '';
     }
 
-    $time = strtotime($timestamp);
-    if ($time === false) {
+    try {
+        $timezone = function_exists('app_runtime_timezone_name')
+            ? new DateTimeZone(app_runtime_timezone_name())
+            : new DateTimeZone(date_default_timezone_get());
+        $date = new DateTimeImmutable($timestamp, $timezone);
+        $today = new DateTimeImmutable('now', $timezone);
+    } catch (Throwable $exception) {
         return $timestamp;
     }
 
-    $today = date('Y-m-d');
-    $loginDate = date('Y-m-d', $time);
-    $loginYear = date('Y', $time);
-    $currentYear = date('Y');
+    $loginDate = $date->format('Y-m-d');
+    $loginYear = $date->format('Y');
+    $currentYear = $today->format('Y');
 
-    if ($loginDate === $today) {
-        return date('H:i', $time);
+    if ($loginDate === $today->format('Y-m-d')) {
+        return $date->format('H:i');
     } elseif ($loginYear === $currentYear) {
-        return date('d.m', $time);
+        return $date->format('d.m');
     } else {
-        return date('d.m.Y', $time);
+        return $date->format('d.m.Y');
     }
 }
 
@@ -16994,6 +17063,34 @@ function admin_ensure_static_pages_locale_runtime(Mysql_ks $db): void
         $db->query("UPDATE static_pages SET locale_code = 'pl' WHERE slug REGEXP '-pl$'");
     }
 
+    if (!schema_column_exists($db, 'static_pages', 'menu_section')) {
+        $db->query("ALTER TABLE static_pages ADD COLUMN menu_section VARCHAR(30) NOT NULL DEFAULT 'other' AFTER locale_code");
+        schema_forget_column_cache('static_pages', 'menu_section');
+    }
+
+    if (!schema_column_exists($db, 'static_pages', 'menu_title')) {
+        $db->query("ALTER TABLE static_pages ADD COLUMN menu_title VARCHAR(191) DEFAULT NULL AFTER menu_section");
+        schema_forget_column_cache('static_pages', 'menu_title');
+    }
+
+    if (!schema_column_exists($db, 'static_pages', 'menu_logo_url')) {
+        $db->query("ALTER TABLE static_pages ADD COLUMN menu_logo_url VARCHAR(255) DEFAULT NULL AFTER menu_title");
+        schema_forget_column_cache('static_pages', 'menu_logo_url');
+    }
+
+    if (!schema_column_exists($db, 'static_pages', 'menu_sort_order')) {
+        $db->query("ALTER TABLE static_pages ADD COLUMN menu_sort_order INT NOT NULL DEFAULT 100 AFTER menu_logo_url");
+        schema_forget_column_cache('static_pages', 'menu_sort_order');
+    }
+
+    if (schema_column_exists($db, 'static_pages', 'menu_section')) {
+        $db->query("UPDATE static_pages SET menu_section = 'other' WHERE menu_section IS NULL OR menu_section = ''");
+    }
+
+    if (schema_column_exists($db, 'static_pages', 'menu_sort_order')) {
+        $db->query("UPDATE static_pages SET menu_sort_order = 100 WHERE menu_sort_order IS NULL OR menu_sort_order < 0");
+    }
+
     $done = true;
 }
 
@@ -17239,6 +17336,94 @@ function admin_page_normalize_locale(?string $locale): string
     return admin_faq_normalize_locale($locale);
 }
 
+function admin_page_section_options(): array
+{
+    return [
+        'other' => 'Other',
+        'payments' => 'Payments',
+        'applications' => 'Applications',
+        'menu' => 'Menu',
+    ];
+}
+
+function admin_page_normalize_section(?string $section): string
+{
+    $section = strtolower(trim((string)$section));
+    return array_key_exists($section, admin_page_section_options()) ? $section : 'other';
+}
+
+function admin_page_card_logo_upload_directory(): string
+{
+    return dirname(__DIR__, 2) . '/public_html/uploads/page-cards';
+}
+
+function admin_page_card_logo_public_path(array $file, int $adminUserId): ?string
+{
+    $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+    $originalName = (string)($file['name'] ?? '');
+    $tmpPath = (string)($file['tmp_name'] ?? '');
+    $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'];
+    $mimeType = function_exists('mime_content_type') ? (string)mime_content_type($tmpPath) : '';
+    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'text/plain', 'text/xml', 'application/xml'];
+    $isSvg = $extension === 'svg';
+
+    if (
+        $uploadError !== UPLOAD_ERR_OK
+        || !is_uploaded_file($tmpPath)
+        || !in_array($extension, $allowedExtensions, true)
+        || (!$isSvg && $mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true))
+        || ($isSvg && !admin_site_logo_is_valid_svg($tmpPath))
+    ) {
+        return null;
+    }
+
+    $uploadDirectory = admin_page_card_logo_upload_directory();
+    if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+        return null;
+    }
+
+    $safeExtension = $extension === 'jpeg' ? 'jpg' : $extension;
+    $fileName = 'page_card_' . max(0, $adminUserId) . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $safeExtension;
+    $destinationPath = $uploadDirectory . '/' . $fileName;
+
+    $saved = false;
+    if (!$isSvg && $mimeType !== '' && function_exists('imagecreatetruecolor')) {
+        $saved = admin_chat_resize_image($tmpPath, $destinationPath, $mimeType);
+    }
+
+    if (!$saved) {
+        $saved = move_uploaded_file($tmpPath, $destinationPath);
+    }
+
+    if (!$saved) {
+        return null;
+    }
+
+    return '/uploads/page-cards/' . $fileName;
+}
+
+function admin_delete_page_card_logo_file(string $publicPath): bool
+{
+    $publicPath = trim($publicPath);
+    if ($publicPath === '' || strpos($publicPath, '/uploads/page-cards/') !== 0) {
+        return false;
+    }
+
+    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
+    if ($publicRoot === false) {
+        return false;
+    }
+
+    $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
+    $realFilePath = realpath($filePath);
+    if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/page-cards/') !== 0 || !is_file($realFilePath)) {
+        return false;
+    }
+
+    return @unlink($realFilePath);
+}
+
 function admin_page_slugify(string $value): string
 {
     return admin_faq_slugify($value);
@@ -17281,7 +17466,7 @@ function admin_page_all_rows(Mysql_ks $db): array
     admin_ensure_static_pages_locale_runtime($db);
 
     $rows = $db->select_full_user(
-        "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
+        "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE page_type = 'page'
          ORDER BY is_system DESC, id ASC"
@@ -17332,7 +17517,7 @@ function admin_page_find(Mysql_ks $db, int $pageId): ?array
     admin_page_seed_system_rows($db);
     admin_ensure_static_pages_locale_runtime($db);
     $row = $db->select_user(
-        "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
+        "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE id = {$pageId}
            AND page_type = 'page'
@@ -17350,6 +17535,11 @@ function admin_page_slug_base(string $slug): string
 
 function admin_page_group_key(array $row): string
 {
+    $menuSection = admin_page_normalize_section((string)($row['menu_section'] ?? 'other'));
+    if ($menuSection !== 'other') {
+        return $menuSection;
+    }
+
     $slug = admin_page_slug_base((string)($row['slug'] ?? ''));
 
     if (in_array($slug, ['apps', 'instructions'], true)) {
@@ -17382,6 +17572,7 @@ function admin_page_group_title(string $groupKey, array $messages): string
 function admin_page_visual_badges(array $row, array $messages): array
 {
     $slug = admin_page_slug_base((string)($row['slug'] ?? ''));
+    $menuSection = admin_page_normalize_section((string)($row['menu_section'] ?? 'other'));
     $map = [
         'instructions' => [
             [
@@ -17440,6 +17631,20 @@ function admin_page_visual_badges(array $row, array $messages): array
     ];
 
     if (!isset($map[$slug])) {
+        if ($menuSection === 'payments') {
+            return [[
+                'label' => admin_t($messages, 'page_group_payments', 'Payments'),
+                'bg' => '#fffbeb',
+                'text' => '#b45309',
+            ]];
+        }
+        if ($menuSection === 'applications') {
+            return [[
+                'label' => admin_t($messages, 'page_group_applications', 'Applications'),
+                'bg' => '#eef6ff',
+                'text' => '#1d4ed8',
+            ]];
+        }
         return [];
     }
 
@@ -17483,6 +17688,12 @@ function admin_page_sort_rows(array $rows): array
             return $leftGroupOrder <=> $rightGroupOrder;
         }
 
+        $leftMenuSortOrder = (int)($left['menu_sort_order'] ?? 100);
+        $rightMenuSortOrder = (int)($right['menu_sort_order'] ?? 100);
+        if ($leftMenuSortOrder !== $rightMenuSortOrder) {
+            return $leftMenuSortOrder <=> $rightMenuSortOrder;
+        }
+
         $leftSlugOrder = (int)($slugOrder[$leftBase] ?? 999);
         $rightSlugOrder = (int)($slugOrder[$rightBase] ?? 999);
         if ($leftSlugOrder !== $rightSlugOrder) {
@@ -17520,7 +17731,7 @@ function admin_page_sort_rows(array $rows): array
     return $rows;
 }
 
-function admin_create_page(Mysql_ks $db, array $input): array
+function admin_create_page(Mysql_ks $db, array $input, array $files = [], int $adminUserId = 0): array
 {
     if (!schema_object_exists($db, 'static_pages')) {
         return ['ok' => false, 'message' => 'Page storage is not available.'];
@@ -17533,6 +17744,16 @@ function admin_create_page(Mysql_ks $db, array $input): array
     $body = trim((string)($input['body'] ?? ''));
     $localeCode = admin_page_normalize_locale((string)($input['locale_code'] ?? 'pl'));
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+    $menuSection = admin_page_normalize_section((string)($input['menu_section'] ?? 'other'));
+    $menuTitle = trim((string)($input['menu_title'] ?? ''));
+    $menuSortOrder = max(0, (int)($input['menu_sort_order'] ?? 100));
+    $menuLogoUrl = '';
+    $menuLogoFile = is_array($files['menu_logo_file'] ?? null) ? $files['menu_logo_file'] : null;
+    $menuLogoUploadError = (int)($menuLogoFile['error'] ?? UPLOAD_ERR_NO_FILE);
+
+    if ($menuTitle === '') {
+        $menuTitle = $title;
+    }
 
     if ($title === '') {
         return ['ok' => false, 'message' => 'Page title is required.'];
@@ -17542,14 +17763,24 @@ function admin_create_page(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'Page content is required.'];
     }
 
+    if ($menuLogoUploadError !== UPLOAD_ERR_NO_FILE) {
+        $menuLogoUrl = (string)admin_page_card_logo_public_path($menuLogoFile, $adminUserId);
+        if ($menuLogoUrl === '') {
+            return ['ok' => false, 'message' => 'Page card logo must be a valid JPG, PNG, GIF, WEBP or SVG image.'];
+        }
+    }
+
     $slug = admin_page_locale_aware_slug($db, $title, $slugInput, $localeCode);
     $inserted = $db->insert(
-        ['slug', 'title', 'body', 'locale_code', 'page_type', 'is_system', 'is_active'],
-        [$slug, $title, $body, $localeCode, 'page', 0, $isActive],
+        ['slug', 'title', 'body', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_sort_order', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, $menuSection, $menuTitle, $menuLogoUrl !== '' ? $menuLogoUrl : null, $menuSortOrder, 'page', 0, $isActive],
         'static_pages'
     );
 
     if (!$inserted) {
+        if ($menuLogoUrl !== '') {
+            admin_delete_page_card_logo_file($menuLogoUrl);
+        }
         return ['ok' => false, 'message' => 'Unable to create page.'];
     }
 
@@ -17560,7 +17791,7 @@ function admin_create_page(Mysql_ks $db, array $input): array
     ];
 }
 
-function admin_save_page(Mysql_ks $db, int $pageId, array $input): array
+function admin_save_page(Mysql_ks $db, int $pageId, array $input, array $files = [], int $adminUserId = 0): array
 {
     $page = admin_page_find($db, $pageId);
     if (!is_array($page) || empty($page['id'])) {
@@ -17572,6 +17803,15 @@ function admin_save_page(Mysql_ks $db, int $pageId, array $input): array
     $body = trim((string)($input['body'] ?? ''));
     $localeCode = admin_page_normalize_locale((string)($input['locale_code'] ?? (string)($page['locale_code'] ?? 'pl')));
     $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
+    $menuSection = admin_page_normalize_section((string)($input['menu_section'] ?? (string)($page['menu_section'] ?? 'other')));
+    $menuTitle = trim((string)($input['menu_title'] ?? ''));
+    $menuSortOrder = max(0, (int)($input['menu_sort_order'] ?? ($page['menu_sort_order'] ?? 100)));
+    $existingMenuLogoUrl = trim((string)($page['menu_logo_url'] ?? ''));
+    $menuLogoUrl = $existingMenuLogoUrl;
+    $removeMenuLogo = isset($input['remove_menu_logo']) && (string)$input['remove_menu_logo'] === '1';
+    $menuLogoFile = is_array($files['menu_logo_file'] ?? null) ? $files['menu_logo_file'] : null;
+    $menuLogoUploadError = (int)($menuLogoFile['error'] ?? UPLOAD_ERR_NO_FILE);
+    $uploadedMenuLogoUrl = '';
 
     if ($title === '') {
         return ['ok' => false, 'message' => 'Page title is required.'];
@@ -17581,13 +17821,39 @@ function admin_save_page(Mysql_ks $db, int $pageId, array $input): array
         return ['ok' => false, 'message' => 'Page content is required.'];
     }
 
+    if ($menuTitle === '') {
+        $menuTitle = $title;
+    }
+
+    if ($removeMenuLogo) {
+        $menuLogoUrl = '';
+    }
+
+    if ($menuLogoUploadError !== UPLOAD_ERR_NO_FILE) {
+        $uploadedMenuLogoUrl = (string)admin_page_card_logo_public_path($menuLogoFile, $adminUserId);
+        if ($uploadedMenuLogoUrl === '') {
+            return ['ok' => false, 'message' => 'Page card logo must be a valid JPG, PNG, GIF, WEBP or SVG image.'];
+        }
+        $menuLogoUrl = $uploadedMenuLogoUrl;
+    }
+
     $slug = admin_page_locale_aware_slug($db, $title, $slugInput, $localeCode, $pageId);
     $updated = $db->update_using_id(
-        ['slug', 'title', 'body', 'locale_code', 'page_type', 'is_system', 'is_active'],
-        [$slug, $title, $body, $localeCode, 'page', (int)($page['is_system'] ?? 0), $isActive],
+        ['slug', 'title', 'body', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_sort_order', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, $menuSection, $menuTitle, $menuLogoUrl !== '' ? $menuLogoUrl : null, $menuSortOrder, 'page', (int)($page['is_system'] ?? 0), $isActive],
         'static_pages',
         $pageId
     );
+
+    if ($updated) {
+        if ($uploadedMenuLogoUrl !== '' && $existingMenuLogoUrl !== '' && $existingMenuLogoUrl !== $uploadedMenuLogoUrl) {
+            admin_delete_page_card_logo_file($existingMenuLogoUrl);
+        } elseif ($removeMenuLogo && $uploadedMenuLogoUrl === '' && $existingMenuLogoUrl !== '') {
+            admin_delete_page_card_logo_file($existingMenuLogoUrl);
+        }
+    } elseif ($uploadedMenuLogoUrl !== '') {
+        admin_delete_page_card_logo_file($uploadedMenuLogoUrl);
+    }
 
     return [
         'ok' => (bool)$updated,
@@ -17607,6 +17873,9 @@ function admin_delete_page(Mysql_ks $db, int $pageId): array
     }
 
     $deleted = $db->delete_using_id('static_pages', $pageId);
+    if ($deleted) {
+        admin_delete_page_card_logo_file((string)($page['menu_logo_url'] ?? ''));
+    }
 
     return [
         'ok' => (bool)$deleted,
@@ -19099,11 +19368,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                             <?php foreach ($orders as $row): ?>
                                 <?php
                                 $orderId = (int)($row['id'] ?? 0);
-                                $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
-                                $orderTitle = trim((string)($row['provider_name'] ?? ''));
-                                if ($durationLabel !== '') {
-                                    $orderTitle = trim($orderTitle . ' ' . $durationLabel);
-                                }
+                                $orderTitle = admin_order_product_title($row, $messages);
                                 $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                 $orderStatusVisual = admin_order_status_visual($row);
                                 $orderProgress = admin_order_progress_data($row);
@@ -19112,16 +19377,10 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $orderUrl = '/admin/?page=orders&order_id=' . $orderId;
                                 $orderCreatedAtRaw = trim((string)($row['created_at'] ?? ''));
                                 $orderCreatedAtLabel = admin_format_last_login_date($orderCreatedAtRaw);
-                                $orderCreatedAtIsToday = false;
+                                $orderCreatedAtIsToday = admin_is_current_day_datetime($orderCreatedAtRaw);
                                 $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
                                 $orderCustomerHandle = trim((string)($row['public_handle'] ?? ''));
                                 $orderCustomerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
-                                if ($orderCreatedAtRaw !== '') {
-                                    $orderCreatedAtTimestamp = strtotime($orderCreatedAtRaw);
-                                    if ($orderCreatedAtTimestamp !== false) {
-                                        $orderCreatedAtIsToday = date('Y-m-d', $orderCreatedAtTimestamp) === date('Y-m-d');
-                                    }
-                                }
                                 ?>
                                 <tr>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
