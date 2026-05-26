@@ -2524,6 +2524,17 @@ function admin_order_payment_method_options(?string $current = ''): array
 
 function admin_order_progress_data(array $order): array
 {
+    if (admin_normalize_product_type((string)($order['product_type'] ?? 'subscription')) === 'credits') {
+        return [
+            'has_expiry' => false,
+            'remaining_seconds' => 0,
+            'remaining_days' => 0,
+            'percent' => 0,
+            'color' => '#d1d5db',
+            'tone' => 'neutral',
+        ];
+    }
+
     $createdAt = !empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0;
     $startedAt = !empty($order['started_at']) ? strtotime((string)$order['started_at']) : 0;
     $expiresAt = !empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0;
@@ -2661,12 +2672,24 @@ function admin_format_datetime_local(?string $value): string
         return '';
     }
 
-    $timestamp = strtotime($value);
-    if ($timestamp === false) {
+    $timestamp = function_exists('app_timestamp_from_utc_datetime')
+        ? app_timestamp_from_utc_datetime($value)
+        : strtotime($value);
+    if (!is_int($timestamp) || $timestamp <= 0) {
         return '';
     }
 
-    return date('Y-m-d\TH:i', $timestamp);
+    try {
+        $timezone = function_exists('app_runtime_timezone_name')
+            ? new DateTimeZone(app_runtime_timezone_name())
+            : new DateTimeZone(date_default_timezone_get());
+    } catch (Throwable $exception) {
+        $timezone = new DateTimeZone(date_default_timezone_get());
+    }
+
+    return (new DateTimeImmutable('@' . $timestamp))
+        ->setTimezone($timezone)
+        ->format('Y-m-d\TH:i');
 }
 
 function admin_format_money_value($amount, string $currencyCode = ''): string
@@ -2710,7 +2733,13 @@ function admin_compact_datetime_label(?string $value): string
         $timezone = function_exists('app_runtime_timezone_name')
             ? new DateTimeZone(app_runtime_timezone_name())
             : new DateTimeZone(date_default_timezone_get());
-        $date = new DateTimeImmutable($value, $timezone);
+        $timestamp = function_exists('app_timestamp_from_utc_datetime')
+            ? app_timestamp_from_utc_datetime($value)
+            : strtotime($value);
+        if (!is_int($timestamp) || $timestamp <= 0) {
+            return $value;
+        }
+        $date = (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone);
     } catch (Throwable $exception) {
         return $value;
     }
@@ -2738,7 +2767,13 @@ function admin_is_current_day_datetime(?string $value): bool
         $timezone = function_exists('app_runtime_timezone_name')
             ? new DateTimeZone(app_runtime_timezone_name())
             : new DateTimeZone(date_default_timezone_get());
-        $date = new DateTimeImmutable($value, $timezone);
+        $timestamp = function_exists('app_timestamp_from_utc_datetime')
+            ? app_timestamp_from_utc_datetime($value)
+            : strtotime($value);
+        if (!is_int($timestamp) || $timestamp <= 0) {
+            return false;
+        }
+        $date = (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone);
         $today = new DateTimeImmutable('now', $timezone);
     } catch (Throwable $exception) {
         return false;
@@ -14796,7 +14831,13 @@ function admin_format_last_login_date(?string $timestamp): string
         $timezone = function_exists('app_runtime_timezone_name')
             ? new DateTimeZone(app_runtime_timezone_name())
             : new DateTimeZone(date_default_timezone_get());
-        $date = new DateTimeImmutable($timestamp, $timezone);
+        $parsedTimestamp = function_exists('app_timestamp_from_utc_datetime')
+            ? app_timestamp_from_utc_datetime($timestamp)
+            : strtotime($timestamp);
+        if (!is_int($parsedTimestamp) || $parsedTimestamp <= 0) {
+            return $timestamp;
+        }
+        $date = (new DateTimeImmutable('@' . $parsedTimestamp))->setTimezone($timezone);
         $today = new DateTimeImmutable('now', $timezone);
     } catch (Throwable $exception) {
         return $timestamp;
@@ -19383,6 +19424,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                 $orderStatusVisual = admin_order_status_visual($row);
                                 $orderProgress = admin_order_progress_data($row);
+                                $isCreditsOrder = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits';
                                 $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                 $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
                                 $orderUrl = '/admin/?page=orders&order_id=' . $orderId;
@@ -19424,7 +19466,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                                     <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
                                                 </div>
-                                            <?php elseif ((string)($row['status'] ?? '') === 'active'): ?>
+                                            <?php elseif ((string)($row['status'] ?? '') === 'active' && !$isCreditsOrder && !empty($orderProgress['has_expiry'])): ?>
                                                 <div class="admin-order-progress">
                                                     <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
                                                         <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
@@ -19433,7 +19475,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                                         <div class="admin-order-progress__meta">
                                                             <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
                                                             <?php if (!empty($row['expires_at'])): ?>
-                                                                <span><?php echo admin_e(date('d.m.Y', strtotime((string)$row['expires_at']))); ?></span>
+                                                                <span><?php echo admin_e(app_format_utc_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
                                                             <?php else: ?>
                                                                 <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
                                                             <?php endif; ?>
@@ -19462,7 +19504,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                         </div>
                                     </td>
                                     <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
-                                        <?php echo !empty($row['created_at']) ? admin_e(date('d.m.Y', strtotime((string)$row['created_at']))) : '—'; ?>
+                                        <?php echo !empty($row['created_at']) ? admin_e(app_format_utc_datetime_local((string)($row['created_at'] ?? ''), 'd.m.Y')) : '—'; ?>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                         <a href="<?php echo admin_e($orderUrl); ?>" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : (in_array((string)($orderStatusVisual['class'] ?? ''), ['admin-order-status-icon--pending', 'admin-order-status-icon--awaiting-activation'], true) ? 'btn-dark' : 'btn-success'); ?>" aria-label="Details" style="width: 50px; height: 50px;">

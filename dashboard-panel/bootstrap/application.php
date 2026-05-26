@@ -3685,6 +3685,17 @@ function app_order_delivery_payload(array $order): array
 
 function app_order_progress_data(array $order): array
 {
+    if (strtolower(trim((string)($order['product_type'] ?? 'subscription'))) === 'credits') {
+        return [
+            'has_expiry' => false,
+            'remaining_seconds' => 0,
+            'remaining_days' => 0,
+            'percent' => 0,
+            'color' => '#d1d5db',
+            'tone' => 'neutral',
+        ];
+    }
+
     $createdAt = !empty($order['date_add']) ? strtotime((string)$order['date_add']) : (!empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0);
     $startedAt = !empty($order['started_at']) ? strtotime((string)$order['started_at']) : (!empty($order['date_start']) ? strtotime((string)$order['date_start']) : 0);
     $expiresAt = !empty($order['date_end']) ? strtotime((string)$order['date_end']) : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
