@@ -55,13 +55,13 @@
 
 				$price = (float)($product['price'] ?? 0);
 				$durationHours = (int)($product['duration'] ?? 0);
-				$productType = strtolower(trim((string)($product['product_type'] ?? 'subscription')));
+				$productType = app_normalize_product_type($product['product_type'] ?? 'subscription');
 				$currencyId = isset($product['currency_id']) ? (int)$product['currency_id'] : 0;
 				if ($currencyId <= 0) {
 					$currencyId = 1;
 				}
 
-				$expiresAt = ($productType !== 'credits' && $durationHours > 0)
+				$expiresAt = (app_product_type_uses_expiry($productType) && $durationHours > 0)
 					? date("Y-m-d H:i:s", time() + (3600 * $durationHours))
 					: null;
 				$orderReference = 'WEB-' . date('YmdHis') . '-' . $customerId;

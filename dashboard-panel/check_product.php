@@ -39,7 +39,6 @@ if (!app_customer_sales_enabled($user, $settings)) {
 
 $trialsEnabled = (int)($settings['active_trials'] ?? 0) === 1;
 $productTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
-$catalogProductType = app_customer_order_catalog_mode($user, $settings);
 $productDescriptionSelect = schema_column_exists($db, 'products', 'description')
     ? 'products.description AS description,'
     : "'' AS description,";
@@ -98,26 +97,45 @@ if (!$products) {
     exit;
 }
 
+$catalogAvailableTypes = [];
+foreach ((array)$products as $productRow) {
+    $catalogAvailableTypes[] = app_normalize_product_type($productRow['product_type'] ?? 'subscription');
+}
+$catalogAvailableTypes = array_values(array_unique($catalogAvailableTypes));
+$catalogProductType = count($catalogAvailableTypes) > 1
+    ? 'mixed'
+    : ($catalogAvailableTypes[0] ?? app_customer_order_catalog_mode($user, $settings));
+
 echo '<div class="form-group" data-products-found="1">';
 echo '<div class="col-lg-8">';
 if ($catalogProductType === 'mixed') {
     $productPickerLabel = localization_translate($t, 'order_add_mixed_label', 'Select product');
+} elseif ($catalogProductType === 'product') {
+    $productPickerLabel = localization_translate($t, 'order_add_product_label', 'Select product');
 } else {
-    $productPickerLabel = localization_translate($t, $catalogProductType === 'credits' ? 'order_add_credits_label' : 'order_add_subscription_label', $catalogProductType === 'credits' ? 'Select credits package' : 'Select subscription');
+    $productPickerLabel = localization_translate(
+        $t,
+        $catalogProductType === 'credits'
+            ? 'order_add_credits_label'
+            : ($catalogProductType === 'product' ? 'order_add_product_label' : 'order_add_subscription_label'),
+        $catalogProductType === 'credits'
+            ? 'Select credits package'
+            : ($catalogProductType === 'product' ? 'Select product' : 'Select subscription')
+    );
 }
 echo '<label class="form-label" for="id_product">' . htmlspecialchars((string)$productPickerLabel, ENT_QUOTES, 'UTF-8') . '</label>';
 echo '<input type="hidden" name="id_product" id="id_product" value="" required>';
 echo '<div class="order-product-picker" id="order_product_picker">';
+$descriptionTemplates = '';
 
 foreach ($products as $product) {
     $productId = (int)$product['id'];
     $productName = htmlspecialchars((string)$product['name'], ENT_QUOTES, 'UTF-8');
-    $productDescription = trim(strip_tags((string)($product['description'] ?? '')));
-    $productDescriptionAttr = htmlspecialchars($productDescription, ENT_QUOTES, 'UTF-8');
+    $productDescriptionHtml = trim(chat_sanitize_rich_content_html((string)($product['description'] ?? '')));
     $price = number_format((float)$product['price'], 2, '.', '');
     $durationHours = (int)$product['duration'];
     $isTrial = !empty($product['trial']);
-    $productType = strtolower(trim((string)($product['product_type'] ?? 'subscription')));
+    $productType = app_normalize_product_type($product['product_type'] ?? 'subscription');
     $currencySymbol = htmlspecialchars((string)($product['currency_symbol'] ?? $reseller['currency_symbol'] ?? ''), ENT_QUOTES, 'UTF-8');
     $providerLogoRaw = trim((string)($product['provider_logo_url'] ?? ''));
     $providerLogoPath = $providerLogoRaw !== '' ? app_format_logo_path($providerLogoRaw) : '';
@@ -125,6 +143,8 @@ foreach ($products as $product) {
 
     if ($productType === 'credits') {
         $durationLabel = localization_translate($t, 'product_type_credits_short', 'Credits');
+    } elseif ($productType === 'product') {
+        $durationLabel = localization_translate($t, 'product_type_product_short', 'Product');
     } elseif ($isTrial) {
         $durationLabel = $durationHours . ' Hours Trial';
     } else {
@@ -136,7 +156,7 @@ foreach ($products as $product) {
         . ' data-product-id="' . $productId . '"'
         . ' data-product-title="' . $productName . '"'
         . ' data-product-price="' . htmlspecialchars($price . ' ' . $currencySymbol, ENT_QUOTES, 'UTF-8') . '"'
-        . ' data-description="' . $productDescriptionAttr . '"'
+        . ' data-description-template="#product_description_template_' . $productId . '"'
         . ' onclick="selectProductOption(this)">';
     echo '<span class="order-product-picker__summary">';
     if ($providerLogoPath !== '') {
@@ -151,12 +171,19 @@ foreach ($products as $product) {
     echo '<span class="order-product-picker__badge order-product-picker__badge--dark">' . $price . ' ' . $currencySymbol . '</span>';
     echo '</span>';
     echo '</button>';
+
+    $descriptionTemplates .= '<template id="product_description_template_' . $productId . '">'
+        . $productDescriptionHtml
+        . '</template>';
 }
 
 echo '</div>';
+if ($descriptionTemplates !== '') {
+    echo '<div class="order-product-picker__description-templates" hidden>' . $descriptionTemplates . '</div>';
+}
 echo '<div id="product_description_wrap" style="display:none; margin-top:12px;">';
 echo '<div class="order-product-picker__description-title" id="product_description_title"></div>';
-echo '<div class="alert alert-info" id="product_description" style="margin-bottom:0; white-space:pre-line;"></div>';
+echo '<div class="order-product-picker__description" id="product_description"></div>';
 echo '</div>';
 echo '</div>';
 echo '</div>';

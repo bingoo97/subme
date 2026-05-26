@@ -13,6 +13,8 @@
                         {$t.order_add_mixed|default:'Add new'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
                     {elseif $order_catalog_product_type|default:'subscription' eq 'credits'}
                         {$t.order_add_credits|default:'Buy credits'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
+                    {elseif $order_catalog_product_type|default:'subscription' eq 'product'}
+                        {$t.order_add_product|default:'Open shop'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
                     {else}
                         {$t.order_add_subscription|default:'Add subscription'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
                     {/if}
@@ -31,6 +33,8 @@
                         {$t.order_add_no_products_mixed_notice|default:'There are currently no available products for your account.'}
                     {elseif $order_catalog_product_type|default:'subscription' eq 'credits'}
                         {$t.order_add_no_products_credits_notice|default:'There are currently no available credits packages for your account.'}
+                    {elseif $order_catalog_product_type|default:'subscription' eq 'product'}
+                        {$t.order_add_no_products_product_notice|default:'There are currently no available products in the shop for your account.'}
                     {else}
                         {$t.order_add_no_products_subscription_notice|default:'There are currently no available subscription packages for your account.'}
                     {/if}
@@ -57,7 +61,7 @@
                 </thead>
                 <tbody>
                     {section name=i loop=$wygrane}
-                        {assign var="showInlineRenewPaymentButton" value=($wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].status == 1 && !$wygrane[i].payment_waiting_activation && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days <= 7)}
+                        {assign var="showInlineRenewPaymentButton" value=($wygrane[i].product_type|default:'subscription' eq 'subscription' && $wygrane[i].status == 1 && !$wygrane[i].payment_waiting_activation && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days <= 7)}
                         <tr>
                             <td data-label="{$t.history_badge_order|default:'Order'}">
                                 <span class="badge badge-secondary">#{$wygrane[i].id}</span>
@@ -93,7 +97,7 @@
                                     {if $wygrane[i].link_url neq ''}
                                         <div class="orders-user-summary__note"><i class="fa fa-check text-success" aria-hidden="true"></i> {$t.order_delivery_enabled|default:'m3u enabled'}</div>
                                     {/if}
-                                    {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].progress.has_expiry}
+                                    {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' eq 'subscription' && $wygrane[i].progress.has_expiry}
                                         <div class="orders-user-progress">
                                             <div class="orders-user-progress__days orders-user-progress__days--{$wygrane[i].progress.tone|default:'neutral'}">
                                                 {$wygrane[i].progress.remaining_days|default:0}
@@ -181,7 +185,7 @@
                             <span class="user-order-modal__summary-chip btn-outline-dark">#{$wygrane[i].id}</span>
                             <span class="user-order-modal__summary-chip btn-outline-dark">{$wygrane[i].price_label|default:$wygrane[i].price}</span>
                         </div>
-                        {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' neq 'credits' && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days < 7}
+                        {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' eq 'subscription' && $wygrane[i].progress.has_expiry && $wygrane[i].progress.remaining_days > 0 && $wygrane[i].progress.remaining_days < 7}
                             <div class="alert alert-warning user-order-modal__header-alert">
                                 <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
                                 <span>{$t.orders_expiring_soon_warning|default:'This subscription will expire very soon. Renew it now to avoid interruption.'}</span>
@@ -198,12 +202,12 @@
                             <li role="presentation" class="nav-item">
                                 <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">Details</a>
                             </li>
-                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' neq 'credits'))}
+                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' eq 'subscription'))}
                                 <li role="presentation" class="nav-item">
                                     <a class="nav-link" href="#orderActions{$wygrane[i].id}" aria-controls="orderActions{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">
                                         {if $can_pending_payment_actions}
                                             {$t.orders_action_payment|default:'Payment'}
-                                        {elseif $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' neq 'credits'}
+                                        {elseif $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' eq 'subscription'}
                                             {$t.orders_action_renew|default:'Renew'}
                                             <span class="user-order-modal__tab-badge user-order-modal__tab-badge--danger">!</span>
                                         {else}
@@ -272,10 +276,12 @@
                                         <label class="form-label">{$t.history_column_date|default:'Date'}</label>
                                         <input type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].created_display}" readonly>
                                     </div>
+                                    {if $wygrane[i].product_type|default:'subscription' eq 'subscription'}
                                     <div>
                                         <label class="form-label">{$t.order_expires_at|default:'Expires at'}</label>
                                         <input type="text" class="form-control user-order-modal__readonly" value="{if $wygrane[i].expiry}{$wygrane[i].expiry}{else}{$t.order_no_expiry|default:'No expiry'}{/if}" readonly>
                                     </div>
+                                    {/if}
                                     <div>
                                         <label class="form-label">{$t.orders_note|default:'Note'}</label>
                                         <textarea class="form-control user-order-modal__readonly" rows="3" readonly>{if $wygrane[i].note neq ''}{$wygrane[i].note}{else}{$t.orders_note_empty|default:'No note added.'}{/if}</textarea>
@@ -295,7 +301,7 @@
                                     {/if}
                                 </div>
                             </div>
-                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' neq 'credits'))}
+                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' eq 'subscription'))}
                                 <div role="tabpanel" class="tab-pane fade" id="orderActions{$wygrane[i].id}">
                                     <div class="user-order-modal__actions-stack">
                                         {if $can_pending_payment_actions}
@@ -313,7 +319,7 @@
                                             </div>
                                             {/if}
                                         {/if}
-                                        {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' neq 'credits'}
+                                        {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' eq 'subscription'}
                                             <div class="user-order-modal__action-copy">
                                                 <strong>{$t.orders_action_extend|default:'Extend'}</strong>
                                                 <p>{$t.orders_action_extend_intro|default:'Your current subscription is still active. Extend it now to keep the same service without interruption.'}</p>
@@ -322,7 +328,7 @@
                                                 <i class="fa fa-history" aria-hidden="true"></i> {$t.orders_action_extend|default:'Extend'}
                                             </a>
                                         {/if}
-                                        {if $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' neq 'credits'}
+                                        {if $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' eq 'subscription'}
                                             <div class="user-order-modal__action-copy user-order-modal__action-copy--danger">
                                                 <strong>{$t.orders_action_renew|default:'Renew'}</strong>
                                                 <p>{$t.orders_action_renew_intro|default:'This subscription has already expired. Create a new payment request to renew access and restore service.'}</p>

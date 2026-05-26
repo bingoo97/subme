@@ -226,7 +226,13 @@ function admin_credits_sales_enabled(array $settings): bool
 
 function admin_normalize_product_type($value): string
 {
-    return strtolower(trim((string)$value)) === 'credits' ? 'credits' : 'subscription';
+    $value = strtolower(trim((string)$value));
+    return in_array($value, ['subscription', 'credits', 'product'], true) ? $value : 'subscription';
+}
+
+function admin_product_type_uses_expiry($value): bool
+{
+    return admin_normalize_product_type($value) === 'subscription';
 }
 
 function admin_customer_type_options(string $current = ''): array
@@ -2524,7 +2530,7 @@ function admin_order_payment_method_options(?string $current = ''): array
 
 function admin_order_progress_data(array $order): array
 {
-    if (admin_normalize_product_type((string)($order['product_type'] ?? 'subscription')) === 'credits') {
+    if (!admin_product_type_uses_expiry($order['product_type'] ?? 'subscription')) {
         return [
             'has_expiry' => false,
             'remaining_seconds' => 0,
@@ -8792,6 +8798,7 @@ function admin_product_active_rows(Mysql_ks $db): array
             products.id,
             products.provider_id,
             products.name,
+            products.product_type,
             products.duration_hours,
             products.price_amount,
             products.is_active,
@@ -8895,7 +8902,7 @@ function admin_product_find(Mysql_ks $db, int $productId): ?array
 
 function admin_product_type_options(string $current = ''): array
 {
-    $options = ['subscription', 'credits'];
+    $options = ['subscription', 'product', 'credits'];
     $current = admin_normalize_product_type($current);
     if ($current !== '' && !in_array($current, $options, true)) {
         $options[] = $current;
@@ -8907,11 +8914,12 @@ function admin_product_type_options(string $current = ''): array
 function admin_product_type_form_options(array $settings, string $current = ''): array
 {
     $current = admin_normalize_product_type($current);
-    if ($current === 'credits') {
-        return ['credits'];
+    $options = ['subscription', 'product'];
+    if (admin_credits_sales_enabled($settings) || $current === 'credits') {
+        $options[] = 'credits';
     }
 
-    return admin_credits_sales_enabled($settings) ? ['subscription', 'credits'] : ['subscription'];
+    return $options;
 }
 
 function admin_product_provisioning_mode_options(string $current = ''): array
@@ -9005,7 +9013,7 @@ function admin_create_product(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'Enable credits sales in Settings before creating credits products.'];
     }
 
-    if ($productType !== 'credits' && ($durationHoursRaw === '' || !ctype_digit($durationHoursRaw))) {
+    if (admin_product_type_uses_expiry($productType) && ($durationHoursRaw === '' || !ctype_digit($durationHoursRaw))) {
         return ['ok' => false, 'message' => 'Choose a valid subscription period.'];
     }
 
@@ -9022,11 +9030,11 @@ function admin_create_product(Mysql_ks $db, array $input): array
     }
 
     $slug = admin_product_unique_slug($db, $name, $slugInput);
-    $durationHours = $productType === 'credits' ? 0 : (int)$durationHoursRaw;
-    if ($productType !== 'credits' && admin_product_subscription_requires_trial($durationHours) && $isTrial !== 1) {
+    $durationHours = admin_product_type_uses_expiry($productType) ? (int)$durationHoursRaw : 0;
+    if (admin_product_type_uses_expiry($productType) && admin_product_subscription_requires_trial($durationHours) && $isTrial !== 1) {
         return ['ok' => false, 'message' => 'Packages with 6h, 12h or 24h duration must be marked as trial.'];
     }
-    if ($productType === 'credits') {
+    if (!admin_product_type_uses_expiry($productType)) {
         $isTrial = 0;
     }
     $priceAmount = number_format((float)$priceAmountRaw, 2, '.', '');
@@ -9084,7 +9092,7 @@ function admin_save_product(Mysql_ks $db, int $productId, array $input): array
         return ['ok' => false, 'message' => 'Enable credits sales in Settings before switching products to credits.'];
     }
 
-    if ($productType !== 'credits' && ($durationHoursRaw === '' || !ctype_digit($durationHoursRaw))) {
+    if (admin_product_type_uses_expiry($productType) && ($durationHoursRaw === '' || !ctype_digit($durationHoursRaw))) {
         return ['ok' => false, 'message' => 'Choose a valid subscription period.'];
     }
 
@@ -9101,11 +9109,11 @@ function admin_save_product(Mysql_ks $db, int $productId, array $input): array
     }
 
     $slug = admin_product_unique_slug($db, $name, $slugInput, $productId);
-    $durationHours = $productType === 'credits' ? 0 : (int)$durationHoursRaw;
-    if ($productType !== 'credits' && admin_product_subscription_requires_trial($durationHours) && $isTrial !== 1) {
+    $durationHours = admin_product_type_uses_expiry($productType) ? (int)$durationHoursRaw : 0;
+    if (admin_product_type_uses_expiry($productType) && admin_product_subscription_requires_trial($durationHours) && $isTrial !== 1) {
         return ['ok' => false, 'message' => 'Packages with 6h, 12h or 24h duration must be marked as trial.'];
     }
-    if ($productType === 'credits') {
+    if (!admin_product_type_uses_expiry($productType)) {
         $isTrial = 0;
     }
     $priceAmount = number_format((float)$priceAmountRaw, 2, '.', '');
@@ -10009,7 +10017,9 @@ function admin_format_product_option_label(array $productRow): string
     $provider = trim((string)($productRow['provider_name'] ?? ''));
     $name = trim((string)($productRow['name'] ?? ''));
     $productType = admin_normalize_product_type($productRow['product_type'] ?? 'subscription');
-    $duration = $productType === 'credits' ? 'Credits' : admin_duration_label_from_hours((int)($productRow['duration_hours'] ?? 0));
+    $duration = $productType === 'subscription'
+        ? admin_duration_label_from_hours((int)($productRow['duration_hours'] ?? 0))
+        : '';
     $amount = trim((string)($productRow['price_amount'] ?? '0.00'));
     $currency = trim((string)($productRow['currency_code'] ?? ''));
 
@@ -10039,7 +10049,7 @@ function admin_order_product_title(array $orderRow, ?array $messages = null): st
     $productType = admin_normalize_product_type((string)($orderRow['product_type'] ?? 'subscription'));
     $durationLabel = admin_duration_label_from_hours((int)($orderRow['duration_hours'] ?? 0));
 
-    if ($productType === 'credits') {
+    if ($productType !== 'subscription') {
         if ($productName !== '') {
             return $productName;
         }
@@ -10048,8 +10058,8 @@ function admin_order_product_title(array $orderRow, ?array $messages = null): st
         }
 
         return $messages !== null
-            ? admin_t($messages, 'product_type_credits', 'Credits')
-            : 'Credits';
+            ? admin_t($messages, 'product_type_' . $productType, ucfirst($productType))
+            : ucfirst($productType);
     }
 
     if ($provider !== '' && $productName !== '') {
@@ -10084,6 +10094,7 @@ function admin_product_basic_row(Mysql_ks $db, int $productId): ?array
             products.id,
             products.provider_id,
             products.name,
+            products.product_type,
             products.duration_hours,
             products.price_amount,
             products.currency_id,
@@ -10136,7 +10147,9 @@ function admin_create_order(Mysql_ks $db, array $input): array
     }
 
     $durationHours = (int)($product['duration_hours'] ?? 0);
-    $expiresAt = $durationHours > 0 ? date('Y-m-d H:i:s', time() + ($durationHours * 3600)) : null;
+    $expiresAt = admin_product_type_uses_expiry($product['product_type'] ?? 'subscription') && $durationHours > 0
+        ? date('Y-m-d H:i:s', time() + ($durationHours * 3600))
+        : null;
     $orderReference = 'ADM-' . date('YmdHis') . '-' . $customerId;
     $insertFields = [
         'customer_id',
@@ -10257,14 +10270,14 @@ function admin_save_order_info(
     $startedAt = admin_normalize_datetime_input($input['started_at'] ?? null);
     $expiresAt = admin_normalize_datetime_input($input['expires_at'] ?? null);
     $paidAt = admin_normalize_datetime_input($input['paid_at'] ?? null);
-    $isCreditsOrder = admin_normalize_product_type((string)($order['product_type'] ?? 'subscription')) === 'credits';
+    $usesExpiry = admin_product_type_uses_expiry($order['product_type'] ?? 'subscription');
 
-    if ($isCreditsOrder) {
+    if (!$usesExpiry) {
         $startedAt = null;
         $expiresAt = null;
     }
 
-    if (!$isCreditsOrder && $status === 'active' && $startedAt === null) {
+    if ($usesExpiry && $status === 'active' && $startedAt === null) {
         $startedAt = date('Y-m-d H:i:s');
     }
 
@@ -19430,7 +19443,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                 $orderStatusVisual = admin_order_status_visual($row);
                                 $orderProgress = admin_order_progress_data($row);
-                                $isCreditsOrder = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits';
+                                $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
                                 $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                 $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
                                 $orderUrl = '/admin/?page=orders&order_id=' . $orderId;
@@ -19472,7 +19485,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                                     <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
                                                 </div>
-                                            <?php elseif ((string)($row['status'] ?? '') === 'active' && !$isCreditsOrder && !empty($orderProgress['has_expiry'])): ?>
+                                            <?php elseif ((string)($row['status'] ?? '') === 'active' && $usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
                                                 <div class="admin-order-progress">
                                                     <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
                                                         <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>

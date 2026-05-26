@@ -11,9 +11,15 @@
 										 <img src="/img/offer.png" alt="Offer" width="45" height="45">
 									 </div>
 									 <div class="col">
-										 <p class="text-muted mb-0" style="max-width: 400px;">
+                                         <p class="text-muted mb-0" style="max-width: 400px;">
                                              {if $order_catalog_product_type|default:'subscription' eq 'mixed'}
-                                                 {$t.order_add_provider_description_mixed|default:'Select the provider and then choose any available subscription or credits product for this account.'}
+                                                 {if $order_catalog_has_store_products|default:false}
+                                                     {$t.order_add_provider_description_store_mixed|default:'Select the shop and then choose any available product or subscription for this account.'}
+                                                 {else}
+                                                     {$t.order_add_provider_description_mixed|default:'Select the provider and then choose any available subscription or credits product for this account.'}
+                                                 {/if}
+                                             {elseif $order_catalog_product_type|default:'subscription' eq 'product'}
+                                                 {$t.order_add_provider_description_store|default:'Select the shop and then choose the product you want to buy.'}
                                              {elseif $order_catalog_product_type|default:'subscription' eq 'credits'}
                                                  {$t.order_add_provider_description_credits|default:'Select the provider for the credits order. Each provider can have different credit packages and pricing.'}
                                              {else}
@@ -25,7 +31,7 @@
 
 					 <div class="form-group">
 							 <div class="col-lg-6">
-								 <label class="form-label mt-3" for="id_provider">{$t.order_add_provider_label|default:'Select provider'}:</label>
+								 <label class="form-label mt-3" for="id_provider">{if $order_catalog_has_store_products|default:false}{$t.order_add_provider_label_store|default:'Select shop'}{else}{$t.order_add_provider_label|default:'Select provider'}{/if}:</label>
 
 								 <select class="form-control mb-2 strong" id="id_provider" onchange="check_product(this);">
 												<option value="0" id="select_input">- Select -</option>

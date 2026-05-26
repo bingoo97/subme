@@ -10,16 +10,20 @@ function productPickerState() {
 
 function updateProductDescription() {
 	var state = productPickerState();
-	var description = state.activeButton.data('description');
+	var descriptionTemplateSelector = state.activeButton.data('description-template');
 	var title = state.activeButton.data('product-title');
 	var price = state.activeButton.data('product-price');
 	var hasProduct = state.hasProduct;
 	var addForm = $('#add_product').closest('form');
 	var choiceLabel = $.trim(addForm.data('choice-label') || 'Your choice:');
 	var priceLabel = $.trim(addForm.data('price-label') || 'Purchase price:');
+	var descriptionHtml = '';
 
-	if (typeof description !== 'string') {
-		description = '';
+	if (typeof descriptionTemplateSelector === 'string' && $.trim(descriptionTemplateSelector) !== '') {
+		var descriptionTemplate = $(descriptionTemplateSelector).first();
+		if (descriptionTemplate.length) {
+			descriptionHtml = $.trim(descriptionTemplate.html() || '');
+		}
 	}
 	if (typeof title !== 'string') {
 		title = '';
@@ -28,26 +32,25 @@ function updateProductDescription() {
 		price = '';
 	}
 
-	description = $.trim(description);
 	title = $.trim(title);
 	price = $.trim(price);
 	$('#add_product').prop('disabled', !hasProduct);
 
 	if (!hasProduct) {
 		$('#product_description_title').text('');
-		$('#product_description').text('');
+		$('#product_description').html('');
 		$('#product_description_wrap').hide();
 		$('#selected_product_price_note').text('').hide();
 		return;
 	}
 
 	$('#product_description_title').text(choiceLabel + ' ' + title);
-	if (description !== '') {
-		$('#product_description').text(description);
+	if (descriptionHtml !== '') {
+		$('#product_description').html(descriptionHtml);
 		$('#product_description').show();
 		$('#product_description_wrap').show();
 	} else {
-		$('#product_description').text('').hide();
+		$('#product_description').html('').hide();
 		$('#product_description_wrap').show();
 	}
 

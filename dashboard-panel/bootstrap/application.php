@@ -3685,7 +3685,7 @@ function app_order_delivery_payload(array $order): array
 
 function app_order_progress_data(array $order): array
 {
-    if (strtolower(trim((string)($order['product_type'] ?? 'subscription'))) === 'credits') {
+    if (!app_product_type_uses_expiry($order['product_type'] ?? 'subscription')) {
         return [
             'has_expiry' => false,
             'remaining_seconds' => 0,
@@ -5260,6 +5260,17 @@ function app_customer_product_type(array $customer, array $settings = []): strin
     return app_credits_sales_enabled($settings) ? 'credits' : 'subscription';
 }
 
+function app_normalize_product_type($value): string
+{
+    $value = strtolower(trim((string)$value));
+    return in_array($value, ['subscription', 'credits', 'product'], true) ? $value : 'subscription';
+}
+
+function app_product_type_uses_expiry($value): bool
+{
+    return app_normalize_product_type($value) === 'subscription';
+}
+
 function app_credits_sales_enabled(array $settings): bool
 {
     return !empty($settings['credits_sales_enabled']);
@@ -5272,11 +5283,14 @@ function app_customer_sales_enabled(array $customer, array $settings): bool
         return false;
     }
 
-    if (app_customer_product_type($customer, $settings) === 'credits') {
-        return app_credits_sales_enabled($settings);
+    $catalogTypes = app_customer_order_catalog_product_types($customer, $settings);
+    if (in_array('credits', $catalogTypes, true) && !app_credits_sales_enabled($settings)) {
+        $catalogTypes = array_values(array_filter($catalogTypes, static function (string $type): bool {
+            return $type !== 'credits';
+        }));
     }
 
-    return true;
+    return $catalogTypes !== [];
 }
 
 function app_customer_news_visibilities(array $customer): array
@@ -5306,10 +5320,15 @@ function app_product_type_sql(Mysql_ks $db, array $customer, array $settings = [
 function app_customer_order_catalog_product_types(array $customer, array $settings = []): array
 {
     if (app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller') {
-        return ['subscription', 'credits'];
+        $types = ['subscription', 'product'];
+        if (app_credits_sales_enabled($settings)) {
+            $types[] = 'credits';
+        }
+
+        return $types;
     }
 
-    return ['subscription'];
+    return ['subscription', 'product'];
 }
 
 function app_customer_order_catalog_product_type_sql(Mysql_ks $db, array $customer, array $settings = []): string
@@ -5319,11 +5338,12 @@ function app_customer_order_catalog_product_type_sql(Mysql_ks $db, array $custom
 
 function app_customer_order_catalog_mode(array $customer, array $settings = []): string
 {
-    if (app_normalize_customer_type($customer['customer_type'] ?? '') === 'reseller') {
+    $types = array_values(array_unique(array_map('app_normalize_product_type', app_customer_order_catalog_product_types($customer, $settings))));
+    if (count($types) > 1) {
         return 'mixed';
     }
 
-    return app_customer_product_type($customer, $settings);
+    return $types[0] ?? 'subscription';
 }
 
 function app_fetch_settings(Mysql_ks $db): array
@@ -8475,7 +8495,7 @@ function app_expire_overdue_orders(Mysql_ks $db, ?string $now = null): array
          FROM orders
          LEFT JOIN products ON products.id = orders.product_id
          WHERE status = 'active'
-           AND COALESCE(products.product_type, 'subscription') <> 'credits'
+           AND COALESCE(products.product_type, 'subscription') = 'subscription'
            AND expires_at IS NOT NULL
            AND expires_at <= '{$safeNowSql}'
          ORDER BY id ASC"

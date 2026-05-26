@@ -126,15 +126,16 @@ if ($wygrane) {
         }
 
         $wygrane[$i]['przedluzenia'] = $wygrane[$i]['extend'];
+        $usesExpiry = app_product_type_uses_expiry($wygrane[$i]['product_type'] ?? 'subscription');
 
         $wygrane[$i]['date_end_s'] = strtotime((string)$wygrane[$i]['date_end']);
-        $wygrane[$i]['date_e'] = $wygrane[$i]['date_end_s'] ? date('d.m.Y', $wygrane[$i]['date_end_s']) : '';
+        $wygrane[$i]['date_e'] = ($usesExpiry && $wygrane[$i]['date_end_s']) ? date('d.m.Y', $wygrane[$i]['date_end_s']) : '';
 
         $wygrane[$i]['date_add_s'] = strtotime((string)$wygrane[$i]['date_add']);
         $wygrane[$i]['date_a'] = $wygrane[$i]['date_add_s'] ? date('d.m.Y', $wygrane[$i]['date_add_s']) : '';
 
-        $wygrane[$i]['days'] = ceil(abs($time_s - (int)$wygrane[$i]['date_end_s']) / 86400);
-        $wygrane[$i]['expiry'] = $wygrane[$i]['date_end_s'] ? date('d.m.Y', $wygrane[$i]['date_end_s']) : '';
+        $wygrane[$i]['days'] = ($usesExpiry && $wygrane[$i]['date_end_s']) ? ceil(abs($time_s - (int)$wygrane[$i]['date_end_s']) / 86400) : 0;
+        $wygrane[$i]['expiry'] = ($usesExpiry && $wygrane[$i]['date_end_s']) ? date('d.m.Y', $wygrane[$i]['date_end_s']) : '';
         $wygrane[$i]['created_display'] = $wygrane[$i]['date_add_s'] ? date('d.m.Y', $wygrane[$i]['date_add_s']) : '';
         $wygrane[$i]['price_label'] = app_format_money_value(
             (float)($wygrane[$i]['price'] ?? 0),
@@ -164,7 +165,7 @@ if ($wygrane) {
             && empty($wygrane[$i]['has_generated_payment_request'])
         ) ? 1 : 0;
 
-        if ($wygrane[$i]['date_add_s'] < $wygrane[$i]['date_end_s']) {
+        if ($usesExpiry && $wygrane[$i]['date_add_s'] < $wygrane[$i]['date_end_s']) {
             $startDate = $wygrane[$i]['date_add_s'];
             $endDate = $wygrane[$i]['date_end_s'];
             $currentDate = $time_s;

@@ -1759,8 +1759,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            function normalizeProductType(value) {
+                value = String(value || 'subscription').toLowerCase();
+                if (value === 'credits' || value === 'product') {
+                    return value;
+                }
+                return 'subscription';
+            }
+
             var syncTrialConstraint = function () {
-                var productType = String(typeField.value || 'subscription').toLowerCase() === 'credits' ? 'credits' : 'subscription';
+                var productType = normalizeProductType(typeField.value || 'subscription');
                 var durationHours = parseInt(durationField && durationField.value ? durationField.value : '0', 10) || 0;
                 var trialRequired = productType === 'subscription' && durationHours > 0 && durationHours <= 24;
 
@@ -1777,11 +1785,15 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             var sync = function () {
-                var productType = String(typeField.value || 'subscription').toLowerCase() === 'credits' ? 'credits' : 'subscription';
+                var productType = normalizeProductType(typeField.value || 'subscription');
 
                 qa('[data-product-type-section]', scope).forEach(function (section) {
-                    var sectionType = String(section.getAttribute('data-product-type-section') || '').toLowerCase();
-                    var visible = sectionType === productType;
+                    var sectionTypes = String(section.getAttribute('data-product-type-section') || '')
+                        .toLowerCase()
+                        .split(',')
+                        .map(function (item) { return item.trim(); })
+                        .filter(Boolean);
+                    var visible = sectionTypes.indexOf(productType) !== -1;
 
                     setHidden(section, !visible);
 

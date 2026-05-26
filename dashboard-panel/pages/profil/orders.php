@@ -14,8 +14,11 @@ switch ($site) {
 			$tenantId = tenant_current_id($user);
 			$customerProductType = app_customer_product_type($user, $settings);
 			$orderCatalogMode = app_customer_order_catalog_mode($user, $settings);
+			$orderCatalogTypes = app_customer_order_catalog_product_types($user, $settings);
+			$orderCatalogDisplayMode = $orderCatalogMode;
 			$orderSalesAvailable = app_customer_sales_enabled($user, $settings);
 			$orderCatalogHasProducts = false;
+			$orderCatalogHasStoreProducts = false;
 			$pendingActivationOrder = app_uses_v2_schema($db)
 				? app_find_customer_paid_pending_activation_order($db, (int)$user['id'])
 				: null;
@@ -35,9 +38,52 @@ switch ($site) {
 					   " . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0")
 				);
 				$orderCatalogHasProducts = (int)($productCountRow['total'] ?? 0) > 0;
+				$productTypeCountRows = $db->select_full_user(
+					"SELECT
+						COALESCE(products.product_type, 'subscription') AS product_type,
+						COUNT(*) AS total
+					 FROM products
+					 INNER JOIN product_providers
+					    ON product_providers.id = products.provider_id
+					 WHERE products.is_active = 1
+					   AND product_providers.is_active = 1
+					   AND products.product_type IN ({$productTypeSql})
+					   " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
+					   " . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0") . "
+					 GROUP BY COALESCE(products.product_type, 'subscription')
+					 ORDER BY product_type ASC"
+				);
+				$catalogAvailableTypes = [];
+				foreach ((array)$productTypeCountRows as $productTypeCountRow) {
+					$totalForType = (int)($productTypeCountRow['total'] ?? 0);
+					if ($totalForType <= 0) {
+						continue;
+					}
+					$catalogAvailableTypes[] = app_normalize_product_type((string)($productTypeCountRow['product_type'] ?? 'subscription'));
+				}
+				$catalogAvailableTypes = array_values(array_unique($catalogAvailableTypes));
+				if (count($catalogAvailableTypes) > 1) {
+					$orderCatalogDisplayMode = 'mixed';
+				} elseif (!empty($catalogAvailableTypes[0])) {
+					$orderCatalogDisplayMode = $catalogAvailableTypes[0];
+				}
+				$productStoreCountRow = $db->select_user(
+					"SELECT COUNT(*) AS total
+					 FROM products
+					 INNER JOIN product_providers
+					    ON product_providers.id = products.provider_id
+					 WHERE products.is_active = 1
+					   AND product_providers.is_active = 1
+					   AND products.product_type = 'product'
+					   " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
+					   " . ((int)($settings["active_trials"] ?? 0) === 1 ? "" : "AND products.is_trial = 0")
+				);
+				$orderCatalogHasStoreProducts = (int)($productStoreCountRow['total'] ?? 0) > 0;
 			}
 
-			$smarty->assign('order_catalog_product_type', $orderCatalogMode);
+			$smarty->assign('order_catalog_product_type', $orderCatalogDisplayMode);
+			$smarty->assign('order_catalog_types', $orderCatalogTypes);
+			$smarty->assign('order_catalog_has_store_products', $orderCatalogHasStoreProducts ? 1 : 0);
 			$smarty->assign('order_sales_available', $orderSalesAvailable ? 1 : 0);
 			$smarty->assign('order_catalog_has_products', $orderCatalogHasProducts ? 1 : 0);
 			$smarty->assign('order_add_blocked_by_pending_activation', $orderAddBlockedByPendingActivation);
@@ -94,8 +140,8 @@ switch ($site) {
 				} elseif (!$sourceOrder || empty($sourceOrder["product_id"])) {
 					$smarty->assign("alert_error", "Order not found.");
 					$smarty->display("alert.tpl");
-				} elseif (strtolower(trim((string)($sourceOrder["product_type"] ?? 'subscription'))) === 'credits') {
-					$smarty->assign("alert_error", localization_translate($t, 'orders_credits_extend_unavailable', 'Credits orders cannot be renewed or extended.'));
+				} elseif (!app_product_type_uses_expiry($sourceOrder["product_type"] ?? 'subscription')) {
+					$smarty->assign("alert_error", localization_translate($t, 'orders_credits_extend_unavailable', 'This product cannot be renewed or extended.'));
 					$smarty->display("alert.tpl");
 				} elseif (!empty($sourceOrder["is_trial"]) && (int)($settings["active_trials"] ?? 0) !== 1) {
 					$smarty->assign("alert_error", localization_translate($t, 'trials_disabled_notice', 'Trial subscriptions are currently disabled.'));

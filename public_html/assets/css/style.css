@@ -6573,6 +6573,87 @@ img.scan{
 	color:#111827;
 }
 
+.order-product-picker__description{
+	padding:1rem 1.05rem;
+	border:1px solid #e6ebf3;
+	border-radius:18px;
+	background:#fff;
+	box-shadow:0 12px 28px rgba(15,23,42,.04);
+	color:#111827;
+	line-height:1.65;
+	overflow:hidden;
+}
+
+.order-product-picker__description > :first-child{
+	margin-top:0;
+}
+
+.order-product-picker__description > :last-child{
+	margin-bottom:0;
+}
+
+.order-product-picker__description h1,
+.order-product-picker__description h2,
+.order-product-picker__description h3,
+.order-product-picker__description h4,
+.order-product-picker__description h5,
+.order-product-picker__description h6{
+	margin:0 0 .55rem;
+	color:#0f172a;
+	font-weight:900;
+	line-height:1.2;
+}
+
+.order-product-picker__description p,
+.order-product-picker__description ul,
+.order-product-picker__description ol,
+.order-product-picker__description blockquote{
+	margin:0 0 .85rem;
+}
+
+.order-product-picker__description strong,
+.order-product-picker__description b{
+	font-weight:800;
+}
+
+.order-product-picker__description em,
+.order-product-picker__description i{
+	font-style:italic;
+}
+
+.order-product-picker__description a{
+	color:#111827;
+	font-weight:700;
+	text-decoration:underline;
+}
+
+.order-product-picker__description .btn{
+	text-decoration:none;
+}
+
+.order-product-picker__description img,
+.order-product-picker__description video,
+.order-product-picker__description iframe,
+.order-product-picker__description svg,
+.order-product-picker__description canvas{
+	display:block;
+	max-width:100% !important;
+	height:auto !important;
+	border-radius:14px;
+}
+
+.order-product-picker__description table{
+	display:block;
+	max-width:100%;
+	overflow-x:auto;
+}
+
+.order-product-picker__description code,
+.order-product-picker__description pre{
+	max-width:100%;
+	overflow:auto;
+}
+
 .apps-page .payment-wizard__header{
 	margin-bottom:1.6rem;
 }

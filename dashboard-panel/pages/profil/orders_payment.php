@@ -48,12 +48,12 @@ if (!function_exists('orders_payment_crypto_logo_by_code')) {
 if (!function_exists('orders_payment_product_label')) {
     function orders_payment_product_label(array $product, string $currencySymbol): string
     {
-        $productType = strtolower(trim((string)($product['product_type'] ?? 'subscription')));
+        $productType = app_normalize_product_type($product['product_type'] ?? 'subscription');
         $durationHours = isset($product['duration']) ? (int)$product['duration'] : 0;
         $price = isset($product['price']) ? number_format((float)$product['price'], 2, '.', '') : '0.00';
         $isTrial = !empty($product['trial']);
 
-        if ($productType === 'credits') {
+        if (!app_product_type_uses_expiry($productType)) {
             return trim((string)$product['name']) . ' • ' . $price . ' ' . trim($currencySymbol);
         }
 
@@ -934,7 +934,9 @@ if (app_uses_v2_schema($db)) {
                     orders_payment_cancel_open_bank_requests($db, (int)$user['id'], (int)$selected['id']);
 
                     if (!$isSameOrderRenewalFlow) {
-                        $newExpiry = date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])));
+                        $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
+                            ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                            : null;
                         $db->update_using_id(
                             ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method'],
                             [
@@ -1108,7 +1110,9 @@ if (app_uses_v2_schema($db)) {
                 } else {
 
                 if (!$isSameOrderRenewalFlow) {
-                    $newExpiry = date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])));
+                    $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
+                        ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                        : null;
                     $db->update_using_id(
                         ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method'],
                         [
@@ -1282,7 +1286,9 @@ if (app_uses_v2_schema($db)) {
                                 }
                             }
                         } else {
-                            $newExpiry = date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])));
+                            $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
+                                ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                                : null;
                             $updated = $db->update_using_id(
                                 ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
                                 [

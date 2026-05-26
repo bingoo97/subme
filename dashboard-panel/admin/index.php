@@ -6163,7 +6163,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $createProviderId = (int)($orderCreateState['provider_id'] ?? 0);
                                         $createProductOptions = $createProviderId > 0 ? ($orderProductsByProvider[$createProviderId] ?? []) : [];
                                         $createDurationPlaceholder = $createProviderId > 0
-                                            ? admin_t($messages, 'order_product_placeholder', 'Choose subscription time')
+                                            ? admin_t($messages, 'order_product_placeholder', 'Choose product')
                                             : admin_t($messages, 'order_product_placeholder_locked', 'Choose package first');
                                         ?>
                                         <div class="admin-editor-page">
@@ -6229,7 +6229,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                                 <div class="col-lg-6">
                                                                     <label class="form-label" for="product_id"><?php echo admin_e(admin_t($messages, 'order_duration_label', 'Subscription time')); ?></label>
-                                                                    <select class="form-select" id="product_id" name="product_id" data-admin-order-product data-selected-product-id="<?php echo admin_e((string)$orderCreateState['product_id']); ?>" data-placeholder-default="<?php echo admin_e(admin_t($messages, 'order_product_placeholder', 'Choose subscription time')); ?>" data-placeholder-locked="<?php echo admin_e(admin_t($messages, 'order_product_placeholder_locked', 'Choose package first')); ?>"<?php echo $createProviderId <= 0 ? ' disabled' : ''; ?>>
+                                                                    <select class="form-select" id="product_id" name="product_id" data-admin-order-product data-selected-product-id="<?php echo admin_e((string)$orderCreateState['product_id']); ?>" data-placeholder-default="<?php echo admin_e(admin_t($messages, 'order_product_placeholder', 'Choose product')); ?>" data-placeholder-locked="<?php echo admin_e(admin_t($messages, 'order_product_placeholder_locked', 'Choose package first')); ?>"<?php echo $createProviderId <= 0 ? ' disabled' : ''; ?>>
                                                                         <option value=""><?php echo admin_e($createDurationPlaceholder); ?></option>
                                                                         <?php foreach ($createProductOptions as $productRow): ?>
                                                                             <?php $productOptionId = (int)($productRow['id'] ?? 0); ?>
@@ -6352,7 +6352,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                                         $orderStatusVisual = admin_order_status_visual($row);
                                                         $orderProgress = admin_order_progress_data($row);
-                                                        $isCreditsOrder = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits';
+                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
                                                         $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
                                                         $orderCreatedIsToday = admin_is_current_day_datetime((string)($row['created_at'] ?? ''));
                                                         $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
@@ -6476,7 +6476,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <i class="bi bi-wallet2" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_balance_recent_topup_message', 'The customer has just topped up their account balance.')); ?></span>
                                                                         </div>
-                                                                    <?php elseif ((string)($row['status'] ?? '') === 'active' && !empty($orderProgress['has_expiry'])): ?>
+                                                                    <?php elseif ((string)($row['status'] ?? '') === 'active' && $usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
                                                                         <div class="admin-order-progress">
                                                                             <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
                                                                                 <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
@@ -6585,7 +6585,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                                         $orderStatusVisual = admin_order_status_visual($row);
                                                         $orderProgress = admin_order_progress_data($row);
-                                                        $isCreditsOrder = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits';
+                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
                                                         $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
                                                         $orderCreatedIsToday = admin_is_current_day_datetime((string)($row['created_at'] ?? ''));
                                                         $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
@@ -6658,7 +6658,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
                                                                         </div>
                                                                     <?php endif; ?>
-                                                                    <?php if (!$isCreditsOrder && !empty($orderProgress['has_expiry'])): ?>
+                                                                    <?php if ($usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
                                                                     <div class="admin-order-progress">
                                                                         <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
                                                                             <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
@@ -6803,7 +6803,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         }
                                                         $customerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
                                                         $providerDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
-                                                        $isCreditsOrder = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits';
+                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
                                                         $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
                                                         $subscriptionStartedAt = trim((string)($row['started_at'] ?? ''));
                                                         $subscriptionStartedLabel = $subscriptionStartedAt !== ''
@@ -6827,7 +6827,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $modalId = 'adminOrderModal' . $orderId;
                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
-                                        $canExtendOrderFromModal = !$isCreditsOrder && !$isPendingOrder && in_array($orderStatusRaw, ['active', 'expired'], true) && $paymentStatusRaw === 'paid';
+                                        $canExtendOrderFromModal = $usesSubscriptionTiming && !$isPendingOrder && in_array($orderStatusRaw, ['active', 'expired'], true) && $paymentStatusRaw === 'paid';
                                         ?>
                                         <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>" tabindex="-1" aria-hidden="true">
                                             <div class="modal-dialog modal-dialog-centered modal-xl">
@@ -6846,12 +6846,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
                                                                     </a>
                                                                 <?php endif; ?>
-                                                                <?php if (!$isCreditsOrder && $subscriptionStartedLabel !== ''): ?>
+                                                                <?php if ($usesSubscriptionTiming && $subscriptionStartedLabel !== ''): ?>
                                                                     <span class="btn btn-outline-dark btn-md admin-order-modal__header-badge">
                                                                         <?php echo admin_e(admin_t($messages, 'order_started_at', 'Started at')); ?>: <?php echo admin_e($subscriptionStartedLabel); ?>
                                                                     </span>
                                                                 <?php endif; ?>
-                                                                <?php if (!$isCreditsOrder && $subscriptionExpiresLabel !== ''): ?>
+                                                                <?php if ($usesSubscriptionTiming && $subscriptionExpiresLabel !== ''): ?>
                                                                     <span class="btn btn-outline-dark btn-md admin-order-modal__header-badge">
                                                                         <?php echo admin_e(admin_t($messages, 'order_expires_at', 'Expires at')); ?>:
                                                                         <span class="admin-order-modal__header-badge-date-danger"><?php echo admin_e($subscriptionExpiresLabel); ?></span>
@@ -6905,23 +6905,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php if ($orderStatusRaw !== 'active'): ?>
                                                                             <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert>
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
-                                                                                <span><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.')); ?></span>
+                                                                                <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.')); ?></span>
                                                                             </div>
                                                                         <?php else: ?>
                                                                             <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert hidden>
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
-                                                                                <span><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.')); ?></span>
+                                                                                <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.')); ?></span>
                                                                             </div>
                                                                         <?php endif; ?>
                                                                         <?php if ($orderStatusRaw === 'active'): ?>
                                                                             <div class="alert alert-success admin-order-modal__activation-alert admin-order-modal__activation-alert--success" role="alert" data-admin-order-active-alert>
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'order_activation_success_title', 'Order has been completed.')); ?></strong>
-                                                                                <span><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_activation_success_text_generic', 'The payment has been approved by the administrator and the order has been completed.') : admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.')); ?></span>
+                                                                                <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.') : admin_t($messages, 'order_activation_success_text_generic', 'The payment has been approved by the administrator and the order has been completed.')); ?></span>
                                                                             </div>
                                                                         <?php else: ?>
                                                                             <div class="alert alert-success admin-order-modal__activation-alert admin-order-modal__activation-alert--success" role="alert" data-admin-order-active-alert hidden>
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'order_activation_success_title', 'Order has been completed.')); ?></strong>
-                                                                                <span><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_activation_success_text_generic', 'The payment has been approved by the administrator and the order has been completed.') : admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.')); ?></span>
+                                                                                <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.') : admin_t($messages, 'order_activation_success_text_generic', 'The payment has been approved by the administrator and the order has been completed.')); ?></span>
                                                                             </div>
                                                                         <?php endif; ?>
                                                                         <?php if ($isAwaitingActivationOrder): ?>
@@ -6941,8 +6941,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </div>
                                                                             <div class="admin-order-modal__next-steps">
                                                                                 <div class="admin-order-modal__next-step">
-                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_next_step_customer_profile_title', '1. Open the customer profile.') : admin_t($messages, 'order_next_step_provider_title', '1. Go to the provider dashboard.')); ?></strong>
-                                                                                    <?php if ($isCreditsOrder): ?>
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_customer_profile_title', '1. Open the customer profile.') : admin_t($messages, 'order_next_step_provider_title', '1. Go to the provider dashboard.')); ?></strong>
+                                                                                    <?php if (!$usesSubscriptionTiming): ?>
                                                                                         <a href="<?php echo admin_e($customerProfileUrl); ?>" class="btn btn-dark btn-lg admin-order-modal__provider-btn">
                                                                                             <i class="bi bi-person-badge" aria-hidden="true"></i>
                                                                                             <span><?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?></span>
@@ -6955,8 +6955,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <?php endif; ?>
                                                                                 </div>
                                                                                 <div class="admin-order-modal__next-step">
-                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')); ?></strong>
-                                                                                    <span class="admin-order-modal__next-step-copy"><?php echo admin_e($isCreditsOrder ? admin_t($messages, 'order_next_step_account_update_copy', 'After updating the customer account, change the order status below.') : admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.')); ?></span>
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')); ?></strong>
+                                                                                    <span class="admin-order-modal__next-step-copy"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_copy', 'After updating the customer account, change the order status below.') : admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.')); ?></span>
                                                                                 </div>
                                                                             </div>
                                                                         <?php elseif ($canMarkPaidFromBalance): ?>
@@ -7107,13 +7107,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
                                                                                     <input type="text" class="form-control" name="total_amount" value="<?php echo admin_e(number_format((float)($row['total_amount'] ?? 0), 2, '.', '')); ?>">
                                                                                 </div>
-                                                                                <?php if (!$isCreditsOrder && !$isPendingOrder): ?>
+                                                                                <?php if ($usesSubscriptionTiming && !$isPendingOrder): ?>
                                                                                     <div>
                                                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_started_at', 'Started at')); ?></label>
                                                                                         <input type="datetime-local" class="form-control" name="started_at" value="<?php echo admin_e(admin_format_datetime_local((string)($row['started_at'] ?? ''))); ?>">
                                                                                     </div>
                                                                                 <?php endif; ?>
-                                                                                <?php if (!$isCreditsOrder): ?>
+                                                                                <?php if ($usesSubscriptionTiming): ?>
                                                                                 <div>
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_expires_at', 'Expires at')); ?></label>
                                                                                     <input type="datetime-local" class="form-control" name="expires_at" value="<?php echo admin_e(admin_format_datetime_local((string)($row['expires_at'] ?? ''))); ?>">
@@ -7143,7 +7143,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></label>
                                                                                     <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e((string)($row['product_name'] ?? '')); ?>" readonly>
                                                                                 </div>
-                                                                                <?php if (!$isCreditsOrder): ?>
+                                                                                <?php if ($usesSubscriptionTiming): ?>
                                                                                 <div>
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_duration_label', 'Subscription time')); ?></label>
                                                                                     <input type="text" class="form-control admin-order-modal__readonly" value="<?php echo admin_e($durationLabel); ?>" readonly>
@@ -7586,7 +7586,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'product_type_' . $productDraftType, ucfirst(str_replace('_', ' ', $productDraftType)))); ?>" readonly>
                                                             <input type="hidden" name="product_type" value="<?php echo admin_e($productDraftType); ?>" data-product-type-select>
                                                         <?php endif; ?>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_type_toggle_help', 'Choose whether you are adding a timed subscription or a credits product for reseller orders.')); ?></small>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_type_toggle_help', 'Choose whether you are adding a timed subscription, a credits package for resellers, or a regular store product visible to all users.')); ?></small>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="product_provider_id"><?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?></label>
@@ -7647,7 +7647,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="product_description"><?php echo admin_e(admin_t($messages, 'product_description_label', 'Description')); ?></label>
-                                                        <textarea class="form-control" id="product_description" name="description" rows="5"><?php echo admin_e((string)($productDraft['description'] ?? '')); ?></textarea>
+                                                        <textarea class="form-control" id="product_description" name="description" rows="12" data-admin-rich-editor="1" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($productDraft['description'] ?? '')); ?></textarea>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
                                                     </div>
                                                     <div class="col-12" data-product-type-section="subscription">
                                                         <div class="admin-form-card">
@@ -7662,10 +7663,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </label>
                                                         <small class="text-muted d-block mt-2"><?php echo admin_e(admin_t($messages, 'product_trial_short_duration_help', 'Packages with 6h, 12h or 24h duration can only be saved as trial.')); ?></small>
                                                     </div>
-                                                    <div class="col-12" data-product-type-section="credits">
+                                                    <div class="col-12" data-product-type-section="credits,product">
                                                         <div class="admin-form-card">
-                                                            <h4><?php echo admin_e(admin_t($messages, 'product_credits_section_title', 'Credits settings')); ?></h4>
-                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_credits_section_help', 'Credits do not top up any balance. A purchase only creates an order record with customer, date, payment and fulfillment status.')); ?></p>
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_no_expiry_section_title', 'Non-subscription settings')); ?></h4>
+                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_no_expiry_section_help', 'Credits and store products do not use subscription time or expiry. A purchase creates an order record that is fulfilled manually.')); ?></p>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -7722,7 +7723,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'product_type_' . $productEditorType, ucfirst(str_replace('_', ' ', $productEditorType)))); ?>" readonly>
                                                             <input type="hidden" name="product_type" value="<?php echo admin_e($productEditorType); ?>" data-product-type-select>
                                                         <?php endif; ?>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_type_toggle_help', 'Choose whether you are adding a timed subscription or a credits product for reseller orders.')); ?></small>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'product_type_toggle_help', 'Choose whether you are adding a timed subscription, a credits package for resellers, or a regular store product visible to all users.')); ?></small>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="product_provider_id"><?php echo admin_e(admin_t($messages, 'product_provider_label', 'Provider')); ?></label>
@@ -7782,7 +7783,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="product_description"><?php echo admin_e(admin_t($messages, 'product_description_label', 'Description')); ?></label>
-                                                        <textarea class="form-control" id="product_description" name="description" rows="5"><?php echo admin_e((string)($productEditor['description'] ?? '')); ?></textarea>
+                                                        <textarea class="form-control" id="product_description" name="description" rows="12" data-admin-rich-editor="1" data-admin-rich-editor-image-urls="1" data-admin-rich-editor-videos="1"><?php echo admin_e((string)($productEditor['description'] ?? '')); ?></textarea>
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'rich_editor_html_help', 'Supports headings, bold, links, lists, text alignment and images from disk. You can also switch to HTML mode.')); ?></div>
                                                     </div>
                                                     <div class="col-12" data-product-type-section="subscription">
                                                         <div class="admin-form-card">
@@ -7797,10 +7799,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </label>
                                                         <small class="text-muted d-block mt-2"><?php echo admin_e(admin_t($messages, 'product_trial_short_duration_help', 'Packages with 6h, 12h or 24h duration can only be saved as trial.')); ?></small>
                                                     </div>
-                                                    <div class="col-12" data-product-type-section="credits">
+                                                    <div class="col-12" data-product-type-section="credits,product">
                                                         <div class="admin-form-card">
-                                                            <h4><?php echo admin_e(admin_t($messages, 'product_credits_section_title', 'Credits settings')); ?></h4>
-                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_credits_section_help', 'Credits do not top up any balance. A purchase only creates an order record with customer, date, payment and fulfillment status.')); ?></p>
+                                                            <h4><?php echo admin_e(admin_t($messages, 'product_no_expiry_section_title', 'Non-subscription settings')); ?></h4>
+                                                            <p class="mb-0 text-body-secondary small"><?php echo admin_e(admin_t($messages, 'product_no_expiry_section_help', 'Credits and store products do not use subscription time or expiry. A purchase creates an order record that is fulfilled manually.')); ?></p>
                                                         </div>
                                                     </div>
                                                     <div class="col-md-6">
@@ -7957,9 +7959,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $productPriceLabel = admin_format_money_value($row['price_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
                                                         $providerName = (string)($row['provider_name'] ?? '—');
                                                         $productName = trim((string)($row['name'] ?? ''));
-                                                        $productTypeLabel = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) === 'credits'
-                                                            ? admin_t($messages, 'product_type_credits', 'Credits')
-                                                            : admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+                                                        $normalizedProductType = admin_normalize_product_type((string)($row['product_type'] ?? 'subscription'));
+                                                        $productTypeLabel = $normalizedProductType === 'subscription'
+                                                            ? admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0))
+                                                            : admin_t($messages, 'product_type_' . $normalizedProductType, ucfirst($normalizedProductType));
                                                         $showProductTypeLabel = true;
                                                         if ($productName !== '' && $productTypeLabel !== '') {
                                                             $normalizedProductName = function_exists('mb_strtolower') ? mb_strtolower($productName, 'UTF-8') : strtolower($productName);
@@ -7969,7 +7972,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             }
                                                         }
                                                         $productDaysLabel = '';
-                                                        if (admin_normalize_product_type((string)($row['product_type'] ?? 'subscription')) !== 'credits' && (int)($row['duration_hours'] ?? 0) > 0) {
+                                                        if ($normalizedProductType === 'subscription' && (int)($row['duration_hours'] ?? 0) > 0) {
                                                             $days = (int)($row['duration_hours'] ?? 0) / 24;
                                                             $productDaysLabel = (int)$days . ' Days';
                                                         }
@@ -8662,7 +8665,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             $userQuickOrderProviderId = (int)($userQuickOrderState['provider_id'] ?? 0);
                                                             $userQuickOrderProductOptions = $userQuickOrderProviderId > 0 ? ($userQuickOrderProductsByProvider[$userQuickOrderProviderId] ?? []) : [];
                                                             $userQuickOrderPlaceholder = $userQuickOrderProviderId > 0
-                                                                ? admin_t($messages, 'order_product_placeholder', 'Choose subscription time')
+                                                                ? admin_t($messages, 'order_product_placeholder', 'Choose product')
                                                                 : admin_t($messages, 'order_product_placeholder_locked', 'Choose package first');
                                                             ?>
                                                             <div class="modal fade" id="adminUserQuickOrderModal" tabindex="-1" aria-hidden="true">
@@ -8691,7 +8694,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 </div>
                                                                                 <div class="mb-3">
                                                                                     <label class="form-label" for="adminUserQuickOrderProduct"><?php echo admin_e(admin_t($messages, 'order_duration_label', 'Subscription time')); ?></label>
-                                                                                    <select class="form-select" id="adminUserQuickOrderProduct" name="product_id" data-admin-user-quick-order-product data-selected-product-id="<?php echo admin_e((string)($userQuickOrderState['product_id'] ?? 0)); ?>" data-placeholder-default="<?php echo admin_e(admin_t($messages, 'order_product_placeholder', 'Choose subscription time')); ?>" data-placeholder-locked="<?php echo admin_e(admin_t($messages, 'order_product_placeholder_locked', 'Choose package first')); ?>"<?php echo $userQuickOrderProviderId <= 0 ? ' disabled' : ''; ?>>
+                                                                                    <select class="form-select" id="adminUserQuickOrderProduct" name="product_id" data-admin-user-quick-order-product data-selected-product-id="<?php echo admin_e((string)($userQuickOrderState['product_id'] ?? 0)); ?>" data-placeholder-default="<?php echo admin_e(admin_t($messages, 'order_product_placeholder', 'Choose product')); ?>" data-placeholder-locked="<?php echo admin_e(admin_t($messages, 'order_product_placeholder_locked', 'Choose package first')); ?>"<?php echo $userQuickOrderProviderId <= 0 ? ' disabled' : ''; ?>>
                                                                                         <option value=""><?php echo admin_e($userQuickOrderPlaceholder); ?></option>
                                                                                         <?php foreach ($userQuickOrderProductOptions as $productRow): ?>
                                                                                             <?php $quickProductId = (int)($productRow['id'] ?? 0); ?>
