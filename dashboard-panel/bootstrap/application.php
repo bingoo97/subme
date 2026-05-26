@@ -5949,6 +5949,89 @@ function app_email_smtp_is_configured(array $settings): bool
         && $smtpPassword !== '';
 }
 
+function app_secrets_root_path(): string
+{
+    static $resolvedPath = null;
+    if (is_string($resolvedPath)) {
+        return $resolvedPath;
+    }
+
+    $candidates = [];
+
+    $envOverride = trim((string)getenv('APP_SECRETS_DIR'));
+    if ($envOverride !== '') {
+        $candidates[] = $envOverride;
+    }
+
+    $homeDir = trim((string)(getenv('HOME') ?: ($_SERVER['HOME'] ?? '')));
+    $backendRoot = app_backend_root_path();
+    $appSlug = basename(dirname($backendRoot));
+    if ($homeDir !== '' && $appSlug !== '' && $appSlug !== '.' && $appSlug !== '..') {
+        $candidates[] = rtrim($homeDir, '/') . '/.subme-secrets/' . $appSlug;
+    }
+
+    foreach ($candidates as $candidate) {
+        $candidate = trim((string)$candidate);
+        if ($candidate === '') {
+            continue;
+        }
+
+        if (is_dir($candidate)) {
+            $resolved = realpath($candidate);
+            $resolvedPath = $resolved !== false ? $resolved : $candidate;
+            return $resolvedPath;
+        }
+    }
+
+    $resolvedPath = '';
+    return $resolvedPath;
+}
+
+function app_email_dkim_config(array $settings): array
+{
+    static $fileConfig = null;
+
+    if ($fileConfig === null) {
+        $fileConfig = [];
+        $secretsDir = app_secrets_root_path();
+        if ($secretsDir !== '') {
+            $privateKeyPath = $secretsDir . '/dkim.private';
+            $selectorPath = $secretsDir . '/dkim.selector';
+            $domainPath = $secretsDir . '/dkim.domain';
+            $passphrasePath = $secretsDir . '/dkim.passphrase';
+
+            if (is_file($privateKeyPath) && is_readable($privateKeyPath) && is_file($selectorPath)) {
+                $selector = trim((string)file_get_contents($selectorPath));
+                if ($selector !== '') {
+                    $fileConfig = [
+                        'private_key_path' => $privateKeyPath,
+                        'selector' => $selector,
+                        'domain_override' => is_file($domainPath) ? trim((string)file_get_contents($domainPath)) : '',
+                        'passphrase' => is_file($passphrasePath) ? trim((string)file_get_contents($passphrasePath)) : '',
+                    ];
+                }
+            }
+        }
+    }
+
+    if ($fileConfig === []) {
+        return [];
+    }
+
+    $config = $fileConfig;
+    $domain = trim((string)($config['domain_override'] ?? ''));
+    if ($domain === '') {
+        $domain = app_email_domain_from_address(app_email_primary_from($settings));
+    }
+
+    if ($domain === '') {
+        return [];
+    }
+
+    $config['domain'] = $domain;
+    return $config;
+}
+
 function app_email_require_phpmailer(): void
 {
     if (class_exists(\PHPMailer\PHPMailer\PHPMailer::class)) {
@@ -5998,6 +6081,18 @@ function app_email_mailer(array $settings): \PHPMailer\PHPMailer\PHPMailer
     if ($messageHost !== 'localhost') {
         $mail->MessageID = sprintf('<%s@%s>', bin2hex(random_bytes(16)), $messageHost);
     }
+
+    $dkimConfig = app_email_dkim_config($settings);
+    if ($dkimConfig !== []) {
+        $mail->DKIM_domain = (string)$dkimConfig['domain'];
+        $mail->DKIM_selector = (string)$dkimConfig['selector'];
+        $mail->DKIM_private = (string)$dkimConfig['private_key_path'];
+        $mail->DKIM_identity = $fromEmail;
+        $mail->DKIM_passphrase = (string)($dkimConfig['passphrase'] ?? '');
+        $mail->DKIM_copyHeaderFields = false;
+        $mail->DKIM_extraHeaders = ['List-Unsubscribe'];
+    }
+
     $mail->addCustomHeader('Auto-Submitted', 'auto-generated');
     $mail->addCustomHeader('X-Auto-Response-Suppress', 'All');
     $mail->addCustomHeader('X-Entity-Ref-ID', bin2hex(random_bytes(10)));
