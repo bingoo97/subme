@@ -3112,7 +3112,9 @@ if ($route === 'crypto-wallets') {
         $walletEditor = admin_crypto_wallet_find($db, $walletEditorId);
         $walletAssignments = admin_crypto_wallet_active_assignments($db, $walletEditorId);
         $walletDeleteSummary = admin_crypto_wallet_delete_summary($db, $walletEditorId);
-        $walletPaymentConflict = admin_crypto_wallet_payment_conflict_summary($db, $walletEditorId);
+        $walletPaymentConflict = $cryptoWalletSharedEnabled
+            ? ['can_split' => false, 'candidate' => null, 'keeper' => null, 'candidates' => []]
+            : admin_crypto_wallet_payment_conflict_summary($db, $walletEditorId);
     } elseif ($walletCreateMode) {
         $walletEditor = [
             'id' => 0,
@@ -10057,8 +10059,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php endif; ?>
 
                                         <?php
-                                        $paymentsWalletConflict = admin_first_crypto_wallet_payment_conflict($db);
-                                        if (is_array($paymentsWalletConflict) && !empty($paymentsWalletConflict['wallet_id'])):
+                                        $paymentsWalletConflict = $cryptoWalletSharedEnabled ? null : admin_first_crypto_wallet_payment_conflict($db);
+                                        if (!$cryptoWalletSharedEnabled && is_array($paymentsWalletConflict) && !empty($paymentsWalletConflict['wallet_id'])):
                                             $paymentsConflictWalletId = (int)($paymentsWalletConflict['wallet_id'] ?? 0);
                                             $paymentsConflictLabel = trim((string)($paymentsWalletConflict['label'] ?? ''));
                                             $paymentsConflictAddress = trim((string)($paymentsWalletConflict['address'] ?? ''));
