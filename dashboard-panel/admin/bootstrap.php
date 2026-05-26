@@ -17021,22 +17021,52 @@ function admin_faq_count(Mysql_ks $db): int
     return (int)($row['total'] ?? 0);
 }
 
-function admin_faq_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
+function admin_faq_all_rows(Mysql_ks $db): array
 {
     if (!schema_object_exists($db, 'static_pages')) {
         return [];
     }
 
     admin_ensure_static_pages_locale_runtime($db);
-    $limit = max(1, min(100, $limit));
-    $offset = max(0, $offset);
     return $db->select_full_user(
         "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE page_type = 'faq' OR slug LIKE 'faq-%'
-         ORDER BY locale_code ASC, slug ASC, id ASC
-         LIMIT {$offset}, {$limit}"
+         ORDER BY locale_code ASC, slug ASC, id ASC"
     );
+}
+
+function admin_faq_count_by_locale(Mysql_ks $db, string $localeCode): int
+{
+    $localeCode = admin_faq_normalize_locale($localeCode);
+    $rows = admin_faq_all_rows($db);
+    $rows = array_filter($rows, static function (array $row) use ($localeCode): bool {
+        return admin_faq_normalize_locale((string)($row['locale_code'] ?? 'pl')) === $localeCode;
+    });
+
+    return count($rows);
+}
+
+function admin_faq_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
+{
+    $limit = max(1, min(100, $limit));
+    $offset = max(0, $offset);
+    $rows = admin_faq_all_rows($db);
+
+    return array_slice($rows, $offset, $limit);
+}
+
+function admin_faq_rows_by_locale(Mysql_ks $db, string $localeCode, int $limit = 20, int $offset = 0): array
+{
+    $localeCode = admin_faq_normalize_locale($localeCode);
+    $limit = max(1, min(100, $limit));
+    $offset = max(0, $offset);
+    $rows = admin_faq_all_rows($db);
+    $rows = array_values(array_filter($rows, static function (array $row) use ($localeCode): bool {
+        return admin_faq_normalize_locale((string)($row['locale_code'] ?? 'pl')) === $localeCode;
+    }));
+
+    return array_slice($rows, $offset, $limit);
 }
 
 function admin_faq_find(Mysql_ks $db, int $faqId): ?array

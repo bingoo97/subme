@@ -1909,7 +1909,6 @@ function app_order_has_generated_payment_request(Mysql_ks $db, int $orderId, int
             "SELECT id
              FROM crypto_deposit_requests
              WHERE order_id = {$orderId}{$customerFilterSql}
-               AND status NOT IN ('cancelled', 'rejected', 'failed')
              ORDER BY id DESC
              LIMIT 1"
         );
@@ -1923,7 +1922,6 @@ function app_order_has_generated_payment_request(Mysql_ks $db, int $orderId, int
             "SELECT id
              FROM bank_transfer_requests
              WHERE order_id = {$orderId}{$customerFilterSql}
-               AND status NOT IN ('cancelled', 'rejected', 'failed')
              ORDER BY id DESC
              LIMIT 1"
         );

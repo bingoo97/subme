@@ -26,7 +26,7 @@ return [
     'nav_pages' => 'Pages',
     'nav_live_chat' => 'Live chat',
     'nav_email_templates' => 'Email templates',
-    'nav_faq' => 'FAQ',
+    'nav_faq' => 'FAQ - Chat',
     'nav_help' => 'Help',
     'nav_settings' => 'Settings',
     'top_search_placeholder' => 'Search order ID, customer email or crypto wallet',

@@ -1604,6 +1604,7 @@ $newsFormState = [
 $faqEditorId = 0;
 $faqEditor = null;
 $faqShowCreate = false;
+$faqLocaleTab = $currentLocale === 'en' ? 'en' : 'pl';
 $faqListPage = 1;
 $faqListPerPage = 20;
 $faqListTotal = 0;
@@ -2456,8 +2457,9 @@ if ($route === 'live-chat') {
 }
 
 if ($route === 'faq') {
+    $faqLocaleTab = admin_faq_normalize_locale((string)($_GET['faq_locale_tab'] ?? $faqLocaleTab));
     $faqListPage = max(1, (int)($_GET['faq_list_page'] ?? 1));
-    $faqListTotal = admin_faq_count($db);
+    $faqListTotal = admin_faq_count_by_locale($db, $faqLocaleTab);
     $faqListTotalPages = max(1, (int)ceil($faqListTotal / $faqListPerPage));
     if ($faqListPage > $faqListTotalPages) {
         $faqListPage = $faqListTotalPages;
@@ -2468,6 +2470,7 @@ if ($route === 'faq') {
 
     if (isset($_POST['admin_create_faq'])) {
         $faqShowCreate = true;
+        $faqLocaleTab = admin_faq_normalize_locale((string)($_POST['faq_locale_tab'] ?? $faqLocaleTab));
         $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
         $faqFormState = [
             'locale_code' => admin_faq_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
@@ -2483,7 +2486,8 @@ if ($route === 'faq') {
         } else {
             $createResult = admin_create_faq($db, $_POST);
             if (!empty($createResult['ok']) && !empty($createResult['faq_id'])) {
-                header('Location: /admin/?page=faq&edit_faq=' . (int)$createResult['faq_id'] . '&faq_list_page=' . $faqListPage . '&created_faq=1');
+                $faqRedirectLocaleTab = admin_faq_normalize_locale((string)($faqFormState['locale_code'] ?? $faqLocaleTab));
+                header('Location: /admin/?page=faq&edit_faq=' . (int)$createResult['faq_id'] . '&faq_list_page=' . $faqListPage . '&faq_locale_tab=' . rawurlencode($faqRedirectLocaleTab) . '&created_faq=1');
                 exit;
             }
 
@@ -2494,6 +2498,7 @@ if ($route === 'faq') {
 
     if (isset($_POST['admin_save_faq'])) {
         $faqEditorId = (int)($_POST['faq_id'] ?? 0);
+        $faqLocaleTab = admin_faq_normalize_locale((string)($_POST['faq_locale_tab'] ?? $faqLocaleTab));
         $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
         $faqFormState = [
             'locale_code' => admin_faq_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
@@ -2509,7 +2514,8 @@ if ($route === 'faq') {
         } else {
             $saveResult = admin_save_faq($db, $faqEditorId, $_POST);
             if (!empty($saveResult['ok'])) {
-                header('Location: /admin/?page=faq&edit_faq=' . $faqEditorId . '&faq_list_page=' . $faqListPage . '&saved_faq=1');
+                $faqRedirectLocaleTab = admin_faq_normalize_locale((string)($faqFormState['locale_code'] ?? $faqLocaleTab));
+                header('Location: /admin/?page=faq&edit_faq=' . $faqEditorId . '&faq_list_page=' . $faqListPage . '&faq_locale_tab=' . rawurlencode($faqRedirectLocaleTab) . '&saved_faq=1');
                 exit;
             }
 
@@ -2519,6 +2525,7 @@ if ($route === 'faq') {
     }
 
     if (isset($_POST['admin_delete_faq'])) {
+        $faqLocaleTab = admin_faq_normalize_locale((string)($_POST['faq_locale_tab'] ?? $faqLocaleTab));
         $faqListPage = max(1, (int)($_POST['faq_list_page'] ?? $faqListPage));
 
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
@@ -2527,13 +2534,17 @@ if ($route === 'faq') {
         } else {
             $deleteResult = admin_delete_faq($db, (int)($_POST['faq_id'] ?? 0));
             if (!empty($deleteResult['ok'])) {
-                header('Location: /admin/?page=faq&faq_list_page=' . $faqListPage . '&deleted_faq=1');
+                header('Location: /admin/?page=faq&faq_list_page=' . $faqListPage . '&faq_locale_tab=' . rawurlencode($faqLocaleTab) . '&deleted_faq=1');
                 exit;
             }
 
             $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'faq_delete_error', 'Unable to delete FAQ entry.'));
             $pageAlertType = 'danger';
         }
+    }
+
+    if ($faqShowCreate && !isset($_POST['admin_create_faq'])) {
+        $faqFormState['locale_code'] = $faqLocaleTab;
     }
 
     if ($faqEditorId > 0) {
@@ -5020,15 +5031,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             $chatConversationType = trim((string)($chatRow['conversation_type'] ?? ''));
                                             $chatIsGroupLike = function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type($chatConversationType);
                                             $chatIsGlobalGroup = $chatConversationType === 'global_group';
+                                            $chatCustomerEmail = trim((string)($chatRow['customer_email'] ?? ''));
                                             $chatTitleLabel = $chatIsGroupLike
                                                 ? $displayName
-                                                : (string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'));
+                                                : ($chatCustomerEmail !== '' ? $chatCustomerEmail : admin_t($messages, 'chat_unknown_customer', 'Customer'));
                                             $chatHandleLabel = trim((string)($chatRow['customer_public_handle'] ?? ''));
                                             $chatPrimaryLabel = $chatHandleLabel !== '' && !$chatIsGroupLike
                                                 ? '@' . $chatHandleLabel
                                                 : $displayName;
                                             $chatSecondaryLabel = $chatHandleLabel !== '' && !$chatIsGroupLike
-                                                ? trim((string)($chatRow['customer_email'] ?? ''))
+                                                ? $chatCustomerEmail
                                                 : '';
                                             ?>
                                             <div
@@ -11597,9 +11609,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $presence = (array)($chatEntry['presence'] ?? []);
                                                         $chatStatus = strtolower(trim((string)($chatRow['status'] ?? 'open')));
                                                         $customerId = (int)($chatRow['customer_id'] ?? 0);
-                                                        $chatTitleLabel = trim((string)($chatRow['conversation_type'] ?? '')) === 'group_chat'
+                                                        $chatConversationType = trim((string)($chatRow['conversation_type'] ?? ''));
+                                                        $chatCustomerEmail = trim((string)($chatRow['customer_email'] ?? ''));
+                                                        $chatTitleLabel = function_exists('chat_is_group_like_conversation_type') && chat_is_group_like_conversation_type($chatConversationType)
                                                             ? $displayName
-                                                            : (string)($chatRow['customer_email'] ?: admin_t($messages, 'chat_unknown_customer', 'Customer'));
+                                                            : ($chatCustomerEmail !== '' ? $chatCustomerEmail : admin_t($messages, 'chat_unknown_customer', 'Customer'));
                                                         ?>
                                                         <article class="admin-live-chat-item<?php echo $isUnread ? ' is-unread' : ''; ?>">
                                                             <div class="admin-live-chat-item__main">
@@ -12050,7 +12064,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'faq_create_title', 'Add FAQ entry')); ?></h3>
                                                 </div>
-                                                <a href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                <a href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>&amp;faq_locale_tab=<?php echo admin_e($faqLocaleTab); ?>" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'back_to_faq', 'Back to FAQ')); ?></span>
                                                 </a>
@@ -12059,6 +12073,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <form method="post" class="admin-editor-form">
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
+                                                <input type="hidden" name="faq_locale_tab" value="<?php echo admin_e($faqLocaleTab); ?>">
 
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
@@ -12114,7 +12129,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'faq_editor_title', 'Edit FAQ entry')); ?></h3>
                                                 </div>
-                                                <a href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                <a href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>&amp;faq_locale_tab=<?php echo admin_e($faqLocaleTab); ?>" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'back_to_faq', 'Back to FAQ')); ?></span>
                                                 </a>
@@ -12124,6 +12139,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="faq_id" value="<?php echo admin_e((string)$faqEditor['id']); ?>">
                                                 <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
+                                                <input type="hidden" name="faq_locale_tab" value="<?php echo admin_e($faqLocaleTab); ?>">
 
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
@@ -12184,14 +12200,27 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         break;
                                     endif;
 
-                                    $faqRows = admin_faq_rows($db, $faqListPerPage, ($faqListPage - 1) * $faqListPerPage);
+                                    $faqRows = admin_faq_rows_by_locale($db, $faqLocaleTab, $faqListPerPage, ($faqListPage - 1) * $faqListPerPage);
+                                    $faqLocaleTabs = [
+                                        'pl' => admin_t($messages, 'page_locale_tab_pl', 'PL'),
+                                        'en' => admin_t($messages, 'page_locale_tab_en', 'EN'),
+                                    ];
                                     ?>
                                     <div class="admin-section-actions">
-                                        <a href="/admin/?page=faq&amp;view=create&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-dark">
+                                        <a href="/admin/?page=faq&amp;view=create&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>&amp;faq_locale_tab=<?php echo admin_e($faqLocaleTab); ?>" class="btn btn-dark">
                                             <i class="bi bi-plus-circle" aria-hidden="true"></i>
                                             <span><?php echo admin_e(admin_t($messages, 'faq_add_new', 'Add FAQ entry')); ?></span>
                                         </a>
                                     </div>
+                                    <ul class="nav nav-tabs admin-pages-locale-tabs" aria-label="<?php echo admin_e(admin_t($messages, 'locale_switch', 'Language')); ?>">
+                                        <?php foreach ($faqLocaleTabs as $localeCode => $localeLabel): ?>
+                                            <li class="nav-item">
+                                                <a class="nav-link<?php echo $faqLocaleTab === $localeCode ? ' active' : ''; ?>" href="/admin/?page=faq&amp;faq_locale_tab=<?php echo admin_e($localeCode); ?>&amp;faq_list_page=1">
+                                                    <?php echo admin_e($localeLabel); ?>
+                                                </a>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
                                     <?php if ($faqRows): ?>
                                         <div class="table-responsive">
                                             <table class="table admin-table align-middle">
@@ -12210,7 +12239,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
                                                                 <div class="d-flex align-items-center gap-2 flex-wrap">
                                                                     <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
-                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(strtoupper((string)($row['locale_code'] ?? 'pl'))); ?></span>
                                                                 </div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'faq_type_label', 'Type')); ?>">
@@ -12229,13 +12257,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-wallet-actions">
-                                                                    <a href="/admin/?page=faq&amp;edit_faq=<?php echo admin_e((string)$row['id']); ?>&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>" class="btn btn-dark btn-sm">
+                                                                    <a href="/admin/?page=faq&amp;edit_faq=<?php echo admin_e((string)$row['id']); ?>&amp;faq_list_page=<?php echo admin_e((string)$faqListPage); ?>&amp;faq_locale_tab=<?php echo admin_e($faqLocaleTab); ?>" class="btn btn-dark btn-sm">
                                                                         <i class="bi bi-pencil-square" aria-hidden="true"></i>
                                                                     </a>
                                                                     <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'faq_delete_confirm', 'Delete this FAQ entry?')); ?>');">
                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                         <input type="hidden" name="faq_id" value="<?php echo admin_e((string)$row['id']); ?>">
                                                                         <input type="hidden" name="faq_list_page" value="<?php echo admin_e((string)$faqListPage); ?>">
+                                                                        <input type="hidden" name="faq_locale_tab" value="<?php echo admin_e($faqLocaleTab); ?>">
                                                                         <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_faq" title="<?php echo admin_e(admin_t($messages, 'faq_delete_button', 'Delete FAQ entry')); ?>">
                                                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                                                         </button>
@@ -12252,7 +12281,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <ul class="pagination admin-pagination">
                                                     <?php for ($pageNumber = 1; $pageNumber <= $faqListTotalPages; $pageNumber++): ?>
                                                         <li class="page-item<?php echo $pageNumber === $faqListPage ? ' active' : ''; ?>">
-                                                            <a class="page-link" href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                            <a class="page-link" href="/admin/?page=faq&amp;faq_list_page=<?php echo admin_e((string)$pageNumber); ?>&amp;faq_locale_tab=<?php echo admin_e($faqLocaleTab); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
                                                         </li>
                                                     <?php endfor; ?>
                                                 </ul>

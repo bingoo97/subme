@@ -2,6 +2,11 @@
 switch ($site) {
 	case "orders":
 		if ($user["logged"]) {
+			if (isset($_GET['cancelled_order']) && (int)$_GET['cancelled_order'] === 1) {
+				$smarty->assign("alert", localization_translate($t, 'orders_cancelled', 'Order removed.'));
+				$smarty->display("alert.tpl");
+			}
+
 			if (app_uses_v2_schema($db)) {
 				app_delete_stale_unpaid_orders($db);
 			}

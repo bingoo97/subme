@@ -3738,6 +3738,14 @@ body.homepage-onboarding-open{
 	margin: 16px 0 0;
 }
 
+.payment-method-start__cancel{
+	margin-top:18px;
+}
+
+.payment-method-start__cancel .btn{
+	min-width:320px;
+}
+
 .payment-method-hero__image{
 	display:block;
 	width:100%;
@@ -4837,6 +4845,11 @@ body.app-modal-layer-active .messenger-profile-modal.is-open{
 	}
 
 	.payment-method-start__button{
+		width:100%;
+		min-width:0;
+	}
+
+	.payment-method-start__cancel .btn{
 		width:100%;
 		min-width:0;
 	}

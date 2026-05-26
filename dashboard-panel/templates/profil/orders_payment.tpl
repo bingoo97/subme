@@ -85,6 +85,16 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <div class="payment-method-hero">
                             <img src="/img/package.jpg" alt="Payment package" class="payment-method-hero__image" />
                         </div>
+                        {if $payment_can_cancel_order|default:0}
+                            <form action="" method="post" class="payment-method-start__cancel">
+                                <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
+                                <input type="hidden" name="id" value="{$selected.id}" />
+                                <input type="hidden" name="payment" value="{$selected.id}" />
+                                <button type="submit" class="btn btn-outline-danger btn-lg" name="cancel_order_from_payment_selection" onclick="return confirm('{$t.orders_cancel_from_payment_confirm|default:'Cancel this order? This will remove it from the system.'|escape:'javascript'}');">
+                                    <i class="fa fa-times-circle" aria-hidden="true"></i> {$t.orders_cancel_from_payment_button|default:'Cancel order'}
+                                </button>
+                            </form>
+                        {/if}
                     </div>
                 {else}
                     <div class="alert alert-warning">

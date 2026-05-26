@@ -537,6 +537,22 @@ if (!function_exists('orders_payment_archive_expired_bank_requests')) {
     }
 }
 
+if (!function_exists('orders_payment_can_cancel_order_from_selection')) {
+    function orders_payment_can_cancel_order_from_selection(array $selected, string $activeRequestMethod, bool $isSameOrderRenewalFlow, bool $hasGeneratedPaymentRequest): bool
+    {
+        $statusRaw = strtolower(trim((string)($selected['status_raw'] ?? '')));
+        $paymentStatusRaw = strtolower(trim((string)($selected['payment_status_raw'] ?? '')));
+        $fulfillmentStatusRaw = strtolower(trim((string)($selected['fulfillment_status_raw'] ?? '')));
+
+        return !$isSameOrderRenewalFlow
+            && $activeRequestMethod === ''
+            && !$hasGeneratedPaymentRequest
+            && $statusRaw === 'pending_payment'
+            && $paymentStatusRaw === 'unpaid'
+            && !in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true);
+    }
+}
+
 if (!function_exists('orders_payment_load_v2_order')) {
     function orders_payment_load_v2_order($db, int $customerId, int $orderId): ?array
     {
@@ -1405,6 +1421,52 @@ if (app_uses_v2_schema($db)) {
             $selectedMethod = $activeRequestMethod;
         }
 
+        $hasGeneratedPaymentRequest = app_order_has_generated_payment_request(
+            $db,
+            (int)($selected['id'] ?? 0),
+            (int)$user['id']
+        );
+        $canCancelOrderFromSelection = orders_payment_can_cancel_order_from_selection(
+            (array)$selected,
+            $activeRequestMethod,
+            $isSameOrderRenewalFlow,
+            $hasGeneratedPaymentRequest
+        );
+
+        if (isset($_POST['cancel_order_from_payment_selection'])) {
+            if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
+                $smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
+            } elseif (!$canCancelOrderFromSelection) {
+                $smarty->assign(
+                    'alert_error',
+                    localization_translate(
+                        $t,
+                        'orders_delete_blocked_payment_generated',
+                        'You cannot remove this order because a payment request has already been generated for it.'
+                    )
+                );
+            } else {
+                app_delete_unpaid_order_payment_requests($db, (int)$selected['id'], (int)$user['id']);
+                if (schema_object_exists($db, 'order_status_events')) {
+                    app_delete_records_by_ids($db, 'order_status_events', 'order_id', [(int)$selected['id']]);
+                }
+                if (schema_object_exists($db, 'order_renewals')) {
+                    app_delete_records_by_ids($db, 'order_renewals', 'order_id', [(int)$selected['id']]);
+                }
+                $db->delete_using_id('orders', (int)$selected['id']);
+
+                if (!headers_sent()) {
+                    header('Location: /orders?cancelled_order=1');
+                    exit;
+                }
+
+                $smarty->assign('alert', localization_translate($t, 'orders_cancelled', 'Order removed.'));
+                $smarty->display('alert.tpl');
+                $smarty->assign('selected', null);
+                return;
+            }
+        }
+
         $activeRequestExpiresAt = '';
         $activeRequestRemainingSeconds = 0;
         if ($activeRequestMethod === 'crypto' && !empty($cryptoRequest['expires_at'])) {
@@ -1443,6 +1505,7 @@ if (app_uses_v2_schema($db)) {
         $smarty->assign('payment_active_request_method', $activeRequestMethod);
         $smarty->assign('payment_active_request_expires_at', $activeRequestExpiresAt);
         $smarty->assign('payment_active_request_remaining_seconds', $activeRequestRemainingSeconds);
+        $smarty->assign('payment_can_cancel_order', $canCancelOrderFromSelection ? 1 : 0);
         $smarty->assign('payment_products', $availableProducts);
         $smarty->assign('payment_selected_product_id', $selectedProductId);
         $smarty->assign('payment_crypto_assets', $cryptoAssets);

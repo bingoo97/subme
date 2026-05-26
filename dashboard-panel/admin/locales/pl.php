@@ -26,7 +26,7 @@ return [
     'nav_pages' => 'Pages',
     'nav_live_chat' => 'Live chat',
     'nav_email_templates' => 'Emails',
-    'nav_faq' => 'FAQ',
+    'nav_faq' => 'FAQ - Chat',
     'nav_help' => 'Pomoc',
     'nav_settings' => 'Ustawienia',
     'top_search_placeholder' => 'Szukaj po ID zamówienia, emailu klienta lub portfelu krypto',
