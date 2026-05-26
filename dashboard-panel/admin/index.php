@@ -12311,8 +12311,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
                                                 <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
-                                                <input type="hidden" name="menu_sort_order" value="<?php echo admin_e((string)($pageDraft['menu_sort_order'] ?? 100)); ?>">
-
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
                                                         <label class="form-label" for="content_page_locale"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></label>
@@ -12349,6 +12347,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e(admin_t($messages, 'nav_pages', 'Pages')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="form-label" for="content_page_menu_sort_order"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?></label>
+                                                        <input type="number" class="form-control" id="content_page_menu_sort_order" name="menu_sort_order" value="<?php echo admin_e((string)($pageDraft['menu_sort_order'] ?? 100)); ?>" min="0" step="1">
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_sort_order_help', 'Lower number means earlier display in the user instruction tiles.')); ?></div>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="content_page_menu_title"><?php echo admin_e(admin_t($messages, 'page_menu_title_label', 'Tile name')); ?></label>
@@ -12397,7 +12400,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="page_id" value="<?php echo admin_e((string)$pageEditor['id']); ?>">
                                                 <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
                                                 <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
-                                                <input type="hidden" name="menu_sort_order" value="<?php echo admin_e((string)($pageEditor['menu_sort_order'] ?? 100)); ?>">
                                                 <input type="hidden" name="existing_menu_logo_url" value="<?php echo admin_e((string)($pageEditor['menu_logo_url'] ?? '')); ?>">
 
                                                 <div class="row g-3">
@@ -12440,6 +12442,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-4">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'page_system_label', 'System entry')); ?></label>
                                                         <input type="text" class="form-control" value="<?php echo admin_e(!empty($pageEditor['is_system']) ? admin_t($messages, 'page_system_yes', 'Yes') : admin_t($messages, 'page_system_no', 'No')); ?>" readonly>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="content_page_menu_sort_order"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?></label>
+                                                        <input type="number" class="form-control" id="content_page_menu_sort_order" name="menu_sort_order" value="<?php echo admin_e((string)($pageEditor['menu_sort_order'] ?? 100)); ?>" min="0" step="1">
+                                                        <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_sort_order_help', 'Lower number means earlier display in the user instruction tiles.')); ?></div>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="content_page_menu_title"><?php echo admin_e(admin_t($messages, 'page_menu_title_label', 'Tile name')); ?></label>
@@ -12553,6 +12560,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php endforeach; ?>
                                                                 </div>
                                                                 <div class="text-body-secondary small"><?php echo admin_e((string)($row['slug'] ?? '')); ?></div>
+                                                                <div class="text-body-secondary small"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?>: <?php echo admin_e((string)((int)($row['menu_sort_order'] ?? 100))); ?></div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'page_type_label', 'Type')); ?>">
                                                                 <div class="d-flex flex-column gap-1">

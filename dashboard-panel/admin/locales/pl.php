@@ -1420,6 +1420,7 @@ return [
     'page_section_help' => 'Wybierz Płatności lub Aplikacje, jeśli ta strona ma pojawić się jako kafelek one_box na /instructions.',
     'page_menu_title_label' => 'Nazwa zakładki',
     'page_menu_title_help' => 'Wyświetlana jako tytuł kafelka one_box w UI użytkownika. Puste pole użyje tytułu strony.',
+    'page_menu_sort_order_help' => 'Niższa liczba oznacza wcześniejsze wyświetlanie w kafelkach instrukcji po stronie usera.',
     'page_menu_logo_label' => 'Logo zakładki',
     'page_menu_logo_help' => 'Opcjonalne logo pokazywane nad tytułem kafelka. Najlepiej używać dla instrukcji płatności i aplikacji.',
     'page_menu_logo_current' => 'Obecne logo zakładki',

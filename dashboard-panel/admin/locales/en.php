@@ -1420,6 +1420,7 @@ return [
     'page_section_help' => 'Choose Payments or Applications if this page should appear as a one_box tile on /instructions.',
     'page_menu_title_label' => 'Tile name',
     'page_menu_title_help' => 'Shown as the one_box title in the user UI. Leave empty to use the page title.',
+    'page_menu_sort_order_help' => 'Lower number means earlier display in the user instruction tiles.',
     'page_menu_logo_label' => 'Tile logo',
     'page_menu_logo_help' => 'Optional logo shown above the tile title. Best for payment and application instruction tiles.',
     'page_menu_logo_current' => 'Current tile logo',
