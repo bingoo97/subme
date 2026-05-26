@@ -9,6 +9,11 @@ $applicationInstructionsEnabled = app_application_instructions_enabled($appSetti
 app_ensure_system_content_pages_runtime($db);
 $currentStaticPageLocale = app_static_page_normalize_locale($currentLocale ?? ($user['locale_code'] ?? 'en'));
 
+if (!app_static_page_route_is_publicly_visible($db, 'apps', $currentStaticPageLocale)) {
+    header('Location: /');
+    exit;
+}
+
 $apps = app_apps_seed_data($t, $applicationInstructionsEnabled);
 
 $appsFallbackToGlobalUrl = false;
@@ -24,6 +29,12 @@ foreach ($apps as $index => $app) {
 
     $apps[$index]['url'] = $directUrl;
     $apps[$index]['uses_global_apps_url'] = ($directUrl !== '' && $directUrl === $appsUrl);
+
+    $instructionUrl = trim((string)($apps[$index]['instruction_url'] ?? ''));
+    $instructionRoute = ltrim((string)parse_url($instructionUrl, PHP_URL_PATH), '/');
+    if ($instructionRoute !== '' && !app_static_page_route_is_publicly_visible($db, $instructionRoute, $currentStaticPageLocale)) {
+        $apps[$index]['instruction_url'] = '';
+    }
 }
 
 $staticPage = app_static_page_find_for_route($db, 'apps', $currentStaticPageLocale);

@@ -17236,7 +17236,12 @@ function admin_page_count(Mysql_ks $db): int
     return (int)($row['total'] ?? 0);
 }
 
-function admin_page_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
+function admin_page_locale_code(array $row): string
+{
+    return admin_page_normalize_locale((string)($row['locale_code'] ?? 'pl'));
+}
+
+function admin_page_all_rows(Mysql_ks $db): array
 {
     if (!schema_object_exists($db, 'static_pages')) {
         return [];
@@ -17244,8 +17249,6 @@ function admin_page_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
 
     admin_page_seed_system_rows($db);
     admin_ensure_static_pages_locale_runtime($db);
-    $limit = max(1, min(100, $limit));
-    $offset = max(0, $offset);
 
     $rows = $db->select_full_user(
         "SELECT id, slug, title, body, locale_code, page_type, is_system, is_active, created_at, updated_at
@@ -17254,7 +17257,39 @@ function admin_page_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
          ORDER BY is_system DESC, id ASC"
     );
 
-    $rows = is_array($rows) ? admin_page_sort_rows($rows) : [];
+    return is_array($rows) ? admin_page_sort_rows($rows) : [];
+}
+
+function admin_page_count_by_locale(Mysql_ks $db, string $localeCode): int
+{
+    $localeCode = admin_page_normalize_locale($localeCode);
+    $rows = admin_page_all_rows($db);
+    $rows = array_filter($rows, static function (array $row) use ($localeCode): bool {
+        return admin_page_locale_code($row) === $localeCode;
+    });
+
+    return count($rows);
+}
+
+function admin_page_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
+{
+    $limit = max(1, min(100, $limit));
+    $offset = max(0, $offset);
+    $rows = admin_page_all_rows($db);
+
+    return array_slice($rows, $offset, $limit);
+}
+
+function admin_page_rows_by_locale(Mysql_ks $db, string $localeCode, int $limit = 20, int $offset = 0): array
+{
+    $localeCode = admin_page_normalize_locale($localeCode);
+    $limit = max(1, min(100, $limit));
+    $offset = max(0, $offset);
+    $rows = admin_page_all_rows($db);
+    $rows = array_values(array_filter($rows, static function (array $row) use ($localeCode): bool {
+        return admin_page_locale_code($row) === $localeCode;
+    }));
+
     return array_slice($rows, $offset, $limit);
 }
 
@@ -17281,6 +17316,37 @@ function admin_page_slug_base(string $slug): string
 {
     $slug = strtolower(trim($slug));
     return preg_replace('/-(pl|en)$/', '', $slug) ?? $slug;
+}
+
+function admin_page_group_key(array $row): string
+{
+    $slug = admin_page_slug_base((string)($row['slug'] ?? ''));
+
+    if (in_array($slug, ['apps', 'instructions'], true)) {
+        return 'menu';
+    }
+
+    if (in_array($slug, ['instruction-ott-player', 'instruction-newlook', 'instruction-smart-iptv'], true)) {
+        return 'applications';
+    }
+
+    if (in_array($slug, ['instruction-trust-wallet', 'instruction-revolut', 'instruction-crypto-exchange'], true)) {
+        return 'payments';
+    }
+
+    return 'other';
+}
+
+function admin_page_group_title(string $groupKey, array $messages): string
+{
+    $titles = [
+        'menu' => admin_t($messages, 'page_group_menu', 'MENU'),
+        'applications' => admin_t($messages, 'page_group_applications', 'Applications'),
+        'payments' => admin_t($messages, 'page_group_payments', 'Payments'),
+        'other' => admin_t($messages, 'page_group_other', 'Other pages'),
+    ];
+
+    return (string)($titles[$groupKey] ?? $titles['other']);
 }
 
 function admin_page_visual_badges(array $row, array $messages): array
@@ -17353,6 +17419,26 @@ function admin_page_visual_badges(array $row, array $messages): array
 function admin_page_sort_rows(array $rows): array
 {
     usort($rows, static function (array $left, array $right): int {
+        $groupOrder = [
+            'menu' => 10,
+            'applications' => 20,
+            'payments' => 30,
+            'other' => 40,
+        ];
+        $slugOrder = [
+            'apps' => 10,
+            'instructions' => 20,
+            'instruction-ott-player' => 30,
+            'instruction-newlook' => 40,
+            'instruction-smart-iptv' => 50,
+            'instruction-trust-wallet' => 60,
+            'instruction-revolut' => 70,
+            'instruction-crypto-exchange' => 80,
+        ];
+        $localeOrder = [
+            'pl' => 10,
+            'en' => 20,
+        ];
         $leftSystem = !empty($left['is_system']) ? 1 : 0;
         $rightSystem = !empty($right['is_system']) ? 1 : 0;
         if ($leftSystem !== $rightSystem) {
@@ -17361,6 +17447,18 @@ function admin_page_sort_rows(array $rows): array
 
         $leftBase = admin_page_slug_base((string)($left['slug'] ?? ''));
         $rightBase = admin_page_slug_base((string)($right['slug'] ?? ''));
+        $leftGroupOrder = (int)($groupOrder[admin_page_group_key($left)] ?? 999);
+        $rightGroupOrder = (int)($groupOrder[admin_page_group_key($right)] ?? 999);
+        if ($leftGroupOrder !== $rightGroupOrder) {
+            return $leftGroupOrder <=> $rightGroupOrder;
+        }
+
+        $leftSlugOrder = (int)($slugOrder[$leftBase] ?? 999);
+        $rightSlugOrder = (int)($slugOrder[$rightBase] ?? 999);
+        if ($leftSlugOrder !== $rightSlugOrder) {
+            return $leftSlugOrder <=> $rightSlugOrder;
+        }
+
         $slugCompare = strcmp($leftBase, $rightBase);
         if ($slugCompare !== 0) {
             return $slugCompare;
@@ -17368,6 +17466,12 @@ function admin_page_sort_rows(array $rows): array
 
         $leftLocale = admin_page_normalize_locale((string)($left['locale_code'] ?? 'pl'));
         $rightLocale = admin_page_normalize_locale((string)($right['locale_code'] ?? 'pl'));
+        $leftLocaleOrder = (int)($localeOrder[$leftLocale] ?? 999);
+        $rightLocaleOrder = (int)($localeOrder[$rightLocale] ?? 999);
+        if ($leftLocaleOrder !== $rightLocaleOrder) {
+            return $leftLocaleOrder <=> $rightLocaleOrder;
+        }
+
         $localeCompare = strcmp($leftLocale, $rightLocale);
         if ($localeCompare !== 0) {
             return $localeCompare;

@@ -1618,6 +1618,7 @@ $faqFormState = [
 $pageEditorId = 0;
 $pageEditor = null;
 $pageShowCreate = false;
+$pageLocaleTab = $currentLocale === 'en' ? 'en' : 'pl';
 $pageListPage = 1;
 $pageListPerPage = 20;
 $pageListTotal = 0;
@@ -2546,8 +2547,13 @@ if ($route === 'faq') {
 }
 
 if ($route === 'pages') {
+    $pageLocaleTab = admin_page_normalize_locale((string)($_GET['page_locale_tab'] ?? $pageLocaleTab));
+    if (!in_array($pageLocaleTab, ['pl', 'en'], true)) {
+        $pageLocaleTab = $currentLocale === 'en' ? 'en' : 'pl';
+    }
+
     $pageListPage = max(1, (int)($_GET['page_list_page'] ?? 1));
-    $pageListTotal = admin_page_count($db);
+    $pageListTotal = admin_page_count_by_locale($db, $pageLocaleTab);
     $pageListTotalPages = max(1, (int)ceil($pageListTotal / $pageListPerPage));
     if ($pageListPage > $pageListTotalPages) {
         $pageListPage = $pageListTotalPages;
@@ -2558,6 +2564,7 @@ if ($route === 'pages') {
 
     if (isset($_POST['admin_create_page'])) {
         $pageShowCreate = true;
+        $pageLocaleTab = admin_page_normalize_locale((string)($_POST['page_locale_tab'] ?? $pageLocaleTab));
         $pageListPage = max(1, (int)($_POST['page_list_page'] ?? $pageListPage));
         $pageFormState = [
             'locale_code' => admin_page_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
@@ -2573,7 +2580,8 @@ if ($route === 'pages') {
         } else {
             $createResult = admin_create_page($db, $_POST);
             if (!empty($createResult['ok']) && !empty($createResult['page_id'])) {
-                header('Location: /admin/?page=pages&edit_page=' . (int)$createResult['page_id'] . '&page_list_page=' . $pageListPage . '&created_page=1');
+                $pageRedirectLocaleTab = admin_page_normalize_locale((string)($pageFormState['locale_code'] ?? $pageLocaleTab));
+                header('Location: /admin/?page=pages&edit_page=' . (int)$createResult['page_id'] . '&page_list_page=' . $pageListPage . '&page_locale_tab=' . rawurlencode($pageRedirectLocaleTab) . '&created_page=1');
                 exit;
             }
 
@@ -2584,6 +2592,7 @@ if ($route === 'pages') {
 
     if (isset($_POST['admin_save_page'])) {
         $pageEditorId = (int)($_POST['page_id'] ?? 0);
+        $pageLocaleTab = admin_page_normalize_locale((string)($_POST['page_locale_tab'] ?? $pageLocaleTab));
         $pageListPage = max(1, (int)($_POST['page_list_page'] ?? $pageListPage));
         $pageFormState = [
             'locale_code' => admin_page_normalize_locale((string)($_POST['locale_code'] ?? 'pl')),
@@ -2599,7 +2608,8 @@ if ($route === 'pages') {
         } else {
             $saveResult = admin_save_page($db, $pageEditorId, $_POST);
             if (!empty($saveResult['ok'])) {
-                header('Location: /admin/?page=pages&edit_page=' . $pageEditorId . '&page_list_page=' . $pageListPage . '&saved_page=1');
+                $pageRedirectLocaleTab = admin_page_normalize_locale((string)($pageFormState['locale_code'] ?? $pageLocaleTab));
+                header('Location: /admin/?page=pages&edit_page=' . $pageEditorId . '&page_list_page=' . $pageListPage . '&page_locale_tab=' . rawurlencode($pageRedirectLocaleTab) . '&saved_page=1');
                 exit;
             }
 
@@ -2609,6 +2619,7 @@ if ($route === 'pages') {
     }
 
     if (isset($_POST['admin_delete_page'])) {
+        $pageLocaleTab = admin_page_normalize_locale((string)($_POST['page_locale_tab'] ?? $pageLocaleTab));
         $pageListPage = max(1, (int)($_POST['page_list_page'] ?? $pageListPage));
 
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
@@ -2617,13 +2628,17 @@ if ($route === 'pages') {
         } else {
             $deleteResult = admin_delete_page($db, (int)($_POST['page_id'] ?? 0));
             if (!empty($deleteResult['ok'])) {
-                header('Location: /admin/?page=pages&page_list_page=' . $pageListPage . '&deleted_page=1');
+                header('Location: /admin/?page=pages&page_list_page=' . $pageListPage . '&page_locale_tab=' . rawurlencode($pageLocaleTab) . '&deleted_page=1');
                 exit;
             }
 
             $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'page_delete_error', 'Unable to delete page.'));
             $pageAlertType = 'danger';
         }
+    }
+
+    if ($pageShowCreate && !isset($_POST['admin_create_page'])) {
+        $pageFormState['locale_code'] = $pageLocaleTab;
     }
 
     if ($pageEditorId > 0) {
@@ -12258,7 +12273,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'page_create_title', 'Add page')); ?></h3>
                                                 </div>
-                                                <a href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                <a href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>&amp;page_locale_tab=<?php echo admin_e($pageLocaleTab); ?>" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'back_to_pages', 'Back to pages')); ?></span>
                                                 </a>
@@ -12267,6 +12282,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <form method="post" class="admin-editor-form">
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
+                                                <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
 
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
@@ -12322,7 +12338,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'page_editor_title', 'Edit page')); ?></h3>
                                                 </div>
-                                                <a href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-outline-dark btn-sm">
+                                                <a href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>&amp;page_locale_tab=<?php echo admin_e($pageLocaleTab); ?>" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                     <span><?php echo admin_e(admin_t($messages, 'back_to_pages', 'Back to pages')); ?></span>
                                                 </a>
@@ -12332,6 +12348,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                 <input type="hidden" name="page_id" value="<?php echo admin_e((string)$pageEditor['id']); ?>">
                                                 <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
+                                                <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
 
                                                 <div class="row g-3">
                                                     <div class="col-md-3">
@@ -12398,14 +12415,27 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         break;
                                     endif;
 
-                                    $pageRows = admin_page_rows($db, $pageListPerPage, ($pageListPage - 1) * $pageListPerPage);
+                                    $pageRows = admin_page_rows_by_locale($db, $pageLocaleTab, $pageListPerPage, ($pageListPage - 1) * $pageListPerPage);
+                                    $pageLocaleTabs = [
+                                        'pl' => admin_t($messages, 'page_locale_tab_pl', 'PL'),
+                                        'en' => admin_t($messages, 'page_locale_tab_en', 'EN'),
+                                    ];
                                     ?>
                                     <div class="admin-section-actions">
-                                        <a href="/admin/?page=pages&amp;view=create&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-dark">
+                                        <a href="/admin/?page=pages&amp;view=create&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>&amp;page_locale_tab=<?php echo admin_e($pageLocaleTab); ?>" class="btn btn-dark">
                                             <i class="bi bi-plus-circle" aria-hidden="true"></i>
                                             <span><?php echo admin_e(admin_t($messages, 'page_add_new', 'Add page')); ?></span>
                                         </a>
                                     </div>
+                                    <ul class="nav nav-tabs admin-pages-locale-tabs" aria-label="<?php echo admin_e(admin_t($messages, 'locale_switch', 'Language')); ?>">
+                                        <?php foreach ($pageLocaleTabs as $localeCode => $localeLabel): ?>
+                                            <li class="nav-item">
+                                                <a class="nav-link<?php echo $pageLocaleTab === $localeCode ? ' active' : ''; ?>" href="/admin/?page=pages&amp;page_locale_tab=<?php echo admin_e($localeCode); ?>&amp;page_list_page=1">
+                                                    <?php echo admin_e($localeLabel); ?>
+                                                </a>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
                                     <?php if ($pageRows): ?>
                                         <div class="table-responsive">
                                             <table class="table admin-table align-middle">
@@ -12419,12 +12449,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </tr>
                                                 </thead>
                                                 <tbody>
+                                                    <?php $pageCurrentGroup = null; ?>
                                                     <?php foreach ($pageRows as $row): ?>
+                                                        <?php $pageRowGroup = admin_page_group_key((array)$row); ?>
+                                                        <?php if ($pageCurrentGroup !== $pageRowGroup): ?>
+                                                            <tr class="admin-pages-group-row">
+                                                                <td colspan="5"><?php echo admin_e(admin_page_group_title($pageRowGroup, $messages)); ?></td>
+                                                            </tr>
+                                                            <?php $pageCurrentGroup = $pageRowGroup; ?>
+                                                        <?php endif; ?>
                                                         <tr>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
                                                                 <div class="d-flex align-items-center gap-2 flex-wrap">
                                                                     <strong><?php echo admin_e((string)($row['title'] ?? '')); ?></strong>
-                                                                    <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(strtoupper((string)($row['locale_code'] ?? 'pl'))); ?></span>
                                                                     <?php foreach (admin_page_visual_badges((array)$row, $messages) as $pageBadge): ?>
                                                                         <span class="admin-page-tag" style="--page-tag-bg: <?php echo admin_e((string)($pageBadge['bg'] ?? '#f3f4f6')); ?>; --page-tag-color: <?php echo admin_e((string)($pageBadge['text'] ?? '#111827')); ?>;">
                                                                             <?php echo admin_e((string)($pageBadge['label'] ?? '')); ?>
@@ -12449,7 +12486,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-wallet-actions">
-                                                                    <a href="/admin/?page=pages&amp;edit_page=<?php echo admin_e((string)$row['id']); ?>&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>" class="btn btn-dark btn-sm">
+                                                                    <a href="/admin/?page=pages&amp;edit_page=<?php echo admin_e((string)$row['id']); ?>&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>&amp;page_locale_tab=<?php echo admin_e($pageLocaleTab); ?>" class="btn btn-dark btn-sm">
                                                                         <i class="bi bi-pencil-square" aria-hidden="true"></i>
                                                                     </a>
                                                                     <?php if (empty($row['is_system'])): ?>
@@ -12457,6 +12494,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                             <input type="hidden" name="page_id" value="<?php echo admin_e((string)$row['id']); ?>">
                                                                             <input type="hidden" name="page_list_page" value="<?php echo admin_e((string)$pageListPage); ?>">
+                                                                            <input type="hidden" name="page_locale_tab" value="<?php echo admin_e($pageLocaleTab); ?>">
                                                                             <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_page" title="<?php echo admin_e(admin_t($messages, 'page_delete_button', 'Delete page')); ?>">
                                                                                 <i class="bi bi-trash" aria-hidden="true"></i>
                                                                             </button>
@@ -12474,7 +12512,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <ul class="pagination admin-pagination">
                                                     <?php for ($pageNumber = 1; $pageNumber <= $pageListTotalPages; $pageNumber++): ?>
                                                         <li class="page-item<?php echo $pageNumber === $pageListPage ? ' active' : ''; ?>">
-                                                            <a class="page-link" href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                            <a class="page-link" href="/admin/?page=pages&amp;page_list_page=<?php echo admin_e((string)$pageNumber); ?>&amp;page_locale_tab=<?php echo admin_e($pageLocaleTab); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
                                                         </li>
                                                     <?php endfor; ?>
                                                 </ul>

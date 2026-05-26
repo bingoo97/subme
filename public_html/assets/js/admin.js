@@ -588,7 +588,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
             var source = doc.createElement('textarea');
             source.className = 'admin-rich-editor__source form-control';
+            source.setAttribute('rows', '20');
             source.setAttribute('hidden', 'hidden');
+            source.style.minHeight = '500px';
 
             var fileInput = doc.createElement('input');
             fileInput.type = 'file';
@@ -636,6 +638,12 @@ document.addEventListener('DOMContentLoaded', function () {
             function syncSurfaceFromSource() {
                 surface.innerHTML = sanitizeHtml(source.value);
                 syncTextareaFromSurface(false);
+            }
+
+            function ensureSourceEditorHeight() {
+                var targetHeight = Math.max(500, surface.offsetHeight || 0, source.scrollHeight || 0);
+                source.style.minHeight = '500px';
+                source.style.height = targetHeight + 'px';
             }
 
             function updateToggleButton() {
@@ -730,6 +738,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     syncSourceFromSurface();
                     surface.setAttribute('hidden', 'hidden');
                     source.removeAttribute('hidden');
+                    ensureSourceEditorHeight();
                     source.focus();
                 }
                 updateToggleButton();
@@ -1005,6 +1014,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             source.addEventListener('input', function () {
                 textarea.value = source.value;
+                ensureSourceEditorHeight();
                 dispatchTextareaEvent('input');
             });
 

@@ -11,8 +11,23 @@ app_ensure_system_content_pages_runtime($db);
 $currentStaticPageLocale = app_static_page_normalize_locale($currentLocale ?? ($user['locale_code'] ?? 'en'));
 
 $instructionGuides = app_instruction_guides_seed_data($t, $applicationInstructionsEnabled);
+$instructionGuides = array_values(array_filter($instructionGuides, static function (array $guide) use ($db, $currentStaticPageLocale): bool {
+    $href = trim((string)($guide['href'] ?? ''));
+    $route = ltrim((string)parse_url($href, PHP_URL_PATH), '/');
+
+    if ($route === '') {
+        return false;
+    }
+
+    return app_static_page_route_is_publicly_visible($db, $route, $currentStaticPageLocale);
+}));
 
 if ($site === 'instructions') {
+    if (!app_static_page_route_is_publicly_visible($db, 'instructions', $currentStaticPageLocale)) {
+        header('Location: /');
+        exit;
+    }
+
     $staticPage = app_static_page_find_for_route($db, 'instructions', $currentStaticPageLocale);
     $staticPageBody = is_array($staticPage) && !empty($staticPage['id'])
         ? (string)($staticPage['body'] ?? '')
@@ -40,6 +55,11 @@ $guideMap = [
 ];
 
 if (isset($guideMap[$site])) {
+    if (!app_static_page_route_is_publicly_visible($db, $site, $currentStaticPageLocale)) {
+        header('Location: /instructions');
+        exit;
+    }
+
     if (in_array($site, ['instruction-smart-iptv', 'instruction-ott-player', 'instruction-newlook'], true) && !$applicationInstructionsEnabled) {
         header('Location: /instructions');
         exit;

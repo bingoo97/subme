@@ -300,6 +300,11 @@ if (!function_exists('app_instruction_guides_seed_data')) {
                 'title' => localization_translate($messages, 'instructions_crypto_exchange'),
             ],
             [
+                'href' => '/instruction-smart-iptv',
+                'icon' => 'fa-television',
+                'title' => localization_translate($messages, 'instructions_smart_iptv'),
+            ],
+            [
                 'href' => '/instruction-ott-player',
                 'icon' => 'fa-play-circle',
                 'title' => localization_translate($messages, 'instructions_ott_player'),
@@ -313,7 +318,7 @@ if (!function_exists('app_instruction_guides_seed_data')) {
 
         if (!$applicationInstructionsEnabled) {
             $guides = array_values(array_filter($guides, static function (array $guide): bool {
-                return !in_array((string)($guide['href'] ?? ''), ['/instruction-ott-player', '/instruction-newlook'], true);
+                return !in_array((string)($guide['href'] ?? ''), ['/instruction-smart-iptv', '/instruction-ott-player', '/instruction-newlook'], true);
             }));
         }
 
@@ -913,6 +918,51 @@ if (!function_exists('app_static_page_find_for_route')) {
         }
 
         return null;
+    }
+}
+
+if (!function_exists('app_static_page_route_is_publicly_visible')) {
+    function app_static_page_route_is_publicly_visible(Mysql_ks $db, string $baseSlug, ?string $localeCode): bool
+    {
+        if (!schema_object_exists($db, 'static_pages')) {
+            return true;
+        }
+
+        app_ensure_static_pages_runtime_columns($db);
+        $baseSlug = trim($baseSlug);
+        if ($baseSlug === '') {
+            return false;
+        }
+
+        $localeCode = app_static_page_normalize_locale($localeCode);
+        $candidateSlugs = [
+            app_static_page_locale_slug($baseSlug, $localeCode),
+            app_static_page_locale_slug($baseSlug, 'en'),
+            app_static_page_locale_slug($baseSlug, 'pl'),
+        ];
+
+        $seen = [];
+        foreach ($candidateSlugs as $candidateSlug) {
+            if ($candidateSlug === '' || isset($seen[$candidateSlug])) {
+                continue;
+            }
+
+            $seen[$candidateSlug] = true;
+            $safeSlug = $db->escape($candidateSlug);
+            $row = $db->select_user(
+                "SELECT id, is_active
+                 FROM static_pages
+                 WHERE slug = '{$safeSlug}'
+                   AND page_type = 'page'
+                 LIMIT 1"
+            );
+
+            if (is_array($row) && !empty($row['id'])) {
+                return !empty($row['is_active']);
+            }
+        }
+
+        return true;
     }
 }
 

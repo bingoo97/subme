@@ -61,6 +61,9 @@
 		groupAvatarPreviewUrl: '',
 		resellerViewMode: 'list',
 		conversationTransitionTimer: null,
+		scrollToBottomTimers: [],
+		scrollToBottomFrame: null,
+		suppressAutoOpenOnce: false,
 		restoreOpenScrollToBottomPending: false,
 		messagePageSize: 10,
 		loadOlderBatchSize: 5,
@@ -169,9 +172,14 @@
 
 			$scroll.off('.messengerUiScroll');
 			$scroll.on('scroll.messengerUiScroll', function () {
+				var previousTop = self.lastKnownScrollTop;
 				var distanceFromBottom = Math.max(0, this.scrollHeight - this.clientHeight - this.scrollTop);
+				var scrolledUp = this.scrollTop < (previousTop - 2);
 				self.lastKnownScrollTop = this.scrollTop;
-				self.userBrowsingHistory = distanceFromBottom > 24;
+				self.userBrowsingHistory = scrolledUp ? distanceFromBottom > 8 : distanceFromBottom > 24;
+				if (self.userBrowsingHistory) {
+					self.clearScheduledScrollToBottom();
+				}
 				self.queueOlderMessagesLoad();
 			});
 		},
@@ -457,6 +465,11 @@
 			return 'messenger:panel-open:' + String(cfg.userId || 0);
 		},
 
+		panelCollapseOnceStorageKey: function () {
+			var cfg = this.config();
+			return 'messenger:panel-collapse-once:' + String(cfg.userId || 0);
+		},
+
 		activeConversationStorageKey: function () {
 			var cfg = this.config();
 			return 'messenger:active-conversation:' + String(cfg.userId || 0);
@@ -518,6 +531,18 @@
 			}
 		},
 
+		requestSingleNavigationCollapse: function () {
+			if (!this.storageAvailable()) {
+				return;
+			}
+
+			try {
+				window.sessionStorage.setItem(this.panelCollapseOnceStorageKey(), '1');
+			} catch (error) {
+				return;
+			}
+		},
+
 		restorePanelState: function () {
 			if (this.isDesktopDocked()) {
 				return true;
@@ -529,6 +554,39 @@
 				return window.localStorage.getItem(this.panelStateStorageKey()) === '1';
 			} catch (error) {
 				return false;
+			}
+		},
+
+		consumeSingleNavigationCollapse: function () {
+			var key = this.panelCollapseOnceStorageKey();
+			var shouldCollapse = false;
+
+			if (!this.storageAvailable()) {
+				return false;
+			}
+
+			try {
+				shouldCollapse = window.sessionStorage.getItem(key) === '1';
+				window.sessionStorage.removeItem(key);
+			} catch (error) {
+				return false;
+			}
+
+			return shouldCollapse;
+		},
+
+		prepareForInternalNavigation: function () {
+			this.requestSingleNavigationCollapse();
+			this.clearScheduledScrollToBottom();
+			this.closeGroupMenu();
+			this.closeGroupSettingsMenu();
+			this.closeGroupMembersPopover();
+
+			if (!this.isDesktopDocked()) {
+				this.widget().removeClass('is-open');
+				this.heading().attr('aria-expanded', 'false');
+				this.panel().attr('aria-hidden', 'true').removeClass('in is-visible').stop(true, true).hide();
+				this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
 			}
 		},
 
@@ -637,6 +695,14 @@
 					$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
 					this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
 				}
+				return;
+			}
+
+			if (this.suppressAutoOpenOnce) {
+				$widget.removeClass('is-open');
+				this.heading().attr('aria-expanded', 'false');
+				$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
+				this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
 				return;
 			}
 
@@ -802,6 +868,21 @@
 			}
 		},
 
+		clearScheduledScrollToBottom: function () {
+			if (this.scrollToBottomTimers && this.scrollToBottomTimers.length) {
+				this.scrollToBottomTimers.forEach(function (timerId) {
+					window.clearTimeout(timerId);
+				});
+			}
+			this.scrollToBottomTimers = [];
+
+			if (this.scrollToBottomFrame) {
+				var cancelRaf = window.cancelAnimationFrame || window.clearTimeout;
+				cancelRaf(this.scrollToBottomFrame);
+				this.scrollToBottomFrame = null;
+			}
+		},
+
 		restoreScrollPosition: function (scrollTop) {
 			var metrics = this.getScrollMetrics();
 			var safeScrollTop = Math.max(0, parseInt(scrollTop || 0, 10) || 0);
@@ -822,23 +903,33 @@
 			};
 			var delays = [0, 80, 220, 480, 900];
 
+			this.clearScheduledScrollToBottom();
+
 			if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
 				delays = delays.concat([1300, 1800]);
 			}
 
 			delays.forEach(function (delay) {
-				window.setTimeout(function () {
+				var timerId = window.setTimeout(function () {
 					if (self.hasResellerInboxLayout() && self.hasActiveConversationSelection() && self.resellerViewMode === 'conversation') {
 						self.showConversationView();
+					}
+					if (self.userBrowsingHistory) {
+						return;
 					}
 					self.refreshOpenLayout(true);
 					self.scrollToBottom();
 				}, delay);
+				self.scrollToBottomTimers.push(timerId);
 			});
 
-			raf(function () {
+			this.scrollToBottomFrame = raf(function () {
+				self.scrollToBottomFrame = null;
 				if (self.hasResellerInboxLayout() && self.hasActiveConversationSelection() && self.resellerViewMode === 'conversation') {
 					self.showConversationView();
+				}
+				if (self.userBrowsingHistory) {
+					return;
 				}
 				self.refreshOpenLayout(true);
 				self.scrollToBottom();
@@ -2910,24 +3001,16 @@
 
 		handlePaymentCardRedirect: function (url) {
 			var targetUrl = $.trim(String(url || ''));
-			var self = this;
 
 			if (!targetUrl) {
 				return false;
 			}
 
-			this.closeGroupMenu();
-			this.closeGroupSettingsMenu();
-			this.closeGroupMembersPopover();
-			this.close();
+			this.prepareForInternalNavigation();
 
 			window.setTimeout(function () {
 				window.location.assign(targetUrl);
 			}, 190);
-
-			window.setTimeout(function () {
-				self.close();
-			}, 20);
 
 			return false;
 		},
@@ -3992,6 +4075,26 @@
 				return self.handlePaymentCardRedirect(href);
 			});
 
+			$(document).on('click.messengerUi', '[data-chat-message-bubble] a[href]', function (event) {
+				var $link = $(this);
+				var href = $.trim(String($link.attr('href') || ''));
+				var target = String($link.attr('target') || '').toLowerCase();
+
+				if (event.isDefaultPrevented() || event.which > 1 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+					return;
+				}
+
+				if (!href || href.charAt(0) === '#' || /^javascript:/i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href)) {
+					return;
+				}
+
+				if (target === '_blank' || $link.is('[download], [data-chat-scroll-to-message], [data-chat-profile-open], .chat-payment-card__button')) {
+					return;
+				}
+
+				self.prepareForInternalNavigation();
+			});
+
 			$(document).on('click.messengerUi', '[data-chat-conversation-tab]', function (event) {
 				event.preventDefault();
 				self.closeGroupMenu();
@@ -4185,6 +4288,7 @@
 
 		init: function () {
 			var shouldRestoreOpenState;
+			var shouldSuppressAutoOpen;
 			var requestedConversationId;
 			if (this.initDone) {
 				this.refreshOpenLayout(false);
@@ -4193,6 +4297,11 @@
 			}
 
 			shouldRestoreOpenState = this.restorePanelState();
+			shouldSuppressAutoOpen = this.consumeSingleNavigationCollapse();
+			this.suppressAutoOpenOnce = shouldSuppressAutoOpen;
+			if (shouldSuppressAutoOpen) {
+				shouldRestoreOpenState = false;
+			}
 			requestedConversationId = this.requestedConversationIdFromUrl();
 			this.restoreOpenScrollToBottomPending = !!shouldRestoreOpenState;
 			this.updateViewportMetrics();
@@ -4214,11 +4323,12 @@
 			this.syncDesktopDockedState();
 			this.resetGroupModal();
 			this.bind();
-			if (shouldRestoreOpenState || this.isDesktopDocked()) {
+			if (shouldRestoreOpenState || (this.isDesktopDocked() && !shouldSuppressAutoOpen)) {
 				this.open();
 			} else {
 				this.fetch({ force: true });
 			}
+			this.suppressAutoOpenOnce = false;
 			this.schedulePoll();
 			this.initDone = true;
 		}
