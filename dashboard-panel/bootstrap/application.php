@@ -7702,6 +7702,79 @@ function app_contact_subject_prefix(array $settings, string $subjectLabel): stri
     return trim($prefix . ' ' . $subjectLabel);
 }
 
+function app_contact_email_strings(string $localeCode): array
+{
+    if (app_normalize_email_locale($localeCode) === 'pl') {
+        return [
+            'greeting' => 'Witaj,',
+            'support_intro' => 'Przez formularz kontaktowy przyszła nowa wiadomość.',
+            'copy_intro' => 'Otrzymaliśmy Twoją wiadomość z formularza kontaktowego.',
+            'site_label' => 'Strona',
+            'email_label' => 'Email',
+            'subject_label' => 'Temat',
+            'ip_label' => 'IP',
+            'url_label' => 'URL',
+            'message_heading' => 'Treść wiadomości',
+            'copy_message_heading' => 'Treść Twojej wiadomości',
+            'support_reply_hint' => 'Możesz odpowiedzieć bezpośrednio na tę wiadomość email.',
+            'copy_outro' => 'Support odpowie tak szybko, jak to możliwe.',
+        ];
+    }
+
+    return [
+        'greeting' => 'Hello,',
+        'support_intro' => 'A new message arrived through the contact form.',
+        'copy_intro' => 'We received your contact form message.',
+        'site_label' => 'Site',
+        'email_label' => 'Email',
+        'subject_label' => 'Subject',
+        'ip_label' => 'IP',
+        'url_label' => 'URL',
+        'message_heading' => 'Message',
+        'copy_message_heading' => 'Your message',
+        'support_reply_hint' => 'You can reply directly to this email.',
+        'copy_outro' => 'Support will reply as soon as possible.',
+    ];
+}
+
+function app_contact_email_meta_table_html(array $rows): string
+{
+    if ($rows === []) {
+        return '';
+    }
+
+    $html = '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:separate;border-spacing:0;margin:18px 0 0 0;background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">';
+
+    foreach ($rows as $index => $row) {
+        $label = htmlspecialchars((string)($row['label'] ?? ''), ENT_QUOTES, 'UTF-8');
+        $value = (string)($row['value_html'] ?? '');
+        $borderStyle = $index > 0 ? 'border-top:1px solid #e5e7eb;' : '';
+        $html .= '<tr>'
+            . '<td style="width:148px;padding:12px 16px;font-family:Arial,sans-serif;font-size:13px;line-height:1.45;color:#6b7280;font-weight:700;vertical-align:top;' . $borderStyle . '">' . $label . '</td>'
+            . '<td style="padding:12px 16px;font-family:Arial,sans-serif;font-size:14px;line-height:1.55;color:#111827;vertical-align:top;' . $borderStyle . '">' . $value . '</td>'
+            . '</tr>';
+    }
+
+    $html .= '</table>';
+    return $html;
+}
+
+function app_contact_email_message_card_html(string $heading, string $message): string
+{
+    $messageText = trim(app_email_plain_text($message));
+    if ($messageText === '') {
+        return '';
+    }
+
+    $safeHeading = htmlspecialchars($heading, ENT_QUOTES, 'UTF-8');
+    $safeMessage = nl2br(htmlspecialchars($messageText, ENT_QUOTES, 'UTF-8'));
+
+    return '<div style="margin-top:18px;padding:18px 18px 16px 18px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;">'
+        . '<div style="font-family:Arial,sans-serif;font-size:13px;line-height:1.4;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6b7280;margin:0 0 10px 0;">' . $safeHeading . '</div>'
+        . '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#111827;margin:0;">' . $safeMessage . '</div>'
+        . '</div>';
+}
+
 function app_contact_support_body(array $settings, string $email, string $subjectLabel, string $message, string $clientIp = ''): string
 {
     $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
@@ -7729,6 +7802,70 @@ function app_contact_support_body(array $settings, string $email, string $subjec
     return implode("\n", $bodyLines);
 }
 
+function app_contact_support_body_html(
+    array $settings,
+    string $email,
+    string $subjectLabel,
+    string $message,
+    string $clientIp = '',
+    string $localeCode = 'en'
+): string {
+    $localeCode = app_normalize_email_locale($localeCode);
+    $strings = app_contact_email_strings($localeCode);
+    $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
+    $siteUrl = trim((string)($settings['site_url'] ?? $settings['page_url'] ?? ''));
+    $safeEmail = htmlspecialchars(trim($email), ENT_QUOTES, 'UTF-8');
+    $safeSubject = htmlspecialchars(trim($subjectLabel), ENT_QUOTES, 'UTF-8');
+    $rows = [
+        [
+            'label' => $strings['email_label'],
+            'value_html' => '<a href="mailto:' . $safeEmail . '" style="color:#111827;text-decoration:none;font-weight:700;">' . $safeEmail . '</a>',
+        ],
+        [
+            'label' => $strings['subject_label'],
+            'value_html' => '<strong>' . $safeSubject . '</strong>',
+        ],
+    ];
+
+    if ($siteName !== '') {
+        $siteValue = htmlspecialchars($siteName, ENT_QUOTES, 'UTF-8');
+        if ($siteUrl !== '') {
+            $siteValue = '<a href="' . htmlspecialchars($siteUrl, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:none;font-weight:700;">' . $siteValue . '</a>';
+        }
+        array_unshift($rows, [
+            'label' => $strings['site_label'],
+            'value_html' => $siteValue,
+        ]);
+    }
+
+    if ($clientIp !== '') {
+        $rows[] = [
+            'label' => $strings['ip_label'],
+            'value_html' => htmlspecialchars($clientIp, ENT_QUOTES, 'UTF-8'),
+        ];
+    }
+
+    if ($siteUrl !== '') {
+        $safeSiteUrl = htmlspecialchars($siteUrl, ENT_QUOTES, 'UTF-8');
+        $rows[] = [
+            'label' => $strings['url_label'],
+            'value_html' => '<a href="' . $safeSiteUrl . '" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:none;">' . $safeSiteUrl . '</a>',
+        ];
+    }
+
+    return '<h3 style="margin:0 0 12px 0;font-family:Arial,sans-serif;font-size:24px;line-height:1.25;color:#111827;">'
+        . htmlspecialchars($strings['greeting'], ENT_QUOTES, 'UTF-8')
+        . '</h3>'
+        . '<p style="margin:0;font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#374151;">'
+        . htmlspecialchars($strings['support_intro'], ENT_QUOTES, 'UTF-8')
+        . '</p>'
+        . app_contact_email_meta_table_html($rows)
+        . app_contact_email_message_card_html($strings['message_heading'], $message)
+        . '<p style="margin:18px 0 0 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;color:#6b7280;">'
+        . htmlspecialchars($strings['support_reply_hint'], ENT_QUOTES, 'UTF-8')
+        . '</p>';
+}
+
 function app_contact_copy_body(array $settings, string $subjectLabel, string $message): string
 {
     $siteName = trim((string)($settings['site_name'] ?? $settings['page_name'] ?? 'Subscription Panel'));
@@ -7748,6 +7885,42 @@ function app_contact_copy_body(array $settings, string $subjectLabel, string $me
         $siteName !== '' ? $siteName : 'Subscription Panel',
         $siteUrl,
     ]);
+}
+
+function app_contact_copy_body_html(
+    array $settings,
+    string $email,
+    string $subjectLabel,
+    string $message,
+    string $localeCode = 'en'
+): string {
+    $localeCode = app_normalize_email_locale($localeCode);
+    $strings = app_contact_email_strings($localeCode);
+    $safeEmail = htmlspecialchars(trim($email), ENT_QUOTES, 'UTF-8');
+    $safeSubject = htmlspecialchars(trim($subjectLabel), ENT_QUOTES, 'UTF-8');
+
+    $rows = [
+        [
+            'label' => $strings['email_label'],
+            'value_html' => '<a href="mailto:' . $safeEmail . '" style="color:#111827;text-decoration:none;font-weight:700;">' . $safeEmail . '</a>',
+        ],
+        [
+            'label' => $strings['subject_label'],
+            'value_html' => '<strong>' . $safeSubject . '</strong>',
+        ],
+    ];
+
+    return '<h3 style="margin:0 0 12px 0;font-family:Arial,sans-serif;font-size:24px;line-height:1.25;color:#111827;">'
+        . htmlspecialchars($strings['greeting'], ENT_QUOTES, 'UTF-8')
+        . '</h3>'
+        . '<p style="margin:0;font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#374151;">'
+        . htmlspecialchars($strings['copy_intro'], ENT_QUOTES, 'UTF-8')
+        . '</p>'
+        . app_contact_email_meta_table_html($rows)
+        . app_contact_email_message_card_html($strings['copy_message_heading'], $message)
+        . '<p style="margin:18px 0 0 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;color:#6b7280;">'
+        . htmlspecialchars($strings['copy_outro'], ENT_QUOTES, 'UTF-8')
+        . '</p>';
 }
 
 function app_customer_presence_key(Mysql_ks $db, int $customerId, string $lastSeenAt = '', ?int $currentTime = null): string

@@ -39,6 +39,7 @@ return [
         'contact_submit' => 'Send message',
         'contact_success' => 'Your message has been sent to support.',
         'contact_copy_success' => 'A copy of the message was also sent to your email.',
+        'contact_copy_failed' => 'The message was sent to support, but the copy could not be delivered to your email. Please check spam or try again later.',
         'contact_disabled_notice' => 'The contact form is currently disabled.',
         'contact_rate_limited' => 'A message was sent recently. Please wait a moment before trying again.',
         'contact_copy_subject' => 'Contact form confirmation',

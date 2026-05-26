@@ -84,6 +84,7 @@ switch ($site) {
             $email = strtolower($contactForm['email']);
             $subjectLabel = $contactSubjectOptions[$contactForm['subject']];
             $clientIp = isset($_SERVER['REMOTE_ADDR']) ? trim((string)$_SERVER['REMOTE_ADDR']) : '';
+            $contactLocaleCode = app_normalize_email_locale((string)($_SESSION['lang'] ?? ($user['locale_code'] ?? ($settings['default_locale_code'] ?? 'en'))));
 
             try {
                 $supportMail = app_email_mailer($settings);
@@ -94,7 +95,19 @@ switch ($site) {
                     app_contact_subject_prefix($settings, $subjectLabel),
                     'Contact form message'
                 );
-                $supportMail->Body = app_contact_support_body(
+                $supportMail->Body = app_email_wrap_html(
+                    $settings,
+                    app_contact_support_body_html(
+                        $settings,
+                        $email,
+                        $subjectLabel,
+                        $contactForm['message'],
+                        $clientIp,
+                        $contactLocaleCode
+                    ),
+                    $contactLocaleCode
+                );
+                $supportMail->AltBody = app_contact_support_body(
                     $settings,
                     $email,
                     $subjectLabel,
@@ -103,21 +116,40 @@ switch ($site) {
                 );
                 $supportMail->send();
 
-                if ($contactForm['send_copy']) {
-                    $copyMail = app_email_mailer($settings);
-                    $copyMail->addAddress($email);
-                    $copyMail->Subject = app_email_subject(
-                        localization_translate($t, 'contact_copy_subject', 'Contact form confirmation'),
-                        'Contact form confirmation'
-                    );
-                    $copyMail->Body = app_contact_copy_body($settings, $subjectLabel, $contactForm['message']);
-                    $copyMail->send();
+                $copySent = false;
+                $copyRequested = !empty($contactForm['send_copy']);
+                if ($copyRequested) {
+                    try {
+                        $copyMail = app_email_mailer($settings);
+                        $copyMail->addAddress($email);
+                        $copyMail->Subject = app_email_subject(
+                            localization_translate($t, 'contact_copy_subject', 'Contact form confirmation'),
+                            'Contact form confirmation'
+                        );
+                        $copyMail->Body = app_email_wrap_html(
+                            $settings,
+                            app_contact_copy_body_html(
+                                $settings,
+                                $email,
+                                $subjectLabel,
+                                $contactForm['message'],
+                                $contactLocaleCode
+                            ),
+                            $contactLocaleCode
+                        );
+                        $copyMail->AltBody = app_contact_copy_body($settings, $subjectLabel, $contactForm['message']);
+                        $copyMail->send();
+                        $copySent = true;
+                    } catch (\Throwable $copyException) {
+                        $copyError = $copyException->getMessage();
+                        error_log('[contact-copy-send-failed] ' . $copyError);
+                    }
                 }
 
                 app_contact_mark_sent();
 
                 $successMessage = localization_translate($t, 'contact_success');
-                if ($contactForm['send_copy']) {
+                if ($copyRequested && $copySent) {
                     $successMessage .= ' ' . localization_translate($t, 'contact_copy_success');
                 }
 
@@ -129,6 +161,9 @@ switch ($site) {
                 ];
                 $smarty->assign('contact_form', $contactForm);
                 $smarty->assign('alert', $successMessage);
+                if ($copyRequested && !$copySent) {
+                    $smarty->assign('alert_error', localization_translate($t, 'contact_copy_failed'));
+                }
                 $smarty->display('alert.tpl');
             } catch (\Throwable $exception) {
                 $smarty->assign('alert_error', localization_translate($t, 'contact_error_not_configured'));

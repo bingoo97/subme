@@ -38,6 +38,7 @@ return [
         'contact_submit' => 'Wyślij wiadomość',
         'contact_success' => 'Twoja wiadomość została wysłana do supportu.',
         'contact_copy_success' => 'Kopia wiadomości została wysłana także na Twój email.',
+        'contact_copy_failed' => 'Wiadomość do supportu została wysłana, ale nie udało się dostarczyć kopii na Twój email. Sprawdź folder spam albo spróbuj ponownie później.',
         'contact_disabled_notice' => 'Formularz kontaktowy jest obecnie wyłączony.',
         'contact_rate_limited' => 'Wiadomość została wysłana przed chwilą. Odczekaj chwilę przed kolejną próbą.',
         'contact_copy_subject' => 'Potwierdzenie wiadomości kontaktowej',
