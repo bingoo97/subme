@@ -16658,12 +16658,67 @@ function admin_chat_store_uploaded_image(array $file, int $adminUserId): ?string
 
 function admin_site_logo_upload_directory(): string
 {
+    if (function_exists('app_public_path')) {
+        return app_public_path('uploads/branding');
+    }
+
     return dirname(__DIR__, 2) . '/public_html/uploads/branding';
 }
 
 function admin_product_provider_logo_upload_directory(): string
 {
+    if (function_exists('app_public_path')) {
+        return app_public_path('uploads/providers');
+    }
+
     return dirname(__DIR__, 2) . '/public_html/uploads/providers';
+}
+
+function admin_legacy_upload_public_root(): string
+{
+    return dirname(__DIR__, 2) . '/public_html';
+}
+
+function admin_public_upload_root(): string
+{
+    if (function_exists('app_public_path')) {
+        return app_public_path();
+    }
+
+    return admin_legacy_upload_public_root();
+}
+
+function admin_delete_managed_upload_file(string $publicPath, string $prefix): bool
+{
+    $publicPath = trim($publicPath);
+    if ($publicPath === '' || strpos($publicPath, $prefix) !== 0) {
+        return false;
+    }
+
+    $deleted = false;
+    $roots = array_unique([
+        realpath(admin_public_upload_root()) ?: admin_public_upload_root(),
+        realpath(admin_legacy_upload_public_root()) ?: admin_legacy_upload_public_root(),
+    ]);
+
+    foreach ($roots as $root) {
+        $root = rtrim((string)$root, '/');
+        if ($root === '' || !is_dir($root)) {
+            continue;
+        }
+
+        $candidatePath = $root . '/' . ltrim($publicPath, '/');
+        $realFilePath = realpath($candidatePath);
+        if ($realFilePath === false || strpos($realFilePath, $root . $prefix) !== 0 || !is_file($realFilePath)) {
+            continue;
+        }
+
+        if (@unlink($realFilePath)) {
+            $deleted = true;
+        }
+    }
+
+    return $deleted;
 }
 
 function admin_site_logo_is_valid_svg(string $tmpPath): bool
@@ -16774,44 +16829,12 @@ function admin_product_provider_logo_public_path(array $file, int $adminUserId):
 
 function admin_delete_site_logo_file(string $publicPath): bool
 {
-    $publicPath = trim($publicPath);
-    if ($publicPath === '' || strpos($publicPath, '/uploads/branding/') !== 0) {
-        return false;
-    }
-
-    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
-    if ($publicRoot === false) {
-        return false;
-    }
-
-    $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
-    $realFilePath = realpath($filePath);
-    if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/branding/') !== 0 || !is_file($realFilePath)) {
-        return false;
-    }
-
-    return @unlink($realFilePath);
+    return admin_delete_managed_upload_file($publicPath, '/uploads/branding/');
 }
 
 function admin_delete_product_provider_logo_file(string $publicPath): bool
 {
-    $publicPath = trim($publicPath);
-    if ($publicPath === '' || strpos($publicPath, '/uploads/providers/') !== 0) {
-        return false;
-    }
-
-    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
-    if ($publicRoot === false) {
-        return false;
-    }
-
-    $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
-    $realFilePath = realpath($filePath);
-    if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/providers/') !== 0 || !is_file($realFilePath)) {
-        return false;
-    }
-
-    return @unlink($realFilePath);
+    return admin_delete_managed_upload_file($publicPath, '/uploads/providers/');
 }
 
 function admin_email_template_rows(Mysql_ks $db, int $limit = 20): array
@@ -17354,6 +17377,10 @@ function admin_page_normalize_section(?string $section): string
 
 function admin_page_card_logo_upload_directory(): string
 {
+    if (function_exists('app_public_path')) {
+        return app_public_path('uploads/page-cards');
+    }
+
     return dirname(__DIR__, 2) . '/public_html/uploads/page-cards';
 }
 
@@ -17405,23 +17432,7 @@ function admin_page_card_logo_public_path(array $file, int $adminUserId): ?strin
 
 function admin_delete_page_card_logo_file(string $publicPath): bool
 {
-    $publicPath = trim($publicPath);
-    if ($publicPath === '' || strpos($publicPath, '/uploads/page-cards/') !== 0) {
-        return false;
-    }
-
-    $publicRoot = realpath(dirname(__DIR__, 2) . '/public_html');
-    if ($publicRoot === false) {
-        return false;
-    }
-
-    $filePath = $publicRoot . '/' . ltrim($publicPath, '/');
-    $realFilePath = realpath($filePath);
-    if ($realFilePath === false || strpos($realFilePath, $publicRoot . '/uploads/page-cards/') !== 0 || !is_file($realFilePath)) {
-        return false;
-    }
-
-    return @unlink($realFilePath);
+    return admin_delete_managed_upload_file($publicPath, '/uploads/page-cards/');
 }
 
 function admin_page_slugify(string $value): string

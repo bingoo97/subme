@@ -161,11 +161,68 @@ function app_format_logo_path(string $path): string
         return '/img/no-image.png';
     }
 
+    if (strpos($path, '/uploads/') === 0) {
+        app_sync_managed_upload_to_public_root($path);
+    }
+
     if (strpos($path, 'http://') === 0 || strpos($path, 'https://') === 0 || strpos($path, '/') === 0) {
         return $path;
     }
 
     return '/' . ltrim($path, '/');
+}
+
+function app_legacy_managed_upload_root_path(): string
+{
+    return dirname(app_backend_root_path()) . '/public_html';
+}
+
+function app_sync_managed_upload_to_public_root(string $publicPath): bool
+{
+    $publicPath = trim($publicPath);
+    if ($publicPath === '') {
+        return false;
+    }
+
+    $allowedPrefixes = [
+        '/uploads/branding/',
+        '/uploads/providers/',
+        '/uploads/page-cards/',
+    ];
+
+    $matchesPrefix = false;
+    foreach ($allowedPrefixes as $allowedPrefix) {
+        if (strpos($publicPath, $allowedPrefix) === 0) {
+            $matchesPrefix = true;
+            break;
+        }
+    }
+
+    if (!$matchesPrefix) {
+        return false;
+    }
+
+    $targetPath = app_public_path(ltrim($publicPath, '/'));
+    if (is_file($targetPath)) {
+        return true;
+    }
+
+    $legacyPath = rtrim(app_legacy_managed_upload_root_path(), '/') . '/' . ltrim($publicPath, '/');
+    if (!is_file($legacyPath)) {
+        return false;
+    }
+
+    $targetDirectory = dirname($targetPath);
+    if (!is_dir($targetDirectory) && !mkdir($targetDirectory, 0775, true) && !is_dir($targetDirectory)) {
+        return false;
+    }
+
+    if (@copy($legacyPath, $targetPath)) {
+        @chmod($targetPath, 0664);
+        return true;
+    }
+
+    return false;
 }
 
 function app_backend_root_path(): string
