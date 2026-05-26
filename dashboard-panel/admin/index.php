@@ -774,6 +774,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         }
 
         if (!$settingsProtectedFeatureEditEnabled) {
+            $maintenanceMode = !empty($appSettings['maintenance_mode']) ? 1 : 0;
             $registrationEnabled = !empty($appSettings['registration_enabled']) ? 1 : 0;
             $referralsEnabled = admin_referrals_enabled($appSettings) ? 1 : 0;
             $customerTypeSwitchEnabled = admin_customer_type_switch_enabled($appSettings) ? 1 : 0;
@@ -13114,7 +13115,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <div class="row g-4">
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" role="switch" id="maintenance_mode" name="maintenance_mode"<?php echo !empty($appSettings['maintenance_mode']) ? ' checked' : ''; ?>>
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="maintenance_mode" name="maintenance_mode"<?php echo !empty($appSettings['maintenance_mode']) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                         <label class="form-check-label" for="maintenance_mode"><?php echo admin_e(admin_t($messages, 'settings_maintenance_mode', 'Technical maintenance break ON')); ?></label>
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_maintenance_mode_help', 'If ON, the user-facing site is temporarily replaced with a maintenance screen.')); ?></small>
