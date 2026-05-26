@@ -10257,8 +10257,14 @@ function admin_save_order_info(
     $startedAt = admin_normalize_datetime_input($input['started_at'] ?? null);
     $expiresAt = admin_normalize_datetime_input($input['expires_at'] ?? null);
     $paidAt = admin_normalize_datetime_input($input['paid_at'] ?? null);
+    $isCreditsOrder = admin_normalize_product_type((string)($order['product_type'] ?? 'subscription')) === 'credits';
 
-    if ($status === 'active' && $startedAt === null) {
+    if ($isCreditsOrder) {
+        $startedAt = null;
+        $expiresAt = null;
+    }
+
+    if (!$isCreditsOrder && $status === 'active' && $startedAt === null) {
         $startedAt = date('Y-m-d H:i:s');
     }
 

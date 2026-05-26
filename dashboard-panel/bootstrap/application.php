@@ -1480,7 +1480,7 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
          FROM crypto_assets
          WHERE is_active = 1
          {$assetFilterSql}
-         ORDER BY id ASC"
+         ORDER BY orders.id ASC"
     );
 
     if (!$rows) {
@@ -8471,9 +8471,11 @@ function app_expire_overdue_orders(Mysql_ks $db, ?string $now = null): array
     $safeNowSql = $db->escape($safeNow);
 
     $rows = $db->select_full_user(
-        "SELECT id
+        "SELECT orders.id
          FROM orders
+         LEFT JOIN products ON products.id = orders.product_id
          WHERE status = 'active'
+           AND COALESCE(products.product_type, 'subscription') <> 'credits'
            AND expires_at IS NOT NULL
            AND expires_at <= '{$safeNowSql}'
          ORDER BY id ASC"
