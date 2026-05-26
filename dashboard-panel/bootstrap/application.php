@@ -5113,9 +5113,10 @@ function app_fetch_settings(Mysql_ks $db): array
     $legacyRetentionDays = max(1, min(30, (int)($settings['support_chat_retention_days'] ?? 7)));
     $settings['support_chat_retention_days'] = $legacyRetentionDays;
     $settings['support_chat_retention_hours'] = (int)($settings['support_chat_retention_hours'] ?? ($legacyRetentionDays * 24));
-    if (!in_array($settings['support_chat_retention_hours'], [1, 24, 72, 168, 720], true)) {
+    if (!in_array($settings['support_chat_retention_hours'], [1, 6, 12, 24, 72, 168], true)) {
         $settings['support_chat_retention_hours'] = 168;
     }
+    $settings['support_chat_retention_days'] = max(1, (int)ceil($settings['support_chat_retention_hours'] / 24));
     $settings['count_news'] = (int)($settings['news_feed_limit'] ?? 10);
     $settings['homepage_verify'] = (int)($settings['homepage_verification_enabled'] ?? 0);
     $settings['apikey'] = $settings['api_key'] ?? '';
@@ -8804,7 +8805,7 @@ function app_prune_support_chat_messages(Mysql_ks $db, ?string $now = null): arr
     }
 
     $hours = (int)($settings['support_chat_retention_hours'] ?? 168);
-    if (!in_array($hours, [1, 24, 72, 168, 720], true)) {
+    if (!in_array($hours, [1, 6, 12, 24, 72, 168], true)) {
         $hours = 168;
     }
 

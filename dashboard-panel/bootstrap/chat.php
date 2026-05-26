@@ -1881,19 +1881,44 @@ if (!function_exists('chat_time_anchor_label')) {
     }
 }
 
+if (!function_exists('chat_allowed_retention_hours')) {
+    function chat_allowed_retention_hours(): array
+    {
+        return [1, 6, 12, 24, 72, 168];
+    }
+}
+
+if (!function_exists('chat_retention_hours')) {
+    function chat_retention_hours(array $settings): int
+    {
+        $allowedHours = function_exists('chat_allowed_retention_hours') ? chat_allowed_retention_hours() : [1, 6, 12, 24, 72, 168];
+        $hours = isset($settings['support_chat_retention_hours']) ? (int)$settings['support_chat_retention_hours'] : 0;
+        if (in_array($hours, $allowedHours, true)) {
+            return $hours;
+        }
+
+        $legacyDays = isset($settings['support_chat_retention_days']) ? (int)$settings['support_chat_retention_days'] : 7;
+        $hours = max(1, $legacyDays) * 24;
+        if (in_array($hours, $allowedHours, true)) {
+            return $hours;
+        }
+
+        return 168;
+    }
+}
+
 if (!function_exists('chat_retention_days')) {
     function chat_retention_days(array $settings): int
     {
-        $days = isset($settings['support_chat_retention_days']) ? (int)$settings['support_chat_retention_days'] : 7;
-        return max(1, min(30, $days));
+        return max(1, (int)ceil(chat_retention_hours($settings) / 24));
     }
 }
 
 if (!function_exists('chat_purge_expired_messages')) {
-    function chat_purge_expired_messages(Mysql_ks $db, int $retentionDays): void
+    function chat_purge_expired_messages(Mysql_ks $db, int $retentionHours): void
     {
-        if ($retentionDays < 1) {
-            $retentionDays = 1;
+        if ($retentionHours < 1) {
+            $retentionHours = 1;
         }
 
         if (function_exists('app_prune_support_chat_messages')) {
@@ -1907,7 +1932,7 @@ if (!function_exists('chat_purge_expired_messages')) {
         if (schema_object_exists($db, 'produkty_chat')) {
             $db->query(
                 "DELETE FROM produkty_chat
-                 WHERE data < DATE_SUB(NOW(), INTERVAL {$retentionDays} DAY)"
+                 WHERE data < DATE_SUB(NOW(), INTERVAL {$retentionHours} HOUR)"
             );
         }
     }

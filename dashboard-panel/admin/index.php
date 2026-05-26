@@ -749,7 +749,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $resellerGroupChatLimit = 10;
         }
         $supportChatRetentionHours = (int)($_POST['support_chat_retention_hours'] ?? 168);
-        if (!in_array($supportChatRetentionHours, [1, 24, 72, 168, 720], true)) {
+        if (!in_array($supportChatRetentionHours, [1, 6, 12, 24, 72, 168], true)) {
             $supportChatRetentionHours = 168;
         }
         $contactFormEnabled = isset($_POST['contact_form_enabled']) ? 1 : 0;
@@ -13233,12 +13233,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div class="col-12">
                                                     <label class="form-label" for="support_chat_retention_hours"><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention', 'Live chat message retention')); ?></label>
                                                     <?php $supportChatRetentionHours = (int)($appSettings['support_chat_retention_hours'] ?? (($appSettings['support_chat_retention_days'] ?? 7) * 24)); ?>
+                                                    <?php if (!in_array($supportChatRetentionHours, [1, 6, 12, 24, 72, 168], true)) { $supportChatRetentionHours = 168; } ?>
                                                     <select class="form-select" id="support_chat_retention_hours" name="support_chat_retention_hours">
                                                         <option value="1"<?php echo $supportChatRetentionHours === 1 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_1h', '1 hour')); ?></option>
+                                                        <option value="6"<?php echo $supportChatRetentionHours === 6 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_6h', '6 hours')); ?></option>
+                                                        <option value="12"<?php echo $supportChatRetentionHours === 12 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_12h', '12 hours')); ?></option>
                                                         <option value="24"<?php echo $supportChatRetentionHours === 24 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_24h', '24 hours')); ?></option>
                                                         <option value="72"<?php echo $supportChatRetentionHours === 72 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_3d', '3 days')); ?></option>
                                                         <option value="168"<?php echo $supportChatRetentionHours === 168 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_7d', '7 days')); ?></option>
-                                                        <option value="720"<?php echo $supportChatRetentionHours === 720 ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_30d', '30 days')); ?></option>
                                                     </select>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_support_chat_retention_help', 'Older live chat messages and empty conversations are removed automatically by the maintenance runner.')); ?></small>
                                                 </div>

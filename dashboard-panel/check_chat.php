@@ -708,7 +708,7 @@ $currentCustomerRow = $db->select_user(
 $customerHasFullMessenger = chat_customer_can_use_groups($user, is_array($settings ?? null) ? $settings : []);
 $responseMessage = '';
 
-chat_purge_expired_messages($db, chat_retention_days($settings));
+chat_purge_expired_messages($db, chat_retention_hours($settings));
 
 if (
     $action === 'read'

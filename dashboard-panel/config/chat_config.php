@@ -10,7 +10,7 @@ if (!app_support_chat_effective_enabled(is_array($settings ?? null) ? $settings 
     return;
 }
 
-chat_purge_expired_messages($db, chat_retention_days($settings));
+chat_purge_expired_messages($db, chat_retention_hours($settings));
 
 $chatLocaleCode = 'en';
 if (isset($user['locale_code']) && (string)$user['locale_code'] !== '') {
