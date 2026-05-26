@@ -1101,7 +1101,13 @@ if (!function_exists('app_ensure_system_content_pages_runtime')) {
                         $shouldUpdate = false;
 
                         if ($field === 'menu_sort_order') {
-                            $shouldUpdate = (int)$currentValue <= 0;
+                            $shouldUpdate = (int)$currentValue <= 0
+                                || ((int)$currentValue === 100 && (int)$defaultValue !== 100);
+                        } elseif ($field === 'menu_section') {
+                            $normalizedCurrentValue = app_static_page_normalize_menu_section((string)$currentValue);
+                            $normalizedDefaultValue = app_static_page_normalize_menu_section((string)$defaultValue);
+                            $shouldUpdate = trim((string)$currentValue) === ''
+                                || ($normalizedCurrentValue === 'other' && $normalizedDefaultValue !== 'other');
                         } else {
                             $shouldUpdate = trim((string)$currentValue) === '';
                         }
