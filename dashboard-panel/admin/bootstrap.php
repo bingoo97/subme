@@ -3872,11 +3872,17 @@ function admin_activity_log(
         return;
     }
 
-    $db->insert(
-        ['customer_id', 'admin_user_id', 'actor_type', 'action_key', 'description', 'ip_address'],
-        [$customerId > 0 ? $customerId : null, $adminUserId > 0 ? $adminUserId : null, 'admin', $actionKey, $description, $ipAddress !== '' ? $ipAddress : null],
-        'customer_activity_logs'
-    );
+    $insertColumns = ['customer_id', 'admin_user_id', 'actor_type', 'action_key', 'description', 'ip_address'];
+    $insertValues = [$customerId > 0 ? $customerId : null, $adminUserId > 0 ? $adminUserId : null, 'admin', $actionKey, $description, $ipAddress !== '' ? $ipAddress : null];
+
+    if (schema_column_exists($db, 'customer_activity_logs', 'created_at')) {
+        $insertColumns[] = 'created_at';
+        $insertValues[] = function_exists('app_current_datetime_string')
+            ? app_current_datetime_string()
+            : date('Y-m-d H:i:s');
+    }
+
+    $db->insert($insertColumns, $insertValues, 'customer_activity_logs');
 }
 
 function admin_log_customer_and_admin(
@@ -10513,10 +10519,12 @@ function admin_delete_order(
     return ['ok' => true, 'message' => 'Order deleted successfully.'];
 }
 
-function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
+function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $chargeCustomerBalance = true): array
 {
     $order = admin_order_find($db, $orderId);
     $product = admin_product_basic_row($db, $productId);
+    $adminUserId = isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : 0;
+    $ipAddress = (string)($_SERVER['REMOTE_ADDR'] ?? '');
 
     if (!$order) {
         return ['ok' => false, 'message' => 'Order not found.'];
@@ -10553,18 +10561,21 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
     $newExpiry = date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
     $extensionAmount = round((float)($product['price_amount'] ?? 0), 2);
 
-    $balanceDebitResult = admin_apply_customer_balance_runtime_event(
-        $db,
-        (int)($order['customer_id'] ?? 0),
-        $extensionAmount,
-        'debit',
-        'order_extension',
-        $orderId . ':' . $productId . ':' . $newExpiry,
-        'Extended order #' . $orderId . ' with package #' . $productId,
-        isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : 0
-    );
-    if (empty($balanceDebitResult['ok'])) {
-        return $balanceDebitResult;
+    if ($chargeCustomerBalance && $extensionAmount > 0) {
+        $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+            $db,
+            (int)($order['customer_id'] ?? 0),
+            $extensionAmount,
+            'debit',
+            'order_extension',
+            $orderId . ':' . $productId . ':' . $newExpiry,
+            'Extended order #' . $orderId . ' with package #' . $productId,
+            $adminUserId,
+            $ipAddress
+        );
+        if (empty($balanceDebitResult['ok'])) {
+            return $balanceDebitResult;
+        }
     }
 
     $updated = $db->update_using_id(
@@ -10591,10 +10602,10 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
                 (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
                 $durationHours,
                 'applied',
-                date('Y-m-d H:i:s'),
-                date('Y-m-d H:i:s'),
+                app_current_datetime_string(),
+                app_current_datetime_string(),
                 $newExpiry,
-                'Extended from admin panel',
+                $chargeCustomerBalance ? 'Extended from admin panel' : 'Extended from admin panel without charging customer balance',
             ],
             'order_renewals'
         );
@@ -10603,12 +10614,37 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
     if ($updated && schema_object_exists($db, 'order_status_events')) {
         $db->insert(
             ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
-            [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, (string)($order['status'] ?? ''), (string)($order['status'] ?? ''), 'Order extended by ' . admin_duration_label_from_hours($durationHours)],
+            [
+                $orderId,
+                $adminUserId > 0 ? $adminUserId : null,
+                (string)($order['status'] ?? ''),
+                (string)($order['status'] ?? ''),
+                'Order extended by ' . admin_duration_label_from_hours($durationHours) . ($chargeCustomerBalance ? '' : ' without charging customer balance')
+            ],
             'order_status_events'
         );
     }
 
     if ($updated) {
+        if (!$chargeCustomerBalance) {
+            app_customer_activity_log(
+                $db,
+                (int)($order['customer_id'] ?? 0),
+                'order_extended',
+                'Subscription in order #' . $orderId . ' was extended until ' . $newExpiry . ' by admin without charging account balance.',
+                'admin',
+                $adminUserId,
+                $ipAddress
+            );
+            admin_activity_log(
+                $db,
+                0,
+                $adminUserId,
+                'order_extended',
+                'Extended order #' . $orderId . ' with package #' . $productId . ' without charging customer balance.',
+                $ipAddress
+            );
+        }
         app_queue_order_extended_notification($db, $orderId);
     }
 

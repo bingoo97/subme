@@ -9092,10 +9092,17 @@ body.admin-login-page .admin-crypto-preview__warning::before{
 
 .admin-order-modal__activation-alert{
     margin:0;
-    display:flex;
-    flex-direction:column;
-    gap:.2rem;
+    display:grid;
+    grid-template-columns:auto minmax(0, 1fr);
+    column-gap:.75rem;
+    row-gap:.2rem;
+    align-items:start;
     border-radius:16px;
+}
+
+.admin-order-modal__activation-alert::before{
+    grid-column:1;
+    grid-row:1 / span 2;
 }
 
 .admin-order-modal__activation-alert--success{
@@ -9104,11 +9111,13 @@ body.admin-login-page .admin-crypto-preview__warning::before{
 }
 
 .admin-order-modal__activation-alert strong{
+    grid-column:2;
     font-size:.92rem;
     font-weight:800;
 }
 
 .admin-order-modal__activation-alert span{
+    grid-column:2;
     font-size:.84rem;
     line-height:1.45;
 }

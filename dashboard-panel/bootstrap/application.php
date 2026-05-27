@@ -4029,6 +4029,39 @@ function app_order_can_self_extend(array $order): bool
     return in_array($status, ['active', 'expired'], true) && $paymentStatus === 'paid';
 }
 
+function app_order_self_extension_threshold_days(): int
+{
+    return 10;
+}
+
+function app_order_can_open_self_extension_payment(array $order, int $thresholdDays = 0): bool
+{
+    if (!app_order_can_self_extend($order)) {
+        return false;
+    }
+
+    if ($thresholdDays <= 0) {
+        $thresholdDays = app_order_self_extension_threshold_days();
+    }
+
+    $status = strtolower(trim((string)($order['status_raw'] ?? $order['status_name'] ?? $order['status'] ?? '')));
+    if ($status === 'expired' || (isset($order['status']) && (string)$order['status'] === '2')) {
+        return true;
+    }
+
+    $progress = app_order_progress_data($order);
+    if (empty($progress['has_expiry'])) {
+        return false;
+    }
+
+    $remainingSeconds = (int)($progress['remaining_seconds'] ?? 0);
+    if ($remainingSeconds <= 0) {
+        return true;
+    }
+
+    return $remainingSeconds <= ($thresholdDays * 86400);
+}
+
 function app_order_extension_target_expiry(array $order, array $product): ?string
 {
     if (!app_order_product_can_extend($product)) {
@@ -9928,11 +9961,17 @@ function app_customer_activity_log(
         $actorType = 'system';
     }
 
-    $db->insert(
-        ['customer_id', 'admin_user_id', 'actor_type', 'action_key', 'description', 'ip_address'],
-        [$customerId, $adminUserId > 0 ? $adminUserId : null, $actorType, $actionKey, $description, $ipAddress !== '' ? $ipAddress : null],
-        'customer_activity_logs'
-    );
+    $insertColumns = ['customer_id', 'admin_user_id', 'actor_type', 'action_key', 'description', 'ip_address'];
+    $insertValues = [$customerId, $adminUserId > 0 ? $adminUserId : null, $actorType, $actionKey, $description, $ipAddress !== '' ? $ipAddress : null];
+
+    if (schema_column_exists($db, 'customer_activity_logs', 'created_at')) {
+        $insertColumns[] = 'created_at';
+        $insertValues[] = function_exists('app_current_datetime_string')
+            ? app_current_datetime_string()
+            : date('Y-m-d H:i:s');
+    }
+
+    $db->insert($insertColumns, $insertValues, 'customer_activity_logs');
 }
 
 function app_ensure_customer_balance_runtime_table(Mysql_ks $db): void
@@ -10052,9 +10091,18 @@ function app_apply_customer_balance_runtime_event(
         return ['ok' => false, 'message' => 'Unable to update customer balance.'];
     }
 
+    $eventInsertColumns = ['customer_id', 'source_type', 'source_key', 'direction', 'amount', 'note', 'created_by_admin_user_id'];
+    $eventInsertValues = [$customerId, $sourceType, $sourceKey, $direction, number_format($delta, 2, '.', ''), $note !== '' ? $note : null, $adminUserId > 0 ? $adminUserId : null];
+    if (schema_column_exists($db, 'customer_balance_runtime_events', 'created_at')) {
+        $eventInsertColumns[] = 'created_at';
+        $eventInsertValues[] = function_exists('app_current_datetime_string')
+            ? app_current_datetime_string()
+            : date('Y-m-d H:i:s');
+    }
+
     $inserted = $db->insert(
-        ['customer_id', 'source_type', 'source_key', 'direction', 'amount', 'note', 'created_by_admin_user_id'],
-        [$customerId, $sourceType, $sourceKey, $direction, number_format($delta, 2, '.', ''), $note !== '' ? $note : null, $adminUserId > 0 ? $adminUserId : null],
+        $eventInsertColumns,
+        $eventInsertValues,
         'customer_balance_runtime_events'
     );
 

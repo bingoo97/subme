@@ -651,14 +651,18 @@ if (app_uses_v2_schema($db)) {
     if ($selected) {
         $pendingRenewalRow = app_order_find_pending_renewal($db, (int)$selected['id']);
         $isSameOrderRenewalFlow = app_order_can_self_extend($selected);
+        $canOpenRenewalPayment = $isSameOrderRenewalFlow && app_order_can_open_self_extension_payment($selected);
+        $pendingRenewalStatus = strtolower(trim((string)($pendingRenewalRow['status'] ?? '')));
+        $hasBlockingPendingRenewalState = $isSameOrderRenewalFlow
+            && in_array($pendingRenewalStatus, ['pending_payment', 'paid_pending_activation'], true);
         $pendingBalanceTopupPayment = app_find_customer_pending_balance_topup_payment($db, (int)$user['id']);
         $selectedProductType = strtolower(trim((string)($selected['product_type'] ?? 'subscription')));
         $selected['date_end_s'] = !empty($selected['date_end']) ? strtotime($selected['date_end']) : 0;
         $canRequestPayment = (
             (($selected['status'] == 0) && ($selected['payment'] == 0))
             || ($selected['status'] == 2)
-            || (($selected['status'] == 1) && ($selected['date_end_s'] > 0) && ($selected['date_end_s'] < ($time_s + (3600 * 24 * 7))))
-        );
+            || $canOpenRenewalPayment
+        ) && !$hasBlockingPendingRenewalState;
 
         $availableProducts = [];
         if (!empty($selected['provider_id'])) {
@@ -1493,8 +1497,12 @@ if (app_uses_v2_schema($db)) {
         $paymentStateNotice = '';
 
         if ($activeRequestMethod === '' && !$canRequestPayment) {
-            if ($paymentStatusRaw === 'paid' && $statusRaw !== 'active' && !in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)) {
+            if ($hasBlockingPendingRenewalState) {
+                $paymentStateNotice = 'renewal_pending_activation';
+            } elseif ($paymentStatusRaw === 'paid' && $statusRaw !== 'active' && !in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)) {
                 $paymentStateNotice = 'paid_pending_activation';
+            } elseif (!empty($_GET['renewal']) && $isSameOrderRenewalFlow && !$canOpenRenewalPayment) {
+                $paymentStateNotice = 'renewal_not_ready';
             } elseif ($paymentStatusRaw === 'paid' || $statusRaw === 'active') {
                 $paymentStateNotice = 'already_paid';
             } else {

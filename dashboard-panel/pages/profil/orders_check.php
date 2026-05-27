@@ -145,11 +145,8 @@ if ($wygrane) {
         $wygrane[$i]['progress'] = app_order_progress_data($wygrane[$i]);
         $wygrane[$i]['status_visual'] = app_order_status_visual($wygrane[$i]);
         $wygrane[$i]['can_self_extend_same_order'] = app_order_can_self_extend($wygrane[$i]) ? 1 : 0;
-        $wygrane[$i]['show_inline_extend_payment'] = (
-            !empty($wygrane[$i]['can_self_extend_same_order'])
-            && !empty($wygrane[$i]['progress']['has_expiry'])
-            && (int)($wygrane[$i]['progress']['remaining_days'] ?? 0) <= 7
-        ) ? 1 : 0;
+        $wygrane[$i]['can_open_renewal_payment'] = app_order_can_open_self_extension_payment($wygrane[$i]) ? 1 : 0;
+        $wygrane[$i]['show_inline_extend_payment'] = !empty($wygrane[$i]['can_open_renewal_payment']) ? 1 : 0;
         $wygrane[$i]['payment_waiting_activation'] = (
             (int)($wygrane[$i]['status'] ?? 0) === 0
             && strtolower(trim((string)($wygrane[$i]['payment_status'] ?? ''))) === 'paid'

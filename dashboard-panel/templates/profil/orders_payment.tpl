@@ -297,6 +297,12 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     {if $payment_state_notice eq 'paid_pending_activation'}
                         <strong>{$t.payment_paid_pending_activation_title|default:'Payment confirmed.'}</strong><br />
                         {$t.payment_paid_pending_activation_text|default:'Your payment has already been marked as paid. The subscription is now waiting for activation by the admin. You do not need to generate a new payment request.'}
+                    {elseif $payment_state_notice eq 'renewal_not_ready'}
+                        <strong>{$t.payment_renewal_not_ready_title|default:'Extension is not available yet.'}</strong><br />
+                        {$t.payment_renewal_not_ready_text|default:'You can extend this subscription only during the last 10 days before expiry. Come back closer to the end date or open your orders list for details.'}
+                    {elseif $payment_state_notice eq 'renewal_pending_activation'}
+                        <strong>{$t.payment_renewal_pending_activation_title|default:'Your extension is already waiting for verification.'}</strong><br />
+                        {$t.payment_renewal_pending_activation_text|default:'A renewal payment request for this subscription has already been created and is waiting for approval or rejection by the admin. You cannot generate another renewal payment right now.'}
                     {elseif $payment_state_notice eq 'already_paid'}
                         <strong>{$t.payment_paid_already_title|default:'This order is already paid.'}</strong><br />
                         {$t.payment_paid_already_text|default:'A new payment request is not needed for this order. If you need more details, open your orders list or contact support.'}

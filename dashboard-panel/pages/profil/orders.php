@@ -146,7 +146,7 @@ switch ($site) {
 				} elseif (!empty($sourceOrder["is_trial"]) && (int)($settings["active_trials"] ?? 0) !== 1) {
 					$smarty->assign("alert_error", localization_translate($t, 'trials_disabled_notice', 'Trial subscriptions are currently disabled.'));
 					$smarty->display("alert.tpl");
-				} elseif (!app_order_can_self_extend($sourceOrder)) {
+				} elseif (!app_order_can_open_self_extension_payment($sourceOrder)) {
 					$smarty->assign("alert_error", localization_translate($t, 'orders_extend_same_order_unavailable', 'This order cannot be extended in place right now.'));
 					$smarty->display("alert.tpl");
 				} else {

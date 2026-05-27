@@ -1956,7 +1956,12 @@ if ($route === 'orders') {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
         } else {
-            $extendResult = admin_extend_order($db, (int)($_POST['order_id'] ?? 0), (int)($_POST['extend_product_id'] ?? 0));
+            $extendResult = admin_extend_order(
+                $db,
+                (int)($_POST['order_id'] ?? 0),
+                (int)($_POST['extend_product_id'] ?? 0),
+                (string)($_POST['extend_charge_balance'] ?? '1') !== '0'
+            );
             $pageAlert = (string)($extendResult['message'] ?? admin_t($messages, 'order_extend_error', 'Unable to extend subscription.'));
             $pageAlertType = !empty($extendResult['ok']) ? 'success' : 'danger';
         }
@@ -7184,6 +7189,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <div class="admin-order-modal__stack">
                                                                             <div class="admin-order-extend__hint">
                                                                                 <?php echo admin_e(admin_t($messages, 'order_extend_hint', 'Select a package from the same provider. Its duration will be added to the current subscription expiry date.')); ?>
+                                                                            </div>
+                                                                            <div>
+                                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_label', 'Charge customer balance')); ?></label>
+                                                                                <select class="form-select" name="extend_charge_balance">
+                                                                                    <option value="1"><?php echo admin_e(admin_t($messages, 'yes', 'Yes')); ?></option>
+                                                                                    <option value="0"><?php echo admin_e(admin_t($messages, 'no', 'No')); ?></option>
+                                                                                </select>
+                                                                                <div class="form-text"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_help', 'If set to Yes, the customer must have enough balance. If set to No, the subscription will be extended for free and a note will be added to the customer history.')); ?></div>
                                                                             </div>
                                                                             <div>
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_current_expiry', 'Current expiry')); ?></label>
