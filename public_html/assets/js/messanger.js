@@ -12,8 +12,8 @@
 
 	var MessengerUI = {
 		pollTimer: null,
-		pollIntervalOpen: 5000,
-		pollIntervalClosed: 12000,
+		pollIntervalOpen: 8000,
+		pollIntervalClosed: 20000,
 		fetchInFlight: false,
 		sendInFlight: false,
 		uploadInFlight: false,

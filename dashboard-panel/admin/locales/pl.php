@@ -1403,7 +1403,7 @@ return [
     'payment_quick_create_success' => 'Request płatności został utworzony.',
     'payment_quick_create_error' => 'Nie udało się utworzyć requestu płatności.',
     'payment_quick_create_pending_error' => 'User ma już oczekujący request płatności krypto.',
-    'payment_quick_create_cooldown_error' => 'Poczekaj 20 sekund przed utworzeniem kolejnego requestu płatności dla tego usera.',
+    'payment_quick_create_cooldown_error' => 'Poczekaj 5 sekund przed utworzeniem kolejnego requestu płatności dla tego usera.',
     'payment_quick_create_open_details' => 'Otwórz szczegóły płatności',
     'payment_quick_create_no_assets' => 'Brak aktywnych kryptowalut dostępnych dla tego usera.',
     'payment_delete_hint_new' => 'Jeśli chcesz usunąć płatność, kliknij w szczegóły i przycisk Usuń na dole strony. Jeśli klient zapłacił ale nie ma jeszcze wpłaty a nie chcesz aby płatność trafiła do anulowanych kliknij Weryfikacja a po otrzymaniu środków oznacz jako zatwierdzone.',

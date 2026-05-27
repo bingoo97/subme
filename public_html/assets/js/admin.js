@@ -1038,7 +1038,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var statusNode = q('[data-admin-personal-notes-status]', form);
             var saveButton = q('[data-admin-personal-notes-save]', form);
             var saveUrl = form.getAttribute('data-save-url') || window.location.href;
-            var autosaveIntervalMs = parseInt(form.getAttribute('data-autosave-interval') || '15000', 10);
+            var autosaveIntervalMs = parseInt(form.getAttribute('data-autosave-interval') || '45000', 10);
             var lastSavedValue = textarea ? String(textarea.value || '') : '';
             var isSaving = false;
             var heartbeatTimer = 0;
@@ -1049,7 +1049,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             if (!(autosaveIntervalMs > 0)) {
-                autosaveIntervalMs = 15000;
+                autosaveIntervalMs = 45000;
             }
 
             function setStatus(message, tone) {
@@ -2364,7 +2364,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     });
                     selectedUser.insertAdjacentHTML('beforeend', '<a class="admin-inline-link admin-payments-note__selected-link" href="' + escapeHtml(payload.payment_url) + '">' + escapeHtml(openDetailsText) + '</a>');
                 }
-                setSubmitCooldown(payload.cooldown_seconds || 20);
+                setSubmitCooldown(payload.cooldown_seconds || 5);
                 window.setTimeout(function () {
                     var nextUrl = new URL(window.location.href);
                     nextUrl.searchParams.set('page', 'payments');
@@ -4016,7 +4016,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 pollTopbarState(true);
                 pollTimer = window.setInterval(function () {
                     pollTopbarState(false);
-                }, 15000);
+                }, 30000);
 
                 if (pollTimer) {
                     doc.addEventListener('visibilitychange', function () {
@@ -7180,10 +7180,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         window.setInterval(function () {
             pollChatInboxState(false);
-        }, 12000);
+        }, 20000);
         conversationPollTimer = window.setInterval(function () {
             pollActiveConversation(false);
-        }, 6000);
+        }, 10000);
         doc.addEventListener('visibilitychange', function () {
             if (!doc.hidden) {
                 pollChatInboxState(true);

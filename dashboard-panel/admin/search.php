@@ -103,13 +103,13 @@ if ($action === 'create_quick_crypto_payment_request') {
     $cooldownKey = 'admin_quick_crypto_payment_' . $customerId;
     $lastRequestAt = (int)($_SESSION[$cooldownKey] ?? 0);
     $now = time();
-    $cooldownSeconds = 20;
+    $cooldownSeconds = 5;
 
     if ($lastRequestAt > 0 && ($now - $lastRequestAt) < $cooldownSeconds) {
         http_response_code(429);
         echo json_encode([
             'ok' => false,
-            'message' => admin_t($messages, 'payment_quick_create_cooldown_error', 'Wait 20 seconds before creating another payment request for this user.'),
+            'message' => admin_t($messages, 'payment_quick_create_cooldown_error', 'Wait 5 seconds before creating another payment request for this user.'),
             'cooldown_remaining' => $cooldownSeconds - ($now - $lastRequestAt),
         ]);
         exit;

@@ -1403,7 +1403,7 @@ return [
     'payment_quick_create_success' => 'Payment request created successfully.',
     'payment_quick_create_error' => 'Unable to create payment request.',
     'payment_quick_create_pending_error' => 'User already has a pending crypto payment request.',
-    'payment_quick_create_cooldown_error' => 'Wait 20 seconds before creating another payment request for this user.',
+    'payment_quick_create_cooldown_error' => 'Wait 5 seconds before creating another payment request for this user.',
     'payment_quick_create_open_details' => 'Open payment details',
     'payment_quick_create_no_assets' => 'No active cryptocurrencies are available for this user.',
     'payment_delete_hint_new' => 'If you want to delete this payment, open details and use the Delete button at the bottom of the page.',
