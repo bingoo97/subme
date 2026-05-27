@@ -1558,7 +1558,7 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
          FROM crypto_assets
          WHERE is_active = 1
          {$assetFilterSql}
-         ORDER BY orders.id ASC"
+         ORDER BY id ASC"
     );
 
     if (!$rows) {
