@@ -6169,7 +6169,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             ? admin_t($messages, 'order_product_placeholder', 'Choose product')
                                             : admin_t($messages, 'order_product_placeholder_locked', 'Choose package first');
                                         ?>
-                                        <div class="admin-editor-page">
+                                        <div class="admin-editor-page admin-editor-page--pages">
                                             <div class="admin-editor-page__header">
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'order_create_title', 'Add new order')); ?></h3>
@@ -7240,7 +7240,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     if ($productProviderShowCreate):
                                         $productProviderDraft = $productProviderFormState;
                                         ?>
-                                        <div class="admin-editor-page">
+                                        <div class="admin-editor-page admin-editor-page--pages">
                                             <div class="admin-editor-page__header">
                                                 <div>
                                                     <h3><?php echo admin_e(admin_t($messages, 'product_provider_create_title', 'Add provider')); ?></h3>

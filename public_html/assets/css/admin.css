@@ -8199,6 +8199,24 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     margin:2rem 0;
 }
 
+.admin-editor-page--pages .admin-rich-editor__surface ul,
+.admin-editor-page--pages .admin-rich-editor__surface li{
+    list-style:none;
+}
+
+.admin-editor-page--pages .admin-rich-editor__surface ul{
+    padding-left:0;
+    margin-left:0;
+}
+
+.admin-editor-page--pages .admin-rich-editor__surface li{
+    margin-bottom:.55rem;
+}
+
+.admin-editor-page--pages .admin-rich-editor__surface li:last-child{
+    margin-bottom:0;
+}
+
 .admin-editor-page .admin-rich-editor__surface .instruction-content h2{
     font-size:24px;
     font-weight:600;

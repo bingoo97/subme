@@ -1,4 +1,4 @@
-<div class="content-box info-page">
+<div class="content-box info-page instruction-guide-static-page">
     <div class="payment-wizard__header">
         <h1><a href="/instructions"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$instruction_guide_title}</h1>
     </div>

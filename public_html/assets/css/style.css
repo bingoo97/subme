@@ -6396,6 +6396,24 @@ img.scan{
 	margin: 2rem 0;
 }
 
+.instruction-guide-static-page ul,
+.instruction-guide-static-page li{
+	list-style:none;
+}
+
+.instruction-guide-static-page ul{
+	padding-left:0;
+	margin-left:0;
+}
+
+.instruction-guide-static-page li{
+	margin-bottom:.55rem;
+}
+
+.instruction-guide-static-page li:last-child{
+	margin-bottom:0;
+}
+
 .download_apps a{
 	 display: inline-block;
 }
