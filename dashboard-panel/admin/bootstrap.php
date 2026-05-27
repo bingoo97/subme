@@ -2541,9 +2541,15 @@ function admin_order_progress_data(array $order): array
         ];
     }
 
-    $createdAt = !empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0;
-    $startedAt = !empty($order['started_at']) ? strtotime((string)$order['started_at']) : 0;
-    $expiresAt = !empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0;
+    $createdAt = !empty($order['created_at']) && function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)$order['created_at'])
+        : (!empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0);
+    $startedAt = !empty($order['started_at']) && function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)$order['started_at'])
+        : (!empty($order['started_at']) ? strtotime((string)$order['started_at']) : 0);
+    $expiresAt = !empty($order['expires_at']) && function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)$order['expires_at'])
+        : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
     $durationHours = max(0, (int)($order['duration_hours'] ?? 0));
     $now = time();
 
@@ -2678,8 +2684,8 @@ function admin_format_datetime_local(?string $value): string
         return '';
     }
 
-    $timestamp = function_exists('app_timestamp_from_utc_datetime')
-        ? app_timestamp_from_utc_datetime($value)
+    $timestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime($value)
         : strtotime($value);
     if (!is_int($timestamp) || $timestamp <= 0) {
         return '';
@@ -2739,8 +2745,8 @@ function admin_compact_datetime_label(?string $value): string
         $timezone = function_exists('app_runtime_timezone_name')
             ? new DateTimeZone(app_runtime_timezone_name())
             : new DateTimeZone(date_default_timezone_get());
-        $timestamp = function_exists('app_timestamp_from_utc_datetime')
-            ? app_timestamp_from_utc_datetime($value)
+        $timestamp = function_exists('app_timestamp_from_runtime_datetime')
+            ? app_timestamp_from_runtime_datetime($value)
             : strtotime($value);
         if (!is_int($timestamp) || $timestamp <= 0) {
             return $value;
@@ -2773,8 +2779,8 @@ function admin_is_current_day_datetime(?string $value): bool
         $timezone = function_exists('app_runtime_timezone_name')
             ? new DateTimeZone(app_runtime_timezone_name())
             : new DateTimeZone(date_default_timezone_get());
-        $timestamp = function_exists('app_timestamp_from_utc_datetime')
-            ? app_timestamp_from_utc_datetime($value)
+        $timestamp = function_exists('app_timestamp_from_runtime_datetime')
+            ? app_timestamp_from_runtime_datetime($value)
             : strtotime($value);
         if (!is_int($timestamp) || $timestamp <= 0) {
             return false;
@@ -6426,7 +6432,9 @@ function admin_crypto_accept_preview_db_rows(Mysql_ks $db, array $paymentRow, in
     }
 
     $windowHours = max(1, min(72, $windowHours));
-    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
     $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
@@ -6602,7 +6610,9 @@ function admin_crypto_accept_preview_eth_token_rows(array $paymentRow, int $wind
         return [];
     }
 
-    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
     $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
@@ -6698,7 +6708,9 @@ function admin_crypto_accept_preview_eth_native_rows(array $paymentRow, int $win
         return [];
     }
 
-    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
     $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
@@ -6799,7 +6811,9 @@ function admin_crypto_accept_preview_btc_remote_rows(array $paymentRow, int $win
         }
     }
     $latestHeight = (int)($latestBlockPayload['height'] ?? 0);
-    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
     $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
@@ -6916,7 +6930,9 @@ function admin_crypto_accept_preview_doge_remote_rows(array $paymentRow, int $wi
         return [];
     }
 
-    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
     $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
@@ -7082,7 +7098,9 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
         return [];
     }
 
-    $requestedTimestamp = app_timestamp_from_utc_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
     $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
@@ -10187,6 +10205,11 @@ function admin_create_order(Mysql_ks $db, array $input): array
         array_splice($insertValues, 12, 0, [$deliveryLinkVisible]);
     }
 
+    if (schema_column_exists($db, 'orders', 'created_at') && function_exists('app_current_datetime_string')) {
+        $insertFields[] = 'created_at';
+        $insertValues[] = app_current_datetime_string();
+    }
+
     $inserted = $db->insert($insertFields, $insertValues, 'orders');
 
     if (!$inserted) {
@@ -10195,11 +10218,13 @@ function admin_create_order(Mysql_ks $db, array $input): array
 
     $orderId = (int)$db->id();
     if (schema_object_exists($db, 'order_status_events')) {
-        $db->insert(
-            ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
-            [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, null, 'pending_payment', 'Order created from admin panel'],
-            'order_status_events'
-        );
+        $eventFields = ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'];
+        $eventValues = [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, null, 'pending_payment', 'Order created from admin panel'];
+        if (schema_column_exists($db, 'order_status_events', 'created_at') && function_exists('app_current_datetime_string')) {
+            $eventFields[] = 'created_at';
+            $eventValues[] = app_current_datetime_string();
+        }
+        $db->insert($eventFields, $eventValues, 'order_status_events');
     }
 
     app_queue_order_created_notification($db, $orderId);
@@ -10349,11 +10374,13 @@ function admin_save_order_info(
     $updated = $db->update_using_id($updateFields, $updateValues, 'orders', $orderId);
 
     if ($updated && schema_object_exists($db, 'order_status_events') && $status !== (string)($order['status'] ?? '')) {
-        $db->insert(
-            ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
-            [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, (string)($order['status'] ?? ''), $status, 'Order updated from admin modal'],
-            'order_status_events'
-        );
+        $eventFields = ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'];
+        $eventValues = [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, (string)($order['status'] ?? ''), $status, 'Order updated from admin modal'];
+        if (schema_column_exists($db, 'order_status_events', 'created_at') && function_exists('app_current_datetime_string')) {
+            $eventFields[] = 'created_at';
+            $eventValues[] = app_current_datetime_string();
+        }
+        $db->insert($eventFields, $eventValues, 'order_status_events');
     }
 
     if ($updated) {
@@ -10512,7 +10539,9 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId): array
     }
 
     $now = time();
-    $currentExpiry = !empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0;
+    $currentExpiry = !empty($order['expires_at']) && function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)$order['expires_at'])
+        : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
     $baseTimestamp = $currentExpiry > $now ? $currentExpiry : $now;
     $newExpiry = date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
     $extensionAmount = round((float)($product['price_amount'] ?? 0), 2);
@@ -14821,8 +14850,10 @@ function admin_chat_list_timestamp(?string $timestamp): string
         return '';
     }
 
-    $time = strtotime($timestamp);
-    if ($time === false) {
+    $time = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime($timestamp)
+        : strtotime($timestamp);
+    if (!is_int($time) || $time <= 0) {
         return $timestamp;
     }
 
@@ -14850,8 +14881,8 @@ function admin_format_last_login_date(?string $timestamp): string
         $timezone = function_exists('app_runtime_timezone_name')
             ? new DateTimeZone(app_runtime_timezone_name())
             : new DateTimeZone(date_default_timezone_get());
-        $parsedTimestamp = function_exists('app_timestamp_from_utc_datetime')
-            ? app_timestamp_from_utc_datetime($timestamp)
+        $parsedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+            ? app_timestamp_from_runtime_datetime($timestamp)
             : strtotime($timestamp);
         if (!is_int($parsedTimestamp) || $parsedTimestamp <= 0) {
             return $timestamp;
@@ -19494,7 +19525,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                                         <div class="admin-order-progress__meta">
                                                             <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
                                                             <?php if (!empty($row['expires_at'])): ?>
-                                                                <span><?php echo admin_e(app_format_utc_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
+                                                                <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
                                                             <?php else: ?>
                                                                 <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
                                                             <?php endif; ?>
@@ -19523,7 +19554,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                         </div>
                                     </td>
                                     <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
-                                        <?php echo !empty($row['created_at']) ? admin_e(app_format_utc_datetime_local((string)($row['created_at'] ?? ''), 'd.m.Y')) : '—'; ?>
+                                        <?php echo !empty($row['created_at']) ? admin_e(app_format_runtime_datetime_local((string)($row['created_at'] ?? ''), 'd.m.Y')) : '—'; ?>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                         <a href="<?php echo admin_e($orderUrl); ?>" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : (in_array((string)($orderStatusVisual['class'] ?? ''), ['admin-order-status-icon--pending', 'admin-order-status-icon--awaiting-activation'], true) ? 'btn-dark' : 'btn-success'); ?>" aria-label="Details" style="width: 50px; height: 50px;">

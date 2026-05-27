@@ -4623,8 +4623,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     ? '@' . $newCustomerHandle
                                                     : (string)app_customer_display_label((array)$newCustomerRow);
                                                 $newCustomerRegisteredAt = trim((string)($newCustomerRow['registered_at'] ?? ''));
-                                                $newCustomerRegisteredTimestamp = $newCustomerRegisteredAt !== '' ? strtotime($newCustomerRegisteredAt) : false;
-                                                $newCustomerRegisteredLabel = $newCustomerRegisteredTimestamp !== false ? date('H:i', $newCustomerRegisteredTimestamp) : '';
+                                                $newCustomerRegisteredLabel = $newCustomerRegisteredAt !== '' && function_exists('app_format_runtime_datetime_local')
+                                                    ? app_format_runtime_datetime_local($newCustomerRegisteredAt, 'H:i')
+                                                    : '';
                                                 ?>
                                                 <article class="admin-topbar-notifications__item">
                                                     <div class="admin-topbar-notifications__item-main">
@@ -6487,7 +6488,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-order-progress__meta">
                                                                                     <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
                                                                                     <?php if (!empty($row['expires_at'])): ?>
-                                                                                        <span><?php echo admin_e(app_format_utc_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
+                                                                                        <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
                                                                                     <?php else: ?>
                                                                                         <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
                                                                                     <?php endif; ?>
@@ -6669,7 +6670,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <div class="admin-order-progress__meta">
                                                                                 <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
                                                                                 <?php if (!empty($row['expires_at'])): ?>
-                                                                                    <span><?php echo admin_e(app_format_utc_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
+                                                                                    <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
                                                                                 <?php else: ?>
                                                                                     <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
                                                                                 <?php endif; ?>
@@ -6809,11 +6810,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $durationLabel = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
                                                         $subscriptionStartedAt = trim((string)($row['started_at'] ?? ''));
                                                         $subscriptionStartedLabel = $subscriptionStartedAt !== ''
-                                                            ? app_format_utc_datetime_local($subscriptionStartedAt, 'd.m.Y H:i')
+                                                            ? app_format_runtime_datetime_local($subscriptionStartedAt, 'd.m.Y H:i')
                                                             : '';
                                                         $subscriptionExpiresAt = trim((string)($row['expires_at'] ?? ''));
                                                         $subscriptionExpiresLabel = $subscriptionExpiresAt !== ''
-                                                            ? app_format_utc_datetime_local($subscriptionExpiresAt, 'd.m.Y H:i')
+                                                            ? app_format_runtime_datetime_local($subscriptionExpiresAt, 'd.m.Y H:i')
                                                             : '';
                                                         $balanceActivationContext = admin_order_balance_activation_context($db, $row);
                                                         $balanceSuggestion = (array)($balanceActivationContext['suggested_product'] ?? []);
@@ -7186,7 +7187,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </div>
                                                                             <div>
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_current_expiry', 'Current expiry')); ?></label>
-                                                                                <input type="text" class="form-control" value="<?php echo admin_e(app_format_utc_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y H:i')); ?>" readonly>
+                                                                                <input type="text" class="form-control" value="<?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y H:i')); ?>" readonly>
                                                                             </div>
                                                                             <div>
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_package', 'Extension package')); ?></label>
@@ -8150,11 +8151,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                                 <div class="admin-user-detail__meta-item">
                                                     <span><?php echo admin_e(admin_t($messages, 'col_registered', 'Registered')); ?></span>
-                                                    <strong><?php echo admin_e(substr((string)$selectedCustomer['registered_at'], 0, 16)); ?></strong>
+                                                    <strong><?php echo admin_e(app_format_runtime_datetime_local((string)($selectedCustomer['registered_at'] ?? ''), 'd.m.Y H:i')); ?></strong>
                                                 </div>
                                                 <div class="admin-user-detail__meta-item">
                                                     <span><?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?></span>
-                                                    <strong><?php echo admin_e(substr((string)($selectedCustomer['last_login_at'] ?? ''), 0, 16)); ?></strong>
+                                                    <strong><?php echo admin_e(app_format_runtime_datetime_local((string)($selectedCustomer['last_login_at'] ?? ''), 'd.m.Y H:i')); ?></strong>
                                                 </div>
                                                 <div class="admin-user-detail__meta-item">
                                                     <span><?php echo admin_e(admin_t($messages, 'customer_ip_address', 'IP address')); ?></span>
@@ -10110,8 +10111,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php
                                                             $paymentType = (string)($row['payment_type'] ?? '');
                                                             $paymentStatus = (string)($row['status'] ?? '');
-                                                            $requestedTimestamp = !empty($row['requested_at']) ? strtotime((string)$row['requested_at']) : 0;
-                                                            $expiresTimestamp = !empty($row['expires_at']) ? strtotime((string)$row['expires_at']) : 0;
+                                                            $requestedTimestamp = !empty($row['requested_at']) && function_exists('app_timestamp_from_runtime_datetime')
+                                                                ? app_timestamp_from_runtime_datetime((string)$row['requested_at'])
+                                                                : (!empty($row['requested_at']) ? strtotime((string)$row['requested_at']) : 0);
+                                                            $expiresTimestamp = !empty($row['expires_at']) && function_exists('app_timestamp_from_runtime_datetime')
+                                                                ? app_timestamp_from_runtime_datetime((string)$row['expires_at'])
+                                                                : (!empty($row['expires_at']) ? strtotime((string)$row['expires_at']) : 0);
                                                             $isArchivedPayment = $paymentStatus === 'archived';
                                                             $isExpiredPayment = $paymentStatus === 'expired';
                                                             $isSuccessPayment = in_array($paymentStatus, ['confirmed', 'approved', 'paid', 'completed'], true);
@@ -13925,7 +13930,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </span>
                                                                 </td>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?>">
-                                                                    <?php echo admin_e((string)($adminRow['last_login_at'] ?: '----')); ?>
+                                                                    <?php echo admin_e(trim((string)($adminRow['last_login_at'] ?? '')) !== '' ? admin_format_last_login_date((string)$adminRow['last_login_at']) : '----'); ?>
                                                                 </td>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>" class="text-end">
                                                                     <?php if ($settingsAdminMode): ?>

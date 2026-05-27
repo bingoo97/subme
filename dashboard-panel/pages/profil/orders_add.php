@@ -97,6 +97,11 @@
 					$insertValues[] = 0;
 				}
 
+				if (schema_column_exists($db, 'orders', 'created_at') && function_exists('app_current_datetime_string')) {
+					$insertFields[] = 'created_at';
+					$insertValues[] = app_current_datetime_string();
+				}
+
 				$inserted = $db->insert($insertFields, $insertValues, 'orders');
 				if (!$inserted) {
 					return ['ok' => false, 'message' => 'Unable to create order.'];
@@ -104,11 +109,13 @@
 
 				$orderId = (int)$db->id();
 				if ($orderId > 0 && schema_object_exists($db, 'order_status_events')) {
-					$db->insert(
-						['order_id', 'old_status', 'new_status', 'event_note'],
-						[$orderId, null, 'pending_payment', 'Order created from customer panel'],
-						'order_status_events'
-					);
+					$eventFields = ['order_id', 'old_status', 'new_status', 'event_note'];
+					$eventValues = [$orderId, null, 'pending_payment', 'Order created from customer panel'];
+					if (schema_column_exists($db, 'order_status_events', 'created_at') && function_exists('app_current_datetime_string')) {
+						$eventFields[] = 'created_at';
+						$eventValues[] = app_current_datetime_string();
+					}
+					$db->insert($eventFields, $eventValues, 'order_status_events');
 				}
 
 				if ($orderId > 0) {

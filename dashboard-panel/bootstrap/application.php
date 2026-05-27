@@ -62,10 +62,56 @@ if (!function_exists('app_timestamp_from_utc_datetime')) {
     }
 }
 
+if (!function_exists('app_timestamp_from_runtime_datetime')) {
+    function app_timestamp_from_runtime_datetime(?string $value): int
+    {
+        $value = trim((string)$value);
+        if ($value === '') {
+            return 0;
+        }
+
+        try {
+            $timezone = new DateTimeZone(app_runtime_timezone_name());
+        } catch (Throwable $exception) {
+            $timezone = new DateTimeZone(date_default_timezone_get());
+        }
+
+        try {
+            $date = new DateTimeImmutable($value, $timezone);
+        } catch (Throwable $exception) {
+            return 0;
+        }
+
+        return $date->getTimestamp();
+    }
+}
+
 if (!function_exists('app_format_utc_datetime_local')) {
     function app_format_utc_datetime_local(?string $value, string $format = 'd.m.Y H:i'): string
     {
         $timestamp = app_timestamp_from_utc_datetime($value);
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        app_bootstrap_runtime_timezone();
+
+        try {
+            $timezone = new DateTimeZone(app_runtime_timezone_name());
+        } catch (Throwable $exception) {
+            $timezone = new DateTimeZone(date_default_timezone_get());
+        }
+
+        return (new DateTimeImmutable('@' . $timestamp))
+            ->setTimezone($timezone)
+            ->format($format);
+    }
+}
+
+if (!function_exists('app_format_runtime_datetime_local')) {
+    function app_format_runtime_datetime_local(?string $value, string $format = 'd.m.Y H:i'): string
+    {
+        $timestamp = app_timestamp_from_runtime_datetime($value);
         if ($timestamp <= 0) {
             return '';
         }
@@ -8100,11 +8146,11 @@ function app_queue_order_email(Mysql_ks $db, string $templateKey, int $orderId, 
     }
 
     $settings = app_fetch_settings($db);
-    $expiresAtUtc = (string)($order['expires_at'] ?? '');
-    $expiresAtLocal = $expiresAtUtc !== '' ? app_format_utc_datetime_local($expiresAtUtc) : '';
+    $expiresAt = (string)($order['expires_at'] ?? '');
+    $expiresAtLocal = $expiresAt !== '' ? app_format_runtime_datetime_local($expiresAt) : '';
     $daysRemaining = 0;
-    if ($expiresAtUtc !== '') {
-        $expiresAtTimestamp = app_timestamp_from_utc_datetime($expiresAtUtc);
+    if ($expiresAt !== '') {
+        $expiresAtTimestamp = app_timestamp_from_runtime_datetime($expiresAt);
         if ($expiresAtTimestamp > 0) {
             $daysRemaining = max(0, (int)ceil(($expiresAtTimestamp - time()) / 86400));
         }
@@ -8120,7 +8166,7 @@ function app_queue_order_email(Mysql_ks $db, string $templateKey, int $orderId, 
         'status' => (string)($order['status'] ?? ''),
         'payment_status' => (string)($order['payment_status'] ?? ''),
         'fulfillment_status' => (string)($order['fulfillment_status'] ?? ''),
-        'expires_at' => $expiresAtUtc,
+        'expires_at' => $expiresAt,
         'expires_at_local' => $expiresAtLocal,
         'days_remaining' => $daysRemaining,
         'paid_at' => (string)($order['paid_at'] ?? ''),
@@ -8247,14 +8293,14 @@ function app_queue_upcoming_order_expiry_reminders(Mysql_ks $db, ?string $now = 
             continue;
         }
 
-        $expiresAtUtc = (string)($row['expires_at'] ?? '');
+        $expiresAt = (string)($row['expires_at'] ?? '');
         $emailResult = app_queue_order_email(
             $db,
             'order-expiring-soon',
             $orderId,
             [
                 'days_remaining' => $daysBefore,
-                'expires_at_local' => $expiresAtUtc !== '' ? app_format_utc_datetime_local($expiresAtUtc) : '',
+                'expires_at_local' => $expiresAt !== '' ? app_format_runtime_datetime_local($expiresAt) : '',
             ],
             86400
         );
