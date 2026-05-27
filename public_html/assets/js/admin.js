@@ -3388,6 +3388,10 @@ document.addEventListener('DOMContentLoaded', function () {
             var cryptoInput = modalNode ? q('[data-admin-crypto-accept-crypto-input]', modalNode) : null;
             var fiatInput = modalNode ? q('[data-admin-crypto-accept-fiat-input]', modalNode) : null;
             var cryptoInputLabel = modalNode ? q('[data-admin-crypto-accept-crypto-input-label]', modalNode) : null;
+            var cryptoMismatchNode = modalNode ? q('[data-admin-crypto-accept-crypto-mismatch]', modalNode) : null;
+            var cryptoMismatchTextNode = modalNode ? q('[data-admin-crypto-accept-crypto-mismatch-text]', modalNode) : null;
+            var cryptoExpectedPrefixNode = modalNode ? q('[data-admin-crypto-accept-crypto-expected-prefix]', modalNode) : null;
+            var cryptoExpectedValueNode = modalNode ? q('[data-admin-crypto-accept-crypto-expected-value]', modalNode) : null;
             var submitButton = modalNode ? q('[data-admin-crypto-accept-submit]', modalNode) : null;
             var previewUrl = modalNode ? String(modalNode.getAttribute('data-preview-url') || '').trim() : '';
             var loadingPreviewText = modalNode ? String(modalNode.getAttribute('data-loading-preview-text') || 'Loading recent transactions...') : 'Loading recent transactions...';
@@ -3399,7 +3403,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 ajax: false,
                 flyout: null,
                 payload: null,
+                previewMeta: null,
                 fiatManual: false,
+                cryptoManual: false,
                 submitting: false,
                 previewRequestToken: 0
             };
@@ -3464,10 +3470,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 state.ajax = false;
                 state.flyout = null;
                 state.payload = null;
+                state.previewMeta = null;
                 state.fiatManual = false;
+                state.cryptoManual = false;
                 state.submitting = false;
                 state.previewRequestToken += 1;
                 submitButton.disabled = false;
+                if (cryptoInput) {
+                    cryptoInput.classList.remove('admin-crypto-accept-modal__input--mismatch');
+                }
+                setHidden(cryptoMismatchNode, true);
                 if (explorerPanel) {
                     explorerPanel.innerHTML = '<div class="admin-crypto-accept-modal__explorer-loading">' + escapeHtml(loadingPreviewText) + '</div>';
                 }
@@ -3610,7 +3622,18 @@ document.addEventListener('DOMContentLoaded', function () {
                         );
                         return;
                     }
+                    state.previewMeta = responsePayload.preview || null;
                     explorerPanel.innerHTML = String(responsePayload.html || '');
+                    if (!state.cryptoManual && state.previewMeta && parseNumeric(state.previewMeta.candidate_crypto_amount) > 0) {
+                        var requestedCrypto = parseNumeric(currentPayload.requested_crypto_amount);
+                        var candidateCrypto = parseNumeric(state.previewMeta.candidate_crypto_amount);
+                        var hasSavedReceivedCrypto = String(currentPayload.received_crypto_amount || '').trim() !== '';
+                        if (!hasSavedReceivedCrypto && requestedCrypto > 0 && Math.abs(candidateCrypto - requestedCrypto) > 0.000000005) {
+                            cryptoInput.value = formatCryptoValue(candidateCrypto);
+                            state.fiatManual = false;
+                        }
+                    }
+                    updateComputedFields();
                 }).catch(function () {
                     if (requestToken !== state.previewRequestToken) {
                         return;
@@ -3626,6 +3649,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 var currentCrypto = formatCryptoValue(cryptoInput.value);
                 var currentFiat;
                 var requestedFiat;
+                var requestedCrypto;
+                var previewMeta = state.previewMeta || {};
+                var candidateCrypto;
+                var candidateFiat;
+                var candidateMismatch;
+                var expectedLabel;
+                var detectedFiatLabel;
+                var mismatchBaseText;
+                var expectedBaseText;
 
                 if (!state.fiatManual && rate > 0) {
                     fiatInput.value = formatFiatValue(parseNumeric(cryptoInput.value) * rate);
@@ -3633,6 +3665,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 currentFiat = parseNumeric(fiatInput.value);
                 requestedFiat = parseNumeric(payload.requested_fiat_amount);
+                requestedCrypto = parseNumeric(payload.requested_crypto_amount);
+                candidateCrypto = parseNumeric(previewMeta.candidate_crypto_amount);
+                candidateFiat = parseNumeric(previewMeta.candidate_fiat_amount);
+                candidateMismatch = requestedCrypto > 0 && candidateCrypto > 0 && Math.abs(candidateCrypto - requestedCrypto) > 0.000000005;
 
                 cryptoLabel.textContent = currentCrypto + (assetCode ? ' ' + assetCode : '');
                 fiatLabel.textContent = formatFiatLabelValue(currentFiat, payload);
@@ -3641,6 +3677,32 @@ document.addEventListener('DOMContentLoaded', function () {
                     timeNode.textContent = String(payload.requested_at_label || '').trim();
                 }
                 setHidden(timeWrap, String(payload.requested_at_label || '').trim() === '');
+
+                if (cryptoMismatchTextNode) {
+                    mismatchBaseText = modalNode.getAttribute('data-crypto-mismatch-text') || 'The detected crypto amount is different than requested.';
+                    if (candidateFiat <= 0 && candidateCrypto > 0 && rate > 0) {
+                        candidateFiat = candidateCrypto * rate;
+                    }
+                    detectedFiatLabel = candidateFiat > 0 ? formatFiatLabelValue(candidateFiat, payload) : '';
+                    cryptoMismatchTextNode.textContent = candidateMismatch && detectedFiatLabel !== ''
+                        ? (mismatchBaseText + ' = ' + detectedFiatLabel)
+                        : mismatchBaseText;
+                }
+                if (cryptoExpectedPrefixNode) {
+                    expectedBaseText = modalNode.getAttribute('data-crypto-expected-prefix') || 'It should be';
+                    cryptoExpectedPrefixNode.textContent = expectedBaseText;
+                }
+                if (cryptoExpectedValueNode) {
+                    expectedLabel = formatCryptoValue(requestedCrypto) + (assetCode ? ' ' + assetCode : '');
+                    if (requestedFiat > 0) {
+                        expectedLabel += ' = ' + formatFiatLabelValue(requestedFiat, payload);
+                    }
+                    cryptoExpectedValueNode.textContent = expectedLabel;
+                }
+                if (cryptoInput) {
+                    cryptoInput.classList.toggle('admin-crypto-accept-modal__input--mismatch', candidateMismatch);
+                }
+                setHidden(cryptoMismatchNode, !candidateMismatch);
 
                 setHidden(
                     warningNode,
@@ -3659,6 +3721,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 state.payload = payload;
                 state.fiatManual = false;
+                state.cryptoManual = false;
 
                 if (cryptoInputLabel) {
                     cryptoInputLabel.textContent = cryptoLabelTemplate.replace('{asset}', assetCode || 'Crypto');
@@ -3792,6 +3855,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             cryptoInput.addEventListener('input', function () {
+                state.cryptoManual = true;
                 updateComputedFields();
             });
 

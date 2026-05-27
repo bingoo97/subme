@@ -1259,6 +1259,8 @@ return [
     'payment_accept_modal_submit' => 'Akceptuj płatność',
     'payment_accept_modal_invalid_crypto' => 'Wpisz faktyczną liczbę otrzymanych tokenów.',
     'payment_accept_modal_invalid_fiat' => 'Wpisz kwotę FIAT, którą chcesz zapisać do salda.',
+    'payment_accept_modal_crypto_mismatch_text' => 'Wykryta kwota krypto jest inna niż żądana.',
+    'payment_accept_modal_crypto_expected_prefix' => 'Powinno być',
     'payment_accept_modal_explorer_title' => 'Podgląd explorera',
     'payment_accept_modal_explorer_hint' => 'Jeśli explorer blokuje osadzenie w iframe, otwórz go obok w nowej karcie.',
     'payment_accept_modal_explorer_unavailable' => 'Dla tej płatności nie ma dostępnego linku do explorera.',

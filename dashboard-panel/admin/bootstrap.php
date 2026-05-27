@@ -7375,9 +7375,11 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         }
     }
     $hasCandidate = false;
+    $candidateRow = null;
     if ($bestIndex !== null && $bestScore >= 3.0) {
         $transactions[$bestIndex]['candidate'] = true;
         $hasCandidate = true;
+        $candidateRow = $transactions[$bestIndex];
     }
 
     $balance = admin_crypto_accept_preview_wallet_balance($paymentRow);
@@ -7404,6 +7406,10 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         'empty_title' => admin_t($messages, 'payment_accept_modal_recent_empty_title', 'No recent transactions'),
         'empty_text' => admin_t($messages, 'payment_accept_modal_recent_empty_text', 'No transactions from the last 24 hours were found for this address.'),
         'candidate_badge' => admin_t($messages, 'payment_accept_modal_candidate_badge', 'Best match'),
+        'candidate_crypto_amount' => $candidateRow !== null ? (string)($candidateRow['amount_crypto'] ?? '') : '',
+        'candidate_crypto_label' => $candidateRow !== null ? (string)($candidateRow['amount_crypto_label'] ?? '') : '',
+        'candidate_fiat_amount' => $candidateRow !== null ? (string)($candidateRow['amount_fiat'] ?? '') : '',
+        'candidate_fiat_label' => $candidateRow !== null ? (string)($candidateRow['amount_fiat_label'] ?? '') : '',
         'direction_incoming' => admin_t($messages, 'payment_accept_modal_direction_incoming', 'Incoming'),
         'direction_outgoing' => admin_t($messages, 'payment_accept_modal_direction_outgoing', 'Outgoing'),
         'confirmations_label' => admin_t($messages, 'payment_accept_modal_confirmations_label', 'Confirmations'),

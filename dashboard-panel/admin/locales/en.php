@@ -1259,6 +1259,8 @@ return [
     'payment_accept_modal_submit' => 'Accept payment',
     'payment_accept_modal_invalid_crypto' => 'Enter the actual amount of crypto you received.',
     'payment_accept_modal_invalid_fiat' => 'Enter the FIAT amount you want to credit.',
+    'payment_accept_modal_crypto_mismatch_text' => 'The detected crypto amount is different than requested.',
+    'payment_accept_modal_crypto_expected_prefix' => 'It should be',
     'payment_accept_modal_explorer_title' => 'Explorer preview',
     'payment_accept_modal_explorer_hint' => 'If the explorer blocks iframe embedding, open it in a new tab.',
     'payment_accept_modal_explorer_unavailable' => 'Explorer link is not available for this payment.',

@@ -494,6 +494,13 @@ if (isset($_POST['admin_crypto_address_preview_ajax'])) {
         'ok' => true,
         'html' => $previewHtml,
         'explorer_url' => (string)($previewPayload['explorer_url'] ?? ''),
+        'preview' => [
+            'has_candidate' => !empty($previewPayload['has_candidate']) ? 1 : 0,
+            'candidate_crypto_amount' => (string)($previewPayload['candidate_crypto_amount'] ?? ''),
+            'candidate_crypto_label' => (string)($previewPayload['candidate_crypto_label'] ?? ''),
+            'candidate_fiat_amount' => (string)($previewPayload['candidate_fiat_amount'] ?? ''),
+            'candidate_fiat_label' => (string)($previewPayload['candidate_fiat_label'] ?? ''),
+        ],
     ]);
     exit;
 }
@@ -5560,6 +5567,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 data-accept-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_submit', 'Accept payment')); ?>"
                 data-invalid-crypto-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_invalid_crypto', 'Enter the amount of crypto you actually received.')); ?>"
                 data-invalid-fiat-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_invalid_fiat', 'Enter the FIAT amount you want to credit.')); ?>"
+                data-crypto-mismatch-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_crypto_mismatch_text', 'The detected crypto amount is different than requested.')); ?>"
+                data-crypto-expected-prefix="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_crypto_expected_prefix', 'It should be')); ?>"
                 data-loading-preview-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_loading_preview', 'Loading recent transactions...')); ?>"
                 data-preview-error-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_preview_error', 'Unable to load recent transactions for this address right now.')); ?>"
                 data-open-explorer-text="<?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?>"
@@ -5616,6 +5625,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <label class="admin-crypto-accept-modal__field">
                                             <span class="admin-crypto-accept-modal__field-label" data-admin-crypto-accept-crypto-input-label><?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_crypto_label', 'Received {asset}', ['asset' => 'Crypto'])); ?></span>
                                             <input type="number" min="0.00000001" step="0.00000001" class="form-control form-control-lg" data-admin-crypto-accept-crypto-input inputmode="decimal">
+                                            <div class="admin-crypto-accept-modal__field-note" data-admin-crypto-accept-crypto-mismatch hidden>
+                                                <div class="admin-crypto-accept-modal__field-note-danger" data-admin-crypto-accept-crypto-mismatch-text><?php echo admin_e(admin_t($messages, 'payment_accept_modal_crypto_mismatch_text', 'The detected crypto amount is different than requested.')); ?></div>
+                                                <div class="admin-crypto-accept-modal__field-note-expected"><strong data-admin-crypto-accept-crypto-expected-prefix><?php echo admin_e(admin_t($messages, 'payment_accept_modal_crypto_expected_prefix', 'It should be')); ?></strong> <span data-admin-crypto-accept-crypto-expected-value></span></div>
+                                            </div>
                                         </label>
                                         <label class="admin-crypto-accept-modal__field">
                                             <span class="admin-crypto-accept-modal__field-label"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_fiat_label', 'Amount to credit in FIAT')); ?></span>

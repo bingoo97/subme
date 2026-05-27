@@ -7110,11 +7110,35 @@ body.admin-login-page .alert.alert-danger::before{
     gap:.42rem;
 }
 
+.admin-crypto-accept-modal__field .form-control.admin-crypto-accept-modal__input--mismatch{
+    border:2px solid #dc2626;
+    color:#b91c1c;
+    box-shadow:none;
+}
+
 .admin-crypto-accept-modal__field-label{
     color:#0f172a;
     font-size:.86rem;
     font-weight:800;
     letter-spacing:-.01em;
+}
+
+.admin-crypto-accept-modal__field-note{
+    display:flex;
+    flex-direction:column;
+    gap:.18rem;
+    margin-top:.05rem;
+    font-size:.72rem;
+    line-height:1.45;
+}
+
+.admin-crypto-accept-modal__field-note-danger{
+    color:#dc2626;
+    font-weight:700;
+}
+
+.admin-crypto-accept-modal__field-note-expected{
+    color:#0f172a;
 }
 
 .admin-crypto-accept-modal__hint{
@@ -9090,19 +9114,29 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     gap:1rem;
 }
 
-.admin-order-modal__activation-alert{
+body.admin-app-page .admin-order-modal__stack .alert,
+body.admin-login-page .admin-order-modal__stack .alert,
+.admin-order-modal__stack .alert{
+    display:block;
     margin:0;
-    display:grid;
-    grid-template-columns:auto minmax(0, 1fr);
-    column-gap:.75rem;
-    row-gap:.2rem;
-    align-items:start;
-    border-radius:16px;
 }
 
-.admin-order-modal__activation-alert::before{
-    grid-column:1;
-    grid-row:1 / span 2;
+body.admin-app-page .admin-order-modal__stack .alert::before,
+body.admin-login-page .admin-order-modal__stack .alert::before,
+.admin-order-modal__stack .alert::before{
+    content:none;
+    display:none;
+}
+
+body.admin-app-page .admin-order-modal__stack .alert strong,
+body.admin-login-page .admin-order-modal__stack .alert strong,
+.admin-order-modal__stack .alert strong{
+    display:block;
+    margin-bottom:.28rem;
+}
+
+.admin-order-modal__activation-alert{
+    border-radius:16px;
 }
 
 .admin-order-modal__activation-alert--success{
@@ -9111,13 +9145,12 @@ body.admin-login-page .admin-crypto-preview__warning::before{
 }
 
 .admin-order-modal__activation-alert strong{
-    grid-column:2;
     font-size:.92rem;
     font-weight:800;
 }
 
 .admin-order-modal__activation-alert span{
-    grid-column:2;
+    display:block;
     font-size:.84rem;
     line-height:1.45;
 }
