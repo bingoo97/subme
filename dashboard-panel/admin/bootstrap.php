@@ -111,6 +111,9 @@ function admin_app_settings(Mysql_ks $db): array
     }
 
     app_ensure_settings_runtime_columns($db);
+    if (function_exists('app_ensure_service_currency_seed')) {
+        app_ensure_service_currency_seed($db);
+    }
 
     $settings = $db->select_user("SELECT * FROM app_settings WHERE id = 1 LIMIT 1");
     return is_array($settings) ? $settings : [];
@@ -252,12 +255,16 @@ function admin_service_currency_rows(Mysql_ks $db): array
         return [];
     }
 
+    if (function_exists('app_ensure_service_currency_seed')) {
+        app_ensure_service_currency_seed($db);
+    }
+
     return $db->select_full_user(
         "SELECT id, code, name, symbol
          FROM currencies
          WHERE is_active = 1
-           AND code IN ('USD', 'EUR')
-         ORDER BY FIELD(code, 'USD', 'EUR'), id ASC"
+           AND code IN ('USD', 'EUR', 'GBP')
+         ORDER BY FIELD(code, 'USD', 'EUR', 'GBP'), id ASC"
     );
 }
 

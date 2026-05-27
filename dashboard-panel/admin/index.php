@@ -770,7 +770,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $allowedCurrencyIds[] = (int)($serviceCurrency['id'] ?? 0);
         }
         if (!in_array($selectedCurrencyId, $allowedCurrencyIds, true)) {
-            $selectedCurrencyId = 1;
+            $selectedCurrencyId = (int)($allowedCurrencyIds[0] ?? ($appSettings['default_currency_id'] ?? 0));
         }
 
         if (!$settingsProtectedFeatureEditEnabled) {
@@ -11510,7 +11510,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </div>
                                     <?php if ($newsRows): ?>
                                         <div class="table-responsive">
-                                            <table class="table admin-table align-middle">
+                                            <table class="table admin-table admin-news-table align-middle">
                                                 <thead>
                                                     <tr>
                                                         <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>

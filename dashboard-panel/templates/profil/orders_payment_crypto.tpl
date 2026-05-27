@@ -1,8 +1,8 @@
 <div class="content-box">
 	{if $settings.active_sale == 1}
 		<h5 style="font-size:20px;">
-			<a href="order-payment-{$selected.id}"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i> Bitcoin</a> 
-			<span class="payment_price right">{$selected.price} {$reseller.currency_symbol}</span>
+			<a href="order-payment-{$selected.id}"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i> Bitcoin</a>
+			<span class="payment_price right">{$selected.price} {$selected.currency_symbol|default:$selected.currency_code|default:$reseller.currency_symbol}</span>
 		</h5>
 		<hr/>
 		<input type="hidden" id="code" value="{$code}" />
@@ -18,4 +18,4 @@
 		</div>
 		<a href="orders" class="btn btn-default btn-lg btn-back" title="Close"><i class="fa fa-angle-double-left" aria-hidden="true"></i> Close</a>
 	{/if}
-</div> 
+</div>

@@ -366,7 +366,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             </div>
                             <div>
                                 <span class="payment-request-label">{$t.payment_fiat_value|default:'Fiat value'}</span>
-                                <span class="payment-request-value">{$payment_crypto_request.requested_fiat_amount} {$selected.currency_symbol|default:$selected.currency_code|default:$reseller.currency_symbol}</span>
+                                <span class="payment-request-value">{$payment_crypto_request.requested_fiat_amount} {$payment_crypto_request.currency_symbol|default:$payment_crypto_request.currency_code|default:$selected.currency_symbol|default:$selected.currency_code|default:$reseller.currency_symbol}</span>
                             </div>
                             <div>
                                 <span class="payment-request-label">{$t.payment_wallet_address|default:'Address'}</span>
@@ -433,7 +433,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                 <p>{$t.payment_bank_details_intro|default:'Use the assigned account details shown below.'}</p>
             </div>
             <div class="payment-request-card">
-                <div class="payment-request-grid">
+                    <div class="payment-request-grid">
                     <div>
                         <span class="payment-request-label">{$t.payment_bank_account_holder|default:'Account holder'}</span>
                         <span class="payment-request-value">{$payment_bank_request.account_holder_name}</span>
@@ -450,10 +450,10 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <span class="payment-request-label">SWIFT / BIC</span>
                         <span class="payment-request-value">{$payment_bank_request.swift_bic}</span>
                     </div>
-                    <div>
-                        <span class="payment-request-label">{$t.payment_summary_amount|default:'Amount'}</span>
-                        <span class="payment-request-value">{$payment_bank_request.requested_amount} {$payment_bank_request.currency_code}</span>
-                    </div>
+                        <div>
+                            <span class="payment-request-label">{$t.payment_summary_amount|default:'Amount'}</span>
+                        <span class="payment-request-value">{$payment_bank_request.requested_amount} {$payment_bank_request.currency_symbol|default:$payment_bank_request.currency_code}</span>
+                        </div>
                     {if $payment_bank_request.transfer_instructions}
                     <div class="payment-request-full">
                         <span class="payment-request-label">{$t.instructions|default:'Instructions'}</span>

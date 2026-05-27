@@ -10592,6 +10592,52 @@ body.admin-login-page .admin-crypto-preview__warning::before{
         letter-spacing:.04em;
     }
 
+    .admin-news-table thead{
+        display:none;
+    }
+
+    .admin-news-table,
+    .admin-news-table tbody,
+    .admin-news-table tr,
+    .admin-news-table td{
+        display:block;
+        width:100%;
+    }
+
+    .admin-news-table tr{
+        margin-bottom:.9rem;
+        padding:.9rem;
+        border:1px solid #ebeff6;
+        border-radius:18px;
+        background:#fff;
+    }
+
+    .admin-news-table td{
+        padding:.55rem 0;
+        border:0;
+    }
+
+    .admin-news-table td::before{
+        content:attr(data-label);
+        display:block;
+        margin-bottom:.18rem;
+        color:#7a8296;
+        font-size:.72rem;
+        font-weight:800;
+        text-transform:uppercase;
+        letter-spacing:.04em;
+    }
+
+    .admin-news-table .admin-wallet-actions{
+        justify-content:flex-start;
+        gap:.65rem;
+    }
+
+    .admin-news-table .admin-wallet-actions .btn{
+        min-width:44px;
+        min-height:44px;
+    }
+
     .admin-content{
         padding:0;
         background:#fff;

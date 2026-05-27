@@ -3,7 +3,8 @@ SET NAMES utf8mb4;
 INSERT INTO `currencies` (`id`, `code`, `name`, `symbol`, `is_active`) VALUES
   (1, 'USD', 'US Dollar', '$', 1),
   (2, 'EUR', 'Euro', 'EUR', 1),
-  (3, 'PLN', 'Polish Zloty', 'PLN', 1)
+  (3, 'PLN', 'Polish Zloty', 'PLN', 1),
+  (4, 'GBP', 'British Pound', '£', 1)
 ON DUPLICATE KEY UPDATE
   `name` = VALUES(`name`),
   `symbol` = VALUES(`symbol`),

@@ -200,6 +200,38 @@ function app_format_money_value($amount, string $currencySymbol = '', string $cu
     return $suffix !== '' ? trim($formattedAmount . ' ' . $suffix) : $formattedAmount;
 }
 
+function app_ensure_service_currency_seed(Mysql_ks $db): void
+{
+    static $ensured = false;
+
+    if ($ensured || !schema_object_exists($db, 'currencies')) {
+        return;
+    }
+
+    $ensured = true;
+
+    $seedRows = [
+        ['USD', 'US Dollar', '$'],
+        ['EUR', 'Euro', 'EUR'],
+        ['GBP', 'British Pound', '£'],
+    ];
+
+    foreach ($seedRows as $seedRow) {
+        [$code, $name, $symbol] = $seedRow;
+        $safeCode = $db->escape($code);
+        $safeName = $db->escape($name);
+        $safeSymbol = $db->escape($symbol);
+        @$db->query(
+            "INSERT INTO currencies (`code`, `name`, `symbol`, `is_active`)
+             VALUES ('{$safeCode}', '{$safeName}', '{$safeSymbol}', 1)
+             ON DUPLICATE KEY UPDATE
+               `name` = VALUES(`name`),
+               `symbol` = VALUES(`symbol`),
+               `is_active` = VALUES(`is_active`)"
+        );
+    }
+}
+
 function app_format_logo_path(string $path): string
 {
     $path = trim($path);
@@ -5400,6 +5432,7 @@ function app_fetch_settings(Mysql_ks $db): array
     }
 
     app_ensure_settings_runtime_columns($db);
+    app_ensure_service_currency_seed($db);
 
     $settings = $db->select_user(
         "SELECT

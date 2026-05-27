@@ -1369,10 +1369,13 @@ if (app_uses_v2_schema($db)) {
                 crypto_wallet_addresses.wallet_provider AS wallet_provider,
                 crypto_wallet_addresses.address AS wallet_address,
                 crypto_wallet_addresses.memo_tag AS wallet_memo_tag,
-                crypto_wallet_addresses.qr_url AS wallet_qr_url
+                crypto_wallet_addresses.qr_url AS wallet_qr_url,
+                currencies.symbol AS currency_symbol,
+                currencies.code AS currency_code
              FROM crypto_deposit_requests
              LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
              LEFT JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
+             LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
              WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
                AND crypto_deposit_requests.order_id = " . (int)$selected['id'] . "
              ORDER BY crypto_deposit_requests.id DESC
@@ -1387,6 +1390,7 @@ if (app_uses_v2_schema($db)) {
         $bankRequest = $db->select_user(
             "SELECT
                 bank_transfer_requests.*,
+                currencies.symbol AS currency_symbol,
                 currencies.code AS currency_code,
                 bank_accounts.label,
                 bank_accounts.account_holder_name,
