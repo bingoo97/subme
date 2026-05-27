@@ -7897,6 +7897,10 @@ body.admin-login-page .admin-crypto-preview__warning::before{
     justify-content:flex-start;
 }
 
+.admin-editor-actions--secondary{
+    margin-top:.75rem;
+}
+
 .admin-rich-editor{
     display:grid;
     gap:.75rem;
