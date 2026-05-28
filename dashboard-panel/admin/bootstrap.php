@@ -2478,17 +2478,42 @@ function admin_normalize_datetime_input(?string $value): ?string
         return null;
     }
 
-    $normalized = str_replace('T', ' ', $value);
-    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $normalized)) {
-        $normalized .= ':00';
+    $value = preg_replace('/\s+/', ' ', $value) ?? $value;
+    $value = str_replace('T', ' ', trim($value));
+
+    $formats = [
+        '!Y-m-d H:i:s',
+        '!Y-m-d H:i',
+        '!Y-m-d, H:i:s',
+        '!Y-m-d, H:i',
+        '!d.m.Y H:i:s',
+        '!d.m.Y H:i',
+        '!d.m.Y, H:i:s',
+        '!d.m.Y, H:i',
+        '!Y-m-d',
+        '!d.m.Y',
+    ];
+
+    foreach ($formats as $format) {
+        $date = DateTimeImmutable::createFromFormat($format, $value);
+        if (!$date instanceof DateTimeImmutable) {
+            continue;
+        }
+
+        $errors = DateTimeImmutable::getLastErrors();
+        if (is_array($errors) && ((int)($errors['warning_count'] ?? 0) > 0 || (int)($errors['error_count'] ?? 0) > 0)) {
+            continue;
+        }
+
+        return $date->format('Y-m-d H:i:s');
     }
 
-    $timestamp = strtotime($normalized);
-    if ($timestamp === false) {
-        return null;
-    }
+    return null;
+}
 
-    return date('Y-m-d H:i:s', $timestamp);
+function admin_datetime_input_invalid(?string $value): bool
+{
+    return trim((string)$value) !== '' && admin_normalize_datetime_input($value) === null;
 }
 
 function admin_order_status_options(string $current = ''): array
@@ -2709,6 +2734,21 @@ function admin_format_datetime_local(?string $value): string
     return (new DateTimeImmutable('@' . $timestamp))
         ->setTimezone($timezone)
         ->format('Y-m-d\TH:i');
+}
+
+function admin_format_datetime_text(?string $value): string
+{
+    $value = trim((string)$value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (function_exists('app_format_runtime_datetime_local')) {
+        return app_format_runtime_datetime_local($value, 'd.m.Y H:i');
+    }
+
+    $timestamp = strtotime($value);
+    return $timestamp !== false ? date('d.m.Y H:i', $timestamp) : '';
 }
 
 function admin_format_money_value($amount, string $currencyCode = ''): string
@@ -10309,6 +10349,16 @@ function admin_save_order_info(
     }
     if (!in_array($fulfillmentStatus, admin_order_fulfillment_status_options((string)($order['fulfillment_status'] ?? '')), true)) {
         return ['ok' => false, 'message' => 'Fulfillment status is invalid.'];
+    }
+
+    if (admin_datetime_input_invalid($input['started_at'] ?? null)) {
+        return ['ok' => false, 'message' => 'Start date format is invalid. Use e.g. 2026-05-02 17:42 or 23.08.2026 17:42.'];
+    }
+    if (admin_datetime_input_invalid($input['expires_at'] ?? null)) {
+        return ['ok' => false, 'message' => 'Expiry date format is invalid. Use e.g. 2026-05-02 17:42 or 23.08.2026 17:42.'];
+    }
+    if (admin_datetime_input_invalid($input['paid_at'] ?? null)) {
+        return ['ok' => false, 'message' => 'Paid date format is invalid. Use e.g. 2026-05-02 17:42 or 23.08.2026 17:42.'];
     }
 
     $startedAt = admin_normalize_datetime_input($input['started_at'] ?? null);
@@ -18885,6 +18935,260 @@ function admin_settings_rows(Mysql_ks $db): array
         ['label' => 'bank_transfers_enabled', 'value' => !empty($settings['bank_transfers_enabled']) ? '1' : '0'],
         ['label' => 'crypto_wallet_shared_assignments_enabled', 'value' => !empty($settings['crypto_wallet_shared_assignments_enabled']) ? '1' : '0'],
         ['label' => 'bank_account_shared_assignments_enabled', 'value' => !empty($settings['bank_account_shared_assignments_enabled']) ? '1' : '0'],
+    ];
+}
+
+function admin_sql_runner_split_statements(string $sql): array
+{
+    $statements = [];
+    $buffer = '';
+    $length = strlen($sql);
+    $quote = '';
+    $escaped = false;
+    $lineComment = false;
+    $blockComment = false;
+
+    for ($i = 0; $i < $length; $i++) {
+        $char = $sql[$i];
+        $next = $i + 1 < $length ? $sql[$i + 1] : '';
+
+        if ($lineComment) {
+            if ($char === "\n") {
+                $lineComment = false;
+            }
+            $buffer .= $char;
+            continue;
+        }
+
+        if ($blockComment) {
+            $buffer .= $char;
+            if ($char === '*' && $next === '/') {
+                $buffer .= $next;
+                $i++;
+                $blockComment = false;
+            }
+            continue;
+        }
+
+        if ($quote !== '') {
+            $buffer .= $char;
+            if ($escaped) {
+                $escaped = false;
+                continue;
+            }
+            if ($char === '\\') {
+                $escaped = true;
+                continue;
+            }
+            if ($char === $quote) {
+                $quote = '';
+            }
+            continue;
+        }
+
+        if (($char === '-' && $next === '-') || $char === '#') {
+            $lineComment = true;
+            $buffer .= $char;
+            if ($char === '-' && $next === '-') {
+                $buffer .= $next;
+                $i++;
+            }
+            continue;
+        }
+
+        if ($char === '/' && $next === '*') {
+            $blockComment = true;
+            $buffer .= $char . $next;
+            $i++;
+            continue;
+        }
+
+        if ($char === '\'' || $char === '"' || $char === '`') {
+            $quote = $char;
+            $buffer .= $char;
+            continue;
+        }
+
+        if ($char === ';') {
+            $statement = trim($buffer);
+            if ($statement !== '') {
+                $statements[] = $statement;
+            }
+            $buffer = '';
+            continue;
+        }
+
+        $buffer .= $char;
+    }
+
+    $statement = trim($buffer);
+    if ($statement !== '') {
+        $statements[] = $statement;
+    }
+
+    return $statements;
+}
+
+function admin_sql_runner_statement_head(string $statement): string
+{
+    $statement = preg_replace('~/\*.*?\*/~s', ' ', $statement) ?? $statement;
+    $lines = preg_split('/\R/', $statement) ?: [];
+    $clean = [];
+    foreach ($lines as $line) {
+        $trimmed = ltrim((string)$line);
+        if ($trimmed === '' || str_starts_with($trimmed, '--') || str_starts_with($trimmed, '#')) {
+            continue;
+        }
+        $clean[] = $trimmed;
+    }
+
+    return strtoupper(trim(implode(' ', $clean)));
+}
+
+function admin_sql_runner_create_table_name(string $statement): string
+{
+    if (preg_match('/^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i', $statement, $matches)) {
+        return (string)$matches[1];
+    }
+
+    return '';
+}
+
+function admin_sql_runner_validate_statement(string $statement): array
+{
+    $head = admin_sql_runner_statement_head($statement);
+    if ($head === '') {
+        return ['ok' => false, 'message' => 'Empty SQL statement.'];
+    }
+
+    $blockedPrefixes = [
+        'DROP ',
+        'TRUNCATE ',
+        'DELETE ',
+        'RENAME ',
+        'GRANT ',
+        'REVOKE ',
+        'CREATE USER',
+        'ALTER USER',
+        'DROP USER',
+        'SET PASSWORD',
+        'LOCK TABLES',
+        'UNLOCK TABLES',
+        'KILL ',
+        'SHUTDOWN',
+    ];
+    foreach ($blockedPrefixes as $prefix) {
+        if (str_starts_with($head, $prefix)) {
+            return ['ok' => false, 'message' => 'Blocked SQL statement: ' . trim($prefix)];
+        }
+    }
+
+    $blockedFragments = [' INTO OUTFILE', ' INTO DUMPFILE', ' LOAD_FILE(', ' LOAD DATA'];
+    foreach ($blockedFragments as $fragment) {
+        if (str_contains($head, $fragment)) {
+            return ['ok' => false, 'message' => 'Blocked SQL fragment: ' . trim($fragment)];
+        }
+    }
+
+    if (str_starts_with($head, 'CREATE TABLE') && preg_match('/\)\s+AS\s+SELECT\b/i', $head)) {
+        return ['ok' => false, 'message' => 'CREATE TABLE AS SELECT is blocked in this runner.'];
+    }
+
+    if (str_starts_with($head, 'INSERT ') && str_contains($head, ' ON DUPLICATE KEY UPDATE ')) {
+        return ['ok' => false, 'message' => 'INSERT ... ON DUPLICATE KEY UPDATE is blocked because it can overwrite existing records.'];
+    }
+
+    if (str_starts_with($head, 'ALTER TABLE')) {
+        // Keep ALTER TABLE narrowly scoped to additive schema changes.
+        $blockedAlterFragments = [' DROP ', ' RENAME ', ' CHANGE ', ' MODIFY '];
+        foreach ($blockedAlterFragments as $fragment) {
+            if (str_contains($head, $fragment)) {
+                return ['ok' => false, 'message' => 'Blocked ALTER TABLE operation: ' . trim($fragment)];
+            }
+        }
+    }
+
+    $allowedPrefixes = [
+        'CREATE TABLE',
+        'ALTER TABLE',
+        'CREATE INDEX',
+        'INSERT ',
+    ];
+    foreach ($allowedPrefixes as $prefix) {
+        if (str_starts_with($head, $prefix)) {
+            return ['ok' => true, 'message' => ''];
+        }
+    }
+
+    return ['ok' => false, 'message' => 'Only CREATE TABLE, ALTER TABLE (additive), CREATE INDEX and INSERT statements are allowed here.'];
+}
+
+function admin_execute_sql_import(Mysql_ks $db, string $sql): array
+{
+    $sql = trim($sql);
+    if ($sql === '') {
+        return ['ok' => false, 'message' => 'SQL code is required.', 'executed' => 0, 'skipped' => 0];
+    }
+
+    if (strlen($sql) > 500000) {
+        return ['ok' => false, 'message' => 'SQL code is too large for this runner.', 'executed' => 0, 'skipped' => 0];
+    }
+
+    $statements = admin_sql_runner_split_statements($sql);
+    if ($statements === []) {
+        return ['ok' => false, 'message' => 'No SQL statements found.', 'executed' => 0, 'skipped' => 0];
+    }
+
+    if (count($statements) > 100) {
+        return ['ok' => false, 'message' => 'Too many SQL statements. Please split the import into smaller parts.', 'executed' => 0, 'skipped' => 0];
+    }
+
+    $executed = 0;
+    $skipped = 0;
+    $details = [];
+
+    foreach ($statements as $index => $statement) {
+        $validation = admin_sql_runner_validate_statement($statement);
+        if (empty($validation['ok'])) {
+            return [
+                'ok' => false,
+                'message' => 'Statement #' . ($index + 1) . ': ' . (string)$validation['message'],
+                'executed' => 0,
+                'skipped' => 0,
+                'details' => [],
+            ];
+        }
+    }
+
+    foreach ($statements as $index => $statement) {
+        $tableName = admin_sql_runner_create_table_name($statement);
+        if ($tableName !== '' && schema_object_exists($db, $tableName)) {
+            $skipped++;
+            $details[] = 'Skipped CREATE TABLE `' . $tableName . '` because it already exists.';
+            continue;
+        }
+
+        $result = $db->query($statement);
+        if ($result === false) {
+            $error = trim((string)($db->error ?? 'Unknown SQL error.'));
+            return [
+                'ok' => false,
+                'message' => 'Statement #' . ($index + 1) . ' failed: ' . ($error !== '' ? $error : 'Unknown SQL error.'),
+                'executed' => $executed,
+                'skipped' => $skipped,
+                'details' => $details,
+            ];
+        }
+
+        $executed++;
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'SQL import finished successfully.',
+        'executed' => $executed,
+        'skipped' => $skipped,
+        'details' => $details,
     ];
 }
 

@@ -216,6 +216,7 @@ $adminPersonalNotesFormState = [
 $adminProfileFormState = [
     'public_handle' => admin_public_handle_label($adminUser),
 ];
+$sqlImportFormState = '';
 $adminCreateFormState = [
     'login_name' => '',
     'email' => '',
@@ -1388,6 +1389,40 @@ if ($route === 'settings' && isset($_POST['admin_download_database_backup'])) {
         } else {
             $pageAlert = (string)($backupResult['message'] ?? admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.'));
             $pageAlertType = 'danger';
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_run_sql_import'])) {
+    $sqlImportFormState = trim((string)($_POST['sql_import_code'] ?? ''));
+
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } else {
+        $sqlImportResult = admin_execute_sql_import($db, $sqlImportFormState);
+        $executed = (int)($sqlImportResult['executed'] ?? 0);
+        $skipped = (int)($sqlImportResult['skipped'] ?? 0);
+        $details = (array)($sqlImportResult['details'] ?? []);
+        $pageAlertType = !empty($sqlImportResult['ok']) ? 'success' : 'danger';
+        $pageAlert = (string)($sqlImportResult['message'] ?? admin_t($messages, 'settings_sql_import_error', 'Unable to execute SQL import.'));
+        $pageAlertHtml = admin_e($pageAlert)
+            . '<br>' . admin_e(admin_t($messages, 'settings_sql_import_executed', 'Executed statements')) . ': <strong>' . admin_e((string)$executed) . '</strong>'
+            . ' / ' . admin_e(admin_t($messages, 'settings_sql_import_skipped', 'Skipped statements')) . ': <strong>' . admin_e((string)$skipped) . '</strong>';
+
+        if ($details !== []) {
+            $pageAlertHtml .= '<ul class="mb-0 mt-2">';
+            foreach (array_slice($details, 0, 5) as $detail) {
+                $pageAlertHtml .= '<li>' . admin_e((string)$detail) . '</li>';
+            }
+            $pageAlertHtml .= '</ul>';
+        }
+
+        if (!empty($sqlImportResult['ok'])) {
+            $sqlImportFormState = '';
         }
     }
 }
@@ -7137,7 +7172,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <?php if ($usesSubscriptionTiming): ?>
                                                                                 <div>
                                                                                     <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_expires_at', 'Expires at')); ?></label>
-                                                                                    <input type="datetime-local" class="form-control" name="expires_at" value="<?php echo admin_e(admin_format_datetime_local((string)($row['expires_at'] ?? ''))); ?>">
+                                                                                    <input type="text" class="form-control" name="expires_at" value="<?php echo admin_e(admin_format_datetime_text((string)($row['expires_at'] ?? ''))); ?>" placeholder="23.08.2026 09:23" inputmode="text" autocomplete="off">
                                                                                 </div>
                                                                                 <?php endif; ?>
                                                                                 <div>
@@ -14153,6 +14188,36 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     );
                                     ?>
                                         </div>
+                                        <?php if ($settingsAdminMode): ?>
+                                            <section class="admin-settings-sql-runner">
+                                                <div class="admin-settings-sql-runner__head">
+                                                    <div>
+                                                        <h3><?php echo admin_e(admin_t($messages, 'settings_sql_import_title', 'SQL import')); ?></h3>
+                                                        <p><?php echo admin_e(admin_t($messages, 'settings_sql_import_intro', 'Paste SQL code to add content or create a missing table. This tool is available only in admin mode.')); ?></p>
+                                                    </div>
+                                                    <span class="admin-settings-sql-runner__badge">admin mode</span>
+                                                </div>
+                                                <div class="alert alert-warning admin-settings-sql-runner__notice">
+                                                    <?php echo admin_e(admin_t($messages, 'settings_sql_import_warning', 'Allowed statements: CREATE TABLE, ALTER TABLE (safe additive changes), CREATE INDEX and INSERT. Destructive operations (DROP, DELETE, TRUNCATE) and overwrites are blocked.')); ?>
+                                                </div>
+                                                <form action="/admin/?page=settings<?php echo $settingsAdminUrlSuffix; ?>" method="post">
+                                                    <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                    <label class="form-label" for="settings_sql_import_code"><?php echo admin_e(admin_t($messages, 'settings_sql_import_code_label', 'SQL code')); ?></label>
+                                                    <textarea
+                                                        class="form-control admin-settings-sql-runner__textarea"
+                                                        id="settings_sql_import_code"
+                                                        name="sql_import_code"
+                                                        rows="14"
+                                                        spellcheck="false"
+                                                        placeholder="<?php echo admin_e(admin_t($messages, 'settings_sql_import_placeholder', 'Paste CREATE TABLE / INSERT SQL here...')); ?>"><?php echo admin_e($sqlImportFormState); ?></textarea>
+                                                    <div class="admin-settings-sql-runner__actions">
+                                                        <button type="submit" class="btn btn-danger btn-lg" name="admin_run_sql_import" onclick="return confirm(<?php echo htmlspecialchars(json_encode(admin_t($messages, 'settings_sql_import_confirm', 'Run this SQL code now?'), JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?>);">
+                                                            <?php echo admin_e(admin_t($messages, 'settings_sql_import_button', 'Run SQL import')); ?>
+                                                        </button>
+                                                    </div>
+                                                </form>
+                                            </section>
+                                        <?php endif; ?>
                                     <?php
                                     break;
                             }
