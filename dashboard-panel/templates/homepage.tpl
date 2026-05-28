@@ -419,6 +419,31 @@
         var displayModeQuery = window.matchMedia ? window.matchMedia('(display-mode: standalone)') : null;
         var deferredPrompt = null;
         var isStandalone = false;
+        var localStore = storageAvailable('localStorage');
+        var hideStorageKey = 'add-to-home-hidden-' + (window.location.hostname || 'default');
+
+        function storageAvailable(type) {
+            try {
+                var storage = window[type];
+                var probeKey = '__add_to_home_probe__';
+                storage.setItem(probeKey, '1');
+                storage.removeItem(probeKey);
+                return storage;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function wasLocallyHidden() {
+            return !!(localStore && localStore.getItem(hideStorageKey) === '1');
+        }
+
+        function persistLocalHide() {
+            if (!localStore) {
+                return;
+            }
+            localStore.setItem(hideStorageKey, '1');
+        }
 
         function recomputeStandalone() {
             isStandalone = !!(
@@ -463,7 +488,7 @@
 
         function updateVisibility() {
             recomputeStandalone();
-            entry.hidden = !isMobile || (!isIos && !isAndroid) || isStandalone;
+            entry.hidden = !isMobile || (!isIos && !isAndroid) || isStandalone || wasLocallyHidden();
             if (!entry.hidden) {
                 updatePlatformContent();
             }
@@ -489,6 +514,7 @@
                 promptEvent.userChoice.then(function (choice) {
                     if (choice && choice.outcome === 'accepted') {
                         isStandalone = true;
+                        persistLocalHide();
                         entry.hidden = true;
                         if (window.jQuery) {
                             window.jQuery(modal).modal('hide');
@@ -511,11 +537,19 @@
         window.addEventListener('appinstalled', function () {
             deferredPrompt = null;
             isStandalone = true;
+            persistLocalHide();
             entry.hidden = true;
             if (window.jQuery) {
                 window.jQuery(modal).modal('hide');
             }
         });
+
+        if (window.jQuery) {
+            window.jQuery(modal).on('hidden.bs.modal', function () {
+                persistLocalHide();
+                updateVisibility();
+            });
+        }
 
         if (displayModeQuery) {
             if (typeof displayModeQuery.addEventListener === 'function') {
