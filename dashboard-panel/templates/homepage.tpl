@@ -15,6 +15,20 @@
 </div>
 {include file='alert.tpl'}
 <div class="home_buttons">
+	<div class="col-md-12 add-to-home-entry" data-add-to-home-entry hidden>
+		<div
+			class="one_box one_box--add-to-home"
+			role="button"
+			tabindex="0"
+			data-toggle="modal"
+			data-target="#addToHomeModal"
+			data-add-to-home-trigger
+			aria-label="{$t.home_add_to_home_title|default:'Dodaj do ekranu głównego'}"
+		>
+			<i class="fa fa-mobile" aria-hidden="true"></i>
+			<p class="title">{$t.home_add_to_home_title|default:'Dodaj do ekranu głównego'}</p>
+		</div>
+    </div>
 	<div class="col-md-12">
 		<a href="/news" title="{$t.home_welcome_news}">
 			<div class="one_box" data-news-home-card>
@@ -83,6 +97,66 @@
 			</div>
 		</a>
 	</div>
+</div>
+<div id="addToHomeModal" class="modal fade add-to-home-modal" role="dialog" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="{$t.close|default:'Close'}">x</button>
+                <h4 class="modal-title">{$t.home_add_to_home_title|default:'Dodaj do ekranu głównego'}</h4>
+            </div>
+            <div class="modal-body add-to-home-modal__body">
+                <p class="add-to-home-modal__lead" data-add-to-home-platform-lead></p>
+
+                <div class="add-to-home-modal__platform" data-add-to-home-platform-block="ios" hidden>
+                    <ol class="add-to-home-modal__steps">
+                        <li>{$t.home_add_to_home_ios_step_1|default:'Kliknij w prawym górnym rogu ikonę Udostępnij.'}</li>
+                        <li>{$t.home_add_to_home_ios_step_2|default:'Jeśli nie widzisz pełnej listy opcji, kliknij Pokaż więcej.'}</li>
+                        <li>{$t.home_add_to_home_ios_step_3|default:'Wybierz opcję Do ekranu głównego.'}</li>
+                        <li>{$t.home_add_to_home_ios_step_4|default:'Zmień nazwę skrótu, jeśli chcesz, i kliknij Dodaj.'}</li>
+                        <li>{$t.home_add_to_home_ios_step_5|default:'Gotowe. Ikona strony pojawi się na ekranie głównym telefonu.'}</li>
+                    </ol>
+
+                    <div class="add-to-home-modal__gallery">
+                        <figure class="add-to-home-modal__shot">
+                            <img src="/img/phone_add_icon/1.jpg" alt="{$t.home_add_to_home_shot_1|default:'Krok 1 - Udostępnij'}">
+                            <figcaption>{$t.home_add_to_home_shot_1|default:'Krok 1 - Udostępnij'}</figcaption>
+                        </figure>
+                        <figure class="add-to-home-modal__shot">
+                            <img src="/img/phone_add_icon/2.jpg" alt="{$t.home_add_to_home_shot_2|default:'Krok 2 - Pokaż więcej'}">
+                            <figcaption>{$t.home_add_to_home_shot_2|default:'Krok 2 - Pokaż więcej'}</figcaption>
+                        </figure>
+                        <figure class="add-to-home-modal__shot">
+                            <img src="/img/phone_add_icon/3.jpg" alt="{$t.home_add_to_home_shot_3|default:'Krok 3 - Do ekranu głównego'}">
+                            <figcaption>{$t.home_add_to_home_shot_3|default:'Krok 3 - Do ekranu głównego'}</figcaption>
+                        </figure>
+                        <figure class="add-to-home-modal__shot">
+                            <img src="/img/phone_add_icon/4.jpg" alt="{$t.home_add_to_home_shot_4|default:'Krok 4 - Dodaj skrót'}">
+                            <figcaption>{$t.home_add_to_home_shot_4|default:'Krok 4 - Dodaj skrót'}</figcaption>
+                        </figure>
+                        <figure class="add-to-home-modal__shot">
+                            <img src="/img/phone_add_icon/5.jpg" alt="{$t.home_add_to_home_shot_5|default:'Krok 5 - Gotowe'}">
+                            <figcaption>{$t.home_add_to_home_shot_5|default:'Krok 5 - Gotowe'}</figcaption>
+                        </figure>
+                    </div>
+                </div>
+
+                <div class="add-to-home-modal__platform" data-add-to-home-platform-block="android" hidden>
+                    <ol class="add-to-home-modal__steps">
+                        <li>{$t.home_add_to_home_android_step_1|default:'Kliknij poniższy przycisk lub otwórz menu przeglądarki w telefonie.'}</li>
+                        <li>{$t.home_add_to_home_android_step_2|default:'Wybierz opcję Dodaj do ekranu głównego albo Zainstaluj aplikację.'}</li>
+                        <li>{$t.home_add_to_home_android_step_3|default:'Potwierdź instalację. Ikona strony pojawi się na ekranie głównym telefonu.'}</li>
+                    </ol>
+                    <button type="button" class="btn btn-dark add-to-home-modal__prompt-button" data-add-to-home-native-prompt hidden>
+                        {$t.home_add_to_home_android_prompt|default:'Pokaż okno instalacji'}
+                    </button>
+                    <p class="add-to-home-modal__android-hint" data-add-to-home-native-hint>
+                        {$t.home_add_to_home_android_hint|default:'Jeśli przycisk instalacji nie pojawi się automatycznie, użyj menu przeglądarki i wybierz Dodaj do ekranu głównego.'}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 {if $user.logged && $settings.customer_type_switch_enabled}
     <div class="home-role-switch">
@@ -313,6 +387,138 @@
     })();
 </script>
 {/if}
+<script>
+    (function () {
+        var entry = document.querySelector('[data-add-to-home-entry]');
+        var trigger = document.querySelector('[data-add-to-home-trigger]');
+        var modal = document.getElementById('addToHomeModal');
+        if (!entry || !trigger || !modal) {
+            return;
+        }
+
+        var platformLead = modal.querySelector('[data-add-to-home-platform-lead]');
+        var iosBlock = modal.querySelector('[data-add-to-home-platform-block="ios"]');
+        var androidBlock = modal.querySelector('[data-add-to-home-platform-block="android"]');
+        var nativePromptButton = modal.querySelector('[data-add-to-home-native-prompt]');
+        var androidHint = modal.querySelector('[data-add-to-home-native-hint]');
+        var iosLeadText = '{$t.home_add_to_home_ios_lead|default:'Dodaj stronę do ekranu głównego i otwieraj ją jak zwykłą aplikację. Poniżej masz szybkie kroki dla iPhone i iPad.'|escape:'javascript'}';
+        var androidLeadText = '{$t.home_add_to_home_android_lead|default:'Dodaj stronę do ekranu głównego Androida, aby uruchamiać ją szybciej jak aplikację.'|escape:'javascript'}';
+        var ua = window.navigator.userAgent || '';
+        var isIos = /iPad|iPhone|iPod/i.test(ua) || (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+        var isAndroid = /Android/i.test(ua);
+        var isMobile = isIos || isAndroid || /Mobile|Mobi/i.test(ua);
+        var displayModeQuery = window.matchMedia ? window.matchMedia('(display-mode: standalone)') : null;
+        var deferredPrompt = null;
+        var isStandalone = false;
+
+        function recomputeStandalone() {
+            isStandalone = !!(
+                (displayModeQuery && displayModeQuery.matches) ||
+                window.navigator.standalone === true ||
+                (document.referrer && document.referrer.indexOf('android-app://') === 0)
+            );
+        }
+
+        function updatePlatformContent() {
+            if (isIos) {
+                if (platformLead) {
+                    platformLead.textContent = iosLeadText;
+                }
+                if (iosBlock) {
+                    iosBlock.hidden = false;
+                }
+                if (androidBlock) {
+                    androidBlock.hidden = true;
+                }
+                return;
+            }
+
+            if (isAndroid) {
+                if (platformLead) {
+                    platformLead.textContent = androidLeadText;
+                }
+                if (iosBlock) {
+                    iosBlock.hidden = true;
+                }
+                if (androidBlock) {
+                    androidBlock.hidden = false;
+                }
+                if (nativePromptButton) {
+                    nativePromptButton.hidden = deferredPrompt === null;
+                }
+                if (androidHint) {
+                    androidHint.classList.toggle('is-muted', deferredPrompt !== null);
+                }
+            }
+        }
+
+        function updateVisibility() {
+            recomputeStandalone();
+            entry.hidden = !isMobile || (!isIos && !isAndroid) || isStandalone;
+            if (!entry.hidden) {
+                updatePlatformContent();
+            }
+        }
+
+        trigger.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                trigger.click();
+            }
+        });
+
+        if (nativePromptButton) {
+            nativePromptButton.addEventListener('click', function () {
+                if (!deferredPrompt) {
+                    return;
+                }
+
+                var promptEvent = deferredPrompt;
+                deferredPrompt = null;
+                nativePromptButton.hidden = true;
+                promptEvent.prompt();
+                promptEvent.userChoice.then(function (choice) {
+                    if (choice && choice.outcome === 'accepted') {
+                        isStandalone = true;
+                        entry.hidden = true;
+                        if (window.jQuery) {
+                            window.jQuery(modal).modal('hide');
+                        }
+                    } else {
+                        updateVisibility();
+                    }
+                }).catch(function () {
+                    updateVisibility();
+                });
+            });
+        }
+
+        window.addEventListener('beforeinstallprompt', function (event) {
+            event.preventDefault();
+            deferredPrompt = event;
+            updateVisibility();
+        });
+
+        window.addEventListener('appinstalled', function () {
+            deferredPrompt = null;
+            isStandalone = true;
+            entry.hidden = true;
+            if (window.jQuery) {
+                window.jQuery(modal).modal('hide');
+            }
+        });
+
+        if (displayModeQuery) {
+            if (typeof displayModeQuery.addEventListener === 'function') {
+                displayModeQuery.addEventListener('change', updateVisibility);
+            } else if (typeof displayModeQuery.addListener === 'function') {
+                displayModeQuery.addListener(updateVisibility);
+            }
+        }
+
+        updateVisibility();
+    })();
+</script>
 {if $balance_topup_enabled|default:false}
 	{include file='profil/balance_topup_modal.tpl'}
 {/if}

@@ -2659,6 +2659,96 @@ CONTENT
 	color:#c31071;
 }
 
+.home_buttons .add-to-home-entry .one_box--add-to-home{
+	background:linear-gradient(135deg, #0f172a 0%, #1f2937 100%);
+	border:1px solid #0f172a;
+	color:#fff;
+	cursor:pointer;
+}
+
+.home_buttons .add-to-home-entry .one_box--add-to-home i,
+.home_buttons .add-to-home-entry .one_box--add-to-home p.title{
+	color:#fff;
+}
+
+.home_buttons .add-to-home-entry .one_box--add-to-home:hover,
+.home_buttons .add-to-home-entry .one_box--add-to-home:focus{
+	background:linear-gradient(135deg, #111827 0%, #273449 100%);
+	border-color:#111827;
+	color:#fff;
+}
+
+.add-to-home-modal .modal-dialog{
+	max-width:780px;
+}
+
+.add-to-home-modal__body{
+	padding:24px;
+}
+
+.add-to-home-modal__lead{
+	margin:0 0 18px;
+	font-size:15px;
+	line-height:1.6;
+	color:#1f2937;
+}
+
+.add-to-home-modal__steps{
+	margin:0 0 20px;
+	padding-left:20px;
+}
+
+.add-to-home-modal__steps li{
+	margin-bottom:10px;
+	line-height:1.55;
+	color:#111827;
+}
+
+.add-to-home-modal__gallery{
+	display:grid;
+	grid-template-columns:repeat(2, minmax(0, 1fr));
+	gap:16px;
+}
+
+.add-to-home-modal__shot{
+	margin:0;
+	padding:14px;
+	border:1px solid rgba(17, 24, 39, 0.08);
+	border-radius:20px;
+	background:#fff;
+	box-shadow:0 14px 35px rgba(15, 23, 42, 0.08);
+}
+
+.add-to-home-modal__shot img{
+	display:block;
+	width:100%;
+	height:auto;
+	border-radius:14px;
+	border:1px solid rgba(17, 24, 39, 0.08);
+}
+
+.add-to-home-modal__shot figcaption{
+	margin-top:10px;
+	font-size:13px;
+	font-weight:600;
+	color:#111827;
+}
+
+.add-to-home-modal__prompt-button{
+	margin:4px 0 14px;
+}
+
+.add-to-home-modal__android-hint{
+	margin:0;
+	font-size:13px;
+	line-height:1.5;
+	color:#374151;
+}
+
+.add-to-home-modal__android-hint.is-muted{
+	color:#6b7280;
+}
+
 @media (max-width: 500px) {
 	.home_buttons .one_box{
 		height: 65px;
@@ -2673,6 +2763,15 @@ CONTENT
 	}
 
 	.home_buttons .one_box.one_box--orders-attention{
+	}
+
+	.add-to-home-modal__body{
+		padding:18px;
+	}
+
+	.add-to-home-modal__gallery{
+		grid-template-columns:1fr;
+		gap:14px;
 	}
 }
 
