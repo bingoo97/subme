@@ -23,10 +23,10 @@
 			data-toggle="modal"
 			data-target="#addToHomeModal"
 			data-add-to-home-trigger
-			aria-label="{$t.home_add_to_home_title|default:'Dodaj do ekranu głównego'}"
+			aria-label="{$t.home_add_to_home_button|default:'Dodaj do ekranu telefonu'}"
 		>
-			<i class="fa fa-mobile" aria-hidden="true"></i>
-			<p class="title">{$t.home_add_to_home_title|default:'Dodaj do ekranu głównego'}</p>
+			<i class="fa fa-plus" aria-hidden="true"></i>
+			<p class="title">{$t.home_add_to_home_button|default:'Dodaj do ekranu telefonu'}</p>
 		</div>
     </div>
 	<div class="col-md-12">
@@ -102,51 +102,56 @@
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal" aria-label="{$t.close|default:'Close'}">x</button>
                 <h4 class="modal-title">{$t.home_add_to_home_title|default:'Dodaj do ekranu głównego'}</h4>
             </div>
             <div class="modal-body add-to-home-modal__body">
                 <p class="add-to-home-modal__lead" data-add-to-home-platform-lead></p>
 
                 <div class="add-to-home-modal__platform" data-add-to-home-platform-block="ios" hidden>
-                    <ol class="add-to-home-modal__steps">
-                        <li>{$t.home_add_to_home_ios_step_1|default:'Kliknij w prawym górnym rogu ikonę Udostępnij.'}</li>
-                        <li>{$t.home_add_to_home_ios_step_2|default:'Jeśli nie widzisz pełnej listy opcji, kliknij Pokaż więcej.'}</li>
-                        <li>{$t.home_add_to_home_ios_step_3|default:'Wybierz opcję Do ekranu głównego.'}</li>
-                        <li>{$t.home_add_to_home_ios_step_4|default:'Zmień nazwę skrótu, jeśli chcesz, i kliknij Dodaj.'}</li>
-                        <li>{$t.home_add_to_home_ios_step_5|default:'Gotowe. Ikona strony pojawi się na ekranie głównym telefonu.'}</li>
-                    </ol>
+                    <p class="add-to-home-modal__warning">{$t.home_add_to_home_browser_note|default:'Najlepiej otworzyć stronę w Safari na iPhone lub w Chrome na Androidzie. Nie każda przeglądarka pokazuje opcję dodawania do ekranu głównego.'}</p>
+                    <div class="add-to-home-modal__steps-card">
+                        <ol class="add-to-home-modal__steps">
+                            <li>{$t.home_add_to_home_ios_step_1|default:'Kliknij w prawym górnym rogu ikonę Udostępnij.'}</li>
+                            <li>{$t.home_add_to_home_ios_step_2|default:'Jeśli nie widzisz pełnej listy opcji, kliknij Pokaż więcej.'}</li>
+                            <li>{$t.home_add_to_home_ios_step_3|default:'Wybierz opcję Do ekranu głównego.'}</li>
+                            <li>{$t.home_add_to_home_ios_step_4|default:'Zmień nazwę skrótu, jeśli chcesz, i kliknij Dodaj.'}</li>
+                            <li>{$t.home_add_to_home_ios_step_5|default:'Gotowe. Ikona strony pojawi się na ekranie głównym telefonu.'}</li>
+                        </ol>
+                    </div>
 
                     <div class="add-to-home-modal__gallery">
                         <figure class="add-to-home-modal__shot">
-                            <img src="/img/phone_add_icon/1.jpg" alt="{$t.home_add_to_home_shot_1|default:'Krok 1 - Udostępnij'}">
                             <figcaption>{$t.home_add_to_home_shot_1|default:'Krok 1 - Udostępnij'}</figcaption>
+                            <img src="/img/phone_add_icon/1.jpg" alt="{$t.home_add_to_home_shot_1|default:'Krok 1 - Udostępnij'}">
                         </figure>
                         <figure class="add-to-home-modal__shot">
-                            <img src="/img/phone_add_icon/2.jpg" alt="{$t.home_add_to_home_shot_2|default:'Krok 2 - Pokaż więcej'}">
                             <figcaption>{$t.home_add_to_home_shot_2|default:'Krok 2 - Pokaż więcej'}</figcaption>
+                            <img src="/img/phone_add_icon/2.jpg" alt="{$t.home_add_to_home_shot_2|default:'Krok 2 - Pokaż więcej'}">
                         </figure>
                         <figure class="add-to-home-modal__shot">
-                            <img src="/img/phone_add_icon/3.jpg" alt="{$t.home_add_to_home_shot_3|default:'Krok 3 - Do ekranu głównego'}">
                             <figcaption>{$t.home_add_to_home_shot_3|default:'Krok 3 - Do ekranu głównego'}</figcaption>
+                            <img src="/img/phone_add_icon/3.jpg" alt="{$t.home_add_to_home_shot_3|default:'Krok 3 - Do ekranu głównego'}">
                         </figure>
                         <figure class="add-to-home-modal__shot">
-                            <img src="/img/phone_add_icon/4.jpg" alt="{$t.home_add_to_home_shot_4|default:'Krok 4 - Dodaj skrót'}">
                             <figcaption>{$t.home_add_to_home_shot_4|default:'Krok 4 - Dodaj skrót'}</figcaption>
+                            <img src="/img/phone_add_icon/4.jpg" alt="{$t.home_add_to_home_shot_4|default:'Krok 4 - Dodaj skrót'}">
                         </figure>
                         <figure class="add-to-home-modal__shot">
-                            <img src="/img/phone_add_icon/5.jpg" alt="{$t.home_add_to_home_shot_5|default:'Krok 5 - Gotowe'}">
                             <figcaption>{$t.home_add_to_home_shot_5|default:'Krok 5 - Gotowe'}</figcaption>
+                            <img src="/img/phone_add_icon/5.png" alt="{$t.home_add_to_home_shot_5|default:'Krok 5 - Gotowe'}">
                         </figure>
                     </div>
                 </div>
 
                 <div class="add-to-home-modal__platform" data-add-to-home-platform-block="android" hidden>
-                    <ol class="add-to-home-modal__steps">
-                        <li>{$t.home_add_to_home_android_step_1|default:'Kliknij poniższy przycisk lub otwórz menu przeglądarki w telefonie.'}</li>
-                        <li>{$t.home_add_to_home_android_step_2|default:'Wybierz opcję Dodaj do ekranu głównego albo Zainstaluj aplikację.'}</li>
-                        <li>{$t.home_add_to_home_android_step_3|default:'Potwierdź instalację. Ikona strony pojawi się na ekranie głównym telefonu.'}</li>
-                    </ol>
+                    <p class="add-to-home-modal__warning">{$t.home_add_to_home_browser_note|default:'Najlepiej otworzyć stronę w Safari na iPhone lub w Chrome na Androidzie. Nie każda przeglądarka pokazuje opcję dodawania do ekranu głównego.'}</p>
+                    <div class="add-to-home-modal__steps-card">
+                        <ol class="add-to-home-modal__steps">
+                            <li>{$t.home_add_to_home_android_step_1|default:'Kliknij poniższy przycisk lub otwórz menu przeglądarki w telefonie.'}</li>
+                            <li>{$t.home_add_to_home_android_step_2|default:'Wybierz opcję Dodaj do ekranu głównego albo Zainstaluj aplikację.'}</li>
+                            <li>{$t.home_add_to_home_android_step_3|default:'Potwierdź instalację. Ikona strony pojawi się na ekranie głównym telefonu.'}</li>
+                        </ol>
+                    </div>
                     <button type="button" class="btn btn-dark add-to-home-modal__prompt-button" data-add-to-home-native-prompt hidden>
                         {$t.home_add_to_home_android_prompt|default:'Pokaż okno instalacji'}
                     </button>
@@ -154,6 +159,10 @@
                         {$t.home_add_to_home_android_hint|default:'Jeśli przycisk instalacji nie pojawi się automatycznie, użyj menu przeglądarki i wybierz Dodaj do ekranu głównego.'}
                     </p>
                 </div>
+
+                <button type="button" class="btn btn-dark w-100 add-to-home-modal__footer-close" data-dismiss="modal">
+                    {$t.close|default:'Zamknij'}
+                </button>
             </div>
         </div>
     </div>
