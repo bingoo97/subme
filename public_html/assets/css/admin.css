@@ -9882,6 +9882,64 @@ body.admin-login-page .admin-order-modal__stack .alert strong,
     margin-top:.35rem;
 }
 
+.admin-settings-sql-runner{
+    margin-top:1rem;
+    padding:1rem;
+    border:1px solid rgba(220, 38, 38, .18);
+    border-radius:8px;
+    background:#fffafa;
+}
+
+.admin-settings-sql-runner__head{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    margin-bottom:.85rem;
+}
+
+.admin-settings-sql-runner__head h3{
+    margin:0 0 .25rem;
+    font-size:1.1rem;
+    font-weight:800;
+}
+
+.admin-settings-sql-runner__head p{
+    margin:0;
+    color:#6b7280;
+}
+
+.admin-settings-sql-runner__badge{
+    display:inline-flex;
+    align-items:center;
+    min-height:1.75rem;
+    padding:.25rem .55rem;
+    border-radius:999px;
+    background:#111317;
+    color:#ffffff;
+    font-size:.76rem;
+    font-weight:800;
+    white-space:nowrap;
+}
+
+.admin-settings-sql-runner__notice{
+    margin-bottom:1rem;
+}
+
+.admin-settings-sql-runner__textarea{
+    min-height:18rem;
+    font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size:.9rem;
+    line-height:1.45;
+    resize:vertical;
+}
+
+.admin-settings-sql-runner__actions{
+    display:flex;
+    justify-content:flex-end;
+    margin-top:1rem;
+}
+
 .admin-settings-access__copy{
     margin-bottom:1rem;
 }
