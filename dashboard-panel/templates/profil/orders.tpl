@@ -61,7 +61,9 @@
                 </thead>
                 <tbody>
                     {section name=i loop=$wygrane}
-                        {assign var="showInlineRenewPaymentButton" value=(!empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].status == 1 && !$wygrane[i].payment_waiting_activation)}
+                        {assign var="canPendingPaymentActionsTable" value=($wygrane[i].status == 0 and $wygrane[i].shipment == 0 and not $wygrane[i].payment_waiting_activation and ($wygrane[i].id <> $id_zamowienia_zaplac))}
+                        {assign var="showRenewalPaymentAction" value=($order_sales_available && !$wygrane[i].payment_waiting_activation && !empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].product_type|default:'subscription' eq 'subscription' && ($wygrane[i].status == 1 || $wygrane[i].status == 2))}
+                        {assign var="showPendingPaymentAction" value=($order_sales_available && $canPendingPaymentActionsTable)}
                         <tr>
                             <td data-label="{$t.history_badge_order|default:'Order'}">
                                 <span class="badge badge-secondary">#{$wygrane[i].id}</span>
@@ -145,8 +147,13 @@
                                     {/if}
                             </td>
                             <td data-label="{$t.orders_actions|default:'Actions'}" class="orders-user-table__actions-col">
-                                {if !$wygrane[i].payment_waiting_activation && ($wygrane[i].status != 1 || $wygrane[i].show_inline_extend_payment || $showInlineRenewPaymentButton)}
-                                <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-danger" aria-label="Pay" style="width: 40px;">
+                                {if $showPendingPaymentAction}
+                                <a href="/order-payment-{$wygrane[i].id}" class="btn btn-danger" aria-label="{$t.orders_action_payment|default:'Payment'}" style="width: 40px;">
+                                    <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
+                                </a>
+                                {/if}
+                                {if $showRenewalPaymentAction}
+                                <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-danger" aria-label="{if $wygrane[i].status == 1}{$t.orders_action_extend|default:'Extend'}{else}{$t.orders_action_renew|default:'Renew'}{/if}" style="width: 40px;">
                                     <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
                                 </a>
                                 {/if}
@@ -175,6 +182,7 @@
     {section name=i loop=$wygrane}
         {assign var="has_delivery_access" value=($wygrane[i].delivery_show_credentials || $wygrane[i].link_url neq '')}
         {assign var="can_pending_payment_actions" value=($wygrane[i].status == 0 and $wygrane[i].shipment == 0 and not $wygrane[i].payment_waiting_activation and ($wygrane[i].id <> $id_zamowienia_zaplac))}
+        {assign var="showRenewalPaymentAction" value=($order_sales_available && !$wygrane[i].payment_waiting_activation && !empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].product_type|default:'subscription' eq 'subscription' && ($wygrane[i].status == 1 || $wygrane[i].status == 2))}
         <div id="orderModal{$wygrane[i].id}" class="modal fade user-order-modal" role="dialog">
             <div class="modal-dialog modal-lg" role="document">
                 <div class="modal-content">
@@ -202,12 +210,12 @@
                             <li role="presentation" class="nav-item">
                                 <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">Details</a>
                             </li>
-                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || !empty($wygrane[i].can_open_renewal_payment))}
+                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || $showRenewalPaymentAction)}
                                 <li role="presentation" class="nav-item">
                                     <a class="nav-link" href="#orderActions{$wygrane[i].id}" aria-controls="orderActions{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">
                                         {if $can_pending_payment_actions}
                                             {$t.orders_action_payment|default:'Payment'}
-                                        {elseif $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' eq 'subscription'}
+                                        {elseif $wygrane[i].status == 2 && $showRenewalPaymentAction}
                                             {$t.orders_action_renew|default:'Renew'}
                                             <span class="user-order-modal__tab-badge user-order-modal__tab-badge--danger">!</span>
                                         {else}
@@ -301,7 +309,7 @@
                                     {/if}
                                 </div>
                             </div>
-                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || (($wygrane[i].status == 1 || $wygrane[i].status == 2) && $wygrane[i].product_type|default:'subscription' eq 'subscription'))}
+                            {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || $showRenewalPaymentAction)}
                                 <div role="tabpanel" class="tab-pane fade" id="orderActions{$wygrane[i].id}">
                                     <div class="user-order-modal__actions-stack">
                                         {if $can_pending_payment_actions}
@@ -319,7 +327,7 @@
                                             </div>
                                             {/if}
                                         {/if}
-                                        {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' eq 'subscription' && !empty($wygrane[i].can_open_renewal_payment)}
+                                        {if $wygrane[i].status == 1 && $showRenewalPaymentAction}
                                             <div class="user-order-modal__action-copy">
                                                 <strong>{$t.orders_action_extend|default:'Extend'}</strong>
                                                 <p>{$t.orders_action_extend_intro|default:'Your current subscription is still active. Extend it now to keep the same service without interruption.'}</p>
@@ -328,7 +336,7 @@
                                                 <i class="fa fa-history" aria-hidden="true"></i> {$t.orders_action_extend|default:'Extend'}
                                             </a>
                                         {/if}
-                                        {if $wygrane[i].status == 2 && $wygrane[i].product_type|default:'subscription' eq 'subscription' && !empty($wygrane[i].can_open_renewal_payment)}
+                                        {if $wygrane[i].status == 2 && $showRenewalPaymentAction}
                                             <div class="user-order-modal__action-copy user-order-modal__action-copy--danger">
                                                 <strong>{$t.orders_action_renew|default:'Renew'}</strong>
                                                 <p>{$t.orders_action_renew_intro|default:'This subscription has already expired. Create a new payment request to renew access and restore service.'}</p>

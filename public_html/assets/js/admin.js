@@ -6954,7 +6954,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 setHidden(converterHeaderButton, activeConversationType !== 'global_group');
             }
             if (quickRepliesHeaderButton) {
-                setHidden(quickRepliesHeaderButton, activeConversationType !== 'global_group');
+                setHidden(quickRepliesHeaderButton, activeConversationType !== 'global_group' && activeConversationType !== 'live_chat');
             }
             if (groupSettingsOpenButton) {
                 setHidden(groupSettingsOpenButton, activeConversationType !== 'group_chat' && activeConversationType !== 'global_group');

@@ -4026,6 +4026,15 @@ function app_order_can_self_extend(array $order): bool
         return false;
     }
 
+    // V2 order lists sometimes expose numeric status/payment flags
+    // (`status`: 1 active, 2 expired; `payment`: 2 paid).
+    if (($status === '1' || $status === '2') && isset($order['status'])) {
+        $status = ((string)$order['status'] === '2') ? 'expired' : 'active';
+    }
+    if ($paymentStatus === '2' || (isset($order['payment']) && (int)$order['payment'] === 2)) {
+        $paymentStatus = 'paid';
+    }
+
     return in_array($status, ['active', 'expired'], true) && $paymentStatus === 'paid';
 }
 
