@@ -214,6 +214,7 @@ return [
         'payment_crypto_details_title' => 'Trwa płatność...',
         'payment_crypto_details_intro' => 'Użyj poniższych danych przypisanego portfela, aby dokończyć płatność.',
         'payment_crypto_scan_notice' => 'Skopiuj dane do płatności albo zeskanuj QR kod w swoim portfelu kryptowalutowym, a następnie wpisz powyższą kwotę transakcji. Jeśli nie wiesz jak zapłacić, napisz do nas na Live Chat.',
+        'payment_crypto_fee_warning' => '*** Jeśli jeszcze nie kupiłeś krypto to pamiętaj, że należy doliczyć prowizję za wysłanie - prowizję płaci kupujący. Najlepiej kupić więcej niż kwota podana powyżej, np. o 1-3 $, a kupiona nadwyżka zostanie na przyszłe przedłużenie subskrypcji. Nie opłaca się kupować np. BTC za 10-15 $ - lepiej kupić za 30-50 $, żeby nie płacić ponownie prowizji za zakup, a środki zostaną na Twoim koncie i przy następnym przedłużeniu nie będziesz musiał kupować kryptowaluty ponownie, tylko skorzystasz z polecenia "Wyślij", a nasz adres będziesz mieć w ostatnio dodanych adresach.',
         'payment_cancel_crypto' => 'Anuluj płatność',
         'payment_how_to_pay' => 'Jak zapłacić?',
         'payment_countdown_label' => 'Pozostały czas na płatność',

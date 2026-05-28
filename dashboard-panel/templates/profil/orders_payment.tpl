@@ -404,6 +404,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         </div>
                         <div class="alert alert-warning payment-crypto-alert">
                             {$t.payment_crypto_scan_notice|default:'Copy the payment details or scan the QR code in your crypto wallet, then enter the exact transaction amount shown above. If you send a different amount, your payment will not be approved. Check the transaction fee in the transaction summary. To avoid high fees, contact us on Live Chat and switch to DOGE or CRO payments.'}
+                            <p class="payment-crypto-alert__extra">{$t.payment_crypto_fee_warning|default:'*** Jeśli jeszcze nie kupiłeś krypto, pamiętaj, że należy doliczyć prowizję za wysłanie - prowizję płaci kupujący. Najlepiej kupić więcej niż kwota podana powyżej, np. o 1-3 $, a kupiona nadwyżka zostanie na przyszłe przedłużenie subskrypcji. Nie opłaca się kupować np. BTC za 10-15 $ - lepiej kupić za 30-50 $, żeby nie płacić ponownie prowizji za zakup. Środki zostaną na Twoim koncie i przy następnym przedłużeniu nie będziesz musiał kupować kryptowaluty ponownie, tylko skorzystasz z polecenia "Wyślij", a nasz adres będziesz mieć w ostatnio dodanych adresach.'}</p>
                         </div>
                         <div class="payment-request-actions">
                             <a href="/instructions" class="btn btn-dark btn-lg" title="{$t.payment_how_to_pay|default:'How to pay'}">

@@ -215,6 +215,7 @@ return [
         'payment_crypto_details_title' => 'Crypto payment',
         'payment_crypto_details_intro' => 'Use the assigned wallet details below to complete your payment.',
         'payment_crypto_scan_notice' => 'Copy the payment details or scan the QR code in your crypto wallet, then enter the transaction amount shown above. If you don\'t know how to pay, contact us on Live Chat.',
+        'payment_crypto_fee_warning' => '*** If you have not bought crypto yet, remember to include the sending fee - the buyer pays the fee. It is best to buy a little more than the amount shown above, for example 1-3 $ extra, and the remaining balance will stay on your account for a future subscription renewal. It is usually not worth buying BTC for only 10-15 $ - it is better to buy 30-50 $, so you do not have to pay another purchase fee next time. The remaining funds will stay on your account and during the next renewal you will only need to use the "Send" option, and our wallet address will already be available in your recently used addresses.',
         'payment_cancel_crypto' => 'Cancel payment',
         'payment_how_to_pay' => 'How to pay?',
         'payment_countdown_label' => 'Time left to pay',
