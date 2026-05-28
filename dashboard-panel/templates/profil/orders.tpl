@@ -62,7 +62,7 @@
                 <tbody>
                     {section name=i loop=$wygrane}
                         {assign var="canPendingPaymentActionsTable" value=($wygrane[i].status == 0 and $wygrane[i].shipment == 0 and not $wygrane[i].payment_waiting_activation and ($wygrane[i].id <> $id_zamowienia_zaplac))}
-                        {assign var="showRenewalPaymentAction" value=($order_sales_available && !$wygrane[i].payment_waiting_activation && !empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].product_type|default:'subscription' eq 'subscription' && ($wygrane[i].status == 1 || $wygrane[i].status == 2))}
+                        {assign var="showRenewalPaymentAction" value=($order_sales_available && !$wygrane[i].payment_waiting_activation && !($wygrane[i].renewal_paid_pending_activation|default:0) && !empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].product_type|default:'subscription' eq 'subscription' && ($wygrane[i].status == 1 || $wygrane[i].status == 2))}
                         {assign var="showPendingPaymentAction" value=($order_sales_available && $canPendingPaymentActionsTable)}
                         <tr>
                             <td data-label="{$t.history_badge_order|default:'Order'}">
@@ -79,7 +79,7 @@
                                         {else}
                                             <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
                                         {/if}
-                                        {if $wygrane[i].payment_waiting_activation}
+                                        {if $wygrane[i].payment_waiting_activation || ($wygrane[i].renewal_paid_pending_activation|default:0)}
                                             <span class="orders-user-new-badge orders-user-new-badge--success">{$t.orders_status_payment_confirmed_short|default:'PAID'}</span>
                                         {elseif $wygrane[i].status == 0}
                                             <span class="orders-user-new-badge">NEW</span>
@@ -91,6 +91,10 @@
                                     {if $wygrane[i].payment_waiting_activation}
                                         <div class="orders-user-summary__note orders-user-summary__note--success">
                                             <i class="fa fa-check-circle" aria-hidden="true"></i> {$t.orders_payment_confirmed_waiting_activation|default:'Payment confirmed. Waiting for activation.'}
+                                        </div>
+                                    {elseif $wygrane[i].renewal_paid_pending_activation|default:0}
+                                        <div class="orders-user-summary__note orders-user-summary__note--success">
+                                            <i class="fa fa-check-circle" aria-hidden="true"></i> {$t.orders_payment_confirmed_waiting_extension|default:'Payment confirmed. Waiting for extension.'}
                                         </div>
                                     {/if}
                                     {if $wygrane[i].note neq ''}
@@ -182,7 +186,7 @@
     {section name=i loop=$wygrane}
         {assign var="has_delivery_access" value=($wygrane[i].delivery_show_credentials || $wygrane[i].link_url neq '')}
         {assign var="can_pending_payment_actions" value=($wygrane[i].status == 0 and $wygrane[i].shipment == 0 and not $wygrane[i].payment_waiting_activation and ($wygrane[i].id <> $id_zamowienia_zaplac))}
-        {assign var="showRenewalPaymentAction" value=($order_sales_available && !$wygrane[i].payment_waiting_activation && !empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].product_type|default:'subscription' eq 'subscription' && ($wygrane[i].status == 1 || $wygrane[i].status == 2))}
+        {assign var="showRenewalPaymentAction" value=($order_sales_available && !$wygrane[i].payment_waiting_activation && !($wygrane[i].renewal_paid_pending_activation|default:0) && !empty($wygrane[i].can_open_renewal_payment) && $wygrane[i].product_type|default:'subscription' eq 'subscription' && ($wygrane[i].status == 1 || $wygrane[i].status == 2))}
         <div id="orderModal{$wygrane[i].id}" class="modal fade user-order-modal" role="dialog">
             <div class="modal-dialog modal-lg" role="document">
                 <div class="modal-content">
@@ -268,6 +272,11 @@
                                         <div class="alert alert-success">
                                             <strong>{$t.payment_paid_pending_activation_title|default:'Payment confirmed.'}</strong><br />
                                             {$t.payment_paid_pending_activation_text|default:'This order has already been marked as paid. The subscription is now waiting for activation by the admin and you do not need to create a new payment request.'}
+                                        </div>
+                                    {elseif $wygrane[i].renewal_paid_pending_activation|default:0}
+                                        <div class="alert alert-success">
+                                            <strong>{$t.payment_renewal_approved_waiting_extension_title|default:'Payment confirmed.'}</strong><br />
+                                            {$t.payment_renewal_approved_waiting_extension_text|default:'Your extension payment has been confirmed and is now waiting for manual extension by the admin. You do not need to create another payment request.'}
                                         </div>
                                     {/if}
                                     <div>

@@ -1243,113 +1243,141 @@ if (app_uses_v2_schema($db)) {
                 } else {
                     orders_payment_cancel_open_crypto_requests($db, (int)$user['id'], (int)$selected['id']);
                     orders_payment_cancel_open_bank_requests($db, (int)$user['id'], (int)$selected['id']);
-                    $balanceDebitResult = app_apply_customer_balance_runtime_event(
-                        $db,
-                        (int)$user['id'],
-                        $selectedProductPrice,
-                        'debit',
-                        'order_activation',
-                        (string)((int)$selected['id']),
-                        'Paid from customer balance for order #' . (int)$selected['id'],
-                        'customer',
-                        0,
-                        (string)($_SERVER['REMOTE_ADDR'] ?? '')
-                    );
 
-                    if (empty($balanceDebitResult['ok'])) {
-                        $smarty->assign('alert_error', localization_translate($t, 'payment_balance_debit_error', 'Unable to pay from account balance right now.'));
-                    } else {
-                        $updated = false;
-                        if ($isSameOrderRenewalFlow) {
-                            $renewalState = app_order_upsert_pending_renewal(
-                                $db,
-                                $selected,
-                                $selectedProduct,
-                                'Paid from customer balance'
-                            );
+                    $renewalState = null;
+                    $balanceEventSourceType = 'order_activation';
+                    $balanceEventSourceKey = (string)((int)$selected['id']);
+                    $balanceEventNote = 'Paid from customer balance for order #' . (int)$selected['id'];
 
-                            if (empty($renewalState['ok'])) {
-                                $updated = false;
-                                $smarty->assign('alert_error', (string)($renewalState['message'] ?? localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.')));
-                            } else {
-                                $applyRenewalResult = app_apply_pending_order_renewal(
+                    if ($isSameOrderRenewalFlow) {
+                        $renewalState = app_order_upsert_pending_renewal(
+                            $db,
+                            $selected,
+                            $selectedProduct,
+                            'Paid from customer balance'
+                        );
+
+                        if (empty($renewalState['ok'])) {
+                            $smarty->assign('alert_error', (string)($renewalState['message'] ?? localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.')));
+                        } else {
+                            $renewalIdForBalanceEvent = (int)($renewalState['renewal_id'] ?? 0);
+                            if ($renewalIdForBalanceEvent > 0) {
+                                $balanceEventSourceType = 'order_extension';
+                                $balanceEventSourceKey = 'renewal:balance:' . $renewalIdForBalanceEvent;
+                                $balanceEventNote = 'Paid from customer balance for renewal #' . $renewalIdForBalanceEvent . ' in order #' . (int)$selected['id'];
+                            }
+                        }
+                    }
+
+                    if (!($isSameOrderRenewalFlow && $smarty->getTemplateVars('alert_error'))) {
+                        $balanceDebitResult = app_apply_customer_balance_runtime_event(
+                            $db,
+                            (int)$user['id'],
+                            $selectedProductPrice,
+                            'debit',
+                            $balanceEventSourceType,
+                            $balanceEventSourceKey,
+                            $balanceEventNote,
+                            'customer',
+                            0,
+                            (string)($_SERVER['REMOTE_ADDR'] ?? '')
+                        );
+
+                        if (empty($balanceDebitResult['ok'])) {
+                            if ($isSameOrderRenewalFlow && !empty($renewalState['ok'])) {
+                                app_order_cancel_pending_renewal(
                                     $db,
-                                    (int)$renewalState['renewal_id'],
-                                    'customer',
-                                    0,
-                                    (string)($_SERVER['REMOTE_ADDR'] ?? ''),
-                                    true
+                                    (int)$selected['id'],
+                                    'Cancelled after failed balance debit'
                                 );
-                                $updated = !empty($applyRenewalResult['ok']);
-                                if (!$updated) {
-                                    app_order_cancel_pending_renewal(
+                            }
+                            $smarty->assign('alert_error', localization_translate($t, 'payment_balance_debit_error', 'Unable to pay from account balance right now.'));
+                        } else {
+                            $updated = false;
+                            if ($isSameOrderRenewalFlow) {
+                                if (empty($renewalState['ok'])) {
+                                    $updated = false;
+                                    $smarty->assign('alert_error', (string)($renewalState['message'] ?? localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.')));
+                                } else {
+                                    $applyRenewalResult = app_apply_pending_order_renewal(
                                         $db,
-                                        (int)$selected['id'],
-                                        'Cancelled after failed balance renewal apply'
+                                        (int)$renewalState['renewal_id'],
+                                        'customer',
+                                        0,
+                                        (string)($_SERVER['REMOTE_ADDR'] ?? ''),
+                                        true
+                                    );
+                                    $updated = !empty($applyRenewalResult['ok']);
+                                    if (!$updated) {
+                                        app_order_cancel_pending_renewal(
+                                            $db,
+                                            (int)$selected['id'],
+                                            'Cancelled after failed balance renewal apply'
+                                        );
+                                    }
+                                }
+                            } else {
+                                $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
+                                    ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                                    : null;
+                                $updated = $db->update_using_id(
+                                    ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
+                                    [
+                                        (int)$selectedProduct['id'],
+                                        $selectedProductPrice,
+                                        (int)$selectedProduct['currency_id'],
+                                        $newExpiry,
+                                        'balance',
+                                        'paid',
+                                        'pending',
+                                        date('Y-m-d H:i:s', $time_s),
+                                        'pending_payment',
+                                    ],
+                                    'orders',
+                                    (int)$selected['id']
+                                );
+                            }
+
+                            if (!$updated) {
+                                if (empty($balanceDebitResult['already_applied'])) {
+                                    app_apply_customer_balance_runtime_event(
+                                        $db,
+                                        (int)$user['id'],
+                                        $selectedProductPrice,
+                                        'credit',
+                                        'order_balance_payment_rollback',
+                                        (string)((int)$selected['id']) . ':' . $time_s,
+                                        'Rollback after failed balance payment save for order #' . (int)$selected['id'],
+                                        'system',
+                                        0,
+                                        (string)($_SERVER['REMOTE_ADDR'] ?? '')
                                     );
                                 }
-                            }
-                        } else {
-                            $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
-                                ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
-                                : null;
-                            $updated = $db->update_using_id(
-                                ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
-                                [
-                                    (int)$selectedProduct['id'],
-                                    $selectedProductPrice,
-                                    (int)$selectedProduct['currency_id'],
-                                    $newExpiry,
-                                    'balance',
-                                    'paid',
-                                    'pending',
-                                    date('Y-m-d H:i:s', $time_s),
-                                    'pending_payment',
-                                ],
-                                'orders',
-                                (int)$selected['id']
-                            );
-                        }
-
-                        if (!$updated) {
-                            if (empty($balanceDebitResult['already_applied'])) {
-                                app_apply_customer_balance_runtime_event(
-                                    $db,
-                                    (int)$user['id'],
-                                    $selectedProductPrice,
-                                    'credit',
-                                    'order_balance_payment_rollback',
-                                    (string)((int)$selected['id']) . ':' . $time_s,
-                                    'Rollback after failed balance payment save for order #' . (int)$selected['id'],
-                                    'system',
-                                    0,
-                                    (string)($_SERVER['REMOTE_ADDR'] ?? '')
-                                );
-                            }
-                            if (!$smarty->getTemplateVars('alert_error')) {
-                                $smarty->assign('alert_error', localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.'));
-                            }
-                        } else {
-                            if (!$isSameOrderRenewalFlow && schema_object_exists($db, 'order_status_events')) {
-                                $db->insert(
-                                    ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
-                                    [(int)$selected['id'], null, (string)($selected['status_raw'] ?? 'pending_payment'), 'pending_payment', 'Payment confirmed from customer balance'],
-                                    'order_status_events'
-                                );
-                            }
-                            if (!$isSameOrderRenewalFlow) {
-                                app_customer_activity_log(
-                                    $db,
-                                    (int)$user['id'],
-                                    'order_payment_approved',
-                                    'Order #' . (int)$selected['id'] . ' was paid from account balance.',
-                                    'customer',
-                                    0,
-                                    (string)($_SERVER['REMOTE_ADDR'] ?? '')
-                                );
-                                $paymentRedirectUrl = '/order-payment-' . (int)$selected['id'];
+                                if (!$smarty->getTemplateVars('alert_error')) {
+                                    $smarty->assign('alert_error', localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.'));
+                                }
                             } else {
-                                $paymentRedirectUrl = '/orders';
+                                if (!$isSameOrderRenewalFlow && schema_object_exists($db, 'order_status_events')) {
+                                    $db->insert(
+                                        ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
+                                        [(int)$selected['id'], null, (string)($selected['status_raw'] ?? 'pending_payment'), 'pending_payment', 'Payment confirmed from customer balance'],
+                                        'order_status_events'
+                                    );
+                                }
+                                if (!$isSameOrderRenewalFlow) {
+                                    app_customer_activity_log(
+                                        $db,
+                                        (int)$user['id'],
+                                        'order_payment_approved',
+                                        'Order #' . (int)$selected['id'] . ' was paid from account balance.',
+                                        'customer',
+                                        0,
+                                        (string)($_SERVER['REMOTE_ADDR'] ?? '')
+                                    );
+                                    $paymentRedirectUrl = '/order-payment-' . (int)$selected['id'];
+                                } else {
+                                    $paymentRedirectUrl = '/orders';
+                                }
                             }
                         }
                     }
@@ -1498,7 +1526,11 @@ if (app_uses_v2_schema($db)) {
 
         if ($activeRequestMethod === '' && !$canRequestPayment) {
             if ($hasBlockingPendingRenewalState) {
-                $paymentStateNotice = 'renewal_pending_activation';
+                if ($pendingRenewalStatus === 'paid_pending_activation') {
+                    $paymentStateNotice = 'renewal_approved_waiting_extension';
+                } else {
+                    $paymentStateNotice = 'renewal_pending_activation';
+                }
             } elseif ($paymentStatusRaw === 'paid' && $statusRaw !== 'active' && !in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)) {
                 $paymentStateNotice = 'paid_pending_activation';
             } elseif (!empty($_GET['renewal']) && $isSameOrderRenewalFlow && !$canOpenRenewalPayment) {

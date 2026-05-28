@@ -3761,6 +3761,7 @@ if ($route === 'payments') {
 
         $orderPayload = null;
         $acceptedOrderId = (int)($quickActionResult['order_id'] ?? 0);
+        $acceptedCustomerId = (int)($quickActionResult['customer_id'] ?? 0);
         if ($acceptedOrderId > 0) {
             $acceptedOrderRow = admin_topbar_notification_order_row_by_id($db, $acceptedOrderId);
             if (is_array($acceptedOrderRow)) {
@@ -3813,11 +3814,19 @@ if ($route === 'payments') {
             }
         }
 
+        $redirectUrl = '/admin/?page=orders';
+        if ($acceptedOrderId > 0) {
+            $redirectUrl = '/admin/?page=orders&order_id=' . $acceptedOrderId;
+        } elseif ($acceptedCustomerId > 0) {
+            $redirectUrl = '/admin/?page=orders&customer_id=' . $acceptedCustomerId;
+        }
+
         echo json_encode([
             'ok' => true,
             'message' => (string)($quickActionResult['message'] ?? admin_t($messages, 'payment_save_success', 'Payment request saved successfully.')),
             'payment_id' => $paymentEditorId,
             'order' => $orderPayload,
+            'redirect_url' => $redirectUrl,
         ]);
         exit;
     }
@@ -3866,8 +3875,16 @@ if ($route === 'payments') {
 
             if (!empty($quickActionResult['ok'])) {
                 $quickAction = strtolower(trim((string)($_POST['quick_action'] ?? '')));
-                if ($quickAction === 'accept' && (int)($quickActionResult['order_id'] ?? 0) > 0) {
-                    $redirectUrl = '/admin/?page=orders&order_id=' . (int)$quickActionResult['order_id'];
+                if ($quickAction === 'accept') {
+                    $acceptedOrderId = (int)($quickActionResult['order_id'] ?? 0);
+                    $acceptedCustomerId = (int)($quickActionResult['customer_id'] ?? 0);
+                    if ($acceptedOrderId > 0) {
+                        $redirectUrl = '/admin/?page=orders&order_id=' . $acceptedOrderId;
+                    } elseif ($acceptedCustomerId > 0) {
+                        $redirectUrl = '/admin/?page=orders&customer_id=' . $acceptedCustomerId;
+                    } else {
+                        $redirectUrl = '/admin/?page=orders';
+                    }
                 } elseif ($quickAction === 'renew' && !empty($quickActionResult['payment_type']) && (int)($quickActionResult['payment_id'] ?? 0) > 0) {
                     $redirectUrl = '/admin/?page=payments&payment_type=' . rawurlencode((string)$quickActionResult['payment_type']) . '&payment_id=' . (int)$quickActionResult['payment_id'] . '&renewed_payment=1';
                 } else {
@@ -6324,15 +6341,33 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     endif;
 
                                     $orderRows = admin_order_rows_filtered($db, $orderListPerPage, ($orderListPage - 1) * $orderListPerPage, $orderFilterCustomerId, $orderFilterOrderId);
+                                    foreach ($orderRows as $orderRowIndex => $orderRowData) {
+                                        $pendingRenewalContext = admin_order_pending_renewal_context($db, (array)$orderRowData);
+                                        $orderRows[$orderRowIndex]['pending_renewal_id'] = (int)($pendingRenewalContext['renewal_id'] ?? 0);
+                                        $orderRows[$orderRowIndex]['pending_renewal_product_id'] = (int)($pendingRenewalContext['product_id'] ?? 0);
+                                        $orderRows[$orderRowIndex]['pending_renewal_status'] = (string)($pendingRenewalContext['status'] ?? '');
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_type'] = (string)($pendingRenewalContext['payment_type'] ?? '');
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_id'] = (int)($pendingRenewalContext['payment_id'] ?? 0);
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_status'] = (string)($pendingRenewalContext['payment_status'] ?? '');
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_amount'] = (float)($pendingRenewalContext['payment_amount'] ?? 0);
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_amount_label'] = (string)($pendingRenewalContext['payment_amount_label'] ?? '');
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_approved_at'] = (string)($pendingRenewalContext['payment_approved_at'] ?? '');
+                                        $orderRows[$orderRowIndex]['pending_renewal_payment_url'] = (string)($pendingRenewalContext['payment_url'] ?? '');
+                                        $orderRows[$orderRowIndex]['pending_renewal_customer_balance'] = (float)($pendingRenewalContext['customer_balance'] ?? 0);
+                                        $orderRows[$orderRowIndex]['pending_renewal_customer_balance_label'] = (string)($pendingRenewalContext['customer_balance_label'] ?? '');
+                                        $orderRows[$orderRowIndex]['has_paid_pending_renewal'] = !empty($pendingRenewalContext['has_paid_pending_activation']) ? 1 : 0;
+                                    }
                                     $openOrderCount = 0;
                                     $completedOrderCount = 0;
                                     foreach ($orderRows as $orderRowPreview) {
                                         $orderRowPreviewPaymentStatus = strtolower(trim((string)($orderRowPreview['payment_status'] ?? '')));
                                         $orderRowPreviewFulfillmentStatus = strtolower(trim((string)($orderRowPreview['fulfillment_status'] ?? '')));
                                         $orderRowPreviewStatus = strtolower(trim((string)($orderRowPreview['status'] ?? '')));
+                                        $orderRowHasPaidPendingRenewal = !empty($orderRowPreview['has_paid_pending_renewal']);
                                         $isCompletedOrderPreview = $orderRowPreviewPaymentStatus === 'paid'
                                             && in_array($orderRowPreviewFulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                            && in_array($orderRowPreviewStatus, ['active', 'approved', 'completed', 'fulfilled'], true);
+                                            && in_array($orderRowPreviewStatus, ['active', 'approved', 'completed', 'fulfilled'], true)
+                                            && !$orderRowHasPaidPendingRenewal;
                                         if ($isCompletedOrderPreview) {
                                             $completedOrderCount++;
                                         } else {
@@ -6425,6 +6460,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderOpenPaymentDetailsUrl = '';
                                                         $orderHasOpenPaymentRequest = false;
                                                         $orderRowStatus = (string)($row['status'] ?? '');
+                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
                                                         if (
                                                             $orderPaymentStatusRaw === 'unpaid'
                                                             && in_array($orderRowStatus, ['pending', 'pending_payment'], true)
@@ -6440,7 +6476,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                                         $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
                                                             && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true);
+                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true)
+                                                            && !$isPendingRenewalAwaitingExtension;
                                                         $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
                                                             && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
                                                             && !in_array(strtolower(trim($orderRowStatus)), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
@@ -6451,7 +6488,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             && in_array($orderRowStatus, ['pending', 'pending_payment'], true);
                                                         if ($isCompletedPaidOrder) {
                                                             $orderDetailsButtonClass = 'btn-success';
-                                                        } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                        } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isPendingRenewalAwaitingExtension) {
                                                             $orderDetailsButtonClass = 'btn-primary';
                                                         } elseif ($isFreshUnpaidOrder) {
                                                             $orderDetailsButtonClass = 'btn-outline-default';
@@ -6460,6 +6497,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         }
                                                         if ($isCompletedPaidOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
+                                                        } elseif ($isPendingRenewalAwaitingExtension) {
+                                                            $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_extend', 'Click to extend');
                                                         } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_approve', 'Click to approve');
                                                         } elseif ($isFreshUnpaidOrder) {
@@ -6467,7 +6506,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         } else {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'details', 'Details');
                                                         }
-                                                        if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
+                                                        if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isPendingRenewalAwaitingExtension) {
                                                             $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
                                                         } elseif ($isFreshUnpaidOrder) {
                                                             $orderLeadingIcon = 'bi bi-plus-lg text-dark';
@@ -6522,7 +6561,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </a>
                                                                         <?php endif; ?>
                                                                     </div>
-                                                                    <?php if ($isAwaitingActivationOrder): ?>
+                                                                    <?php if ($isPendingRenewalAwaitingExtension): ?>
+                                                                        <div class="admin-order-summary__note admin-order-summary__note--success">
+                                                                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_waiting_extension', 'Payment confirmed. Waiting for extension.')); ?></span>
+                                                                        </div>
+                                                                    <?php elseif ($isAwaitingActivationOrder): ?>
                                                                         <div class="admin-order-summary__note admin-order-summary__note--success">
                                                                             <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
@@ -6658,6 +6702,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $orderOpenPaymentDetailsUrl = '';
                                                         $orderHasOpenPaymentRequest = false;
                                                         $orderRowStatus = (string)($row['status'] ?? '');
+                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
                                                         if (
                                                             $orderPaymentStatusRaw === 'unpaid'
                                                             && in_array($orderRowStatus, ['pending', 'pending_payment'], true)
@@ -6673,7 +6718,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                                         $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
                                                             && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true);
+                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true)
+                                                            && !$isPendingRenewalAwaitingExtension;
                                                         $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
                                                             && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
                                                             && !in_array(strtolower(trim($orderRowStatus)), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
@@ -6786,6 +6832,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $paymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
                                         $fulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
                                         $isPendingOrder = $orderStatusRaw === 'pending_payment' || $paymentStatusRaw === 'unpaid';
+                                        $isAwaitingActivationOrder = $paymentStatusRaw === 'paid'
+                                            && !in_array($fulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)
+                                            && !in_array($orderStatusRaw, ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
+                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
+                                        $pendingRenewalProductId = (int)($row['pending_renewal_product_id'] ?? 0);
+                                        $pendingRenewalPaymentStatusRaw = strtolower(trim((string)($row['pending_renewal_payment_status'] ?? '')));
+                                        $pendingRenewalPaymentStatusLabel = $pendingRenewalPaymentStatusRaw !== ''
+                                            ? admin_t($messages, 'enum_' . $pendingRenewalPaymentStatusRaw, ucfirst(str_replace('_', ' ', $pendingRenewalPaymentStatusRaw)))
+                                            : '';
                                         $modalOrderStatusLabel = admin_t($messages, 'enum_' . $orderStatusRaw, ucfirst(str_replace('_', ' ', (string)($row['status'] ?? ''))));
                                         $modalOrderStatusClass = 'is-neutral';
                                         $modalOrderStatusIcon = 'bi bi-dot';
@@ -6846,7 +6901,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $balancePaymentContext = admin_order_balance_payment_context($db, $row);
                                                         $hasRecentBalanceTopup = !empty($balancePaymentContext['has_recent_topup_credit']);
                                                         $canMarkPaidFromBalance = !empty($balancePaymentContext['can_mark_paid_from_balance']);
-                                                        if ($isAwaitingActivationOrder) {
+                                                        if ($isPendingRenewalAwaitingExtension) {
+                                                            $modalHeaderStatusLabel = admin_t($messages, 'order_waiting_extension', 'Payment confirmed. Waiting for extension.');
+                                                            $modalHeaderStatusClass = 'is-success';
+                                                            $modalHeaderStatusIcon = 'bi bi-arrow-repeat';
+                                                            $modalHeaderStatusIconClass = '';
+                                                        } elseif ($isAwaitingActivationOrder) {
                                                             $modalHeaderStatusLabel = admin_t($messages, 'order_paid_badge', 'PAID');
                                                             $modalHeaderStatusClass = 'is-success';
                                                             $modalHeaderStatusIcon = 'bi bi-check-lg';
@@ -6884,6 +6944,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
                                         $canExtendOrderFromModal = $usesSubscriptionTiming && !$isPendingOrder && in_array($orderStatusRaw, ['active', 'expired'], true) && $paymentStatusRaw === 'paid';
+                                        $openExtendTabByDefault = $canExtendOrderFromModal && $isPendingRenewalAwaitingExtension;
                                         ?>
                                         <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>" tabindex="-1" aria-hidden="true">
                                             <div class="modal-dialog modal-dialog-centered modal-xl">
@@ -6927,17 +6988,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="modal-body">
                                                         <ul class="nav nav-tabs admin-order-modal__tabs" role="tablist">
                                                             <li class="nav-item" role="presentation">
-                                                                <button class="nav-link active" id="<?php echo admin_e($tabInfoId); ?>" data-bs-toggle="tab" data-bs-target="#<?php echo admin_e($tabInfoId); ?>Pane" type="button" role="tab"><?php echo admin_e(admin_t($messages, 'order_tab_info', 'Info')); ?></button>
+                                                                <button class="nav-link<?php echo $openExtendTabByDefault ? '' : ' active'; ?>" id="<?php echo admin_e($tabInfoId); ?>" data-bs-toggle="tab" data-bs-target="#<?php echo admin_e($tabInfoId); ?>Pane" type="button" role="tab"><?php echo admin_e(admin_t($messages, 'order_tab_info', 'Info')); ?></button>
                                                             </li>
                                                             <?php if ($canExtendOrderFromModal): ?>
                                                                 <li class="nav-item" role="presentation">
-                                                                    <button class="nav-link" id="<?php echo admin_e($tabExtendId); ?>" data-bs-toggle="tab" data-bs-target="#<?php echo admin_e($tabExtendId); ?>Pane" type="button" role="tab"><?php echo admin_e(admin_t($messages, 'order_tab_extend', 'Extend')); ?></button>
+                                                                    <button class="nav-link<?php echo $openExtendTabByDefault ? ' active' : ''; ?>" id="<?php echo admin_e($tabExtendId); ?>" data-bs-toggle="tab" data-bs-target="#<?php echo admin_e($tabExtendId); ?>Pane" type="button" role="tab"><?php echo admin_e(admin_t($messages, 'order_tab_extend', 'Extend')); ?></button>
                                                                 </li>
                                                             <?php endif; ?>
                                                         </ul>
 
                                                             <div class="tab-content admin-order-modal__tab-content">
-                                                            <div class="tab-pane fade show active" id="<?php echo admin_e($tabInfoId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabInfoId); ?>">
+                                                            <div class="tab-pane fade<?php echo $openExtendTabByDefault ? '' : ' show active'; ?>" id="<?php echo admin_e($tabInfoId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabInfoId); ?>">
                                                                 <form
                                                                     method="post"
                                                                     class="admin-order-modal__form"
@@ -6980,12 +7041,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.') : admin_t($messages, 'order_activation_success_text_generic', 'The payment has been approved by the administrator and the order has been completed.')); ?></span>
                                                                             </div>
                                                                         <?php endif; ?>
-                                                                        <?php if ($isAwaitingActivationOrder): ?>
+                                                                        <?php if ($isPendingRenewalAwaitingExtension || $isAwaitingActivationOrder): ?>
                                                                             <div class="admin-order-modal__paid-banner">
-                                                                                <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                                                <i class="<?php echo admin_e($isPendingRenewalAwaitingExtension ? 'bi bi-arrow-repeat' : 'bi bi-check-circle-fill'); ?>" aria-hidden="true"></i>
                                                                                 <div>
-                                                                                    <strong><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></strong>
-                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_paid_steps_intro', 'Complete the steps below to finish this order.')); ?></span>
+                                                                                    <strong><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_waiting_extension', 'Payment confirmed. Waiting for extension.') : admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></strong>
+                                                                                    <span><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_paid_steps_extension_intro', 'Open the Extend tab and apply the selected package manually.') : admin_t($messages, 'order_paid_steps_intro', 'Complete the steps below to finish this order.')); ?></span>
                                                                                     <?php if ($orderWalletPaymentUrl !== '' && $orderWalletPaymentCompact !== ''): ?>
                                                                                         <div class="admin-order-modal__paid-wallet">
                                                                                             <a class="admin-topbar-notifications__wallet-link" href="<?php echo admin_e($orderWalletPaymentUrl); ?>" title="<?php echo admin_e($orderWalletAddress); ?>">
@@ -7011,8 +7072,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <?php endif; ?>
                                                                                 </div>
                                                                                 <div class="admin-order-modal__next-step">
-                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')); ?></strong>
-                                                                                    <span class="admin-order-modal__next-step-copy"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_copy', 'After updating the customer account, change the order status below.') : admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.')); ?></span>
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_title', '2. Open Extend tab and apply package.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.'))); ?></strong>
+                                                                                    <span class="admin-order-modal__next-step-copy"><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_copy', 'After manual extension in provider panel, use Extend tab and then verify order status below.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_copy', 'After updating the customer account, change the order status below.') : admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.'))); ?></span>
                                                                                 </div>
                                                                             </div>
                                                                         <?php elseif ($canMarkPaidFromBalance): ?>
@@ -7230,11 +7291,34 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </div>
 
                                                             <?php if ($canExtendOrderFromModal): ?>
-                                                                <div class="tab-pane fade" id="<?php echo admin_e($tabExtendId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabExtendId); ?>">
+                                                                <div class="tab-pane fade<?php echo $openExtendTabByDefault ? ' show active' : ''; ?>" id="<?php echo admin_e($tabExtendId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabExtendId); ?>">
                                                                     <form method="post" class="admin-order-modal__form">
                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                         <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
                                                                         <div class="admin-order-modal__stack">
+                                                                            <?php if ($isPendingRenewalAwaitingExtension): ?>
+                                                                                <div class="alert alert-success" role="alert">
+                                                                                    <strong><?php echo admin_e(admin_t($messages, 'order_extend_paid_notice_title', 'Approved payment is waiting for manual extension.')); ?></strong><br>
+                                                                                    <?php echo admin_e(admin_t($messages, 'order_extend_paid_notice_payment', 'Payment')); ?>:
+                                                                                    <strong>#<?php echo admin_e((string)((int)($row['pending_renewal_payment_id'] ?? 0))); ?></strong>
+                                                                                    <?php if (trim((string)($row['pending_renewal_payment_amount_label'] ?? '')) !== ''): ?>
+                                                                                        · <strong><?php echo admin_e((string)($row['pending_renewal_payment_amount_label'] ?? '')); ?></strong>
+                                                                                    <?php endif; ?>
+                                                                                    <?php if ($pendingRenewalPaymentStatusLabel !== ''): ?>
+                                                                                        · <?php echo admin_e($pendingRenewalPaymentStatusLabel); ?>
+                                                                                    <?php endif; ?>
+                                                                                    <?php if (trim((string)($row['pending_renewal_payment_approved_at'] ?? '')) !== ''): ?>
+                                                                                        · <?php echo admin_e(app_format_runtime_datetime_local((string)($row['pending_renewal_payment_approved_at'] ?? ''), 'd.m.Y H:i')); ?>
+                                                                                    <?php endif; ?>
+                                                                                    <?php if (trim((string)($row['pending_renewal_customer_balance_label'] ?? '')) !== ''): ?>
+                                                                                        <br><?php echo admin_e(admin_t($messages, 'order_extend_paid_notice_balance', 'Current customer balance')); ?>:
+                                                                                        <strong><?php echo admin_e((string)($row['pending_renewal_customer_balance_label'] ?? '')); ?></strong>
+                                                                                    <?php endif; ?>
+                                                                                    <?php if (trim((string)($row['pending_renewal_payment_url'] ?? '')) !== ''): ?>
+                                                                                        <br><a href="<?php echo admin_e((string)($row['pending_renewal_payment_url'] ?? '')); ?>" class="admin-inline-link"><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></a>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                            <?php endif; ?>
                                                                             <div class="admin-order-extend__hint">
                                                                                 <?php echo admin_e(admin_t($messages, 'order_extend_hint', 'Select a package from the same provider. Its duration will be added to the current subscription expiry date.')); ?>
                                                                             </div>
@@ -7256,7 +7340,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <select class="form-select" name="extend_product_id" required>
                                                                                         <option value=""><?php echo admin_e(admin_t($messages, 'order_extend_package_placeholder', 'Choose extension package')); ?></option>
                                                                                         <?php foreach ($extendProducts as $extendProduct): ?>
-                                                                                            <option value="<?php echo admin_e((string)$extendProduct['id']); ?>">
+                                                                                            <?php $extendOptionId = (int)($extendProduct['id'] ?? 0); ?>
+                                                                                            <option value="<?php echo admin_e((string)$extendOptionId); ?>"<?php echo ($isPendingRenewalAwaitingExtension && $pendingRenewalProductId > 0 && $pendingRenewalProductId === $extendOptionId) ? ' selected' : ''; ?>>
                                                                                                 <?php echo admin_e(admin_format_product_option_label($extendProduct)); ?>
                                                                                             </option>
                                                                                         <?php endforeach; ?>

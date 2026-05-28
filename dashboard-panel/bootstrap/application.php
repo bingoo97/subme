@@ -4121,6 +4121,61 @@ function app_order_find_pending_renewal(
     return is_array($row) && !empty($row['id']) ? $row : null;
 }
 
+function app_load_order_pending_renewal_state_map(Mysql_ks $db, array $orderIds): array
+{
+    if (!$orderIds || !schema_object_exists($db, 'order_renewals')) {
+        return [];
+    }
+
+    app_ensure_order_renewal_runtime_columns($db);
+
+    $safeIds = [];
+    foreach ($orderIds as $orderId) {
+        $orderId = (int)$orderId;
+        if ($orderId > 0) {
+            $safeIds[$orderId] = $orderId;
+        }
+    }
+
+    if (!$safeIds) {
+        return [];
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT
+            id,
+            order_id,
+            status,
+            target_expires_at,
+            requested_at,
+            payment_request_type,
+            payment_request_id
+         FROM order_renewals
+         WHERE order_id IN (" . implode(',', $safeIds) . ")
+           AND status IN ('pending_payment', 'paid_pending_activation')
+         ORDER BY id DESC"
+    );
+
+    $map = [];
+    foreach ((array)$rows as $row) {
+        $orderId = (int)($row['order_id'] ?? 0);
+        if ($orderId <= 0 || isset($map[$orderId])) {
+            continue;
+        }
+
+        $map[$orderId] = [
+            'id' => (int)($row['id'] ?? 0),
+            'status' => strtolower(trim((string)($row['status'] ?? ''))),
+            'target_expires_at' => (string)($row['target_expires_at'] ?? ''),
+            'requested_at' => (string)($row['requested_at'] ?? ''),
+            'payment_request_type' => strtolower(trim((string)($row['payment_request_type'] ?? ''))),
+            'payment_request_id' => (int)($row['payment_request_id'] ?? 0),
+        ];
+    }
+
+    return $map;
+}
+
 function app_order_upsert_pending_renewal(Mysql_ks $db, array $order, array $product, string $note = ''): array
 {
     if (!schema_object_exists($db, 'order_renewals')) {
@@ -4159,6 +4214,16 @@ function app_order_upsert_pending_renewal(Mysql_ks $db, array $order, array $pro
 
     $existing = app_order_find_pending_renewal($db, $orderId);
     if ($existing) {
+        $existingStatus = strtolower(trim((string)($existing['status'] ?? '')));
+        if ($existingStatus === 'paid_pending_activation') {
+            return [
+                'ok' => false,
+                'message' => 'This renewal payment is already approved and waiting for manual extension.',
+                'renewal_id' => (int)($existing['id'] ?? 0),
+                'target_expires_at' => (string)($existing['target_expires_at'] ?? $targetExpiry),
+            ];
+        }
+
         $updated = $db->update_using_id(
             ['product_id', 'price_amount', 'currency_id', 'duration_hours', 'target_expires_at', 'status', 'requested_at', 'payment_request_type', 'payment_request_id', 'renewal_note'],
             [$productId, $priceAmount, $currencyId, $durationHours, $targetExpiry, 'pending_payment', date('Y-m-d H:i:s'), null, null, $renewalNote !== '' ? $renewalNote : null],

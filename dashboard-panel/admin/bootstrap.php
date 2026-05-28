@@ -1270,7 +1270,9 @@ function admin_dashboard_metrics(Mysql_ks $db): array
 
 function admin_dashboard_period_metrics(Mysql_ks $db): array
 {
-    if (!schema_object_exists($db, 'orders')) {
+    $hasOrders = schema_object_exists($db, 'orders');
+    $hasRenewals = schema_object_exists($db, 'order_renewals');
+    if (!$hasOrders && !$hasRenewals) {
         return [];
     }
 
@@ -1303,21 +1305,42 @@ function admin_dashboard_period_metrics(Mysql_ks $db): array
     foreach ($periods as $key => $period) {
         $safeFrom = $db->escape((string)$period['from']);
         $safeTo = $db->escape((string)$period['to']);
-        $row = $db->select_user(
-            "SELECT
-                COUNT(*) AS paid_orders,
-                COALESCE(SUM(orders.total_amount), 0) AS paid_revenue
-             FROM orders
-             WHERE orders.payment_status = 'paid'
-               AND {$dateColumn} BETWEEN '{$safeFrom}' AND '{$safeTo}'"
-        );
+        $paidOrders = 0;
+        $paidRevenue = 0.0;
+
+        if ($hasOrders) {
+            $row = $db->select_user(
+                "SELECT
+                    COUNT(*) AS paid_orders,
+                    COALESCE(SUM(orders.total_amount), 0) AS paid_revenue
+                 FROM orders
+                 WHERE orders.payment_status = 'paid'
+                   AND {$dateColumn} BETWEEN '{$safeFrom}' AND '{$safeTo}'"
+            );
+            $paidOrders += (int)($row['paid_orders'] ?? 0);
+            $paidRevenue += (float)($row['paid_revenue'] ?? 0);
+        }
+
+        if ($hasRenewals) {
+            $renewalsDateColumn = "COALESCE(order_renewals.applied_at, order_renewals.requested_at)";
+            $renewalRow = $db->select_user(
+                "SELECT
+                    COUNT(*) AS paid_orders,
+                    COALESCE(SUM(order_renewals.price_amount), 0) AS paid_revenue
+                 FROM order_renewals
+                 WHERE order_renewals.status = 'applied'
+                   AND {$renewalsDateColumn} BETWEEN '{$safeFrom}' AND '{$safeTo}'"
+            );
+            $paidOrders += (int)($renewalRow['paid_orders'] ?? 0);
+            $paidRevenue += (float)($renewalRow['paid_revenue'] ?? 0);
+        }
 
         $results[$key] = [
             'label' => (string)$period['label'],
             'from' => (string)$period['from'],
             'to' => (string)$period['to'],
-            'paid_orders' => (int)($row['paid_orders'] ?? 0),
-            'paid_revenue' => (float)($row['paid_revenue'] ?? 0),
+            'paid_orders' => $paidOrders,
+            'paid_revenue' => $paidRevenue,
         ];
     }
 
@@ -1326,7 +1349,9 @@ function admin_dashboard_period_metrics(Mysql_ks $db): array
 
 function admin_dashboard_sales_series(Mysql_ks $db, int $days = 30): array
 {
-    if (!schema_object_exists($db, 'orders')) {
+    $hasOrders = schema_object_exists($db, 'orders');
+    $hasRenewals = schema_object_exists($db, 'order_renewals');
+    if (!$hasOrders && !$hasRenewals) {
         return [];
     }
 
@@ -1334,26 +1359,59 @@ function admin_dashboard_sales_series(Mysql_ks $db, int $days = 30): array
     $startTimestamp = strtotime('-' . ($days - 1) . ' days midnight');
     $startDate = date('Y-m-d', $startTimestamp);
     $safeStartDate = $db->escape($startDate);
-    $dateColumn = "DATE(COALESCE(orders.paid_at, orders.created_at))";
-
-    $rows = $db->select_full_user(
-        "SELECT
-            {$dateColumn} AS metric_date,
-            COUNT(*) AS paid_orders,
-            COALESCE(SUM(orders.total_amount), 0) AS paid_revenue
-         FROM orders
-         WHERE orders.payment_status = 'paid'
-           AND {$dateColumn} >= '{$safeStartDate}'
-         GROUP BY {$dateColumn}
-         ORDER BY {$dateColumn} ASC"
-    );
-
     $mapped = [];
-    foreach ($rows as $row) {
-        $mapped[(string)($row['metric_date'] ?? '')] = [
-            'paid_orders' => (int)($row['paid_orders'] ?? 0),
-            'paid_revenue' => (float)($row['paid_revenue'] ?? 0),
-        ];
+
+    if ($hasOrders) {
+        $dateColumn = "DATE(COALESCE(orders.paid_at, orders.created_at))";
+        $rows = $db->select_full_user(
+            "SELECT
+                {$dateColumn} AS metric_date,
+                COUNT(*) AS paid_orders,
+                COALESCE(SUM(orders.total_amount), 0) AS paid_revenue
+             FROM orders
+             WHERE orders.payment_status = 'paid'
+               AND {$dateColumn} >= '{$safeStartDate}'
+             GROUP BY {$dateColumn}
+             ORDER BY {$dateColumn} ASC"
+        );
+
+        foreach ($rows as $row) {
+            $dateKey = (string)($row['metric_date'] ?? '');
+            if ($dateKey === '') {
+                continue;
+            }
+            $mapped[$dateKey] = [
+                'paid_orders' => (int)($row['paid_orders'] ?? 0),
+                'paid_revenue' => (float)($row['paid_revenue'] ?? 0),
+            ];
+        }
+    }
+
+    if ($hasRenewals) {
+        $renewalsDateColumn = "DATE(COALESCE(order_renewals.applied_at, order_renewals.requested_at))";
+        $renewalRows = $db->select_full_user(
+            "SELECT
+                {$renewalsDateColumn} AS metric_date,
+                COUNT(*) AS paid_orders,
+                COALESCE(SUM(order_renewals.price_amount), 0) AS paid_revenue
+             FROM order_renewals
+             WHERE order_renewals.status = 'applied'
+               AND {$renewalsDateColumn} >= '{$safeStartDate}'
+             GROUP BY {$renewalsDateColumn}
+             ORDER BY {$renewalsDateColumn} ASC"
+        );
+
+        foreach ($renewalRows as $row) {
+            $dateKey = (string)($row['metric_date'] ?? '');
+            if ($dateKey === '') {
+                continue;
+            }
+            if (!isset($mapped[$dateKey])) {
+                $mapped[$dateKey] = ['paid_orders' => 0, 'paid_revenue' => 0.0];
+            }
+            $mapped[$dateKey]['paid_orders'] += (int)($row['paid_orders'] ?? 0);
+            $mapped[$dateKey]['paid_revenue'] += (float)($row['paid_revenue'] ?? 0);
+        }
     }
 
     $series = [];
@@ -2180,6 +2238,110 @@ function admin_order_balance_payment_context(Mysql_ks $db, array $order): array
     ];
 }
 
+function admin_order_pending_renewal_context(Mysql_ks $db, array $order): array
+{
+    static $cache = [];
+
+    $orderId = (int)($order['id'] ?? 0);
+    $cacheKey = $orderId > 0 ? (string)$orderId : '0';
+    if (isset($cache[$cacheKey])) {
+        return $cache[$cacheKey];
+    }
+
+    $context = [
+        'has_pending' => false,
+        'has_paid_pending_activation' => false,
+        'renewal_id' => 0,
+        'product_id' => 0,
+        'status' => '',
+        'payment_type' => '',
+        'payment_id' => 0,
+        'payment_status' => '',
+        'payment_amount' => 0.0,
+        'payment_amount_label' => '',
+        'payment_approved_at' => '',
+        'payment_url' => '',
+        'customer_balance' => 0.0,
+        'customer_balance_label' => '',
+    ];
+
+    if ($orderId <= 0 || !schema_object_exists($db, 'order_renewals')) {
+        $cache[$cacheKey] = $context;
+        return $context;
+    }
+
+    $pendingRenewal = app_order_find_pending_renewal($db, $orderId);
+    if (!is_array($pendingRenewal) || empty($pendingRenewal['id'])) {
+        $cache[$cacheKey] = $context;
+        return $context;
+    }
+
+    $renewalStatus = strtolower(trim((string)($pendingRenewal['status'] ?? '')));
+    $context['has_pending'] = true;
+    $context['status'] = $renewalStatus;
+    $context['renewal_id'] = (int)($pendingRenewal['id'] ?? 0);
+    $context['product_id'] = (int)($pendingRenewal['product_id'] ?? 0);
+    $context['has_paid_pending_activation'] = $renewalStatus === 'paid_pending_activation';
+
+    if ($context['has_paid_pending_activation']) {
+        $paymentType = strtolower(trim((string)($pendingRenewal['payment_request_type'] ?? '')));
+        $paymentId = (int)($pendingRenewal['payment_request_id'] ?? 0);
+        if (in_array($paymentType, ['crypto', 'bank'], true) && $paymentId > 0) {
+            $payment = admin_payment_find($db, $paymentType, $paymentId);
+            if (is_array($payment) && !empty($payment['id'])) {
+                $paymentAmount = 0.0;
+                if (isset($payment['received_fiat_amount']) && is_numeric((string)$payment['received_fiat_amount'])) {
+                    $paymentAmount = round((float)$payment['received_fiat_amount'], 2);
+                }
+                if ($paymentAmount <= 0) {
+                    if (isset($payment['requested_amount_value']) && is_numeric((string)$payment['requested_amount_value'])) {
+                        $paymentAmount = round((float)$payment['requested_amount_value'], 2);
+                    } elseif (isset($payment['amount_value']) && is_numeric((string)$payment['amount_value'])) {
+                        $paymentAmount = round((float)$payment['amount_value'], 2);
+                    }
+                }
+
+                $paymentCurrencyCode = trim((string)($payment['currency_code'] ?? (string)($order['currency_code'] ?? '')));
+                $context['payment_type'] = $paymentType;
+                $context['payment_id'] = (int)($payment['id'] ?? $paymentId);
+                $context['payment_status'] = strtolower(trim((string)($payment['status'] ?? '')));
+                $context['payment_amount'] = $paymentAmount;
+                $context['payment_amount_label'] = $paymentAmount > 0
+                    ? admin_format_money_value($paymentAmount, $paymentCurrencyCode)
+                    : '';
+                $context['payment_approved_at'] = trim((string)(
+                    $payment['approved_at']
+                        ?? $payment['confirmed_at']
+                        ?? $payment['requested_at']
+                        ?? ''
+                ));
+                $context['payment_url'] = '/admin/?page=payments&payment_type=' . rawurlencode($paymentType) . '&payment_id=' . (int)$context['payment_id'];
+            }
+        }
+
+        $customerId = (int)($order['customer_id'] ?? $pendingRenewal['customer_id'] ?? 0);
+        if ($customerId > 0 && schema_object_exists($db, 'customers') && schema_column_exists($db, 'customers', 'balance_amount')) {
+            $customerRow = $db->select_user(
+                "SELECT balance_amount
+                 FROM customers
+                 WHERE id = {$customerId}
+                 LIMIT 1"
+            );
+            if (is_array($customerRow)) {
+                $customerBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
+                $context['customer_balance'] = $customerBalance;
+                $context['customer_balance_label'] = admin_format_money_value(
+                    $customerBalance,
+                    (string)($order['currency_code'] ?? '')
+                );
+            }
+        }
+    }
+
+    $cache[$cacheKey] = $context;
+    return $context;
+}
+
 function admin_find_latest_approved_order_payment(Mysql_ks $db, int $orderId): ?array
 {
     if ($orderId <= 0) {
@@ -2657,6 +2819,15 @@ function admin_order_status_visual(array $order): array
     $status = strtolower(trim((string)($order['status'] ?? '')));
     $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
     $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+    $hasPaidPendingRenewal = !empty($order['has_paid_pending_renewal']);
+
+    if ($hasPaidPendingRenewal) {
+        return [
+            'icon' => 'bi bi-arrow-repeat',
+            'class' => 'admin-order-status-icon--awaiting-activation',
+            'label' => 'Payment confirmed',
+        ];
+    }
 
     if (
         $paymentStatus === 'paid'
@@ -5738,18 +5909,63 @@ function admin_finalize_successful_payment(
 
         $pendingRenewal = $pendingRenewalForPayment;
         if (!$pendingRenewal) {
-            $pendingRenewal = app_order_find_pending_renewal($db, $orderId);
+            $fallbackRenewal = app_order_find_pending_renewal($db, $orderId);
+            if (is_array($fallbackRenewal) && !empty($fallbackRenewal['id'])) {
+                $fallbackPaymentId = (int)($fallbackRenewal['payment_request_id'] ?? 0);
+                $fallbackPaymentType = strtolower(trim((string)($fallbackRenewal['payment_request_type'] ?? '')));
+                if ($fallbackPaymentId <= 0 || $fallbackPaymentType === '') {
+                    $pendingRenewal = $fallbackRenewal;
+                }
+            }
         }
         if ($pendingRenewal) {
-            $applyRenewalResult = app_apply_pending_order_renewal(
-                $db,
-                (int)$pendingRenewal['id'],
-                'admin',
-                $adminUserId,
-                $ipAddress
+            $renewalId = (int)($pendingRenewal['id'] ?? 0);
+            if ($renewalId <= 0) {
+                return ['ok' => false, 'message' => 'Pending renewal record is invalid.'];
+            }
+
+            $approvalTimestamp = function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s');
+            $renewalNote = trim((string)($pendingRenewal['renewal_note'] ?? ''));
+            $approvalNote = 'Payment approved on ' . $approvalTimestamp . '. Waiting for manual extension in admin panel.';
+            $updatedRenewal = $db->update_using_id(
+                ['status', 'renewal_note'],
+                [
+                    'paid_pending_activation',
+                    $renewalNote !== '' ? ($renewalNote . "\n" . $approvalNote) : $approvalNote,
+                ],
+                'order_renewals',
+                $renewalId
             );
-            if (empty($applyRenewalResult['ok'])) {
-                return $applyRenewalResult;
+            if (!$updatedRenewal) {
+                return ['ok' => false, 'message' => 'Unable to mark renewal as paid.'];
+            }
+
+            $renewalAmount = round((float)($pendingRenewal['price_amount'] ?? 0), 2);
+            if ($renewalAmount > 0) {
+                $reserveResult = admin_apply_customer_balance_runtime_event(
+                    $db,
+                    $customerId,
+                    $renewalAmount,
+                    'debit',
+                    'order_extension',
+                    'renewal:' . $renewalId,
+                    'Reserved from approved ' . ucfirst($paymentType) . ' payment #' . $paymentId . ' for renewal #' . $renewalId . ' in order #' . $orderId,
+                    $adminUserId,
+                    $ipAddress
+                );
+                if (empty($reserveResult['ok'])) {
+                    return $reserveResult;
+                }
+            }
+
+            $orderPaymentUpdated = $db->update_using_id(
+                ['payment_status', 'paid_at'],
+                ['paid', $approvalTimestamp],
+                'orders',
+                $orderId
+            );
+            if (!$orderPaymentUpdated) {
+                return ['ok' => false, 'message' => 'Unable to update order payment timestamp.'];
             }
 
             return [
@@ -5758,7 +5974,10 @@ function admin_finalize_successful_payment(
                 'order_id' => $orderId,
                 'customer_id' => $customerId,
                 'underpaid_order' => false,
+                'pending_renewal' => true,
+                'pending_renewal_id' => $renewalId,
             ];
+
         }
 
         $order = admin_order_find($db, $orderId);
@@ -10607,6 +10826,30 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
     $durationHours = (int)($product['duration_hours'] ?? 0);
     if ($durationHours <= 0) {
         return ['ok' => false, 'message' => 'Selected package has no duration.'];
+    }
+
+    $pendingRenewal = app_order_find_pending_renewal($db, $orderId);
+    if (is_array($pendingRenewal) && !empty($pendingRenewal['id']) && strtolower(trim((string)($pendingRenewal['status'] ?? ''))) === 'paid_pending_activation') {
+        $pendingProductId = (int)($pendingRenewal['product_id'] ?? 0);
+        if ($pendingProductId > 0 && $pendingProductId !== $productId) {
+            return ['ok' => false, 'message' => 'This payment was approved for another package. Select the same package or create a new payment request.'];
+        }
+
+        $applyResult = app_apply_pending_order_renewal(
+            $db,
+            (int)$pendingRenewal['id'],
+            'admin',
+            $adminUserId,
+            $ipAddress
+        );
+        if (empty($applyResult['ok'])) {
+            return $applyResult;
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Subscription extended successfully.',
+        ];
     }
 
     $now = time();

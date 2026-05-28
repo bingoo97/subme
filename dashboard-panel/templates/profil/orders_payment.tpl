@@ -293,7 +293,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
     {if $payment_active_request_method eq '' && $payment_state_notice|default:'' neq ''}
         <div class="payment-wizard__section">
             <div class="payment-request-card">
-                <div class="alert {if $payment_state_notice eq 'paid_pending_activation'}alert-success{elseif $payment_state_notice eq 'already_paid'}alert-info{else}alert-warning{/if}">
+                <div class="alert {if $payment_state_notice eq 'paid_pending_activation' || $payment_state_notice eq 'renewal_approved_waiting_extension'}alert-success{elseif $payment_state_notice eq 'already_paid'}alert-info{else}alert-warning{/if}">
                     {if $payment_state_notice eq 'paid_pending_activation'}
                         <strong>{$t.payment_paid_pending_activation_title|default:'Payment confirmed.'}</strong><br />
                         {$t.payment_paid_pending_activation_text|default:'Your payment has already been marked as paid. The subscription is now waiting for activation by the admin. You do not need to generate a new payment request.'}
@@ -303,6 +303,9 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     {elseif $payment_state_notice eq 'renewal_pending_activation'}
                         <strong>{$t.payment_renewal_pending_activation_title|default:'Your extension is already waiting for verification.'}</strong><br />
                         {$t.payment_renewal_pending_activation_text|default:'A renewal payment request for this subscription has already been created and is waiting for approval or rejection by the admin. You cannot generate another renewal payment right now.'}
+                    {elseif $payment_state_notice eq 'renewal_approved_waiting_extension'}
+                        <strong>{$t.payment_renewal_approved_waiting_extension_title|default:'Payment confirmed.'}</strong><br />
+                        {$t.payment_renewal_approved_waiting_extension_text|default:'Your extension payment has been confirmed and is now waiting for manual extension by the admin. You do not need to create another payment request.'}
                     {elseif $payment_state_notice eq 'already_paid'}
                         <strong>{$t.payment_paid_already_title|default:'This order is already paid.'}</strong><br />
                         {$t.payment_paid_already_text|default:'A new payment request is not needed for this order. If you need more details, open your orders list or contact support.'}

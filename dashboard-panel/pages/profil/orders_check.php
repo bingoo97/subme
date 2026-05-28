@@ -90,6 +90,7 @@ $generator = $str->generator('orders-site_');
 $wygrane = $str->get_wartosci();
 
 $renewalHistoryMap = [];
+$pendingRenewalStateMap = [];
 if (app_uses_v2_schema($db) && $wygrane) {
     $orderIds = [];
     foreach ($wygrane as $orderRow) {
@@ -99,6 +100,7 @@ if (app_uses_v2_schema($db) && $wygrane) {
         }
     }
     $renewalHistoryMap = app_load_order_renewal_history_map($db, $orderIds, 20);
+    $pendingRenewalStateMap = app_load_order_pending_renewal_state_map($db, $orderIds);
 }
 
 if ($wygrane) {
@@ -106,6 +108,14 @@ if ($wygrane) {
         if (app_uses_v2_schema($db)) {
             $orderId = (int)($wygrane[$i]['id'] ?? 0);
             $wygrane[$i]['extend'] = $renewalHistoryMap[$orderId] ?? [];
+            $pendingRenewalState = $pendingRenewalStateMap[$orderId] ?? null;
+            $pendingRenewalStatus = is_array($pendingRenewalState)
+                ? strtolower(trim((string)($pendingRenewalState['status'] ?? '')))
+                : '';
+            $wygrane[$i]['renewal_pending_status'] = $pendingRenewalStatus;
+            $wygrane[$i]['renewal_pending_payment'] = ($pendingRenewalStatus === 'pending_payment') ? 1 : 0;
+            $wygrane[$i]['renewal_paid_pending_activation'] = ($pendingRenewalStatus === 'paid_pending_activation') ? 1 : 0;
+            $wygrane[$i]['renewal_has_blocking_pending_state'] = in_array($pendingRenewalStatus, ['pending_payment', 'paid_pending_activation'], true) ? 1 : 0;
             $wygrane[$i]['test'] = 1;
             $deliveryPayload = app_order_delivery_payload($wygrane[$i]);
             $wygrane[$i]['link_url'] = (string)$deliveryPayload['url'];

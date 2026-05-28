@@ -3362,6 +3362,23 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
+        function resolveOrdersRedirectUrl(payload) {
+            var redirectUrl = payload && payload.redirect_url ? String(payload.redirect_url).trim() : '';
+            var order = payload && payload.order ? payload.order : null;
+            var customerId = order ? parseInt(order.customer_id || '0', 10) || 0 : 0;
+
+            if (redirectUrl !== '') {
+                return redirectUrl;
+            }
+            if (order && order.order_url) {
+                return String(order.order_url);
+            }
+            if (customerId > 0) {
+                return '/admin/?page=orders&customer_id=' + encodeURIComponent(String(customerId));
+            }
+            return '/admin/?page=orders';
+        }
+
         var cryptoAcceptModalController = (function () {
             var modalNode = q('[data-admin-crypto-accept-modal]');
             var modalInstance = modalNode && hasBootstrap && window.bootstrap && typeof window.bootstrap.Modal !== 'undefined'
@@ -3827,7 +3844,10 @@ document.addEventListener('DOMContentLoaded', function () {
                             return;
                         }
                         hideModal();
-                        moveAcceptedPaymentToOrders(activeFlyout, activeButton, payload);
+                        if (activeFlyout) {
+                            moveAcceptedPaymentToOrders(activeFlyout, activeButton, payload);
+                        }
+                        window.location.assign(resolveOrdersRedirectUrl(payload));
                     }).catch(function () {
                         state.submitting = false;
                         submitButton.disabled = false;
@@ -4026,6 +4046,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 return;
                             }
                             moveAcceptedPaymentToOrders(flyout, button, payload);
+                            window.location.assign(resolveOrdersRedirectUrl(payload));
                         }).catch(function () {
                             button.disabled = false;
                             window.alert(flyout.getAttribute('data-topbar-accept-error-text') || 'Unable to accept payment.');
