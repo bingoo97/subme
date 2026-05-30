@@ -397,6 +397,12 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                                 <span class="payment-request-value">{$payment_crypto_request.wallet_owner_full_name}</span>
                             </div>
                             {/if}
+                            {if $payment_crypto_request.wallet_owner_location}
+                            <div>
+                                <span class="payment-request-label">{$t.payment_wallet_location|default:'Location'}</span>
+                                <span class="payment-request-value">{$payment_crypto_request.wallet_owner_location}</span>
+                            </div>
+                            {/if}
                             
                             {if $payment_crypto_request.wallet_memo_tag}
                             <div>
@@ -537,7 +543,7 @@ $(function () {
                         chatScroll.scrollTop = chatScroll.scrollHeight;
                     }
                 });
-                $icon.removeClass('fa-angle-down').addClass('fa-angle-up');
+                $icon.removeClass('fa-angle-down').addClass('fa-times');
 
                 if (typeof check_chat_read === 'function') {
                     try {

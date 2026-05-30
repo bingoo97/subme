@@ -60,10 +60,18 @@ switch ($site) {
                 $db,
                 "customer_id = " . (int)$user['id'] . "
                  AND order_id IS NULL
-                 AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+                 AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
                  AND expires_at IS NOT NULL
                  AND expires_at <= '{$safeNow}'",
                 $safeNow
+            );
+            app_cancel_invalid_open_crypto_deposit_requests(
+                $db,
+                "customer_id = " . (int)$user['id'] . "
+                 AND order_id IS NULL
+                 AND (expires_at IS NULL OR expires_at > '{$safeNow}')",
+                is_array($settings ?? null) ? $settings : [],
+                'Cancelled invalid balance top-up crypto wallet assignment'
             );
         }
 
@@ -139,7 +147,7 @@ switch ($site) {
                  FROM crypto_deposit_requests
                  WHERE customer_id = " . (int)$user['id'] . "
                    AND order_id IS NULL
-                   AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+                   AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
                    AND (expires_at IS NULL OR expires_at > '{$safeNow}')"
             );
             $activePayment += (int)($v2ActiveRow['total'] ?? 0);
@@ -166,7 +174,8 @@ switch ($site) {
                 $selectedAsset = null;
 
                 foreach ($topupCryptoAssets as $asset) {
-                    if ((int)($asset['wallet_assignment_id'] ?? 0) === $selectedAssetId || (int)($asset['id'] ?? 0) === $selectedAssetId) {
+                    $assetAssignmentId = (int)($asset['wallet_assignment_id'] ?? 0);
+                    if (($assetAssignmentId > 0 && $assetAssignmentId === $selectedAssetId) || (int)($asset['id'] ?? 0) === $selectedAssetId) {
                         $selectedAsset = $asset;
                         break;
                     }
@@ -201,15 +210,33 @@ switch ($site) {
 
                     if (!$selectedAsset) {
                         // error already displayed above
-                    } elseif ((int)($selectedAsset['wallet_assignment_id'] ?? 0) <= 0) {
-                        $assignedWalletId = app_assign_customer_crypto_wallet(
+                    } else {
+                        if (
+                            (int)($selectedAsset['wallet_assignment_id'] ?? 0) > 0
+                            && !app_crypto_deposit_wallet_payload_is_valid(
+                                $db,
+                                (int)$user['id'],
+                                (int)($selectedAsset['crypto_asset_id'] ?? 0),
+                                (int)($selectedAsset['wallet_address_id'] ?? 0),
+                                (int)($selectedAsset['wallet_assignment_id'] ?? 0),
+                                is_array($settings ?? null) ? $settings : []
+                            )
+                        ) {
+                            $selectedAsset['wallet_assignment_id'] = 0;
+                        }
+                    }
+
+                    if ($selectedAsset && (int)($selectedAsset['wallet_assignment_id'] ?? 0) <= 0) {
+                        $assignedWallet = app_assign_customer_crypto_wallet_with_fallback(
                             $db,
                             (int)($selectedAsset['wallet_address_id'] ?? 0),
+                            (int)($selectedAsset['crypto_asset_id'] ?? 0),
                             (int)$user['id'],
                             is_array($settings ?? null) ? $settings : [],
                             0,
                             'Assigned from balance top-up wizard'
                         );
+                        $assignedWalletId = (int)($assignedWallet['wallet_assignment_id'] ?? 0);
 
                         if ($assignedWalletId <= 0) {
                             $smarty->assign('alert_error', localization_translate($t, 'balance_topup_create_error', 'Unable to create the payment request right now.'));
@@ -218,6 +245,19 @@ switch ($site) {
                         } else {
                             $createdWalletAssignmentNow = true;
                             $selectedAsset['wallet_assignment_id'] = $assignedWalletId;
+                            $selectedAsset['wallet_address_id'] = (int)($assignedWallet['wallet_address_id'] ?? $selectedAsset['wallet_address_id']);
+                            $selectedAsset['wallet_address'] = (string)($assignedWallet['address'] ?? $selectedAsset['wallet_address'] ?? '');
+                            $selectedAsset['wallet_memo_tag'] = (string)($assignedWallet['memo_tag'] ?? $selectedAsset['wallet_memo_tag'] ?? '');
+                            $selectedAsset['wallet_label'] = (string)($assignedWallet['label'] ?? $selectedAsset['wallet_label'] ?? '');
+                            $selectedAsset['wallet_owner_full_name'] = (string)($assignedWallet['owner_full_name'] ?? $selectedAsset['wallet_owner_full_name'] ?? '');
+                            $selectedAsset['wallet_notes'] = (string)($assignedWallet['notes'] ?? $selectedAsset['wallet_notes'] ?? '');
+                            $selectedAsset['wallet_provider'] = (string)($assignedWallet['wallet_provider'] ?? $selectedAsset['wallet_provider'] ?? '');
+                            $selectedAsset['network_code'] = (string)($assignedWallet['network_code'] ?? $selectedAsset['network_code'] ?? '');
+                            $selectedAsset['network_label'] = app_crypto_network_label((string)($selectedAsset['network_code'] ?? ''));
+                            $selectedAsset['wallet_owner_location'] = app_wallet_owner_location_resolve(
+                                (string)($selectedAsset['wallet_owner_full_name'] ?? ''),
+                                (string)($selectedAsset['wallet_notes'] ?? '')
+                            );
                             $selectedAsset['is_assigned'] = true;
                         }
                     }
@@ -401,6 +441,7 @@ switch ($site) {
                     crypto_wallet_addresses.address AS address_code,
                     crypto_wallet_addresses.network_code,
                     crypto_wallet_addresses.owner_full_name,
+                    crypto_wallet_addresses.notes AS wallet_notes,
                     crypto_wallet_addresses.qr_url,
                     currencies.symbol AS currency_symbol,
                     currencies.code AS currency_code
@@ -456,6 +497,10 @@ switch ($site) {
                     $v2CryptoPayments[$index]['date'] = $createdTimestamp > 0 ? date('d.m.Y H:i', $createdTimestamp) : '';
                     $v2CryptoPayments[$index]['crypto_logo_url'] = app_crypto_logo_by_code((string)($cryptoPayment['crypto_symbol'] ?? ''), (string)($cryptoPayment['crypto_logo_url'] ?? ''));
                     $v2CryptoPayments[$index]['note'] = trim((string)($cryptoPayment['owner_full_name'] ?? ''));
+                    $v2CryptoPayments[$index]['wallet_owner_location'] = app_wallet_owner_location_resolve(
+                        (string)($cryptoPayment['owner_full_name'] ?? ''),
+                        (string)($cryptoPayment['wallet_notes'] ?? '')
+                    );
                     $v2CryptoPayments[$index]['explorer_url'] = app_crypto_wallet_explorer_url(
                         (string)($cryptoPayment['crypto_symbol'] ?? ''),
                         (string)($cryptoPayment['network_code'] ?? ''),
@@ -486,6 +531,7 @@ switch ($site) {
                     crypto_assets.logo_url AS crypto_logo_url,
                     crypto_wallet_addresses.label AS wallet_label,
                     crypto_wallet_addresses.owner_full_name AS wallet_owner_full_name,
+                    crypto_wallet_addresses.notes AS wallet_notes,
                     crypto_wallet_addresses.network_code AS wallet_network_code,
                     crypto_wallet_addresses.wallet_provider AS wallet_provider,
                     crypto_wallet_addresses.address AS wallet_address,
@@ -499,7 +545,7 @@ switch ($site) {
                  LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
                  WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
                    AND crypto_deposit_requests.order_id IS NULL
-                   AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+                   AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
                    AND (crypto_deposit_requests.expires_at IS NULL OR crypto_deposit_requests.expires_at > '{$safeNow}')
                  ORDER BY crypto_deposit_requests.id DESC
                  LIMIT 1"
@@ -514,6 +560,10 @@ switch ($site) {
                     $activeV2CryptoRequest['qr_code_url'] = app_format_logo_path($activeV2CryptoRequest['qr_code_url']);
                 }
                 $activeV2CryptoRequest['wallet_network_label'] = app_crypto_network_label((string)($activeV2CryptoRequest['wallet_network_code'] ?? ''));
+                $activeV2CryptoRequest['wallet_owner_location'] = app_wallet_owner_location_resolve(
+                    (string)($activeV2CryptoRequest['wallet_owner_full_name'] ?? ''),
+                    (string)($activeV2CryptoRequest['wallet_notes'] ?? '')
+                );
                 $activeV2CryptoRequestRemainingSeconds = !empty($activeV2CryptoRequest['expires_at'])
                     ? max(0, strtotime((string)$activeV2CryptoRequest['expires_at']) - $time_s)
                     : 0;

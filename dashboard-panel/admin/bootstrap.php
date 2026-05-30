@@ -119,6 +119,224 @@ function admin_app_settings(Mysql_ks $db): array
     return is_array($settings) ? $settings : [];
 }
 
+function admin_core_crypto_asset_definitions(): array
+{
+    return [
+        'BTC' => ['name' => 'Bitcoin', 'coingecko_id' => 'bitcoin', 'is_active' => 1],
+        'ETH' => ['name' => 'Ethereum', 'coingecko_id' => 'ethereum', 'is_active' => 1],
+        'DOGE' => ['name' => 'Dogecoin', 'coingecko_id' => 'dogecoin', 'is_active' => 1],
+        'BNB' => ['name' => 'BNB', 'coingecko_id' => 'binancecoin', 'is_active' => 1],
+        'POL' => ['name' => 'Polygon', 'coingecko_id' => 'polygon-ecosystem-token', 'is_active' => 1],
+        'USDT' => ['name' => 'Tether', 'coingecko_id' => 'tether', 'is_active' => 1],
+        'USDC' => ['name' => 'USD Coin', 'coingecko_id' => 'usd-coin', 'is_active' => 1],
+        'SOL' => ['name' => 'Solana', 'coingecko_id' => 'solana', 'is_active' => 1],
+    ];
+}
+
+function admin_ensure_core_crypto_assets(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'crypto_assets')) {
+        return;
+    }
+
+    $done = true;
+
+    foreach (admin_core_crypto_asset_definitions() as $code => $asset) {
+        $codeSql = $db->escape($code);
+        $nameSql = $db->escape((string)$asset['name']);
+        $coingeckoSql = $db->escape((string)$asset['coingecko_id']);
+        $isActive = !empty($asset['is_active']) ? 1 : 0;
+
+        $db->query(
+            "INSERT INTO crypto_assets (code, name, coingecko_id, rate_currency_code, is_active)
+             VALUES ('{$codeSql}', '{$nameSql}', '{$coingeckoSql}', 'USD', {$isActive})
+             ON DUPLICATE KEY UPDATE
+                name = IF(COALESCE(TRIM(name), '') = '', VALUES(name), name),
+                coingecko_id = CASE
+                    WHEN UPPER(code) IN ('BNB', 'POL') THEN VALUES(coingecko_id)
+                    ELSE IF(COALESCE(TRIM(coingecko_id), '') = '', VALUES(coingecko_id), coingecko_id)
+                END,
+                rate_currency_code = IF(COALESCE(TRIM(rate_currency_code), '') = '', 'USD', rate_currency_code),
+                is_active = CASE WHEN UPPER(code) IN ('BNB', 'POL') THEN 1 ELSE is_active END"
+        );
+    }
+}
+
+function admin_ensure_mixer_runtime_tables(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_object_exists($db, 'admin_mixer_orders')) {
+        @$db->query(
+            "CREATE TABLE IF NOT EXISTS admin_mixer_orders (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                public_id VARCHAR(40) NOT NULL,
+                created_by_admin_user_id INT UNSIGNED DEFAULT NULL,
+                input_asset VARCHAR(12) NOT NULL,
+                output_asset VARCHAR(40) NOT NULL,
+                payout_network VARCHAR(40) NOT NULL DEFAULT 'polygon',
+                payout_network_mode VARCHAR(20) NOT NULL DEFAULT 'mainnet',
+                payout_chain_id INT UNSIGNED DEFAULT NULL,
+                recipient_address VARCHAR(128) NOT NULL,
+                deposit_address VARCHAR(128) DEFAULT NULL,
+                deposit_derivation_path VARCHAR(120) DEFAULT NULL,
+                expected_input_amount DECIMAL(24,12) DEFAULT NULL,
+                detected_input_amount DECIMAL(24,12) DEFAULT NULL,
+                payout_amount DECIMAL(24,12) DEFAULT NULL,
+                quote_rate_usd DECIMAL(24,12) DEFAULT NULL,
+                quote_output_rate_usd DECIMAL(24,12) DEFAULT NULL,
+                fee_percent DECIMAL(5,2) NOT NULL DEFAULT 1.50,
+                fee_amount_usd DECIMAL(12,2) DEFAULT NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'draft',
+                confirmations INT UNSIGNED NOT NULL DEFAULT 0,
+                confirmations_required INT UNSIGNED NOT NULL DEFAULT 3,
+                deposit_txid VARCHAR(191) DEFAULT NULL,
+                payout_txid VARCHAR(191) DEFAULT NULL,
+                expires_at DATETIME DEFAULT NULL,
+                detected_at DATETIME DEFAULT NULL,
+                confirmed_at DATETIME DEFAULT NULL,
+                paid_at DATETIME DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uniq_admin_mixer_orders_public_id (public_id),
+                KEY idx_admin_mixer_orders_status (status),
+                KEY idx_admin_mixer_orders_deposit_address (deposit_address),
+                KEY idx_admin_mixer_orders_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_mixer_orders']);
+    }
+
+    if (schema_object_exists($db, 'admin_mixer_orders')) {
+        if (!schema_column_exists($db, 'admin_mixer_orders', 'payout_network')) {
+            @$db->query(
+                "ALTER TABLE admin_mixer_orders
+                 ADD COLUMN payout_network VARCHAR(40) NOT NULL DEFAULT 'polygon'
+                 AFTER output_asset"
+            );
+            schema_forget_column_cache('admin_mixer_orders', 'payout_network');
+        }
+
+        if (!schema_column_exists($db, 'admin_mixer_orders', 'payout_network_mode')) {
+            @$db->query(
+                "ALTER TABLE admin_mixer_orders
+                 ADD COLUMN payout_network_mode VARCHAR(20) NOT NULL DEFAULT 'mainnet'
+                 AFTER payout_network"
+            );
+            schema_forget_column_cache('admin_mixer_orders', 'payout_network_mode');
+        }
+
+        if (!schema_column_exists($db, 'admin_mixer_orders', 'payout_chain_id')) {
+            @$db->query(
+                "ALTER TABLE admin_mixer_orders
+                 ADD COLUMN payout_chain_id INT UNSIGNED DEFAULT NULL
+                 AFTER payout_network_mode"
+            );
+            schema_forget_column_cache('admin_mixer_orders', 'payout_chain_id');
+        }
+
+        if (!schema_column_exists($db, 'admin_mixer_orders', 'quote_output_rate_usd')) {
+            @$db->query(
+                "ALTER TABLE admin_mixer_orders
+                 ADD COLUMN quote_output_rate_usd DECIMAL(24,12) DEFAULT NULL
+                 AFTER quote_rate_usd"
+            );
+            schema_forget_column_cache('admin_mixer_orders', 'quote_output_rate_usd');
+        }
+
+        if (!schema_column_exists($db, 'admin_mixer_orders', 'confirmations_required')) {
+            @$db->query(
+                "ALTER TABLE admin_mixer_orders
+                 ADD COLUMN confirmations_required INT UNSIGNED NOT NULL DEFAULT 3
+                 AFTER confirmations"
+            );
+            schema_forget_column_cache('admin_mixer_orders', 'confirmations_required');
+        }
+    }
+
+    if (!schema_object_exists($db, 'admin_mixer_events')) {
+        @$db->query(
+            "CREATE TABLE IF NOT EXISTS admin_mixer_events (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                order_id BIGINT UNSIGNED DEFAULT NULL,
+                event_type VARCHAR(60) NOT NULL,
+                payload_json LONGTEXT DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY idx_admin_mixer_events_order_id (order_id),
+                KEY idx_admin_mixer_events_event_type (event_type),
+                KEY idx_admin_mixer_events_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_mixer_events']);
+    }
+
+    if (!schema_object_exists($db, 'admin_mixer_deposit_txs')) {
+        @$db->query(
+            "CREATE TABLE IF NOT EXISTS admin_mixer_deposit_txs (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                order_id BIGINT UNSIGNED DEFAULT NULL,
+                input_asset VARCHAR(12) NOT NULL,
+                deposit_address VARCHAR(128) NOT NULL,
+                txid VARCHAR(191) NOT NULL,
+                vout INT UNSIGNED NOT NULL DEFAULT 0,
+                amount DECIMAL(24,12) NOT NULL DEFAULT 0.000000000000,
+                confirmations INT UNSIGNED NOT NULL DEFAULT 0,
+                status VARCHAR(30) NOT NULL DEFAULT 'seen',
+                first_seen_at DATETIME DEFAULT NULL,
+                confirmed_at DATETIME DEFAULT NULL,
+                raw_json LONGTEXT DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uniq_admin_mixer_deposit_txs_asset_tx_vout (input_asset, txid, vout),
+                KEY idx_admin_mixer_deposit_txs_order_id (order_id),
+                KEY idx_admin_mixer_deposit_txs_address (deposit_address),
+                KEY idx_admin_mixer_deposit_txs_status (status),
+                KEY idx_admin_mixer_deposit_txs_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_mixer_deposit_txs']);
+    }
+
+    if (!schema_object_exists($db, 'admin_mixer_payout_attempts')) {
+        @$db->query(
+            "CREATE TABLE IF NOT EXISTS admin_mixer_payout_attempts (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                order_id BIGINT UNSIGNED NOT NULL,
+                payout_network VARCHAR(40) NOT NULL,
+                payout_network_mode VARCHAR(20) NOT NULL DEFAULT 'mainnet',
+                payout_chain_id INT UNSIGNED DEFAULT NULL,
+                output_asset VARCHAR(40) NOT NULL,
+                token_address VARCHAR(64) DEFAULT NULL,
+                recipient_address VARCHAR(128) NOT NULL,
+                payout_amount DECIMAL(24,12) NOT NULL DEFAULT 0.000000000000,
+                txid VARCHAR(191) DEFAULT NULL,
+                request_hash VARCHAR(191) DEFAULT NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                error_message VARCHAR(1000) DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY idx_admin_mixer_payout_attempts_order_id (order_id),
+                KEY idx_admin_mixer_payout_attempts_status (status),
+                KEY idx_admin_mixer_payout_attempts_txid (txid),
+                KEY idx_admin_mixer_payout_attempts_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        unset($GLOBALS['schema_object_exists_cache']['admin_mixer_payout_attempts']);
+    }
+}
+
 function admin_setting_is_enabled(array $settings, string $key, bool $default = false): bool
 {
     if (!array_key_exists($key, $settings)) {
@@ -220,6 +438,841 @@ function admin_crypto_wallet_shared_assignments_enabled(array $settings): bool
 function admin_bank_account_shared_assignments_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'bank_account_shared_assignments_enabled', true);
+}
+
+function admin_swap_converter_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'swap_converter_enabled', false);
+}
+
+function admin_hinkal_private_send_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'hinkal_private_send_enabled', true);
+}
+
+function admin_rango_converter_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'rango_converter_enabled', false);
+}
+
+function admin_rango_centralized_swappers_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'rango_enable_centralized_swappers', true);
+}
+
+function admin_mixer_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'mixer_enabled', false);
+}
+
+function admin_swap_converter_chain_options(): array
+{
+    return [
+        'btc' => [
+            'label' => 'Bitcoin (BTC)',
+            'chain_id' => 20000000000001,
+            'available' => true,
+            'default_enabled' => false,
+        ],
+        'eth' => [
+            'label' => 'Ethereum (EVM)',
+            'chain_id' => 1,
+            'available' => true,
+            'default_enabled' => true,
+        ],
+        'sol' => [
+            'label' => 'Solana (SOL)',
+            'chain_id' => 1151111081099710,
+            'available' => true,
+            'default_enabled' => true,
+        ],
+        'doge' => [
+            'label' => 'Dogecoin (DOGE)',
+            'chain_id' => null,
+            'available' => false,
+            'default_enabled' => false,
+        ],
+        'pol' => [
+            'label' => 'Polygon (POL)',
+            'chain_id' => 137,
+            'available' => true,
+            'default_enabled' => true,
+        ],
+        'bsc' => [
+            'label' => 'BNB Smart Chain (BNB)',
+            'chain_id' => 56,
+            'available' => true,
+            'default_enabled' => true,
+        ],
+    ];
+}
+
+function admin_swap_converter_default_chain_keys(): array
+{
+    return array_keys(array_filter(
+        admin_swap_converter_chain_options(),
+        static fn(array $option): bool => !empty($option['available']) && !empty($option['default_enabled'])
+    ));
+}
+
+function admin_swap_converter_allowed_chain_keys($value, bool $defaultWhenEmpty = true): array
+{
+    $options = admin_swap_converter_chain_options();
+    $keys = is_array($value) ? $value : explode(',', (string)$value);
+    $selected = [];
+
+    foreach ($keys as $key) {
+        $key = strtolower(trim((string)$key));
+        if ($key !== '' && !empty($options[$key]['available'])) {
+            $selected[] = $key;
+        }
+    }
+
+    $selected = array_values(array_unique($selected));
+    return $selected !== [] || !$defaultWhenEmpty ? $selected : admin_swap_converter_default_chain_keys();
+}
+
+function admin_swap_converter_chain_ids_for_keys(array $keys): array
+{
+    $options = admin_swap_converter_chain_options();
+    $ids = [];
+
+    foreach ($keys as $key) {
+        if (!empty($options[$key]['available']) && isset($options[$key]['chain_id'])) {
+            $ids[] = (int)$options[$key]['chain_id'];
+        }
+    }
+
+    return array_values(array_unique($ids));
+}
+
+function admin_mixer_input_asset_options(): array
+{
+    return [
+        'BTC' => [
+            'label' => 'Bitcoin (BTC)',
+            'network' => 'Bitcoin',
+            'symbol' => 'BTC',
+            'icon' => '/img/crypto/btc.png',
+            'network_icon' => '/img/crypto/btc.png',
+            'default_enabled' => true,
+        ],
+        'DOGE' => [
+            'label' => 'Dogecoin (DOGE)',
+            'network' => 'Dogecoin',
+            'symbol' => 'DOGE',
+            'icon' => '/img/crypto/doge.png',
+            'network_icon' => '/img/crypto/doge.png',
+            'default_enabled' => true,
+        ],
+    ];
+}
+
+function admin_mixer_default_input_assets(): array
+{
+    return array_keys(array_filter(
+        admin_mixer_input_asset_options(),
+        static fn(array $option): bool => !empty($option['default_enabled'])
+    ));
+}
+
+function admin_mixer_allowed_input_assets($value, bool $defaultWhenEmpty = true): array
+{
+    $options = admin_mixer_input_asset_options();
+    $assets = is_array($value) ? $value : explode(',', (string)$value);
+    $selected = [];
+
+    foreach ($assets as $asset) {
+        $asset = strtoupper(trim((string)$asset));
+        if ($asset !== '' && isset($options[$asset])) {
+            $selected[] = $asset;
+        }
+    }
+
+    $selected = array_values(array_unique($selected));
+    return $selected !== [] || !$defaultWhenEmpty ? $selected : admin_mixer_default_input_assets();
+}
+
+function admin_mixer_output_asset_options(): array
+{
+    return [
+        'POLYGON_POL' => [
+            'label' => 'POL on Polygon',
+            'network' => 'Polygon',
+            'symbol' => 'POL',
+            'icon' => '/img/crypto/matic.png',
+            'network_icon' => '/img/crypto/matic.png',
+            'default_enabled' => true,
+            'available' => true,
+        ],
+        'POLYGON_USDT' => [
+            'label' => 'USDT on Polygon',
+            'network' => 'Polygon',
+            'symbol' => 'USDT',
+            'icon' => '/img/crypto/tether.png',
+            'network_icon' => '/img/crypto/matic.png',
+            'default_enabled' => false,
+            'available' => false,
+            'note' => 'planned',
+        ],
+        'BSC_USDT' => [
+            'label' => 'USDT on BNB Smart Chain',
+            'network' => 'BNB Smart Chain',
+            'symbol' => 'USDT',
+            'icon' => '/img/crypto/tether.png',
+            'network_icon' => '/img/crypto/bnb.png',
+            'default_enabled' => false,
+            'available' => false,
+            'note' => 'planned',
+        ],
+    ];
+}
+
+function admin_mixer_default_output_assets(): array
+{
+    return array_keys(array_filter(
+        admin_mixer_output_asset_options(),
+        static fn(array $option): bool => !empty($option['available']) && !empty($option['default_enabled'])
+    ));
+}
+
+function admin_mixer_allowed_output_assets($value, bool $defaultWhenEmpty = true): array
+{
+    $options = admin_mixer_output_asset_options();
+    $assets = is_array($value) ? $value : explode(',', (string)$value);
+    $selected = [];
+
+    foreach ($assets as $asset) {
+        $asset = strtoupper(trim((string)$asset));
+        if ($asset !== '' && !empty($options[$asset]['available'])) {
+            $selected[] = $asset;
+        }
+    }
+
+    $selected = array_values(array_unique($selected));
+    return $selected !== [] || !$defaultWhenEmpty ? $selected : admin_mixer_default_output_assets();
+}
+
+function admin_mixer_network_options(): array
+{
+    return [
+        'polygon' => [
+            'label' => 'Polygon',
+            'native_symbol' => 'POL',
+            'chain_id' => 137,
+            'icon' => '/img/crypto/matic.png',
+            'default_rpc_url' => 'https://polygon-rpc.com',
+            'explorer_tx_url' => 'https://polygonscan.com/tx/',
+            'default_enabled' => true,
+            'available' => true,
+            'vault_setting_key' => 'mixer_polygon_vault_contract',
+            'rpc_setting_key' => 'mixer_polygon_rpc_url',
+            'mode_setting_key' => 'mixer_polygon_network_mode',
+            'environments' => [
+                'mainnet' => [
+                    'label' => 'Polygon',
+                    'native_symbol' => 'POL',
+                    'chain_id' => 137,
+                    'default_rpc_url' => 'https://polygon-rpc.com',
+                    'explorer_tx_url' => 'https://polygonscan.com/tx/',
+                    'vault_setting_key' => 'mixer_polygon_vault_contract',
+                    'rpc_setting_key' => 'mixer_polygon_rpc_url',
+                ],
+                'testnet' => [
+                    'label' => 'Polygon Amoy',
+                    'native_symbol' => 'POL',
+                    'chain_id' => 80002,
+                    'default_rpc_url' => 'https://rpc-amoy.polygon.technology',
+                    'explorer_tx_url' => 'https://amoy.polygonscan.com/tx/',
+                    'vault_setting_key' => 'mixer_polygon_testnet_vault_contract',
+                    'rpc_setting_key' => 'mixer_polygon_testnet_rpc_url',
+                ],
+            ],
+        ],
+        'bsc' => [
+            'label' => 'BNB Smart Chain',
+            'native_symbol' => 'BNB',
+            'chain_id' => 56,
+            'icon' => '/img/crypto/bnb.png',
+            'default_rpc_url' => 'https://bsc-dataseed.binance.org',
+            'explorer_tx_url' => 'https://bscscan.com/tx/',
+            'default_enabled' => false,
+            'available' => false,
+            'note' => 'planned',
+            'vault_setting_key' => 'mixer_bsc_vault_contract',
+            'rpc_setting_key' => 'mixer_bsc_rpc_url',
+            'mode_setting_key' => 'mixer_bsc_network_mode',
+            'environments' => [
+                'mainnet' => [
+                    'label' => 'BNB Smart Chain',
+                    'native_symbol' => 'BNB',
+                    'chain_id' => 56,
+                    'default_rpc_url' => 'https://bsc-dataseed.binance.org',
+                    'explorer_tx_url' => 'https://bscscan.com/tx/',
+                    'vault_setting_key' => 'mixer_bsc_vault_contract',
+                    'rpc_setting_key' => 'mixer_bsc_rpc_url',
+                ],
+                'testnet' => [
+                    'label' => 'BSC Testnet',
+                    'native_symbol' => 'BNB',
+                    'chain_id' => 97,
+                    'default_rpc_url' => 'https://data-seed-prebsc-1-s1.binance.org:8545',
+                    'explorer_tx_url' => 'https://testnet.bscscan.com/tx/',
+                    'vault_setting_key' => 'mixer_bsc_testnet_vault_contract',
+                    'rpc_setting_key' => 'mixer_bsc_testnet_rpc_url',
+                ],
+            ],
+        ],
+    ];
+}
+
+function admin_mixer_network_modes(): array
+{
+    return [
+        'mainnet' => 'Mainnet',
+        'testnet' => 'Testnet',
+    ];
+}
+
+function admin_mixer_normalize_network_mode($value): string
+{
+    $value = strtolower(trim((string)$value));
+    return $value === 'testnet' ? 'testnet' : 'mainnet';
+}
+
+function admin_mixer_effective_network_option(string $networkKey, string $mode = 'mainnet'): array
+{
+    $networkKey = strtolower(trim($networkKey));
+    $mode = admin_mixer_normalize_network_mode($mode);
+    $options = admin_mixer_network_options();
+    $base = $options[$networkKey] ?? ($options['polygon'] ?? []);
+    $environment = $base['environments'][$mode] ?? ($base['environments']['mainnet'] ?? []);
+
+    return array_merge($base, $environment, [
+        'key' => $networkKey,
+        'environment' => $mode,
+    ]);
+}
+
+function admin_mixer_default_networks(): array
+{
+    return array_keys(array_filter(
+        admin_mixer_network_options(),
+        static fn(array $option): bool => !empty($option['available']) && !empty($option['default_enabled'])
+    ));
+}
+
+function admin_mixer_allowed_networks($value, bool $defaultWhenEmpty = true): array
+{
+    $options = admin_mixer_network_options();
+    $networks = is_array($value) ? $value : explode(',', (string)$value);
+    $selected = [];
+
+    foreach ($networks as $network) {
+        $network = strtolower(trim((string)$network));
+        if ($network !== '' && !empty($options[$network]['available'])) {
+            $selected[] = $network;
+        }
+    }
+
+    $selected = array_values(array_unique($selected));
+    return $selected !== [] || !$defaultWhenEmpty ? $selected : admin_mixer_default_networks();
+}
+
+function admin_mixer_network_key_for_output_asset(string $outputAsset): string
+{
+    $outputAsset = strtoupper(trim($outputAsset));
+    if (strpos($outputAsset, 'BSC_') === 0) {
+        return 'bsc';
+    }
+
+    return 'polygon';
+}
+
+function admin_mixer_default_rpc_url(string $networkKey, string $mode = 'mainnet'): string
+{
+    $option = admin_mixer_effective_network_option($networkKey, $mode);
+    return (string)($option['default_rpc_url'] ?? '');
+}
+
+function admin_mixer_hex_to_float(string $hex): float
+{
+    $hex = strtolower(trim($hex));
+    $hex = preg_replace('/^0x/', '', $hex) ?? '';
+    if ($hex === '' || preg_match('/^[0-9a-f]+$/', $hex) !== 1) {
+        return 0.0;
+    }
+
+    $value = 0.0;
+    $length = strlen($hex);
+    for ($index = 0; $index < $length; $index++) {
+        $value = ($value * 16) + hexdec($hex[$index]);
+    }
+
+    return $value;
+}
+
+function admin_mixer_format_pool_balance(float $balance, string $symbol): string
+{
+    $decimals = $balance >= 100 ? 2 : ($balance >= 1 ? 4 : 6);
+    $formatted = rtrim(rtrim(number_format(max(0.0, $balance), $decimals, '.', ''), '0'), '.');
+    return ($formatted !== '' ? $formatted : '0') . ' ' . strtoupper(trim($symbol));
+}
+
+function admin_mixer_native_pool_state(string $rpcUrl, string $vaultContract, string $symbol): array
+{
+    static $cache = [];
+
+    $rpcUrl = trim($rpcUrl);
+    $vaultContract = trim($vaultContract);
+    $symbol = strtoupper(trim($symbol));
+
+    if ($vaultContract === '' || preg_match('/^0x[a-fA-F0-9]{40}$/', $vaultContract) !== 1) {
+        return [
+            'ok' => false,
+            'configured' => false,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'Vault contract is missing.',
+        ];
+    }
+
+    if ($rpcUrl === '') {
+        return [
+            'ok' => false,
+            'configured' => false,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'RPC URL is missing.',
+        ];
+    }
+
+    $cacheKey = sha1($rpcUrl . '|' . strtolower($vaultContract) . '|' . $symbol);
+    if (isset($cache[$cacheKey])) {
+        return $cache[$cacheKey];
+    }
+
+    $response = admin_http_post_json($rpcUrl, [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'eth_getBalance',
+        'params' => [$vaultContract, 'latest'],
+    ]);
+
+    $hexBalance = is_array($response) ? (string)($response['result'] ?? '') : '';
+    if ($hexBalance === '' || strpos($hexBalance, '0x') !== 0) {
+        return $cache[$cacheKey] = [
+            'ok' => false,
+            'configured' => true,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'RPC balance read failed.',
+        ];
+    }
+
+    $balance = admin_mixer_hex_to_float($hexBalance) / 1000000000000000000;
+
+    return $cache[$cacheKey] = [
+        'ok' => true,
+        'configured' => true,
+        'balance' => $balance,
+        'label' => admin_mixer_format_pool_balance($balance, $symbol),
+        'error' => '',
+    ];
+}
+
+function admin_mixer_detection_provider_options(): array
+{
+    return [
+        'esplora' => 'Esplora API',
+        'bitcoin_core' => 'Bitcoin Core / Dogecoin Core',
+    ];
+}
+
+function admin_mixer_public_id(): string
+{
+    return 'swp_' . bin2hex(random_bytes(10));
+}
+
+function admin_mixer_asset_coingecko_id(string $assetKey): string
+{
+    $assetKey = strtoupper(trim($assetKey));
+    $map = [
+        'BTC' => 'bitcoin',
+        'DOGE' => 'dogecoin',
+        'POLYGON_POL' => 'polygon-ecosystem-token',
+        'POLYGON_USDT' => 'tether',
+        'BSC_USDT' => 'tether',
+    ];
+
+    return $map[$assetKey] ?? '';
+}
+
+function admin_mixer_price_cache_file(string $cacheKey): string
+{
+    return rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'subme_mixer_price_' . preg_replace('/[^a-z0-9_,-]/i', '', $cacheKey) . '.json';
+}
+
+function admin_mixer_price_usd(array $coingeckoIds, int $ttlSeconds = 60): array
+{
+    $coingeckoIds = array_values(array_unique(array_filter(array_map(
+        static fn($value): string => strtolower(trim((string)$value)),
+        $coingeckoIds
+    ))));
+
+    if ($coingeckoIds === []) {
+        return [];
+    }
+
+    $cacheKey = implode(',', $coingeckoIds);
+    $cachePath = admin_mixer_price_cache_file($cacheKey);
+    if (is_file($cachePath) && (time() - (int)@filemtime($cachePath)) <= max(10, $ttlSeconds)) {
+        $cached = json_decode((string)@file_get_contents($cachePath), true);
+        if (is_array($cached)) {
+            return $cached;
+        }
+    }
+
+    $url = 'https://api.coingecko.com/api/v3/simple/price?ids=' . rawurlencode($cacheKey) . '&vs_currencies=usd';
+    $payload = admin_http_json($url);
+    $prices = [];
+
+    foreach ($coingeckoIds as $id) {
+        $price = isset($payload[$id]['usd']) ? (float)$payload[$id]['usd'] : 0.0;
+        if ($price > 0) {
+            $prices[$id] = [
+                'usd' => $price,
+                'updated_at' => gmdate('c'),
+            ];
+        }
+    }
+
+    if ($prices !== []) {
+        @file_put_contents($cachePath, json_encode($prices, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    return $prices;
+}
+
+function admin_mixer_price_usd_from_crypto_assets(Mysql_ks $db, array $assetKeys, int $ttlSeconds = 300): array
+{
+    admin_ensure_core_crypto_assets($db);
+    $rows = admin_refresh_crypto_asset_rates($db, 'USD', max(60, $ttlSeconds));
+    $byCode = [];
+
+    foreach ($rows as $row) {
+        $code = strtoupper(trim((string)($row['code'] ?? '')));
+        if ($code === '') {
+            continue;
+        }
+
+        $rate = (float)($row['current_rate_fiat'] ?? 0);
+        if ($rate <= 0) {
+            continue;
+        }
+
+        $byCode[$code] = [
+            'usd' => $rate,
+            'updated_at' => (string)($row['rate_updated_at'] ?? ''),
+            'source' => 'crypto_assets',
+        ];
+    }
+
+    $result = [];
+    foreach ($assetKeys as $assetKey) {
+        $assetKey = strtoupper(trim((string)$assetKey));
+        $code = $assetKey;
+        if (strpos($assetKey, '_') !== false) {
+            $parts = explode('_', $assetKey);
+            $code = strtoupper((string)end($parts));
+        }
+
+        if ($code === 'POLYGON') {
+            $code = 'POL';
+        }
+
+        if (isset($byCode[$code])) {
+            $result[$assetKey] = $byCode[$code];
+        }
+    }
+
+    return $result;
+}
+
+function admin_mixer_daily_reserved_usd(Mysql_ks $db): float
+{
+    if (!schema_object_exists($db, 'admin_mixer_orders')) {
+        return 0.0;
+    }
+
+    $row = $db->select_user(
+        "SELECT SUM(COALESCE(detected_input_amount, expected_input_amount, 0) * COALESCE(quote_rate_usd, 0)) AS total_usd
+         FROM admin_mixer_orders
+         WHERE created_at >= CURDATE()
+           AND status NOT IN ('cancelled', 'expired', 'failed')"
+    );
+
+    return round((float)($row['total_usd'] ?? 0), 2);
+}
+
+function admin_mixer_find_order_by_public_id(Mysql_ks $db, string $publicId): ?array
+{
+    $publicId = trim($publicId);
+    if ($publicId === '' || !preg_match('/^swp_[a-f0-9]{20}$/', $publicId)) {
+        return null;
+    }
+
+    $publicIdSql = $db->escape($publicId);
+    $row = $db->select_user("SELECT * FROM admin_mixer_orders WHERE public_id = '{$publicIdSql}' LIMIT 1");
+    return is_array($row) ? $row : null;
+}
+
+function admin_mixer_progress_for_status(string $status): int
+{
+    $status = strtolower(trim($status));
+    $map = [
+        'waiting_deposit' => 12,
+        'confirming' => 42,
+        'ready_to_pay' => 68,
+        'paying' => 86,
+        'paid' => 100,
+        'manual_review' => 62,
+        'expired' => 0,
+        'cancelled' => 0,
+        'failed' => 0,
+    ];
+
+    return $map[$status] ?? 12;
+}
+
+function admin_mixer_order_payload(array $row, array $messages = []): array
+{
+    $status = (string)($row['status'] ?? 'waiting_deposit');
+    $inputAsset = strtoupper((string)($row['input_asset'] ?? 'BTC'));
+    $outputAssetKey = strtoupper((string)($row['output_asset'] ?? 'POLYGON_POL'));
+    $outputOptions = admin_mixer_output_asset_options();
+    $outputOption = $outputOptions[$outputAssetKey] ?? ['symbol' => $outputAssetKey, 'network' => 'Polygon'];
+    $outputNetworkKey = strtolower(trim((string)($row['payout_network'] ?? '')));
+    if ($outputNetworkKey === '') {
+        $outputNetworkKey = admin_mixer_network_key_for_output_asset($outputAssetKey);
+    }
+    $outputNetworkMode = admin_mixer_normalize_network_mode($row['payout_network_mode'] ?? 'mainnet');
+    $networkOption = admin_mixer_effective_network_option($outputNetworkKey, $outputNetworkMode);
+    $outputChainId = (int)($row['payout_chain_id'] ?? 0);
+    if ($outputChainId <= 0) {
+        $outputChainId = (int)($networkOption['chain_id'] ?? 0);
+    }
+    $expiresAtRaw = trim((string)($row['expires_at'] ?? ''));
+    $expiresAtMs = 0;
+    if ($expiresAtRaw !== '') {
+        $expiresAtMs = app_timestamp_from_runtime_datetime($expiresAtRaw) * 1000;
+    }
+
+    return [
+        'id' => (string)($row['public_id'] ?? ''),
+        'amount' => rtrim(rtrim(number_format((float)($row['expected_input_amount'] ?? 0), 12, '.', ''), '0'), '.'),
+        'detected_amount' => rtrim(rtrim(number_format((float)($row['detected_input_amount'] ?? 0), 12, '.', ''), '0'), '.'),
+        'estimated_output_amount' => rtrim(rtrim(number_format((float)($row['payout_amount'] ?? 0), 12, '.', ''), '0'), '.'),
+        'inputAsset' => $inputAsset,
+        'inputNetwork' => $inputAsset === 'DOGE' ? 'Dogecoin' : 'Bitcoin',
+        'outputAsset' => (string)($outputOption['symbol'] ?? 'POL'),
+        'outputNetwork' => (string)($networkOption['label'] ?? ($outputOption['network'] ?? 'Polygon')),
+        'outputNetworkKey' => $outputNetworkKey,
+        'outputNetworkMode' => $outputNetworkMode,
+        'outputChainId' => $outputChainId,
+        'payoutExplorerBase' => (string)($networkOption['explorer_tx_url'] ?? ''),
+        'recipient' => (string)($row['recipient_address'] ?? ''),
+        'depositAddress' => (string)($row['deposit_address'] ?? ''),
+        'status' => $status,
+        'statusLabel' => admin_t($messages, 'mixer_order_status_' . $status, ucwords(str_replace('_', ' ', $status))),
+        'progress' => admin_mixer_progress_for_status($status),
+        'confirmations' => (int)($row['confirmations'] ?? 0),
+        'confirmationsRequired' => max(1, (int)($row['confirmations_required'] ?? ($inputAsset === 'DOGE' ? 20 : 3))),
+        'depositTxid' => (string)($row['deposit_txid'] ?? ''),
+        'payoutTxid' => (string)($row['payout_txid'] ?? ''),
+        'expiresAt' => $expiresAtMs,
+        'createdAt' => app_timestamp_from_runtime_datetime((string)($row['created_at'] ?? '')) * 1000,
+    ];
+}
+
+function admin_mixer_create_order(Mysql_ks $db, array $settings, array $adminUser, array $input): array
+{
+    if (!admin_mixer_enabled($settings)) {
+        return ['ok' => false, 'message' => 'Swapper is disabled.'];
+    }
+
+    $inputAsset = strtoupper(trim((string)($input['input_asset'] ?? 'BTC')));
+    $outputAsset = strtoupper(trim((string)($input['output_asset'] ?? 'POLYGON_POL')));
+    $amount = (float)str_replace(',', '.', (string)($input['amount'] ?? '0'));
+    $recipient = trim((string)($input['recipient_address'] ?? ''));
+    $allowedInputs = admin_mixer_allowed_input_assets($settings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
+    $allowedOutputs = admin_mixer_allowed_output_assets($settings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+    $allowedNetworks = admin_mixer_allowed_networks($settings['mixer_allowed_networks'] ?? 'polygon');
+
+    if (!in_array($inputAsset, $allowedInputs, true)) {
+        return ['ok' => false, 'message' => 'Selected input asset is not available.'];
+    }
+
+    if (!in_array($outputAsset, $allowedOutputs, true)) {
+        return ['ok' => false, 'message' => 'Selected output asset is not available.'];
+    }
+
+    $outputNetworkKey = admin_mixer_network_key_for_output_asset($outputAsset);
+    if (!in_array($outputNetworkKey, $allowedNetworks, true)) {
+        return ['ok' => false, 'message' => 'Selected payout network is not available.'];
+    }
+
+    if ($amount <= 0) {
+        return ['ok' => false, 'message' => 'Amount is required.'];
+    }
+
+    if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $recipient)) {
+        return ['ok' => false, 'message' => 'Recipient wallet address is invalid.'];
+    }
+
+    $depositAddress = $inputAsset === 'DOGE'
+        ? trim((string)($settings['mixer_doge_deposit_address'] ?? ''))
+        : trim((string)($settings['mixer_btc_deposit_address'] ?? ''));
+
+    if ($depositAddress === '') {
+        return ['ok' => false, 'message' => 'Deposit address is missing in Settings.'];
+    }
+
+    $networkOptions = admin_mixer_network_options();
+    $baseNetworkOption = $networkOptions[$outputNetworkKey] ?? $networkOptions['polygon'];
+    $modeSettingKey = (string)($baseNetworkOption['mode_setting_key'] ?? '');
+    $networkMode = admin_mixer_normalize_network_mode($modeSettingKey !== '' ? ($settings[$modeSettingKey] ?? 'mainnet') : 'mainnet');
+    $networkOption = admin_mixer_effective_network_option($outputNetworkKey, $networkMode);
+    $vaultSettingKey = (string)($networkOption['vault_setting_key'] ?? 'mixer_polygon_vault_contract');
+    $rpcSettingKey = (string)($networkOption['rpc_setting_key'] ?? 'mixer_polygon_rpc_url');
+    $vaultContract = trim((string)($settings[$vaultSettingKey] ?? ''));
+    $rpcUrl = trim((string)($settings[$rpcSettingKey] ?? ''));
+    if ($rpcUrl === '') {
+        $rpcUrl = admin_mixer_default_rpc_url($outputNetworkKey, $networkMode);
+    }
+    if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $vaultContract)) {
+        return ['ok' => false, 'message' => 'Swapper is temporarily disabled.'];
+    }
+
+    if ($rpcUrl === '') {
+        return ['ok' => false, 'message' => 'Payout network RPC URL is missing.'];
+    }
+
+    $prices = admin_mixer_price_usd_from_crypto_assets($db, [$inputAsset, $outputAsset], 300);
+    $inputUsd = (float)($prices[$inputAsset]['usd'] ?? 0);
+    $outputUsd = (float)($prices[$outputAsset]['usd'] ?? 0);
+    if ($inputUsd <= 0 || $outputUsd <= 0) {
+        return ['ok' => false, 'message' => 'Price quote is not available right now.'];
+    }
+
+    $amountUsd = round($amount * $inputUsd, 2);
+    $maxPayoutUsd = max(1.0, (float)($settings['mixer_max_payout_usd'] ?? 500.00));
+    $dailyLimitUsd = max(1.0, (float)($settings['mixer_daily_payout_limit_usd'] ?? 1500.00));
+    $dailyReservedUsd = admin_mixer_daily_reserved_usd($db);
+
+    if ($amountUsd > $maxPayoutUsd) {
+        return ['ok' => false, 'message' => 'Amount is above the per-order limit.'];
+    }
+
+    if (($dailyReservedUsd + $amountUsd) > $dailyLimitUsd) {
+        return ['ok' => false, 'message' => 'Daily Swapper limit has been reached.'];
+    }
+
+    $feePercent = max(0.0, min(5.0, (float)($settings['mixer_fee_percent'] ?? 1.50)));
+    $feeUsd = round($amountUsd * ($feePercent / 100), 2);
+    $payoutUsd = max(0.0, $amountUsd - $feeUsd);
+    $payoutAmount = $payoutUsd > 0 ? ($payoutUsd / $outputUsd) : 0.0;
+    $poolState = admin_mixer_native_pool_state($rpcUrl, $vaultContract, (string)($networkOption['native_symbol'] ?? ''));
+    if (empty($poolState['ok'])) {
+        return ['ok' => false, 'message' => 'Unable to read Swapper vault balance. Check RPC URL in Settings.'];
+    }
+    if ((float)($poolState['balance'] ?? 0.0) < $payoutAmount) {
+        return ['ok' => false, 'message' => 'No routes available. The Swapper vault does not have enough liquidity.'];
+    }
+
+    $quoteLifetime = max(1, min(240, (int)($settings['mixer_quote_lifetime_minutes'] ?? 15)));
+    $expiresAt = date('Y-m-d H:i:s', time() + ($quoteLifetime * 60));
+    $publicId = admin_mixer_public_id();
+
+    $created = $db->insert(
+        [
+            'public_id',
+            'created_by_admin_user_id',
+            'input_asset',
+            'output_asset',
+            'payout_network',
+            'payout_network_mode',
+            'payout_chain_id',
+            'recipient_address',
+            'deposit_address',
+            'expected_input_amount',
+            'payout_amount',
+            'quote_rate_usd',
+            'quote_output_rate_usd',
+            'fee_percent',
+            'fee_amount_usd',
+            'status',
+            'confirmations_required',
+            'expires_at',
+        ],
+        [
+            $publicId,
+            (int)($adminUser['id'] ?? 0),
+            $inputAsset,
+            $outputAsset,
+            $outputNetworkKey,
+            $networkMode,
+            (int)($networkOption['chain_id'] ?? 0),
+            $recipient,
+            $depositAddress,
+            number_format($amount, 12, '.', ''),
+            number_format($payoutAmount, 12, '.', ''),
+            number_format($inputUsd, 12, '.', ''),
+            number_format($outputUsd, 12, '.', ''),
+            number_format($feePercent, 2, '.', ''),
+            number_format($feeUsd, 2, '.', ''),
+            'waiting_deposit',
+            $inputAsset === 'DOGE'
+                ? max(1, min(120, (int)($settings['mixer_doge_confirmations_required'] ?? 20)))
+                : max(1, min(12, (int)($settings['mixer_btc_confirmations_required'] ?? 3))),
+            $expiresAt,
+        ],
+        'admin_mixer_orders'
+    );
+
+    if (!$created) {
+        return ['ok' => false, 'message' => 'Unable to create Swapper order.'];
+    }
+
+    $orderId = (int)$db->id();
+    $eventPayload = [
+        'expected_input_amount' => $amount,
+        'amount_usd' => $amountUsd,
+        'input_usd' => $inputUsd,
+        'output_usd' => $outputUsd,
+        'payout_network' => $outputNetworkKey,
+        'payout_network_mode' => $networkMode,
+        'payout_chain_id' => (int)($networkOption['chain_id'] ?? 0),
+        'estimated_output_amount' => $payoutAmount,
+        'fee_percent' => $feePercent,
+        'fee_usd' => $feeUsd,
+    ];
+    $db->insert(
+        ['order_id', 'event_type', 'payload_json'],
+        [$orderId, 'order_created', json_encode($eventPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+        'admin_mixer_events'
+    );
+
+    $row = admin_mixer_find_order_by_public_id($db, $publicId);
+    if (!is_array($row)) {
+        return ['ok' => false, 'message' => 'Unable to load created Swapper order.'];
+    }
+
+    return [
+        'ok' => true,
+        'order' => admin_mixer_order_payload($row),
+        'quote' => $eventPayload,
+    ];
 }
 
 function admin_credits_sales_enabled(array $settings): bool
@@ -673,6 +1726,7 @@ function admin_route_label_key(string $route): string
         'faq' => 'nav_faq',
         'help' => 'nav_help',
         'settings' => 'nav_settings',
+        'swap-converter' => 'nav_swap_converter',
     ];
 
     return $map[$route] ?? 'brand';
@@ -1184,7 +2238,9 @@ function admin_allowed_routes(): array
         }
     }
 
-    return $routes;
+    $routes[] = 'swap-converter';
+
+    return array_values(array_unique($routes));
 }
 
 function admin_normalize_route(?string $route): string
@@ -1236,7 +2292,7 @@ function admin_dashboard_metrics(Mysql_ks $db): array
     }
 
     if (schema_object_exists($db, 'crypto_deposit_requests')) {
-        $row = $db->select_user("SELECT COUNT(*) AS total FROM crypto_deposit_requests WHERE status IN ('pending', 'awaiting_confirmation', 'awaiting_review')");
+        $row = $db->select_user("SELECT COUNT(*) AS total FROM crypto_deposit_requests WHERE status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')");
         $metrics['crypto_open'] = (int)($row['total'] ?? 0);
     }
 
@@ -2463,7 +3519,7 @@ function admin_cancel_open_order_payment_requests(Mysql_ks $db, int $customerId,
             $db,
             "customer_id = {$customerId}
              AND order_id = {$orderId}
-             AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')",
+             AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')",
             'Released after admin cancelled open order crypto payment request',
             $safeNow
         );
@@ -3075,7 +4131,7 @@ function admin_customer_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): ar
         ? "(SELECT COUNT(*) FROM orders WHERE orders.customer_id = customers.id AND orders.status = 'pending_payment')"
         : '0';
     $openCryptoPaymentsSelect = schema_object_exists($db, 'crypto_deposit_requests')
-        ? "(SELECT COUNT(*) FROM crypto_deposit_requests WHERE crypto_deposit_requests.customer_id = customers.id AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review'))"
+        ? "(SELECT COUNT(*) FROM crypto_deposit_requests WHERE crypto_deposit_requests.customer_id = customers.id AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'))"
         : '0';
     $openBankPaymentsSelect = schema_object_exists($db, 'bank_transfer_requests')
         ? "(SELECT COUNT(*) FROM bank_transfer_requests WHERE bank_transfer_requests.customer_id = customers.id AND bank_transfer_requests.status IN ('pending_payment', 'awaiting_review'))"
@@ -3188,7 +4244,7 @@ function admin_customer_management_summary(Mysql_ks $db, int $customerId): array
             "SELECT COUNT(*) AS total
              FROM crypto_deposit_requests
              WHERE customer_id = {$customerId}
-               AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
+               AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')"
         );
         $openPaymentsTotal += (int)($row['total'] ?? 0);
     }
@@ -5448,6 +6504,20 @@ function admin_save_payment(
             'crypto_wallet_addresses',
             $walletAddressId
         );
+
+        if (in_array($status, app_payment_open_crypto_statuses(), true)) {
+            $settings = admin_app_settings($db);
+            if (!app_crypto_deposit_wallet_payload_is_valid(
+                $db,
+                (int)($payment['customer_id'] ?? 0),
+                (int)($payment['crypto_asset_id'] ?? 0),
+                $walletAddressId,
+                (int)($payment['wallet_assignment_id'] ?? 0),
+                $settings
+            )) {
+                return ['ok' => false, 'message' => 'Wallet assignment is no longer valid for this customer. Renew the crypto request to assign a free wallet.'];
+            }
+        }
 
         $cryptoUpdateFields = ['status', 'order_id', 'wallet_address_id', 'requested_at', 'expires_at', 'cancelled_at', 'requested_fiat_amount', 'requested_crypto_amount', 'request_note'];
         $cryptoUpdateValues = [$status, $linkedOrderIdValue, $walletAddressId, $requestedAt, $expiresAt, $cancelledAt, $amountValue, $amountCrypto, $requestNote !== '' ? $requestNote : null];
@@ -8231,15 +9301,23 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
              END
          WHERE customer_id = {$customerId}
            AND {$orderCondition}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')"
+           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')"
     );
 
     $openWalletRequest = $db->select_user(
-        "SELECT id, customer_id, order_id
+        "SELECT
+            crypto_deposit_requests.id,
+            crypto_deposit_requests.customer_id,
+            crypto_deposit_requests.order_id
          FROM crypto_deposit_requests
-         WHERE wallet_address_id = {$walletAddressId}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-         ORDER BY id DESC
+         LEFT JOIN crypto_wallet_assignments AS open_assignment
+           ON open_assignment.id = crypto_deposit_requests.wallet_assignment_id
+         WHERE (
+                crypto_deposit_requests.wallet_address_id = {$walletAddressId}
+             OR open_assignment.wallet_address_id = {$walletAddressId}
+         )
+           AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+         ORDER BY crypto_deposit_requests.id DESC
          LIMIT 1"
     );
 
@@ -8251,9 +9329,15 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
             return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
         }
 
+        if (!app_crypto_deposit_wallet_payload_is_valid($db, $customerId, $assetId, $walletAddressId, $walletAssignmentId, $settings)) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
+        }
+
         $updated = $db->update_using_id(
             [
                 'crypto_asset_id',
+                'wallet_address_id',
                 'wallet_assignment_id',
                 'requested_fiat_amount',
                 'fiat_currency_id',
@@ -8267,6 +9351,7 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
             ],
             [
                 $assetId,
+                $walletAddressId,
                 $walletAssignmentId > 0 ? $walletAssignmentId : null,
                 $amountValue,
                 $currencyId,
@@ -9823,6 +10908,7 @@ function admin_default_coingecko_id(string $assetCode): string
         'CRO' => 'crypto-com-chain',
         'SOL' => 'solana',
         'USDC' => 'usd-coin',
+        'POL' => 'polygon-ecosystem-token',
         'MATIC' => 'matic-network',
         'XRP' => 'ripple',
     ];
@@ -10123,6 +11209,7 @@ function admin_crypto_asset_network_options(string $assetCode): array
         'BNB' => ['bnb' => 'BNB Smart Chain'],
         'CRO' => ['cronos' => 'Cronos'],
         'SOL' => ['solana' => 'Solana'],
+        'POL' => ['polygon' => 'Polygon'],
         'MATIC' => ['polygon' => 'Polygon'],
         'XRP' => ['ripple' => 'XRP Ledger'],
     ];
@@ -11710,7 +12797,7 @@ function admin_customer_has_pending_crypto_payment(Mysql_ks $db, int $customerId
         "SELECT COUNT(*) AS total
          FROM crypto_deposit_requests
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
            AND expires_at > NOW()"
     );
     return (int)($row['total'] ?? 0) > 0;
@@ -11846,24 +12933,27 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
     if (schema_object_exists($db, 'customer_crypto_wallets')) {
         $rows = $db->select_full_user(
             "SELECT
-                wallet_assignment_id,
-                wallet_address_id,
-                customer_id,
-                customer_email,
-                crypto_asset_code,
-                crypto_asset_name,
-                label,
-                address,
-                network_code,
-                wallet_provider,
-                owner_full_name,
-                status,
-                assigned_at
+                customer_crypto_wallets.wallet_assignment_id,
+                customer_crypto_wallets.wallet_address_id,
+                customer_crypto_wallets.customer_id,
+                customer_crypto_wallets.customer_email,
+                customer_crypto_wallets.crypto_asset_code,
+                customer_crypto_wallets.crypto_asset_name,
+                customer_crypto_wallets.label,
+                customer_crypto_wallets.address,
+                customer_crypto_wallets.network_code,
+                customer_crypto_wallets.wallet_provider,
+                customer_crypto_wallets.owner_full_name,
+                customer_crypto_wallets.status,
+                customer_crypto_wallets.assigned_at,
+                crypto_wallet_addresses.notes AS wallet_notes
              FROM customer_crypto_wallets
-             WHERE customer_id = {$customerId}
-               AND status IN ('reserved', 'active')
+             LEFT JOIN crypto_wallet_addresses
+               ON crypto_wallet_addresses.id = customer_crypto_wallets.wallet_address_id
+             WHERE customer_crypto_wallets.customer_id = {$customerId}
+               AND customer_crypto_wallets.status IN ('reserved', 'active')
                {$viewAssetFilter}
-             ORDER BY assigned_at DESC, wallet_assignment_id DESC"
+             ORDER BY customer_crypto_wallets.assigned_at DESC, customer_crypto_wallets.wallet_assignment_id DESC"
         );
     }
 
@@ -11893,6 +12983,7 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
             wallet.network_code,
             wallet.wallet_provider,
             wallet.owner_full_name,
+            wallet.notes AS wallet_notes,
             assignment.status,
             assignment.assigned_at
          FROM crypto_wallet_assignments AS assignment
@@ -11980,6 +13071,7 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
                 crypto_wallet_addresses.crypto_asset_id,
                 crypto_wallet_addresses.label,
                 crypto_wallet_addresses.owner_full_name,
+                crypto_wallet_addresses.notes,
                 crypto_wallet_addresses.address,
                 crypto_wallet_addresses.network_code,
                 crypto_wallet_addresses.memo_tag,
@@ -11992,14 +13084,22 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
                ON current_customer_assignment.wallet_address_id = crypto_wallet_addresses.id
               AND current_customer_assignment.status IN ('reserved', 'active')
               {$currentCustomerFilter}
-             LEFT JOIN crypto_deposit_requests AS open_request
-               ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                AND crypto_wallet_addresses.disabled_at IS NULL
                AND crypto_wallet_addresses.status IN ('available', 'assigned')
                AND current_customer_assignment.id IS NULL
-               AND open_request.id IS NULL
+	               AND NOT EXISTS (
+	                    SELECT 1
+	                    FROM crypto_deposit_requests AS open_request
+	                    LEFT JOIN crypto_wallet_assignments AS open_assignment
+	                      ON open_assignment.id = open_request.wallet_assignment_id
+                    WHERE (
+                            open_request.wallet_address_id = crypto_wallet_addresses.id
+                         OR open_assignment.wallet_address_id = crypto_wallet_addresses.id
+                    )
+                      AND open_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+                    LIMIT 1
+               )
                AND (
                     crypto_wallet_addresses.status = 'available'
                     OR crypto_wallet_addresses.is_reusable = 1
@@ -12018,6 +13118,7 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
                 crypto_wallet_addresses.crypto_asset_id,
                 crypto_wallet_addresses.label,
                 crypto_wallet_addresses.owner_full_name,
+                crypto_wallet_addresses.notes,
                 crypto_wallet_addresses.address,
                 crypto_wallet_addresses.network_code,
                 crypto_wallet_addresses.memo_tag,
@@ -12029,17 +13130,37 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
              LEFT JOIN crypto_wallet_assignments
                ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
               AND crypto_wallet_assignments.status IN ('reserved', 'active')
-             LEFT JOIN crypto_deposit_requests AS open_request
-               ON open_request.wallet_address_id = crypto_wallet_addresses.id
-              AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
              WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
                AND crypto_wallet_addresses.status = 'available'
                AND crypto_wallet_addresses.disabled_at IS NULL
                AND crypto_wallet_assignments.id IS NULL
-               AND open_request.id IS NULL
-             ORDER BY crypto_wallet_addresses.is_reusable DESC,
-                      crypto_wallet_addresses.last_assigned_at ASC,
-                      crypto_wallet_addresses.id ASC
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM crypto_deposit_requests AS open_request
+                    LEFT JOIN crypto_wallet_assignments AS open_assignment
+                      ON open_assignment.id = open_request.wallet_assignment_id
+                    WHERE (
+                            open_request.wallet_address_id = crypto_wallet_addresses.id
+                         OR open_assignment.wallet_address_id = crypto_wallet_addresses.id
+                    )
+	                      AND open_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+	                    LIMIT 1
+	               )
+	               AND NOT EXISTS (
+	                    SELECT 1
+	                    FROM crypto_deposit_requests AS historical_request
+	                    LEFT JOIN crypto_wallet_assignments AS historical_assignment
+	                      ON historical_assignment.id = historical_request.wallet_assignment_id
+	                    WHERE (
+	                            historical_request.wallet_address_id = crypto_wallet_addresses.id
+	                         OR historical_assignment.wallet_address_id = crypto_wallet_addresses.id
+	                    )
+	                      AND historical_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
+	                    LIMIT 1
+	               )
+	             ORDER BY crypto_wallet_addresses.is_reusable DESC,
+	                      crypto_wallet_addresses.last_assigned_at ASC,
+	                      crypto_wallet_addresses.id ASC
              LIMIT 1"
         );
     }
@@ -12171,6 +13292,7 @@ function admin_chat_payment_crypto_preview_html(array $preview, array $messages)
     $cryptoAmount = admin_e((string)($preview['crypto_amount_label'] ?? ''));
     $walletAddress = admin_e((string)($preview['wallet_address'] ?? ''));
     $walletOwner = admin_e((string)($preview['wallet_owner_full_name'] ?? ''));
+    $walletOwnerLocation = admin_e((string)($preview['wallet_owner_location'] ?? ''));
     $assignmentLabel = !empty($preview['uses_existing_assignment'])
         ? admin_t($messages, 'chat_payment_preview_assigned_wallet', 'Assigned wallet')
         : admin_t($messages, 'chat_payment_preview_new_wallet', 'New wallet assignment');
@@ -12196,6 +13318,9 @@ function admin_chat_payment_crypto_preview_html(array $preview, array $messages)
             <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_wallet', 'Wallet address')); ?></span><strong class="admin-chat-payment-preview__code"><?php echo $walletAddress; ?></strong></div>
             <?php if ($walletOwner !== ''): ?>
                 <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_full_name', 'Full name')); ?></span><strong><?php echo $walletOwner; ?></strong></div>
+            <?php endif; ?>
+            <?php if ($walletOwnerLocation !== ''): ?>
+                <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_location', 'Location')); ?></span><strong><?php echo $walletOwnerLocation; ?></strong></div>
             <?php endif; ?>
         </div>
     </div>
@@ -12278,7 +13403,23 @@ function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $a
     }
 
     $assignments = admin_customer_active_crypto_assignments($db, $customerId, (string)$selectedAsset['code']);
-    $assignment = $assignments ? $assignments[0] : null;
+    $assignment = null;
+    foreach ($assignments as $candidateAssignment) {
+        if (
+            admin_crypto_wallet_shared_assignments_enabled($settings)
+            || app_crypto_deposit_wallet_payload_is_valid(
+                $db,
+                $customerId,
+                (int)$selectedAsset['id'],
+                (int)($candidateAssignment['wallet_address_id'] ?? 0),
+                (int)($candidateAssignment['wallet_assignment_id'] ?? 0),
+                $settings
+            )
+        ) {
+            $assignment = $candidateAssignment;
+            break;
+        }
+    }
     $availableWallet = null;
     if (!$assignment) {
         $availableWallet = admin_chat_available_crypto_wallet_for_asset($db, (int)$selectedAsset['id'], $customerId, $settings);
@@ -12293,6 +13434,8 @@ function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $a
 
     $walletAddress = trim((string)($assignment['address'] ?? $availableWallet['address'] ?? ''));
     $walletOwner = trim((string)($assignment['owner_full_name'] ?? $availableWallet['owner_full_name'] ?? ''));
+    $walletNotes = trim((string)($assignment['wallet_notes'] ?? $availableWallet['notes'] ?? ''));
+    $walletOwnerLocation = app_wallet_owner_location_resolve($walletOwner, $walletNotes);
     $requestedCryptoAmount = sprintf('%.8f', $amountValue / $rate);
 
     $preview = [
@@ -12313,6 +13456,8 @@ function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $a
         'wallet_assignment_id' => (int)($assignment['wallet_assignment_id'] ?? 0),
         'wallet_address' => $walletAddress,
         'wallet_owner_full_name' => $walletOwner,
+        'wallet_owner_location' => $walletOwnerLocation,
+        'wallet_notes' => $walletNotes,
         'uses_existing_assignment' => $assignment ? 1 : 0,
     ];
     $preview['preview_html'] = admin_chat_payment_crypto_preview_html($preview, $messages);
@@ -12852,19 +13997,39 @@ function admin_resolve_crypto_wallet_payment_conflict(
     $freeWalletCountRow = $db->select_user(
         "SELECT COUNT(DISTINCT crypto_wallet_addresses.id) AS total
          FROM crypto_wallet_addresses
-         LEFT JOIN crypto_wallet_assignments
-           ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
-          AND crypto_wallet_assignments.status IN ('reserved', 'active')
-         LEFT JOIN crypto_deposit_requests AS open_request
-           ON open_request.wallet_address_id = crypto_wallet_addresses.id
-          AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-         WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
-           AND crypto_wallet_addresses.id <> {$walletId}
-           AND crypto_wallet_addresses.status = 'available'
-           AND crypto_wallet_addresses.disabled_at IS NULL
-           AND crypto_wallet_assignments.id IS NULL
-           AND open_request.id IS NULL"
-    );
+	         LEFT JOIN crypto_wallet_assignments
+	           ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+	          AND crypto_wallet_assignments.status IN ('reserved', 'active')
+	         WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
+	           AND crypto_wallet_addresses.id <> {$walletId}
+	           AND crypto_wallet_addresses.status = 'available'
+	           AND crypto_wallet_addresses.disabled_at IS NULL
+	           AND crypto_wallet_assignments.id IS NULL
+	           AND NOT EXISTS (
+	                SELECT 1
+	                FROM crypto_deposit_requests AS open_request
+	                LEFT JOIN crypto_wallet_assignments AS open_assignment
+	                  ON open_assignment.id = open_request.wallet_assignment_id
+	                WHERE (
+	                        open_request.wallet_address_id = crypto_wallet_addresses.id
+	                     OR open_assignment.wallet_address_id = crypto_wallet_addresses.id
+	                )
+	                  AND open_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+	                LIMIT 1
+	           )
+	           AND NOT EXISTS (
+	                SELECT 1
+	                FROM crypto_deposit_requests AS historical_request
+	                LEFT JOIN crypto_wallet_assignments AS historical_assignment
+	                  ON historical_assignment.id = historical_request.wallet_assignment_id
+	                WHERE (
+	                        historical_request.wallet_address_id = crypto_wallet_addresses.id
+	                     OR historical_assignment.wallet_address_id = crypto_wallet_addresses.id
+	                )
+	                  AND historical_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
+	                LIMIT 1
+	           )"
+	    );
     $freeWalletCount = (int)($freeWalletCountRow['total'] ?? 0);
     if ($freeWalletCount < count($candidates)) {
         return ['ok' => false, 'message' => 'Not enough free wallet addresses are available to split this conflict for every affected customer.'];
@@ -12952,21 +14117,41 @@ function admin_resolve_crypto_wallet_payment_conflict(
                  FROM crypto_wallet_addresses
                  INNER JOIN crypto_assets
                    ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
-                 LEFT JOIN crypto_wallet_assignments
-                   ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
-                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
-                 LEFT JOIN crypto_deposit_requests AS open_request
-                   ON open_request.wallet_address_id = crypto_wallet_addresses.id
-                  AND open_request.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-                 WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
-                   AND crypto_wallet_addresses.id <> {$walletId}
-                   AND crypto_wallet_addresses.status = 'available'
-                   AND crypto_wallet_addresses.disabled_at IS NULL
-                   AND crypto_wallet_assignments.id IS NULL
-                   AND open_request.id IS NULL
-                 ORDER BY crypto_wallet_addresses.is_reusable DESC,
-                          crypto_wallet_addresses.last_assigned_at ASC,
-                          crypto_wallet_addresses.id ASC
+	                 LEFT JOIN crypto_wallet_assignments
+	                   ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
+	                  AND crypto_wallet_assignments.status IN ('reserved', 'active')
+	                 WHERE crypto_wallet_addresses.crypto_asset_id = {$assetId}
+	                   AND crypto_wallet_addresses.id <> {$walletId}
+	                   AND crypto_wallet_addresses.status = 'available'
+	                   AND crypto_wallet_addresses.disabled_at IS NULL
+	                   AND crypto_wallet_assignments.id IS NULL
+	                   AND NOT EXISTS (
+	                        SELECT 1
+	                        FROM crypto_deposit_requests AS open_request
+	                        LEFT JOIN crypto_wallet_assignments AS open_assignment
+	                          ON open_assignment.id = open_request.wallet_assignment_id
+	                        WHERE (
+	                                open_request.wallet_address_id = crypto_wallet_addresses.id
+	                             OR open_assignment.wallet_address_id = crypto_wallet_addresses.id
+	                        )
+	                          AND open_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+	                        LIMIT 1
+	                   )
+	                   AND NOT EXISTS (
+	                        SELECT 1
+	                        FROM crypto_deposit_requests AS historical_request
+	                        LEFT JOIN crypto_wallet_assignments AS historical_assignment
+	                          ON historical_assignment.id = historical_request.wallet_assignment_id
+	                        WHERE (
+	                                historical_request.wallet_address_id = crypto_wallet_addresses.id
+	                             OR historical_assignment.wallet_address_id = crypto_wallet_addresses.id
+	                        )
+	                          AND historical_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
+	                        LIMIT 1
+	                   )
+	                 ORDER BY crypto_wallet_addresses.is_reusable DESC,
+	                          crypto_wallet_addresses.last_assigned_at ASC,
+	                          crypto_wallet_addresses.id ASC
                  LIMIT 1"
             );
             $newWalletId = (int)($freeWallet['wallet_address_id'] ?? 0);
@@ -13213,7 +14398,12 @@ function admin_bank_account_status_options(): array
     ];
 }
 
-function admin_random_wallet_owner_name(): string
+function admin_wallet_owner_location_by_name(string $fullName): string
+{
+    return app_wallet_location_from_owner_name($fullName);
+}
+
+function admin_random_wallet_owner_profile(): array
 {
     $fullNames = [
         'Adam Kowalski',
@@ -13298,9 +14488,23 @@ function admin_random_wallet_owner_name(): string
         'Theo Sullivan',
         'William Brooks',
         'Zoe Collins',
+        'Hans Brunner',
+        'Henry Wagner',
+        'Oliver Fischer',
+        'Luna Fischer',
     ];
 
-    return $fullNames[array_rand($fullNames)];
+    $fullName = (string)$fullNames[array_rand($fullNames)];
+    return [
+        'full_name' => $fullName,
+        'location' => admin_wallet_owner_location_by_name($fullName),
+    ];
+}
+
+function admin_random_wallet_owner_name(): string
+{
+    $profile = admin_random_wallet_owner_profile();
+    return (string)($profile['full_name'] ?? '');
 }
 
 function admin_crypto_wallet_explorer_url(?string $assetCode, ?string $networkName, ?string $address): string
@@ -13471,8 +14675,20 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
         return ['ok' => false, 'message' => 'Network is required for this wallet.'];
     }
 
+    $generatedOwnerProfile = null;
     if ($ownerFullName === '') {
-        $ownerFullName = admin_random_wallet_owner_name();
+        $generatedOwnerProfile = admin_random_wallet_owner_profile();
+        $ownerFullName = (string)($generatedOwnerProfile['full_name'] ?? '');
+    }
+
+    if ($notes === '') {
+        $locationSeed = '';
+        if ($generatedOwnerProfile && !empty($generatedOwnerProfile['location'])) {
+            $locationSeed = (string)$generatedOwnerProfile['location'];
+        } else {
+            $locationSeed = admin_wallet_owner_location_by_name($ownerFullName);
+        }
+        $notes = app_wallet_notes_with_location($notes, $locationSeed);
     }
 
     if (!in_array($statusChoice, array_keys(admin_crypto_wallet_status_options()), true)) {
@@ -13542,15 +14758,23 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         return ['ok' => false, 'message' => 'Disabled wallet cannot be assigned.'];
     }
 
-    if (function_exists('app_crypto_wallet_has_non_cancelled_history')) {
-        $hasOtherCustomerHistory = app_crypto_wallet_has_non_cancelled_history($db, $walletId)
-            && !app_crypto_wallet_has_non_cancelled_history($db, $walletId, $customerId);
-        if ($hasOtherCustomerHistory) {
-            return ['ok' => false, 'message' => 'This wallet already has payment history for another customer and cannot be assigned again.'];
-        }
+    if (function_exists('app_crypto_wallet_has_non_cancelled_history_for_other_customer')
+        && app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $walletId, $customerId)
+    ) {
+        return ['ok' => false, 'message' => 'This wallet already has payment history for another customer and cannot be assigned again.'];
     }
 
     $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
+    if (!$sharedEnabled) {
+        if (app_crypto_wallet_has_active_assignment_for_other_customer($db, $walletId, $customerId)) {
+            return ['ok' => false, 'message' => 'This wallet is already assigned to another customer.'];
+        }
+
+        if (app_crypto_wallet_has_open_request_for_other_customer($db, $walletId, $customerId)) {
+            return ['ok' => false, 'message' => 'This wallet already has an active payment request for another customer.'];
+        }
+    }
+
     $activeAssignments = admin_crypto_wallet_active_assignments($db, $walletId);
     $customerAssignments = admin_customer_active_crypto_assignments($db, $customerId, strtoupper(trim((string)($wallet['asset_code'] ?? ''))));
     $existingCustomerAssignmentId = 0;
@@ -13594,6 +14818,33 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
     }
 
     $db->start();
+    $lockedWallet = $db->select_user(
+        "SELECT id, status, disabled_at
+         FROM crypto_wallet_addresses
+         WHERE id = {$walletId}
+         LIMIT 1
+         FOR UPDATE"
+    );
+    if (!is_array($lockedWallet) || empty($lockedWallet['id']) || !empty($lockedWallet['disabled_at']) || (string)($lockedWallet['status'] ?? '') === 'disabled') {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Wallet is no longer available.'];
+    }
+
+    if (!$sharedEnabled) {
+        $activeAssignments = $db->select_full_user(
+            "SELECT
+                crypto_wallet_assignments.id,
+                crypto_wallet_assignments.customer_id,
+                customers.email AS customer_email
+             FROM crypto_wallet_assignments
+             INNER JOIN customers ON customers.id = crypto_wallet_assignments.customer_id
+             WHERE crypto_wallet_assignments.wallet_address_id = {$walletId}
+               AND crypto_wallet_assignments.status IN ('reserved', 'active')
+             ORDER BY crypto_wallet_assignments.assigned_at DESC, crypto_wallet_assignments.id DESC
+             FOR UPDATE"
+        );
+    }
+
     $walletAssignmentId = $existingCustomerAssignmentId;
 
     if (!$sharedEnabled && $activeAssignments) {
@@ -13661,6 +14912,23 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
     }
 
     if ($existingCustomerAssignmentId <= 0) {
+        if (!$sharedEnabled) {
+            if (app_crypto_wallet_has_active_assignment_for_other_customer($db, $walletId, $customerId)) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'This wallet is already assigned to another customer.'];
+            }
+
+            if (app_crypto_wallet_has_open_request_for_other_customer($db, $walletId, $customerId)) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'This wallet already has an active payment request for another customer.'];
+            }
+
+            if (app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $walletId, $customerId)) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'This wallet already has payment history for another customer and cannot be assigned again.'];
+            }
+        }
+
         $insertOk = $db->insert(
             ['wallet_address_id', 'customer_id', 'assignment_reason', 'status', 'assigned_by_admin_user_id', 'assignment_note'],
             [$walletId, $customerId, 'manual_customer_wallet', 'active', $adminUserId, 'Assigned from admin wallet editor'],
@@ -13859,6 +15127,20 @@ function admin_ensure_crypto_wallet_assignment_for_payment(Mysql_ks $db, array $
     $walletAddressId = admin_crypto_payment_wallet_address_id($db, $payment);
     if ($walletAddressId <= 0) {
         return ['ok' => true];
+    }
+
+    if (!admin_crypto_wallet_shared_assignments_enabled($settings)) {
+        if (app_crypto_wallet_has_active_assignment_for_other_customer($db, $walletAddressId, $customerId)) {
+            return ['ok' => false, 'message' => 'This wallet is already assigned to another customer.'];
+        }
+
+        if (app_crypto_wallet_has_open_request_for_other_customer($db, $walletAddressId, $customerId)) {
+            return ['ok' => false, 'message' => 'This wallet already has an active payment request for another customer.'];
+        }
+
+        if (app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $walletAddressId, $customerId)) {
+            return ['ok' => false, 'message' => 'This wallet already has payment history for another customer and cannot be assigned again.'];
+        }
     }
 
     $paymentId = (int)($payment['id'] ?? 0);
@@ -16051,6 +17333,43 @@ function admin_chat_payment_modal_data(Mysql_ks $db, string $type, int $customer
     return ['ok' => false, 'message' => 'Unsupported payment modal type.'];
 }
 
+function admin_queue_crypto_payment_request_live_chat_card(
+    Mysql_ks $db,
+    int $customerId,
+    array $preview,
+    string $paymentUrl = ''
+): bool {
+    $customer = app_find_customer_by_id($db, $customerId);
+    $localeCode = app_normalize_email_locale((string)($customer['locale_code'] ?? 'en'));
+    $appSettings = app_fetch_settings($db);
+    $siteUrl = rtrim((string)($appSettings['site_url'] ?? ''), '/');
+    $paymentUrl = trim($paymentUrl);
+    if ($paymentUrl === '') {
+        $paymentUrl = $siteUrl !== '' ? $siteUrl . '/payments_crypto#tickets' : '/payments_crypto#tickets';
+    }
+
+    $messageBody = app_build_crypto_payment_chat_card_message([
+        'asset_name' => (string)($preview['asset_name'] ?? ''),
+        'asset_code' => (string)($preview['asset_code'] ?? ''),
+        'asset_logo_url' => (string)($preview['asset_logo_url'] ?? ''),
+        'requested_crypto_amount' => (string)($preview['crypto_amount'] ?? ''),
+        'requested_fiat_amount' => (float)($preview['fiat_amount'] ?? 0),
+        'currency_symbol' => (string)($preview['currency_symbol'] ?? ''),
+        'currency_code' => (string)($preview['currency_code'] ?? ''),
+        'wallet_address' => (string)($preview['wallet_address'] ?? ''),
+        'wallet_owner_full_name' => (string)($preview['wallet_owner_full_name'] ?? ''),
+        'wallet_owner_location' => (string)($preview['wallet_owner_location'] ?? ''),
+        'wallet_notes' => (string)($preview['wallet_notes'] ?? ''),
+        'payment_url' => $paymentUrl,
+    ], $localeCode);
+
+    if ($messageBody === '') {
+        return false;
+    }
+
+    return app_insert_live_chat_admin_message($db, $customerId, $messageBody);
+}
+
 function admin_chat_create_crypto_payment_request(
     Mysql_ks $db,
     int $conversationId,
@@ -16116,16 +17435,24 @@ function admin_chat_create_crypto_payment_request(
         "UPDATE crypto_deposit_requests
          SET status = 'archived'
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
            AND expires_at IS NOT NULL
            AND expires_at < '{$now}'"
     );
     $openWalletRequest = $db->select_user(
-        "SELECT id, customer_id, order_id
+        "SELECT
+            crypto_deposit_requests.id,
+            crypto_deposit_requests.customer_id,
+            crypto_deposit_requests.order_id
          FROM crypto_deposit_requests
-         WHERE wallet_address_id = {$walletAddressId}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-         ORDER BY id DESC
+         LEFT JOIN crypto_wallet_assignments AS open_assignment
+           ON open_assignment.id = crypto_deposit_requests.wallet_assignment_id
+         WHERE (
+                crypto_deposit_requests.wallet_address_id = {$walletAddressId}
+             OR open_assignment.wallet_address_id = {$walletAddressId}
+         )
+           AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+         ORDER BY crypto_deposit_requests.id DESC
          LIMIT 1"
     );
 
@@ -16135,9 +17462,15 @@ function admin_chat_create_crypto_payment_request(
             return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
         }
 
+        if (!app_crypto_deposit_wallet_payload_is_valid($db, $customerId, (int)$preview['asset_id'], $walletAddressId, $walletAssignmentId, $settings)) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
+        }
+
         $updated = $db->update_using_id(
             [
                 'crypto_asset_id',
+                'wallet_address_id',
                 'wallet_assignment_id',
                 'requested_fiat_amount',
                 'fiat_currency_id',
@@ -16151,6 +17484,7 @@ function admin_chat_create_crypto_payment_request(
             ],
             [
                 (int)$preview['asset_id'],
+                $walletAddressId,
                 $walletAssignmentId,
                 (float)$preview['fiat_amount'],
                 (int)$preview['currency_id'],
@@ -16171,50 +17505,29 @@ function admin_chat_create_crypto_payment_request(
         }
         $requestId = (int)$openWalletRequest['id'];
     } else {
-        $created = $db->insert(
-            [
-                'customer_id',
-                'order_id',
-                'crypto_asset_id',
-                'wallet_address_id',
-                'wallet_assignment_id',
-                'requested_fiat_amount',
-                'fiat_currency_id',
-                'exchange_rate',
-                'requested_crypto_amount',
-                'assignment_mode',
-                'status',
-                'created_by_admin_user_id',
-                'requested_at',
-                'expires_at',
-                'request_note',
-            ],
-            [
-                $customerId,
-                null,
-                (int)$preview['asset_id'],
-                $walletAddressId,
-                $walletAssignmentId,
-                (float)$preview['fiat_amount'],
-                (int)$preview['currency_id'],
-                (float)$preview['rate'],
-                (float)$preview['crypto_amount'],
-                'manual',
-                'pending',
-                $adminUserId,
-                $now,
-                $expiresAt,
-                'Created from admin live chat crypto request',
-            ],
-            'crypto_deposit_requests'
-        );
+        $requestId = app_create_crypto_deposit_request($db, [
+            'customer_id' => $customerId,
+            'order_id' => null,
+            'crypto_asset_id' => (int)$preview['asset_id'],
+            'wallet_address_id' => $walletAddressId,
+            'wallet_assignment_id' => $walletAssignmentId,
+            'requested_fiat_amount' => (float)$preview['fiat_amount'],
+            'fiat_currency_id' => (int)$preview['currency_id'],
+            'exchange_rate' => (float)$preview['rate'],
+            'requested_crypto_amount' => (float)$preview['crypto_amount'],
+            'assignment_mode' => 'manual',
+            'status' => 'pending',
+            'created_by_admin_user_id' => $adminUserId,
+            'requested_at' => $now,
+            'expires_at' => $expiresAt,
+            'request_note' => 'Created from admin live chat crypto request',
+            'settings' => $settings,
+        ]);
 
-        if (!$created || (int)$db->id() <= 0) {
+        if ($requestId <= 0) {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'Unable to create crypto payment request.'];
         }
-
-        $requestId = (int)$db->id();
     }
 
     $customer = app_find_customer_by_id($db, $customerId);
@@ -16233,6 +17546,8 @@ function admin_chat_create_crypto_payment_request(
         'currency_code' => (string)$preview['currency_code'],
         'wallet_address' => (string)$preview['wallet_address'],
         'wallet_owner_full_name' => (string)$preview['wallet_owner_full_name'],
+        'wallet_owner_location' => (string)($preview['wallet_owner_location'] ?? ''),
+        'wallet_notes' => (string)($preview['wallet_notes'] ?? ''),
         'payment_url' => $paymentUrl,
     ], $localeCode);
 
@@ -19861,6 +21176,7 @@ function admin_crypto_asset_logo_url(string $assetCode): string
             'cro' => 'cro.png',
             'atom' => 'atom.png',
             'sol' => 'sol.png',
+            'pol' => 'matic.png',
             'matic' => 'matic.png',
             'xrp' => 'xrp.png',
         ];
@@ -20413,16 +21729,24 @@ function admin_quick_create_crypto_payment_request(
         "UPDATE crypto_deposit_requests
          SET status = 'archived'
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
            AND expires_at IS NOT NULL
            AND expires_at < '{$now}'"
     );
     $openWalletRequest = $db->select_user(
-        "SELECT id, customer_id, order_id
+        "SELECT
+            crypto_deposit_requests.id,
+            crypto_deposit_requests.customer_id,
+            crypto_deposit_requests.order_id
          FROM crypto_deposit_requests
-         WHERE wallet_address_id = {$walletAddressId}
-           AND status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
-         ORDER BY id DESC
+         LEFT JOIN crypto_wallet_assignments AS open_assignment
+           ON open_assignment.id = crypto_deposit_requests.wallet_assignment_id
+         WHERE (
+                crypto_deposit_requests.wallet_address_id = {$walletAddressId}
+             OR open_assignment.wallet_address_id = {$walletAddressId}
+         )
+           AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+         ORDER BY crypto_deposit_requests.id DESC
          LIMIT 1"
     );
 
@@ -20432,9 +21756,15 @@ function admin_quick_create_crypto_payment_request(
             return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
         }
 
+        if (!app_crypto_deposit_wallet_payload_is_valid($db, $customerId, (int)$preview['asset_id'], $walletAddressId, $walletAssignmentId, $settings)) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
+        }
+
         $updated = $db->update_using_id(
             [
                 'crypto_asset_id',
+                'wallet_address_id',
                 'wallet_assignment_id',
                 'requested_fiat_amount',
                 'fiat_currency_id',
@@ -20448,6 +21778,7 @@ function admin_quick_create_crypto_payment_request(
             ],
             [
                 (int)$preview['asset_id'],
+                $walletAddressId,
                 $walletAssignmentId,
                 (float)$preview['fiat_amount'],
                 (int)$preview['currency_id'],
@@ -20468,67 +21799,49 @@ function admin_quick_create_crypto_payment_request(
         }
         $requestId = (int)$openWalletRequest['id'];
     } else {
-        $created = $db->insert(
-            [
-                'customer_id',
-                'order_id',
-                'crypto_asset_id',
-                'wallet_address_id',
-                'wallet_assignment_id',
-                'requested_fiat_amount',
-                'fiat_currency_id',
-                'exchange_rate',
-                'requested_crypto_amount',
-                'assignment_mode',
-                'status',
-                'created_by_admin_user_id',
-                'requested_at',
-                'expires_at',
-                'request_note',
-            ],
-            [
-                $customerId,
-                null,
-                (int)$preview['asset_id'],
-                $walletAddressId,
-                $walletAssignmentId,
-                (float)$preview['fiat_amount'],
-                (int)$preview['currency_id'],
-                (float)$preview['rate'],
-                (float)$preview['crypto_amount'],
-                'manual',
-                'pending',
-                $adminUserId,
-                $now,
-                $expiresAt,
-                'Created from admin payments quick create',
-            ],
-            'crypto_deposit_requests'
-        );
+        $requestId = app_create_crypto_deposit_request($db, [
+            'customer_id' => $customerId,
+            'order_id' => null,
+            'crypto_asset_id' => (int)$preview['asset_id'],
+            'wallet_address_id' => $walletAddressId,
+            'wallet_assignment_id' => $walletAssignmentId,
+            'requested_fiat_amount' => (float)$preview['fiat_amount'],
+            'fiat_currency_id' => (int)$preview['currency_id'],
+            'exchange_rate' => (float)$preview['rate'],
+            'requested_crypto_amount' => (float)$preview['crypto_amount'],
+            'assignment_mode' => 'manual',
+            'status' => 'pending',
+            'created_by_admin_user_id' => $adminUserId,
+            'requested_at' => $now,
+            'expires_at' => $expiresAt,
+            'request_note' => 'Created from admin payments quick create',
+            'settings' => $settings,
+        ]);
 
-        if (!$created || (int)$db->id() <= 0) {
+        if ($requestId <= 0) {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'Unable to create crypto payment request.'];
         }
-
-        $requestId = (int)$db->id();
     }
 
     app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
 
     $db->commit();
+    $liveChatMessageCreated = admin_queue_crypto_payment_request_live_chat_card($db, $customerId, $preview);
 
     return [
         'ok' => true,
         'request_id' => $requestId,
         'payment_type' => 'crypto',
         'payment_url' => '/admin/?page=payments&payment_type=crypto&payment_id=' . $requestId,
+        'live_chat_message_created' => $liveChatMessageCreated ? 1 : 0,
     ];
 }
 
 function admin_page_cards(string $route, array $messages): array
 {
     $cards = [
+        'swap-converter' => ['title' => admin_t($messages, 'page_swap_converter_card_title', 'Swap Converter'), 'text' => admin_t($messages, 'page_swap_converter_card_text', 'Use LI.FI widget to swap assets across chains with your configured integrator fee.')],
         'orders' => ['title' => admin_t($messages, 'page_orders_card_title', 'Orders'), 'text' => admin_t($messages, 'page_orders_card_text', 'Create new subscriptions and review all customer orders.')],
         'products' => ['title' => admin_t($messages, 'page_products_card_title', 'Products'), 'text' => admin_t($messages, 'page_products_card_text', 'Review active packages and subscription times from the new database.')],
         'users' => ['title' => admin_t($messages, 'page_users_card_title', 'Users'), 'text' => admin_t($messages, 'page_users_card_text', 'Create, edit and secure customer accounts.')],

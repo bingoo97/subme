@@ -269,6 +269,7 @@ return [
         'payment_fiat_value' => 'Transaction value',
         'payment_wallet_address' => 'Deposit address',
         'payment_wallet_owner' => 'Owner',
+        'payment_wallet_location' => 'Location',
         'payment_wallet_name' => 'Wallet info',
         'payment_wallet_network' => 'Network',
         'payment_wallet_memo' => 'Memo / Tag',

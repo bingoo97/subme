@@ -256,6 +256,7 @@ return [
         'payment_fiat_value' => 'Wartość transakcji',
         'payment_wallet_address' => 'Adres do wpłaty',
         'payment_wallet_owner' => 'Właściciel portfela:',
+        'payment_wallet_location' => 'Lokalizacja',
         'payment_wallet_name' => 'Informacja o portfelu',
         'payment_wallet_network' => 'Sieć',
         'payment_wallet_memo' => 'Memo / Tag',

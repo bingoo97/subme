@@ -314,6 +314,17 @@ $smarty->assign('reseller', $reseller);
 $topbarPaymentBanner = null;
 if (!empty($user['logged']) && app_uses_v2_schema($db) && isset($user['id'])) {
     $safeNow = date('Y-m-d H:i:s');
+    if (function_exists('app_cancel_invalid_open_crypto_deposit_requests')) {
+        app_cancel_invalid_open_crypto_deposit_requests(
+            $db,
+            "customer_id = " . (int)$user['id'] . "
+             AND expires_at IS NOT NULL
+             AND expires_at > '{$safeNow}'",
+            is_array($settings ?? null) ? $settings : [],
+            'Cancelled invalid crypto wallet assignment before topbar prompt'
+        );
+    }
+
     $pendingCryptoRequest = $db->select_user(
         "SELECT
             crypto_deposit_requests.id,
@@ -321,7 +332,7 @@ if (!empty($user['logged']) && app_uses_v2_schema($db) && isset($user['id'])) {
             crypto_deposit_requests.expires_at
          FROM crypto_deposit_requests
          WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
-           AND crypto_deposit_requests.status IN ('pending', 'awaiting_confirmation', 'awaiting_review')
+           AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
            AND crypto_deposit_requests.expires_at IS NOT NULL
            AND crypto_deposit_requests.expires_at > '{$safeNow}'
          ORDER BY crypto_deposit_requests.id DESC

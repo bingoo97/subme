@@ -77,6 +77,12 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             <span class="payment-request-value">{$active_v2_crypto_request.wallet_owner_full_name}</span>
                         </div>
                         {/if}
+                        {if $active_v2_crypto_request.wallet_owner_location}
+                        <div>
+                            <span class="payment-request-label">{$t.payment_wallet_location|default:'Location'}</span>
+                            <span class="payment-request-value">{$active_v2_crypto_request.wallet_owner_location}</span>
+                        </div>
+                        {/if}
                         {if $active_v2_crypto_request.wallet_network_label}
                         <div>
                             <span class="payment-request-label">{$t.payment_wallet_network|default:'Network'}</span>

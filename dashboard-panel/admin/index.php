@@ -4,14 +4,18 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
+const ADMIN_RANGO_DEFAULT_API_KEY = 'c6381a79-2817-4602-83bf-6a641a409e32';
+
 admin_send_security_headers();
 admin_start_session();
 
 $db = Mysql_ks::get_instance();
 app_ensure_customer_runtime_columns($db);
 app_ensure_product_provider_runtime_columns($db);
+admin_ensure_core_crypto_assets($db);
 admin_ensure_help_topics_runtime_table($db);
 admin_ensure_help_videos_runtime_table($db);
+admin_ensure_mixer_runtime_tables($db);
 $appSettings = admin_app_settings($db);
 $cryptoWalletSharedEnabled = admin_crypto_wallet_shared_assignments_enabled($appSettings);
 $cryptoWalletFreeCount = admin_crypto_wallet_free_count($db);
@@ -190,6 +194,84 @@ if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
 $route = admin_normalize_route($_GET['page'] ?? 'dashboard');
 $settingsAdminMode = strtolower(trim((string)($_GET['admin'] ?? ''))) === 'true';
 $settingsAdminUrlSuffix = $settingsAdminMode ? '&admin=true' : '';
+$swapConverterEnabled = admin_swap_converter_enabled($appSettings);
+$swapConverterIntegrator = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-Pro'));
+$swapConverterApiKey = trim((string)($appSettings['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
+$swapConverterFeePercent = round((float)($appSettings['swap_converter_fee_percent'] ?? 1.00), 2);
+$swapConverterFeePercent = max(0.0, min(10.0, $swapConverterFeePercent));
+$swapConverterChainOptions = admin_swap_converter_chain_options();
+$swapConverterAllowedChainKeys = admin_swap_converter_allowed_chain_keys($appSettings['swap_converter_allowed_chains'] ?? '');
+$swapConverterAllowedChainIds = admin_swap_converter_chain_ids_for_keys($swapConverterAllowedChainKeys);
+$hinkalPrivateSendEnabled = admin_hinkal_private_send_enabled($appSettings);
+$hinkalPrivateSendFeeWallet = trim((string)($appSettings['hinkal_private_send_fee_wallet'] ?? ''));
+$rangoConverterEnabled = admin_rango_converter_enabled($appSettings);
+$rangoApiKey = trim((string)($appSettings['rango_api_key'] ?? ''));
+$rangoApiKey = $rangoApiKey !== '' ? $rangoApiKey : ADMIN_RANGO_DEFAULT_API_KEY;
+$rangoWalletConnectProjectId = trim((string)($appSettings['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
+$rangoAffiliateRef = trim((string)($appSettings['rango_affiliate_ref'] ?? ''));
+$rangoAffiliateFeePercent = round((float)($appSettings['rango_affiliate_fee_percent'] ?? 1.00), 2);
+$rangoAffiliateFeePercent = max(0.0, min(3.0, $rangoAffiliateFeePercent));
+$rangoAffiliateWallets = trim((string)($appSettings['rango_affiliate_wallets'] ?? ''));
+$rangoCentralizedSwappersEnabled = admin_rango_centralized_swappers_enabled($appSettings);
+$mixerEnabled = admin_mixer_enabled($appSettings);
+$mixerInputAssetOptions = admin_mixer_input_asset_options();
+$mixerAllowedInputAssets = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
+$mixerOutputAssetOptions = admin_mixer_output_asset_options();
+$mixerAllowedOutputAssets = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+$mixerNetworkOptions = admin_mixer_network_options();
+$mixerNetworkModeOptions = admin_mixer_network_modes();
+$mixerAllowedNetworks = admin_mixer_allowed_networks($appSettings['mixer_allowed_networks'] ?? 'polygon');
+$mixerDetectionProviderOptions = admin_mixer_detection_provider_options();
+$mixerFeePercent = round((float)($appSettings['mixer_fee_percent'] ?? 1.50), 2);
+$mixerFeePercent = max(0.0, min(5.0, $mixerFeePercent));
+$mixerMaxPayoutUsd = round((float)($appSettings['mixer_max_payout_usd'] ?? 500.00), 2);
+$mixerDailyPayoutLimitUsd = round((float)($appSettings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
+$mixerShowPoolLiquidity = array_key_exists('mixer_show_pool_liquidity', $appSettings) ? !empty($appSettings['mixer_show_pool_liquidity']) : true;
+$mixerBtcConfirmationsRequired = (int)($appSettings['mixer_btc_confirmations_required'] ?? 3);
+$mixerDogeConfirmationsRequired = (int)($appSettings['mixer_doge_confirmations_required'] ?? 20);
+$mixerQuoteLifetimeMinutes = (int)($appSettings['mixer_quote_lifetime_minutes'] ?? 15);
+$mixerDetectionProvider = trim((string)($appSettings['mixer_detection_provider'] ?? 'esplora'));
+if (!isset($mixerDetectionProviderOptions[$mixerDetectionProvider])) {
+    $mixerDetectionProvider = 'esplora';
+}
+$mixerBtcDepositAddress = trim((string)($appSettings['mixer_btc_deposit_address'] ?? ''));
+$mixerDogeDepositAddress = trim((string)($appSettings['mixer_doge_deposit_address'] ?? ''));
+$mixerPolygonNetworkMode = admin_mixer_normalize_network_mode($appSettings['mixer_polygon_network_mode'] ?? 'mainnet');
+$mixerPolygonVaultContract = trim((string)($appSettings['mixer_polygon_vault_contract'] ?? ''));
+$mixerPolygonRpcUrl = trim((string)($appSettings['mixer_polygon_rpc_url'] ?? ''));
+$mixerPolygonRpcUrl = $mixerPolygonRpcUrl !== '' ? $mixerPolygonRpcUrl : admin_mixer_default_rpc_url('polygon', 'mainnet');
+$mixerPolygonTestnetVaultContract = trim((string)($appSettings['mixer_polygon_testnet_vault_contract'] ?? ''));
+$mixerPolygonTestnetRpcUrl = trim((string)($appSettings['mixer_polygon_testnet_rpc_url'] ?? ''));
+$mixerPolygonTestnetRpcUrl = $mixerPolygonTestnetRpcUrl !== '' ? $mixerPolygonTestnetRpcUrl : admin_mixer_default_rpc_url('polygon', 'testnet');
+$mixerBscNetworkMode = admin_mixer_normalize_network_mode($appSettings['mixer_bsc_network_mode'] ?? 'mainnet');
+$mixerBscVaultContract = trim((string)($appSettings['mixer_bsc_vault_contract'] ?? ''));
+$mixerBscRpcUrl = trim((string)($appSettings['mixer_bsc_rpc_url'] ?? ''));
+$mixerBscRpcUrl = $mixerBscRpcUrl !== '' ? $mixerBscRpcUrl : admin_mixer_default_rpc_url('bsc', 'mainnet');
+$mixerBscTestnetVaultContract = trim((string)($appSettings['mixer_bsc_testnet_vault_contract'] ?? ''));
+$mixerBscTestnetRpcUrl = trim((string)($appSettings['mixer_bsc_testnet_rpc_url'] ?? ''));
+$mixerBscTestnetRpcUrl = $mixerBscTestnetRpcUrl !== '' ? $mixerBscTestnetRpcUrl : admin_mixer_default_rpc_url('bsc', 'testnet');
+$mixerNotificationEmail = trim((string)($appSettings['mixer_notification_email'] ?? ''));
+$mixerAutoPayoutEnabled = !empty($appSettings['mixer_auto_payout_enabled']);
+$mixerNetworkPoolStates = [];
+if ($mixerEnabled && in_array($route, ['settings', 'swap-converter'], true)) {
+    foreach ($mixerNetworkOptions as $mixerNetworkKey => $mixerNetworkOption) {
+        $mixerNetworkKeyString = (string)$mixerNetworkKey;
+        $mixerNetworkMode = $mixerNetworkKeyString === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+        $mixerNetworkEffectiveOption = admin_mixer_effective_network_option($mixerNetworkKeyString, $mixerNetworkMode);
+        $mixerNetworkVault = $mixerNetworkKeyString === 'bsc'
+            ? ($mixerNetworkMode === 'testnet' ? $mixerBscTestnetVaultContract : $mixerBscVaultContract)
+            : ($mixerNetworkMode === 'testnet' ? $mixerPolygonTestnetVaultContract : $mixerPolygonVaultContract);
+        $mixerNetworkRpc = $mixerNetworkKeyString === 'bsc'
+            ? ($mixerNetworkMode === 'testnet' ? $mixerBscTestnetRpcUrl : $mixerBscRpcUrl)
+            : ($mixerNetworkMode === 'testnet' ? $mixerPolygonTestnetRpcUrl : $mixerPolygonRpcUrl);
+        $mixerNetworkPoolStates[$mixerNetworkKeyString] = admin_mixer_native_pool_state(
+            $mixerNetworkRpc,
+            $mixerNetworkVault,
+            (string)($mixerNetworkEffectiveOption['native_symbol'] ?? '')
+        );
+    }
+}
+$swapConverterPageEnabled = $swapConverterEnabled || $hinkalPrivateSendEnabled || $rangoConverterEnabled || $mixerEnabled;
 $pageAlert = '';
 $pageAlertHtml = '';
 $pageAlertType = 'success';
@@ -233,6 +315,12 @@ $cryptoPreviewStatusRows = [];
 $settingsProtectedFeatureEditEnabled = $settingsAdminMode;
 $manualDatabaseBackupInfo = app_database_backup_latest_info();
 $isAjaxRequest = strtolower(trim((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''))) === 'xmlhttprequest';
+
+if ($route === 'swap-converter' && !$swapConverterPageEnabled) {
+    $route = 'dashboard';
+    $pageAlert = admin_t($messages, 'swap_converter_widget_unavailable', 'Swap Converter is disabled in Settings.');
+    $pageAlertType = 'warning';
+}
 
 if ($route === 'settings' && isset($_GET['download_latest_database_backup'])) {
     if (!admin_csrf_is_valid($_GET['_csrf'] ?? '')) {
@@ -278,6 +366,121 @@ if (!admin_user_can_access_route($adminUser, $route)) {
         ['page' => admin_route_label($messages, $blockedRoute)]
     );
     $pageAlertType = 'danger';
+}
+
+if ($route === 'swap-converter' && isset($_POST['admin_mixer_create_order_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $createResult = admin_mixer_create_order($db, $appSettings, $adminUser, [
+        'input_asset' => $_POST['input_asset'] ?? 'BTC',
+        'output_asset' => $_POST['output_asset'] ?? 'POLYGON_POL',
+        'amount' => $_POST['amount'] ?? '0',
+        'recipient_address' => $_POST['recipient_address'] ?? '',
+    ]);
+
+    if (empty($createResult['ok'])) {
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'mixer_order_create_error', (string)($createResult['message'] ?? 'Unable to create Swapper order.')),
+        ]);
+        exit;
+    }
+
+    $order = is_array($createResult['order'] ?? null) ? $createResult['order'] : [];
+    $order['statusLabel'] = admin_t($messages, 'mixer_order_status_waiting_deposit', 'Waiting deposit');
+
+    echo json_encode([
+        'ok' => true,
+        'order' => $order,
+        'quote' => is_array($createResult['quote'] ?? null) ? $createResult['quote'] : [],
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($route === 'swap-converter' && isset($_POST['admin_mixer_order_status_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $publicId = trim((string)($_POST['public_id'] ?? ''));
+    $orderRow = admin_mixer_find_order_by_public_id($db, $publicId);
+    if (!is_array($orderRow)) {
+        http_response_code(404);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'mixer_order_not_found', 'Swapper order was not found.'),
+        ]);
+        exit;
+    }
+
+    echo json_encode([
+        'ok' => true,
+        'order' => admin_mixer_order_payload($orderRow, $messages),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($route === 'swap-converter' && isset($_POST['admin_mixer_cancel_order_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $publicId = trim((string)($_POST['public_id'] ?? ''));
+    $orderRow = admin_mixer_find_order_by_public_id($db, $publicId);
+    if (!is_array($orderRow)) {
+        http_response_code(404);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'mixer_order_not_found', 'Swapper order was not found.'),
+        ]);
+        exit;
+    }
+
+    if (in_array((string)($orderRow['status'] ?? ''), ['paid', 'paying'], true)) {
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'mixer_order_cancel_blocked', 'This Swapper order cannot be cancelled anymore.'),
+        ]);
+        exit;
+    }
+
+    $db->update(['status'], ['cancelled'], 'admin_mixer_orders', "WHERE id = " . (int)$orderRow['id']);
+    $db->insert(
+        ['order_id', 'event_type', 'payload_json'],
+        [(int)$orderRow['id'], 'order_cancelled', json_encode(['by_admin_user_id' => (int)($adminUser['id'] ?? 0)], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+        'admin_mixer_events'
+    );
+
+    echo json_encode([
+        'ok' => true,
+        'message' => admin_t($messages, 'mixer_order_cancelled', 'Swapper order cancelled.'),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 if (isset($_POST['admin_sensitive_unlock_ajax'])) {
@@ -772,6 +975,57 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
         $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
         $expiredOrdersCleanupEnabled = isset($_POST['expired_orders_cleanup_enabled']) ? 1 : 0;
+        $swapConverterEnabledInput = isset($_POST['swap_converter_enabled']) ? 1 : 0;
+        $swapConverterIntegratorInput = trim((string)($_POST['swap_converter_integrator'] ?? 'Subme-Pro'));
+        $swapConverterApiKeyInput = trim((string)($_POST['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
+        $swapConverterFeePercentInput = round((float)($_POST['swap_converter_fee_percent'] ?? 1.0), 2);
+        $swapConverterAllowedChainKeysInput = admin_swap_converter_allowed_chain_keys($_POST['swap_converter_allowed_chains'] ?? [], false);
+        $hinkalPrivateSendEnabledInput = isset($_POST['hinkal_private_send_enabled']) ? 1 : 0;
+        $hinkalPrivateSendFeeWalletInput = trim((string)($_POST['hinkal_private_send_fee_wallet'] ?? ''));
+        $rangoConverterEnabledInput = isset($_POST['rango_converter_enabled']) ? 1 : 0;
+        $rangoApiKeyInput = trim((string)($_POST['rango_api_key'] ?? ADMIN_RANGO_DEFAULT_API_KEY));
+        if ($rangoApiKeyInput === '' && $rangoConverterEnabledInput === 1) {
+            $rangoApiKeyInput = ADMIN_RANGO_DEFAULT_API_KEY;
+        }
+        $rangoWalletConnectProjectIdInput = trim((string)($_POST['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
+        $rangoAffiliateRefInput = trim((string)($_POST['rango_affiliate_ref'] ?? ''));
+        $rangoAffiliateFeePercentInput = round((float)($_POST['rango_affiliate_fee_percent'] ?? 1.0), 2);
+        $rangoAffiliateWalletsInput = trim((string)($_POST['rango_affiliate_wallets'] ?? ''));
+        $rangoCentralizedSwappersEnabledInput = isset($_POST['rango_enable_centralized_swappers']) ? 1 : 0;
+        $mixerEnabledInput = isset($_POST['mixer_enabled']) ? 1 : 0;
+        $mixerAllowedInputAssetsInput = admin_mixer_allowed_input_assets($_POST['mixer_allowed_input_assets'] ?? [], false);
+        $mixerAllowedOutputAssetsInput = admin_mixer_allowed_output_assets($_POST['mixer_allowed_output_assets'] ?? [], false);
+        $mixerAllowedNetworksInput = admin_mixer_allowed_networks($_POST['mixer_allowed_networks'] ?? [], false);
+        $mixerFeePercentInput = round((float)($_POST['mixer_fee_percent'] ?? 1.5), 2);
+        $mixerMaxPayoutUsdInput = round((float)($_POST['mixer_max_payout_usd'] ?? 500.00), 2);
+        $mixerDailyPayoutLimitUsdInput = round((float)($_POST['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
+        $mixerShowPoolLiquidityInput = isset($_POST['mixer_show_pool_liquidity']) ? 1 : 0;
+        $mixerBtcConfirmationsRequiredInput = (int)($_POST['mixer_btc_confirmations_required'] ?? 3);
+        $mixerDogeConfirmationsRequiredInput = (int)($_POST['mixer_doge_confirmations_required'] ?? 20);
+        $mixerQuoteLifetimeMinutesInput = (int)($_POST['mixer_quote_lifetime_minutes'] ?? 15);
+        $mixerDetectionProviderInput = trim((string)($_POST['mixer_detection_provider'] ?? 'esplora'));
+        $mixerDetectionProviderOptions = admin_mixer_detection_provider_options();
+        if (!isset($mixerDetectionProviderOptions[$mixerDetectionProviderInput])) {
+            $mixerDetectionProviderInput = 'esplora';
+        }
+        $mixerBtcDepositAddressInput = trim((string)($_POST['mixer_btc_deposit_address'] ?? ''));
+        $mixerDogeDepositAddressInput = trim((string)($_POST['mixer_doge_deposit_address'] ?? ''));
+        $mixerPolygonNetworkModeInput = admin_mixer_normalize_network_mode($_POST['mixer_polygon_network_mode'] ?? 'mainnet');
+        $mixerPolygonVaultContractInput = trim((string)($_POST['mixer_polygon_vault_contract'] ?? ''));
+        $mixerPolygonRpcUrlInput = trim((string)($_POST['mixer_polygon_rpc_url'] ?? ''));
+        $mixerPolygonRpcUrlInput = $mixerPolygonRpcUrlInput !== '' ? $mixerPolygonRpcUrlInput : admin_mixer_default_rpc_url('polygon', 'mainnet');
+        $mixerPolygonTestnetVaultContractInput = trim((string)($_POST['mixer_polygon_testnet_vault_contract'] ?? ''));
+        $mixerPolygonTestnetRpcUrlInput = trim((string)($_POST['mixer_polygon_testnet_rpc_url'] ?? ''));
+        $mixerPolygonTestnetRpcUrlInput = $mixerPolygonTestnetRpcUrlInput !== '' ? $mixerPolygonTestnetRpcUrlInput : admin_mixer_default_rpc_url('polygon', 'testnet');
+        $mixerBscNetworkModeInput = admin_mixer_normalize_network_mode($_POST['mixer_bsc_network_mode'] ?? 'mainnet');
+        $mixerBscVaultContractInput = trim((string)($_POST['mixer_bsc_vault_contract'] ?? ''));
+        $mixerBscRpcUrlInput = trim((string)($_POST['mixer_bsc_rpc_url'] ?? ''));
+        $mixerBscRpcUrlInput = $mixerBscRpcUrlInput !== '' ? $mixerBscRpcUrlInput : admin_mixer_default_rpc_url('bsc', 'mainnet');
+        $mixerBscTestnetVaultContractInput = trim((string)($_POST['mixer_bsc_testnet_vault_contract'] ?? ''));
+        $mixerBscTestnetRpcUrlInput = trim((string)($_POST['mixer_bsc_testnet_rpc_url'] ?? ''));
+        $mixerBscTestnetRpcUrlInput = $mixerBscTestnetRpcUrlInput !== '' ? $mixerBscTestnetRpcUrlInput : admin_mixer_default_rpc_url('bsc', 'testnet');
+        $mixerNotificationEmailInput = strtolower(trim((string)($_POST['mixer_notification_email'] ?? '')));
+        $mixerAutoPayoutEnabledInput = isset($_POST['mixer_auto_payout_enabled']) ? 1 : 0;
         $selectedCurrencyId = (int)($_POST['default_currency_id'] ?? 0);
         $allowedCurrencyIds = [];
         foreach ($serviceCurrencies as $serviceCurrency) {
@@ -788,13 +1042,219 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $customerTypeSwitchEnabled = admin_customer_type_switch_enabled($appSettings) ? 1 : 0;
             $pageGuidanceEnabled = admin_page_guidance_enabled($appSettings) ? 1 : 0;
             $paymentTestModeNoticeEnabled = admin_payment_test_mode_notice_enabled($appSettings) ? 1 : 0;
+            $swapConverterEnabledInput = admin_swap_converter_enabled($appSettings) ? 1 : 0;
+            $swapConverterIntegratorInput = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-Pro'));
+            $swapConverterApiKeyInput = trim((string)($appSettings['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
+            $swapConverterFeePercentInput = round((float)($appSettings['swap_converter_fee_percent'] ?? 1.0), 2);
+            $swapConverterAllowedChainKeysInput = admin_swap_converter_allowed_chain_keys($appSettings['swap_converter_allowed_chains'] ?? '');
+            $hinkalPrivateSendEnabledInput = admin_hinkal_private_send_enabled($appSettings) ? 1 : 0;
+            $hinkalPrivateSendFeeWalletInput = trim((string)($appSettings['hinkal_private_send_fee_wallet'] ?? ''));
+            $rangoConverterEnabledInput = admin_rango_converter_enabled($appSettings) ? 1 : 0;
+            $rangoApiKeyInput = trim((string)($appSettings['rango_api_key'] ?? ''));
+            $rangoApiKeyInput = $rangoApiKeyInput !== '' ? $rangoApiKeyInput : ADMIN_RANGO_DEFAULT_API_KEY;
+            $rangoWalletConnectProjectIdInput = trim((string)($appSettings['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
+            $rangoAffiliateRefInput = trim((string)($appSettings['rango_affiliate_ref'] ?? ''));
+            $rangoAffiliateFeePercentInput = round((float)($appSettings['rango_affiliate_fee_percent'] ?? 1.0), 2);
+            $rangoAffiliateWalletsInput = trim((string)($appSettings['rango_affiliate_wallets'] ?? ''));
+            $rangoCentralizedSwappersEnabledInput = admin_rango_centralized_swappers_enabled($appSettings) ? 1 : 0;
+            $mixerEnabledInput = admin_mixer_enabled($appSettings) ? 1 : 0;
+            $mixerAllowedInputAssetsInput = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
+            $mixerAllowedOutputAssetsInput = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+            $mixerAllowedNetworksInput = admin_mixer_allowed_networks($appSettings['mixer_allowed_networks'] ?? 'polygon');
+            $mixerFeePercentInput = round((float)($appSettings['mixer_fee_percent'] ?? 1.5), 2);
+            $mixerMaxPayoutUsdInput = round((float)($appSettings['mixer_max_payout_usd'] ?? 500.00), 2);
+            $mixerDailyPayoutLimitUsdInput = round((float)($appSettings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
+            $mixerShowPoolLiquidityInput = !empty($appSettings['mixer_show_pool_liquidity']) ? 1 : 0;
+            $mixerBtcConfirmationsRequiredInput = (int)($appSettings['mixer_btc_confirmations_required'] ?? 3);
+            $mixerDogeConfirmationsRequiredInput = (int)($appSettings['mixer_doge_confirmations_required'] ?? 20);
+            $mixerQuoteLifetimeMinutesInput = (int)($appSettings['mixer_quote_lifetime_minutes'] ?? 15);
+            $mixerDetectionProviderInput = trim((string)($appSettings['mixer_detection_provider'] ?? 'esplora'));
+            $mixerBtcDepositAddressInput = trim((string)($appSettings['mixer_btc_deposit_address'] ?? ''));
+            $mixerDogeDepositAddressInput = trim((string)($appSettings['mixer_doge_deposit_address'] ?? ''));
+            $mixerPolygonNetworkModeInput = admin_mixer_normalize_network_mode($appSettings['mixer_polygon_network_mode'] ?? 'mainnet');
+            $mixerPolygonVaultContractInput = trim((string)($appSettings['mixer_polygon_vault_contract'] ?? ''));
+            $mixerPolygonRpcUrlInput = trim((string)($appSettings['mixer_polygon_rpc_url'] ?? ''));
+            $mixerPolygonRpcUrlInput = $mixerPolygonRpcUrlInput !== '' ? $mixerPolygonRpcUrlInput : admin_mixer_default_rpc_url('polygon', 'mainnet');
+            $mixerPolygonTestnetVaultContractInput = trim((string)($appSettings['mixer_polygon_testnet_vault_contract'] ?? ''));
+            $mixerPolygonTestnetRpcUrlInput = trim((string)($appSettings['mixer_polygon_testnet_rpc_url'] ?? ''));
+            $mixerPolygonTestnetRpcUrlInput = $mixerPolygonTestnetRpcUrlInput !== '' ? $mixerPolygonTestnetRpcUrlInput : admin_mixer_default_rpc_url('polygon', 'testnet');
+            $mixerBscNetworkModeInput = admin_mixer_normalize_network_mode($appSettings['mixer_bsc_network_mode'] ?? 'mainnet');
+            $mixerBscVaultContractInput = trim((string)($appSettings['mixer_bsc_vault_contract'] ?? ''));
+            $mixerBscRpcUrlInput = trim((string)($appSettings['mixer_bsc_rpc_url'] ?? ''));
+            $mixerBscRpcUrlInput = $mixerBscRpcUrlInput !== '' ? $mixerBscRpcUrlInput : admin_mixer_default_rpc_url('bsc', 'mainnet');
+            $mixerBscTestnetVaultContractInput = trim((string)($appSettings['mixer_bsc_testnet_vault_contract'] ?? ''));
+            $mixerBscTestnetRpcUrlInput = trim((string)($appSettings['mixer_bsc_testnet_rpc_url'] ?? ''));
+            $mixerBscTestnetRpcUrlInput = $mixerBscTestnetRpcUrlInput !== '' ? $mixerBscTestnetRpcUrlInput : admin_mixer_default_rpc_url('bsc', 'testnet');
+            $mixerNotificationEmailInput = strtolower(trim((string)($appSettings['mixer_notification_email'] ?? '')));
+            $mixerAutoPayoutEnabledInput = !empty($appSettings['mixer_auto_payout_enabled']) ? 1 : 0;
         }
+
+        $swapConverterEnabled = $swapConverterEnabledInput === 1;
+        $swapConverterIntegrator = $swapConverterIntegratorInput;
+        $swapConverterApiKey = $swapConverterApiKeyInput;
+        $swapConverterFeePercent = max(0.0, min(10.0, $swapConverterFeePercentInput));
+        $swapConverterAllowedChainKeys = $swapConverterAllowedChainKeysInput;
+        $swapConverterAllowedChainIds = admin_swap_converter_chain_ids_for_keys($swapConverterAllowedChainKeys);
+        $hinkalPrivateSendEnabled = $hinkalPrivateSendEnabledInput === 1;
+        $hinkalPrivateSendFeeWallet = $hinkalPrivateSendFeeWalletInput;
+        $rangoConverterEnabled = $rangoConverterEnabledInput === 1;
+        $rangoApiKey = $rangoApiKeyInput;
+        $rangoWalletConnectProjectId = $rangoWalletConnectProjectIdInput;
+        $rangoAffiliateRef = $rangoAffiliateRefInput;
+        $rangoAffiliateFeePercent = max(0.0, min(3.0, $rangoAffiliateFeePercentInput));
+        $rangoAffiliateWallets = $rangoAffiliateWalletsInput;
+        $rangoCentralizedSwappersEnabled = $rangoCentralizedSwappersEnabledInput === 1;
+        $mixerEnabled = $mixerEnabledInput === 1;
+        $mixerInputAssetOptions = admin_mixer_input_asset_options();
+        $mixerAllowedInputAssets = $mixerAllowedInputAssetsInput;
+        $mixerOutputAssetOptions = admin_mixer_output_asset_options();
+        $mixerAllowedOutputAssets = $mixerAllowedOutputAssetsInput;
+        $mixerNetworkOptions = admin_mixer_network_options();
+        $mixerAllowedNetworks = $mixerAllowedNetworksInput;
+        $mixerFeePercent = max(0.0, min(5.0, $mixerFeePercentInput));
+        $mixerMaxPayoutUsd = $mixerMaxPayoutUsdInput > 0 ? $mixerMaxPayoutUsdInput : 500.00;
+        $mixerDailyPayoutLimitUsd = $mixerDailyPayoutLimitUsdInput > 0 ? $mixerDailyPayoutLimitUsdInput : 1500.00;
+        $mixerShowPoolLiquidity = $mixerShowPoolLiquidityInput === 1;
+        $mixerBtcConfirmationsRequired = max(1, min(12, $mixerBtcConfirmationsRequiredInput));
+        $mixerDogeConfirmationsRequired = max(1, min(120, $mixerDogeConfirmationsRequiredInput));
+        $mixerQuoteLifetimeMinutes = max(1, min(240, $mixerQuoteLifetimeMinutesInput));
+        $mixerDetectionProvider = $mixerDetectionProviderInput;
+        $mixerBtcDepositAddress = $mixerBtcDepositAddressInput;
+        $mixerDogeDepositAddress = $mixerDogeDepositAddressInput;
+        $mixerPolygonNetworkMode = $mixerPolygonNetworkModeInput;
+        $mixerPolygonVaultContract = $mixerPolygonVaultContractInput;
+        $mixerPolygonRpcUrl = $mixerPolygonRpcUrlInput;
+        $mixerPolygonTestnetVaultContract = $mixerPolygonTestnetVaultContractInput;
+        $mixerPolygonTestnetRpcUrl = $mixerPolygonTestnetRpcUrlInput;
+        $mixerBscNetworkMode = $mixerBscNetworkModeInput;
+        $mixerBscVaultContract = $mixerBscVaultContractInput;
+        $mixerBscRpcUrl = $mixerBscRpcUrlInput;
+        $mixerBscTestnetVaultContract = $mixerBscTestnetVaultContractInput;
+        $mixerBscTestnetRpcUrl = $mixerBscTestnetRpcUrlInput;
+        $mixerNotificationEmail = $mixerNotificationEmailInput;
+        $mixerAutoPayoutEnabled = $mixerAutoPayoutEnabledInput === 1;
+
+        $rangoAffiliateWalletsDecoded = null;
+        if ($rangoAffiliateWalletsInput !== '') {
+            $rangoAffiliateWalletsDecoded = json_decode($rangoAffiliateWalletsInput, true);
+        }
+        $rangoAffiliateWalletsIsList = is_array($rangoAffiliateWalletsDecoded)
+            && trim($rangoAffiliateWalletsInput)[0] === '['
+            && ($rangoAffiliateWalletsDecoded === [] || array_keys($rangoAffiliateWalletsDecoded) === range(0, count($rangoAffiliateWalletsDecoded) - 1));
+        $mixerBtcDepositAddressValid = $mixerBtcDepositAddressInput === ''
+            || preg_match('/^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,39})$/i', $mixerBtcDepositAddressInput) === 1;
+        $mixerDogeDepositAddressValid = $mixerDogeDepositAddressInput === ''
+            || preg_match('/^[DA9][a-km-zA-HJ-NP-Z1-9]{25,39}$/', $mixerDogeDepositAddressInput) === 1;
+        $mixerPolygonVaultContractValid = $mixerPolygonVaultContractInput === ''
+            || preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerPolygonVaultContractInput) === 1;
+        $mixerPolygonTestnetVaultContractValid = $mixerPolygonTestnetVaultContractInput === ''
+            || preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerPolygonTestnetVaultContractInput) === 1;
+        $mixerBscVaultContractValid = $mixerBscVaultContractInput === ''
+            || preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerBscVaultContractInput) === 1;
+        $mixerBscTestnetVaultContractValid = $mixerBscTestnetVaultContractInput === ''
+            || preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerBscTestnetVaultContractInput) === 1;
+        $mixerPolygonSelectedVaultInput = $mixerPolygonNetworkModeInput === 'testnet'
+            ? $mixerPolygonTestnetVaultContractInput
+            : $mixerPolygonVaultContractInput;
+        $mixerPolygonSelectedRpcInput = $mixerPolygonNetworkModeInput === 'testnet'
+            ? $mixerPolygonTestnetRpcUrlInput
+            : $mixerPolygonRpcUrlInput;
+        $mixerBscSelectedVaultInput = $mixerBscNetworkModeInput === 'testnet'
+            ? $mixerBscTestnetVaultContractInput
+            : $mixerBscVaultContractInput;
+        $mixerBscSelectedRpcInput = $mixerBscNetworkModeInput === 'testnet'
+            ? $mixerBscTestnetRpcUrlInput
+            : $mixerBscRpcUrlInput;
 
         if ($cryptoDailyBackupEmail !== '' && filter_var($cryptoDailyBackupEmail, FILTER_VALIDATE_EMAIL) === false) {
             $pageAlert = admin_t($messages, 'settings_crypto_daily_backup_email_invalid', 'Backup recipient email must be a valid address.');
             $pageAlertType = 'danger';
             $appSettings['crypto_daily_backup_enabled'] = $cryptoDailyBackupEnabled;
             $appSettings['crypto_daily_backup_email'] = $cryptoDailyBackupEmail;
+        } elseif ($swapConverterFeePercentInput < 0 || $swapConverterFeePercentInput > 10) {
+            $pageAlert = admin_t($messages, 'settings_swap_converter_fee_invalid', 'Swap Converter fee must be between 0 and 10.');
+            $pageAlertType = 'danger';
+        } elseif ($swapConverterEnabledInput === 1 && $swapConverterIntegratorInput === '') {
+            $pageAlert = admin_t($messages, 'settings_swap_converter_integrator_required', 'Provide the LI.FI integrator name to enable Swap Converter.');
+            $pageAlertType = 'danger';
+        } elseif ($swapConverterEnabledInput === 1 && $swapConverterAllowedChainIds === []) {
+            $pageAlert = admin_t($messages, 'settings_swap_converter_chains_required', 'Select at least one LI.FI chain for Swap Converter.');
+            $pageAlertType = 'danger';
+        } elseif ($hinkalPrivateSendFeeWalletInput !== '' && !preg_match('/^0x[a-fA-F0-9]{40}$/', $hinkalPrivateSendFeeWalletInput)) {
+            $pageAlert = admin_t($messages, 'settings_hinkal_private_send_fee_wallet_invalid', 'Hinkal fee wallet must be a valid Polygon/EVM address.');
+            $pageAlertType = 'danger';
+        } elseif ($rangoAffiliateFeePercentInput < 0 || $rangoAffiliateFeePercentInput > 3) {
+            $pageAlert = admin_t($messages, 'settings_rango_fee_invalid', 'Rango affiliate fee must be between 0 and 3.');
+            $pageAlertType = 'danger';
+        } elseif ($rangoConverterEnabledInput === 1 && $rangoApiKeyInput === '') {
+            $pageAlert = admin_t($messages, 'settings_rango_api_key_required', 'Provide the Rango API key to enable BTC/DOGE Converter.');
+            $pageAlertType = 'danger';
+        } elseif ($rangoAffiliateWalletsInput !== '' && (!is_array($rangoAffiliateWalletsDecoded) || $rangoAffiliateWalletsIsList)) {
+            $pageAlert = admin_t($messages, 'settings_rango_affiliate_wallets_invalid', 'Rango affiliate wallets must be a JSON object.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerFeePercentInput < 0 || $mixerFeePercentInput > 5) {
+            $pageAlert = admin_t($messages, 'settings_mixer_fee_invalid', 'Swapper fee must be between 0 and 5.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerMaxPayoutUsdInput <= 0 || $mixerMaxPayoutUsdInput > 5000) {
+            $pageAlert = admin_t($messages, 'settings_mixer_max_payout_invalid', 'Swapper max payout per order must be between 1 and 5000 USD.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerDailyPayoutLimitUsdInput <= 0 || $mixerDailyPayoutLimitUsdInput > 50000) {
+            $pageAlert = admin_t($messages, 'settings_mixer_daily_limit_invalid', 'Swapper daily payout limit must be between 1 and 50000 USD.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerMaxPayoutUsdInput > $mixerDailyPayoutLimitUsdInput) {
+            $pageAlert = admin_t($messages, 'settings_mixer_limits_order', 'Swapper max payout per order cannot be higher than the daily payout limit.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerBtcConfirmationsRequiredInput < 1 || $mixerBtcConfirmationsRequiredInput > 12 || $mixerDogeConfirmationsRequiredInput < 1 || $mixerDogeConfirmationsRequiredInput > 120) {
+            $pageAlert = admin_t($messages, 'settings_mixer_confirmations_invalid', 'Swapper confirmations are outside the allowed range.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerQuoteLifetimeMinutesInput < 1 || $mixerQuoteLifetimeMinutesInput > 240) {
+            $pageAlert = admin_t($messages, 'settings_mixer_quote_lifetime_invalid', 'Swapper quote lifetime must be between 1 and 240 minutes.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerEnabledInput === 1 && $mixerAllowedInputAssetsInput === []) {
+            $pageAlert = admin_t($messages, 'settings_mixer_input_assets_required', 'Select at least one Swapper input asset.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerEnabledInput === 1 && $mixerAllowedOutputAssetsInput === []) {
+            $pageAlert = admin_t($messages, 'settings_mixer_output_assets_required', 'Select at least one Swapper output asset.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerEnabledInput === 1 && $mixerAllowedNetworksInput === []) {
+            $pageAlert = admin_t($messages, 'settings_mixer_networks_required', 'Select at least one Swapper network.');
+            $pageAlertType = 'danger';
+        } elseif (!$mixerPolygonVaultContractValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_vault_invalid', 'Swapper vault contract must be a valid Polygon/EVM address.');
+            $pageAlertType = 'danger';
+        } elseif (!$mixerPolygonTestnetVaultContractValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_polygon_testnet_vault_invalid', 'Polygon testnet vault contract must be a valid EVM address.');
+            $pageAlertType = 'danger';
+        } elseif (!$mixerBscVaultContractValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_bsc_vault_invalid', 'BSC vault contract must be a valid EVM address.');
+            $pageAlertType = 'danger';
+        } elseif (!$mixerBscTestnetVaultContractValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_bsc_testnet_vault_invalid', 'BSC testnet vault contract must be a valid EVM address.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerNotificationEmailInput !== '' && filter_var($mixerNotificationEmailInput, FILTER_VALIDATE_EMAIL) === false) {
+            $pageAlert = admin_t($messages, 'settings_mixer_notification_email_invalid', 'Swapper notification email must be a valid email address.');
+            $pageAlertType = 'danger';
+        } elseif (!$mixerBtcDepositAddressValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_btc_deposit_address_invalid', 'BTC deposit address must be a valid public BTC address from Trust Wallet.');
+            $pageAlertType = 'danger';
+        } elseif (!$mixerDogeDepositAddressValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_doge_deposit_address_invalid', 'DOGE deposit address must be a valid public DOGE address from Trust Wallet.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerAutoPayoutEnabledInput === 1 && $mixerNotificationEmailInput === '') {
+            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, Polygon RPC URL and notification email.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('polygon', $mixerAllowedNetworksInput, true) && ($mixerPolygonSelectedVaultInput === '' || $mixerPolygonSelectedRpcInput === '')) {
+            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, Polygon RPC URL and notification email.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('bsc', $mixerAllowedNetworksInput, true) && ($mixerBscSelectedVaultInput === '' || $mixerBscSelectedRpcInput === '')) {
+            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, Polygon RPC URL and notification email.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('BTC', $mixerAllowedInputAssetsInput, true) && $mixerBtcDepositAddressInput === '') {
+            $pageAlert = admin_t($messages, 'settings_mixer_btc_deposit_address_required', 'Swapper auto payout requires a public BTC deposit address when BTC is enabled.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('DOGE', $mixerAllowedInputAssetsInput, true) && $mixerDogeDepositAddressInput === '') {
+            $pageAlert = admin_t($messages, 'settings_mixer_doge_deposit_address_required', 'Swapper auto payout requires a public DOGE deposit address when DOGE is enabled.');
+            $pageAlertType = 'danger';
         } else {
             $updated = $db->update_using_id(
                 [
@@ -830,6 +1290,46 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'bank_transfers_enabled',
                     'crypto_wallet_shared_assignments_enabled',
                     'bank_account_shared_assignments_enabled',
+                    'swap_converter_enabled',
+                    'swap_converter_integrator',
+                    'swap_converter_fee_percent',
+                    'swap_converter_api_key',
+                    'swap_converter_allowed_chains',
+                    'hinkal_private_send_enabled',
+                    'hinkal_private_send_fee_wallet',
+                    'rango_converter_enabled',
+                    'rango_api_key',
+                    'rango_walletconnect_project_id',
+                    'rango_affiliate_ref',
+                    'rango_affiliate_fee_percent',
+                    'rango_affiliate_wallets',
+                    'rango_enable_centralized_swappers',
+                    'mixer_enabled',
+                    'mixer_allowed_input_assets',
+                    'mixer_allowed_output_assets',
+                    'mixer_allowed_networks',
+                    'mixer_fee_percent',
+                    'mixer_max_payout_usd',
+                    'mixer_daily_payout_limit_usd',
+                    'mixer_show_pool_liquidity',
+                    'mixer_btc_confirmations_required',
+                    'mixer_doge_confirmations_required',
+                    'mixer_quote_lifetime_minutes',
+                    'mixer_detection_provider',
+                    'mixer_btc_deposit_address',
+                    'mixer_doge_deposit_address',
+                    'mixer_polygon_network_mode',
+                    'mixer_polygon_vault_contract',
+                    'mixer_polygon_rpc_url',
+                    'mixer_polygon_testnet_vault_contract',
+                    'mixer_polygon_testnet_rpc_url',
+                    'mixer_bsc_network_mode',
+                    'mixer_bsc_vault_contract',
+                    'mixer_bsc_rpc_url',
+                    'mixer_bsc_testnet_vault_contract',
+                    'mixer_bsc_testnet_rpc_url',
+                    'mixer_notification_email',
+                    'mixer_auto_payout_enabled',
                 ],
                 [
                     $selectedCurrencyId,
@@ -864,6 +1364,46 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $bankTransfersEnabled,
                     $cryptoWalletSharedAssignmentsEnabled,
                     $bankAccountSharedAssignmentsEnabled,
+                    $swapConverterEnabledInput,
+                    $swapConverterIntegratorInput !== '' ? $swapConverterIntegratorInput : null,
+                    $swapConverterFeePercentInput,
+                    $swapConverterApiKeyInput !== '' ? $swapConverterApiKeyInput : null,
+                    implode(',', $swapConverterAllowedChainKeysInput),
+                    $hinkalPrivateSendEnabledInput,
+                    $hinkalPrivateSendFeeWalletInput !== '' ? $hinkalPrivateSendFeeWalletInput : null,
+                    $rangoConverterEnabledInput,
+                    $rangoApiKeyInput !== '' ? $rangoApiKeyInput : null,
+                    $rangoWalletConnectProjectIdInput !== '' ? $rangoWalletConnectProjectIdInput : null,
+                    $rangoAffiliateRefInput !== '' ? $rangoAffiliateRefInput : null,
+                    $rangoAffiliateFeePercentInput,
+                    $rangoAffiliateWalletsInput !== '' ? $rangoAffiliateWalletsInput : null,
+                    $rangoCentralizedSwappersEnabledInput,
+                    $mixerEnabledInput,
+                    implode(',', $mixerAllowedInputAssetsInput),
+                    implode(',', $mixerAllowedOutputAssetsInput),
+                    implode(',', $mixerAllowedNetworksInput),
+                    $mixerFeePercentInput,
+                    $mixerMaxPayoutUsdInput,
+                    $mixerDailyPayoutLimitUsdInput,
+                    $mixerShowPoolLiquidityInput,
+                    $mixerBtcConfirmationsRequiredInput,
+                    $mixerDogeConfirmationsRequiredInput,
+                    $mixerQuoteLifetimeMinutesInput,
+                    $mixerDetectionProviderInput,
+                    $mixerBtcDepositAddressInput !== '' ? $mixerBtcDepositAddressInput : null,
+                    $mixerDogeDepositAddressInput !== '' ? $mixerDogeDepositAddressInput : null,
+                    $mixerPolygonNetworkModeInput,
+                    $mixerPolygonVaultContractInput !== '' ? $mixerPolygonVaultContractInput : null,
+                    $mixerPolygonRpcUrlInput !== '' ? $mixerPolygonRpcUrlInput : null,
+                    $mixerPolygonTestnetVaultContractInput !== '' ? $mixerPolygonTestnetVaultContractInput : null,
+                    $mixerPolygonTestnetRpcUrlInput !== '' ? $mixerPolygonTestnetRpcUrlInput : null,
+                    $mixerBscNetworkModeInput,
+                    $mixerBscVaultContractInput !== '' ? $mixerBscVaultContractInput : null,
+                    $mixerBscRpcUrlInput !== '' ? $mixerBscRpcUrlInput : null,
+                    $mixerBscTestnetVaultContractInput !== '' ? $mixerBscTestnetVaultContractInput : null,
+                    $mixerBscTestnetRpcUrlInput !== '' ? $mixerBscTestnetRpcUrlInput : null,
+                    $mixerNotificationEmailInput !== '' ? $mixerNotificationEmailInput : null,
+                    $mixerAutoPayoutEnabledInput,
                 ],
                 'app_settings',
                 1
@@ -882,6 +1422,83 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $adminDefaultCurrencySymbol = (string)($adminDefaultCurrencyRow['symbol'] ?? '$');
                 $adminDefaultCurrencyLabel = trim($adminDefaultCurrencyCode . ' - ' . (string)($adminDefaultCurrencyRow['name'] ?? $adminDefaultCurrencyCode));
                 $adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
+                $swapConverterEnabled = admin_swap_converter_enabled($appSettings);
+                $swapConverterIntegrator = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-Pro'));
+                $swapConverterApiKey = trim((string)($appSettings['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
+                $swapConverterFeePercent = round((float)($appSettings['swap_converter_fee_percent'] ?? 1.00), 2);
+                $swapConverterFeePercent = max(0.0, min(10.0, $swapConverterFeePercent));
+                $swapConverterAllowedChainKeys = admin_swap_converter_allowed_chain_keys($appSettings['swap_converter_allowed_chains'] ?? '');
+                $swapConverterAllowedChainIds = admin_swap_converter_chain_ids_for_keys($swapConverterAllowedChainKeys);
+                $hinkalPrivateSendEnabled = admin_hinkal_private_send_enabled($appSettings);
+                $hinkalPrivateSendFeeWallet = trim((string)($appSettings['hinkal_private_send_fee_wallet'] ?? ''));
+                $rangoConverterEnabled = admin_rango_converter_enabled($appSettings);
+                $rangoApiKey = trim((string)($appSettings['rango_api_key'] ?? ''));
+                $rangoApiKey = $rangoApiKey !== '' ? $rangoApiKey : ADMIN_RANGO_DEFAULT_API_KEY;
+                $rangoWalletConnectProjectId = trim((string)($appSettings['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
+                $rangoAffiliateRef = trim((string)($appSettings['rango_affiliate_ref'] ?? ''));
+                $rangoAffiliateFeePercent = round((float)($appSettings['rango_affiliate_fee_percent'] ?? 1.00), 2);
+                $rangoAffiliateFeePercent = max(0.0, min(3.0, $rangoAffiliateFeePercent));
+                $rangoAffiliateWallets = trim((string)($appSettings['rango_affiliate_wallets'] ?? ''));
+                $rangoCentralizedSwappersEnabled = admin_rango_centralized_swappers_enabled($appSettings);
+                $mixerEnabled = admin_mixer_enabled($appSettings);
+                $mixerInputAssetOptions = admin_mixer_input_asset_options();
+                $mixerAllowedInputAssets = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
+                $mixerOutputAssetOptions = admin_mixer_output_asset_options();
+                $mixerAllowedOutputAssets = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+                $mixerNetworkOptions = admin_mixer_network_options();
+                $mixerNetworkModeOptions = admin_mixer_network_modes();
+                $mixerAllowedNetworks = admin_mixer_allowed_networks($appSettings['mixer_allowed_networks'] ?? 'polygon');
+                $mixerDetectionProviderOptions = admin_mixer_detection_provider_options();
+                $mixerFeePercent = round((float)($appSettings['mixer_fee_percent'] ?? 1.50), 2);
+                $mixerFeePercent = max(0.0, min(5.0, $mixerFeePercent));
+                $mixerMaxPayoutUsd = round((float)($appSettings['mixer_max_payout_usd'] ?? 500.00), 2);
+                $mixerDailyPayoutLimitUsd = round((float)($appSettings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
+                $mixerShowPoolLiquidity = array_key_exists('mixer_show_pool_liquidity', $appSettings) ? !empty($appSettings['mixer_show_pool_liquidity']) : true;
+                $mixerBtcConfirmationsRequired = (int)($appSettings['mixer_btc_confirmations_required'] ?? 3);
+                $mixerDogeConfirmationsRequired = (int)($appSettings['mixer_doge_confirmations_required'] ?? 20);
+                $mixerQuoteLifetimeMinutes = (int)($appSettings['mixer_quote_lifetime_minutes'] ?? 15);
+                $mixerDetectionProvider = trim((string)($appSettings['mixer_detection_provider'] ?? 'esplora'));
+                if (!isset($mixerDetectionProviderOptions[$mixerDetectionProvider])) {
+                    $mixerDetectionProvider = 'esplora';
+                }
+                $mixerBtcDepositAddress = trim((string)($appSettings['mixer_btc_deposit_address'] ?? ''));
+                $mixerDogeDepositAddress = trim((string)($appSettings['mixer_doge_deposit_address'] ?? ''));
+                $mixerPolygonNetworkMode = admin_mixer_normalize_network_mode($appSettings['mixer_polygon_network_mode'] ?? 'mainnet');
+                $mixerPolygonVaultContract = trim((string)($appSettings['mixer_polygon_vault_contract'] ?? ''));
+                $mixerPolygonRpcUrl = trim((string)($appSettings['mixer_polygon_rpc_url'] ?? ''));
+                $mixerPolygonRpcUrl = $mixerPolygonRpcUrl !== '' ? $mixerPolygonRpcUrl : admin_mixer_default_rpc_url('polygon', 'mainnet');
+                $mixerPolygonTestnetVaultContract = trim((string)($appSettings['mixer_polygon_testnet_vault_contract'] ?? ''));
+                $mixerPolygonTestnetRpcUrl = trim((string)($appSettings['mixer_polygon_testnet_rpc_url'] ?? ''));
+                $mixerPolygonTestnetRpcUrl = $mixerPolygonTestnetRpcUrl !== '' ? $mixerPolygonTestnetRpcUrl : admin_mixer_default_rpc_url('polygon', 'testnet');
+                $mixerBscNetworkMode = admin_mixer_normalize_network_mode($appSettings['mixer_bsc_network_mode'] ?? 'mainnet');
+                $mixerBscVaultContract = trim((string)($appSettings['mixer_bsc_vault_contract'] ?? ''));
+                $mixerBscRpcUrl = trim((string)($appSettings['mixer_bsc_rpc_url'] ?? ''));
+                $mixerBscRpcUrl = $mixerBscRpcUrl !== '' ? $mixerBscRpcUrl : admin_mixer_default_rpc_url('bsc', 'mainnet');
+                $mixerBscTestnetVaultContract = trim((string)($appSettings['mixer_bsc_testnet_vault_contract'] ?? ''));
+                $mixerBscTestnetRpcUrl = trim((string)($appSettings['mixer_bsc_testnet_rpc_url'] ?? ''));
+                $mixerBscTestnetRpcUrl = $mixerBscTestnetRpcUrl !== '' ? $mixerBscTestnetRpcUrl : admin_mixer_default_rpc_url('bsc', 'testnet');
+                $mixerNotificationEmail = trim((string)($appSettings['mixer_notification_email'] ?? ''));
+                $mixerAutoPayoutEnabled = !empty($appSettings['mixer_auto_payout_enabled']);
+                $mixerNetworkPoolStates = [];
+                if ($mixerEnabled && in_array($route, ['settings', 'swap-converter'], true)) {
+                    foreach ($mixerNetworkOptions as $mixerNetworkKey => $mixerNetworkOption) {
+                        $mixerNetworkKeyString = (string)$mixerNetworkKey;
+                        $mixerNetworkMode = $mixerNetworkKeyString === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+                        $mixerNetworkEffectiveOption = admin_mixer_effective_network_option($mixerNetworkKeyString, $mixerNetworkMode);
+                        $mixerNetworkVault = $mixerNetworkKeyString === 'bsc'
+                            ? ($mixerNetworkMode === 'testnet' ? $mixerBscTestnetVaultContract : $mixerBscVaultContract)
+                            : ($mixerNetworkMode === 'testnet' ? $mixerPolygonTestnetVaultContract : $mixerPolygonVaultContract);
+                        $mixerNetworkRpc = $mixerNetworkKeyString === 'bsc'
+                            ? ($mixerNetworkMode === 'testnet' ? $mixerBscTestnetRpcUrl : $mixerBscRpcUrl)
+                            : ($mixerNetworkMode === 'testnet' ? $mixerPolygonTestnetRpcUrl : $mixerPolygonRpcUrl);
+                        $mixerNetworkPoolStates[$mixerNetworkKeyString] = admin_mixer_native_pool_state(
+                            $mixerNetworkRpc,
+                            $mixerNetworkVault,
+                            (string)($mixerNetworkEffectiveOption['native_symbol'] ?? '')
+                        );
+                    }
+                }
+                $swapConverterPageEnabled = $swapConverterEnabled || $hinkalPrivateSendEnabled || $rangoConverterEnabled || $mixerEnabled;
             } else {
                 $pageAlert = admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.');
                 $pageAlertType = 'danger';
@@ -4108,6 +4725,7 @@ if ($route === 'payments' && $paymentFilterCustomer && is_array($pageCard)) {
 }
 
 $pageTitleMap = [
+    'swap-converter' => admin_t($messages, 'page_swap_converter_title', 'Swap Converter'),
     'dashboard' => admin_t($messages, 'page_dashboard_title', 'Dashboard'),
     'orders' => admin_t($messages, 'page_orders_title', 'Orders'),
     'products' => admin_t($messages, 'page_products_title', 'Products'),
@@ -4126,6 +4744,7 @@ $pageTitleMap = [
 ];
 
 $pageIntroMap = [
+    'swap-converter' => admin_t($messages, 'page_swap_converter_intro', 'Swap ETH, USDT and other assets across networks with Swap Converter.'),
     'dashboard' => admin_t($messages, 'page_dashboard_intro', 'A clean overview of customers, payments and content.'),
     'orders' => admin_t($messages, 'page_orders_intro', ''),
     'products' => admin_t($messages, 'page_products_intro', ''),
@@ -4292,6 +4911,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 <i class="bi bi-box-arrow-up-right"></i>
                 <span><?php echo admin_e(admin_t($messages, 'preview_site', 'View website')); ?></span>
             </a>
+
+            <?php if ($swapConverterPageEnabled && admin_user_can_access_route($adminUser, 'swap-converter')): ?>
+                <a href="/admin/?page=swap-converter" class="admin-sidebar__preview admin-sidebar__preview--swap<?php echo $route === 'swap-converter' ? ' is-active' : ''; ?>">
+                    <i class="bi bi-arrow-left-right"></i>
+                    <span><?php echo admin_e(admin_t($messages, 'nav_swap_converter', 'Swap Converter')); ?></span>
+                </a>
+            <?php endif; ?>
 
             <nav class="admin-sidebar__nav">
                 <?php foreach ($navigation as $groupKey => $items): ?>
@@ -5716,12 +6342,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 <section class="admin-search-results" data-admin-search-results hidden></section>
 
                 <div data-admin-default-content>
-                <section class="admin-page-hero d-none d-lg-block d-xl-block">
-                    <div>
-                        <h1><?php echo admin_e($pageTitleMap[$route] ?? ''); ?></h1>
-                        <p><?php echo admin_e($pageIntroMap[$route] ?? ''); ?></p>
-                    </div>
-                </section>
+                    <section class="admin-page-hero d-none d-lg-block d-xl-block">
+                        <div>
+                            <h1><?php echo admin_e($pageTitleMap[$route] ?? ''); ?></h1>
+                            <p><?php echo admin_e($pageIntroMap[$route] ?? ''); ?></p>
+                        </div>
+                    </section>
 
                 <?php if ($route === 'dashboard'): ?>
                     <section class="admin-dashboard-period-grid">
@@ -6207,8 +6833,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     </section>
                 <?php else: ?>
                     <section class="admin-page-layout">
-                        <article class="admin-panel-card admin-panel-card--wide">
-                            <?php if ((string)($pageCard['title'] ?? '') !== '' || (string)($pageCard['text'] ?? '') !== ''): ?>
+                        <article class="admin-panel-card admin-panel-card--wide<?php echo $route === 'swap-converter' ? ' admin-panel-card--swap-converter' : ''; ?>">
+                            <?php if ($route !== 'swap-converter' && ((string)($pageCard['title'] ?? '') !== '' || (string)($pageCard['text'] ?? '') !== '')): ?>
                             <div class="admin-panel-card__header">
                                 <div>
                                     <?php if ((string)($pageCard['title'] ?? '') !== ''): ?>
@@ -6223,6 +6849,604 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                             <?php
                             switch ($route) {
+                                case 'swap-converter':
+                                    $swapFeeDecimal = round($swapConverterFeePercent / 100, 6);
+                                    $swapHelpText = static function (string $text): string {
+                                        $escaped = admin_e($text);
+                                        $terms = [
+                                            'BNB Smart Chain',
+                                            'Ethereum ERC-20',
+                                            'Ethereum/ERC-20',
+                                            'USDT ERC-20',
+                                            'Send to wallet',
+                                            'Get BSC gas',
+                                            'assetu B',
+                                            'asset B',
+                                            'Dogecoina',
+                                            'Dogecoin',
+                                            'Bitcoina',
+                                            'Bitcoin',
+                                            'Rango',
+                                            'Polygon',
+                                            'Solana',
+                                            'USDT',
+                                            'DOGE',
+                                            'BSC',
+                                            'ETH',
+                                            'BNB',
+                                            'SOL',
+                                            'POL',
+                                            'MATIC',
+                                        ];
+                                        $pattern = '/(?<![\\p{L}\\p{N}])(' . implode('|', array_map(static fn ($term) => preg_quote($term, '/'), $terms)) . ')(?![\\p{L}\\p{N}])/u';
+                                        return preg_replace_callback($pattern, static function (array $matches): string {
+                                            return '<strong class="admin-swap-help__asset">' . $matches[1] . '</strong>';
+                                        }, $escaped) ?? $escaped;
+                                    };
+                                    $swapModeCount = ($swapConverterEnabled ? 1 : 0) + ($hinkalPrivateSendEnabled ? 1 : 0) + ($rangoConverterEnabled ? 1 : 0) + ($mixerEnabled ? 1 : 0);
+                                    $swapDefaultMode = $mixerEnabled
+                                        ? 'mixer'
+                                        : ($swapConverterEnabled ? 'lifi' : ($hinkalPrivateSendEnabled ? 'private' : ($rangoConverterEnabled ? 'rango' : '')));
+                                    $mixerInputAssetLabels = [];
+                                    foreach ($mixerAllowedInputAssets as $assetKey) {
+                                        $mixerInputAssetLabels[] = (string)($mixerInputAssetOptions[$assetKey]['label'] ?? $assetKey);
+                                    }
+                                    $mixerOutputAssetLabels = [];
+                                    foreach ($mixerAllowedOutputAssets as $assetKey) {
+                                        $mixerOutputAssetLabels[] = (string)($mixerOutputAssetOptions[$assetKey]['label'] ?? $assetKey);
+                                    }
+                                    $mixerActiveNetworkKey = (string)($mixerAllowedNetworks[0] ?? 'polygon');
+                                    $mixerActiveNetworkMode = $mixerActiveNetworkKey === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+                                    $mixerActiveNetworkOption = admin_mixer_effective_network_option($mixerActiveNetworkKey, $mixerActiveNetworkMode);
+                                    $mixerActiveVaultContract = $mixerActiveNetworkKey === 'bsc'
+                                        ? ($mixerActiveNetworkMode === 'testnet' ? $mixerBscTestnetVaultContract : $mixerBscVaultContract)
+                                        : ($mixerActiveNetworkMode === 'testnet' ? $mixerPolygonTestnetVaultContract : $mixerPolygonVaultContract);
+                                    $mixerActiveRpcUrl = $mixerActiveNetworkKey === 'bsc'
+                                        ? ($mixerActiveNetworkMode === 'testnet' ? $mixerBscTestnetRpcUrl : $mixerBscRpcUrl)
+                                        : ($mixerActiveNetworkMode === 'testnet' ? $mixerPolygonTestnetRpcUrl : $mixerPolygonRpcUrl);
+                                    $mixerActiveChainId = (int)($mixerActiveNetworkOption['chain_id'] ?? 137);
+                                    $mixerActiveChainHex = '0x' . dechex(max(1, $mixerActiveChainId));
+                                    $mixerActiveExplorerTxUrl = (string)($mixerActiveNetworkOption['explorer_tx_url'] ?? 'https://polygonscan.com/tx/');
+                                    $mixerActivePoolState = $mixerNetworkPoolStates[$mixerActiveNetworkKey] ?? [
+                                        'ok' => false,
+                                        'configured' => false,
+                                        'balance' => 0.0,
+                                        'label' => '0 ' . (string)($mixerActiveNetworkOption['native_symbol'] ?? ''),
+                                        'error' => 'Pool balance is not available.',
+                                    ];
+                                    $mixerPreviewInputKey = (string)($mixerAllowedInputAssets[0] ?? 'BTC');
+                                    $mixerPreviewOutputKey = (string)($mixerAllowedOutputAssets[0] ?? 'POLYGON_POL');
+                                    $mixerPreviewInputOption = $mixerInputAssetOptions[$mixerPreviewInputKey] ?? [];
+                                    $mixerPreviewInputSymbol = (string)($mixerPreviewInputOption['symbol'] ?? $mixerPreviewInputKey);
+                                    $mixerPreviewInputNetwork = (string)($mixerPreviewInputOption['network'] ?? ($mixerPreviewInputKey === 'DOGE' ? 'Dogecoin' : 'Bitcoin'));
+                                    $mixerPreviewInputIcon = (string)($mixerPreviewInputOption['icon'] ?? '');
+                                    $mixerPreviewInputNetworkIcon = (string)($mixerPreviewInputOption['network_icon'] ?? $mixerPreviewInputIcon);
+                                    $mixerPreviewDepositAddress = $mixerPreviewInputKey === 'DOGE' ? $mixerDogeDepositAddress : $mixerBtcDepositAddress;
+                                    $mixerInputAssetUiOptions = [];
+                                    foreach ($mixerAllowedInputAssets as $inputAssetKey) {
+                                        $inputAssetKeyString = strtoupper((string)$inputAssetKey);
+                                        $inputAssetOption = $mixerInputAssetOptions[$inputAssetKeyString] ?? [];
+                                        $inputAssetSymbol = (string)($inputAssetOption['symbol'] ?? $inputAssetKeyString);
+                                        $inputAssetNetwork = (string)($inputAssetOption['network'] ?? ($inputAssetKeyString === 'DOGE' ? 'Dogecoin' : 'Bitcoin'));
+                                        $inputAssetIcon = (string)($inputAssetOption['icon'] ?? '');
+                                        $inputAssetNetworkIcon = (string)($inputAssetOption['network_icon'] ?? $inputAssetIcon);
+                                        $inputAssetDepositAddress = $inputAssetKeyString === 'DOGE' ? $mixerDogeDepositAddress : $mixerBtcDepositAddress;
+                                        $mixerInputAssetUiOptions[] = [
+                                            'key' => $inputAssetKeyString,
+                                            'symbol' => $inputAssetSymbol,
+                                            'network' => $inputAssetNetwork,
+                                            'icon' => $inputAssetIcon,
+                                            'networkIcon' => $inputAssetNetworkIcon,
+                                            'badge' => $inputAssetKeyString === 'DOGE' ? 'D' : 'B',
+                                            'depositAddress' => $inputAssetDepositAddress,
+                                        ];
+                                    }
+                                    $mixerInputAssetUiOptionsJson = json_encode($mixerInputAssetUiOptions, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                                    $mixerPreviewOutputOption = $mixerOutputAssetOptions[$mixerPreviewOutputKey] ?? [];
+                                    $mixerPreviewOutputSymbol = (string)($mixerPreviewOutputOption['symbol'] ?? 'POL');
+                                    $mixerPreviewOutputNetwork = (string)($mixerActiveNetworkOption['label'] ?? ($mixerPreviewOutputOption['network'] ?? 'Polygon'));
+                                    $mixerPreviewOutputIcon = (string)($mixerPreviewOutputOption['icon'] ?? '');
+                                    $mixerPreviewOutputNetworkIcon = (string)($mixerPreviewOutputOption['network_icon'] ?? $mixerPreviewOutputIcon);
+                                    $mixerPreviewInputBadge = $mixerPreviewInputKey === 'DOGE' ? 'D' : 'B';
+                                    $mixerPreviewOutputBadge = strtoupper(substr($mixerPreviewOutputNetwork, 0, 1));
+                                    $mixerVaultReady = $mixerActiveVaultContract !== '' && preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerActiveVaultContract) === 1;
+                                    $mixerRpcReady = $mixerActiveRpcUrl !== '';
+                                    $mixerPoolReady = !empty($mixerActivePoolState['ok']);
+                                    $mixerPoolHasLiquidity = $mixerPoolReady && (float)($mixerActivePoolState['balance'] ?? 0.0) > 0;
+                                    $mixerEmailReady = $mixerNotificationEmail !== '' && filter_var($mixerNotificationEmail, FILTER_VALIDATE_EMAIL) !== false;
+                                    $mixerBtcWatcherReady = !in_array('BTC', $mixerAllowedInputAssets, true) || $mixerBtcDepositAddress !== '';
+                                    $mixerDogeWatcherReady = !in_array('DOGE', $mixerAllowedInputAssets, true) || $mixerDogeDepositAddress !== '';
+                                    $mixerWatcherReady = $mixerBtcWatcherReady && $mixerDogeWatcherReady;
+                                    $mixerRouteReady = $mixerAllowedInputAssets !== [] && $mixerAllowedOutputAssets !== [] && $mixerAllowedNetworks !== [] && $mixerVaultReady && $mixerRpcReady && $mixerPoolReady && $mixerPoolHasLiquidity && $mixerWatcherReady;
+                                    $mixerConfigReady = $mixerRouteReady && $mixerActiveRpcUrl !== '' && $mixerEmailReady;
+                                    $mixerInputsDisabled = !$mixerVaultReady || !$mixerRpcReady || !$mixerPoolReady || !$mixerPoolHasLiquidity;
+                                    if (!$mixerVaultReady) {
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_temporarily_disabled', 'Unfortunately, Swapper is temporarily disabled. Please try again later.');
+                                    } elseif (!$mixerRpcReady || !$mixerPoolReady) {
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_rpc_unavailable', 'Swapper cannot read the vault balance. Check RPC URL in Settings.');
+                                    } elseif (!$mixerPoolHasLiquidity) {
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_pool_empty', 'No routes available. The Swapper vault has no liquidity right now.');
+                                    } elseif ($mixerRouteReady) {
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_wallet_required', 'The destination wallet address is required to proceed with the transfer.');
+                                    } else {
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_setup_required', 'No routes available. Complete Swapper settings in admin mode before generating a deposit address.');
+                                    }
+                                    $mixerButtonText = $mixerInputsDisabled
+                                        ? admin_t($messages, 'mixer_widget_temporarily_disabled_button', 'Swapper temporarily disabled')
+                                        : admin_t($messages, 'mixer_start_swap', 'Start Swap');
+                                    ?>
+                                    <section class="admin-swap-page">
+                                        <?php if ($swapModeCount > 1): ?>
+                                            <div class="admin-swap-mode" data-admin-swap-mode-root data-admin-swap-default-mode="<?php echo admin_e($swapDefaultMode); ?>">
+                                                <div class="admin-swap-mode__switch" role="tablist" aria-label="<?php echo admin_e(admin_t($messages, 'swap_converter_mode_label', 'Mode')); ?>" style="--admin-swap-mode-columns: <?php echo (int)$swapModeCount; ?>;">
+                                                    <?php if ($mixerEnabled): ?>
+                                                        <button type="button" class="admin-swap-mode__option<?php echo $swapDefaultMode === 'mixer' ? ' is-active' : ''; ?>" data-admin-swap-mode="mixer" role="tab" aria-selected="<?php echo $swapDefaultMode === 'mixer' ? 'true' : 'false'; ?>">
+                                                            <?php echo admin_e(admin_t($messages, 'swap_converter_mode_mixer', 'Swapper')); ?>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if ($swapConverterEnabled): ?>
+                                                        <button type="button" class="admin-swap-mode__option<?php echo $swapDefaultMode === 'lifi' ? ' is-active' : ''; ?>" data-admin-swap-mode="lifi" role="tab" aria-selected="<?php echo $swapDefaultMode === 'lifi' ? 'true' : 'false'; ?>">
+                                                            <?php echo admin_e(admin_t($messages, 'swap_converter_mode_exchange', 'Bridge')); ?>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if ($hinkalPrivateSendEnabled): ?>
+                                                        <button type="button" class="admin-swap-mode__option<?php echo $swapDefaultMode === 'private' ? ' is-active' : ''; ?>" data-admin-swap-mode="private" role="tab" aria-selected="<?php echo $swapDefaultMode === 'private' ? 'true' : 'false'; ?>">
+                                                            <?php echo admin_e(admin_t($messages, 'swap_converter_mode_private', 'Wyślij prywatnie')); ?>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if ($rangoConverterEnabled): ?>
+                                                        <button type="button" class="admin-swap-mode__option<?php echo $swapDefaultMode === 'rango' ? ' is-active' : ''; ?>" data-admin-swap-mode="rango" role="tab" aria-selected="<?php echo $swapDefaultMode === 'rango' ? 'true' : 'false'; ?>">
+                                                            <?php echo admin_e(admin_t($messages, 'swap_converter_mode_rango', 'BTC/DOGE')); ?>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($hinkalPrivateSendEnabled): ?>
+                                            <div class="admin-swap-view" data-admin-swap-view="private"<?php echo $swapDefaultMode !== 'private' ? ' hidden' : ''; ?>>
+                                                <div
+                                                    class="admin-private-send-widget"
+                                                    id="adminHinkalPrivateSendMount"
+                                                    data-fee-percent="<?php echo admin_e(number_format($swapConverterFeePercent, 2, '.', '')); ?>"
+                                                    data-fee-wallet="<?php echo admin_e($hinkalPrivateSendFeeWallet); ?>"
+                                                    data-loading-label="<?php echo admin_e(admin_t($messages, 'hinkal_private_send_loading', 'Ładowanie modułu Hinkal...')); ?>"
+                                                    data-error-label="<?php echo admin_e(admin_t($messages, 'hinkal_private_send_error', 'Nie udało się załadować modułu Hinkal.')); ?>"
+                                                    data-walletconnect-project-id="5432e3507d41270bee46b7b85bbc2ef8">
+                                                    <div class="admin-swap-loader admin-private-send-loader" role="status" aria-live="polite">
+                                                        <span class="admin-swap-loader__spinner" aria-hidden="true"></span>
+                                                        <span><?php echo admin_e(admin_t($messages, 'hinkal_private_send_loading', 'Ładowanie modułu Hinkal...')); ?></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($swapConverterEnabled): ?>
+                                        <div class="admin-swap-view" data-admin-swap-view="lifi"<?php echo $swapDefaultMode !== 'lifi' ? ' hidden' : ''; ?>>
+                                            <div class="admin-swap-help">
+                                                <button class="btn btn-outline-default btn-md w-100 admin-swap-help__toggle" type="button" data-bs-toggle="collapse" data-bs-target="#adminSwapHowItWorks" aria-expanded="false" aria-controls="adminSwapHowItWorks">
+                                                    <?php echo admin_e(admin_t($messages, 'swap_converter_help_toggle', 'How does the exchange work?')); ?>
+                                                </button>
+                                                <div class="collapse admin-swap-help__panel" id="adminSwapHowItWorks">
+                                                    <div class="admin-swap-help__content">
+                                                        <p><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_intro', 'First, exchange received assets, for example Bitcoin or Dogecoin, on the main wallet to USDT on Polygon.')); ?></p>
+                                                        <p class="admin-swap-help__warning"><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_warning', 'Important: if the transaction starts from Polygon, keep at least 3-5 USD worth of POL on the same wallet for gas. Without POL, USDT Polygon cannot move.')); ?></p>
+                                                        <p><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_networks', 'From USDT Polygon, exchange funds to the selected destination network. Also keep a small native balance on that network so you can withdraw or send funds later.')); ?></p>
+                                                        <ul>
+                                                            <li><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_example_bnb', 'USDT Polygon -> USDT BNB: you need POL for the start transaction and BNB for later withdrawals on BNB Smart Chain.')); ?></li>
+                                                            <li><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_example_sol', 'USDT Polygon -> USDT SOL: you need POL for the start transaction and SOL for later withdrawals on Solana.')); ?></li>
+                                                            <li><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_example_pol', 'USDT Polygon -> USDT Ethereum ERC-20: you need POL for the start transaction and ETH for later movements on Ethereum.')); ?></li>
+                                                        </ul>
+                                                        <p><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_native_gas', 'You cannot pay Polygon gas with BNB, SOL or ETH. Gas is always paid in the native currency of the network where the transaction starts.')); ?></p>
+                                                        <div class="alert alert-warning admin-swap-help__gas-alert" role="alert">
+                                                            <span class="admin-swap-help__alert-text"><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_bsc_gas', 'Get BSC gas means the destination wallet on BNB Smart Chain is low on BNB for gas. If you continue, LI.FI can add a small amount of BNB to the transaction so that after receiving USDT BNB, the funds are not stuck and can be sent or withdrawn later. This does not pay Polygon gas - you still need POL to start the transaction.')); ?></span>
+                                                        </div>
+                                                        <div class="alert alert-info admin-swap-help__address-alert mb-0" role="alert">
+                                                            <span class="admin-swap-help__alert-text"><?php echo $swapHelpText(admin_t($messages, 'swap_converter_help_send_to_wallet', 'Before starting the exchange, verify 100% that the Send to wallet address is correct and matches the destination network for asset B. If you enter the wrong address or choose the wrong network, assets may be lost or impossible to recover.')); ?></span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <?php if ($swapConverterIntegrator === ''): ?>
+                                                <div class="alert alert-warning mb-0">
+                                                    <?php echo admin_e(admin_t($messages, 'swap_converter_widget_missing_integrator', 'LI.FI integrator name is missing. Fill it in Settings (admin mode).')); ?>
+                                                </div>
+                                            <?php else: ?>
+                                                <div class="admin-swap-widget"
+                                                    id="adminSwapWidgetMount"
+                                                    data-integrator="<?php echo admin_e($swapConverterIntegrator); ?>"
+                                                    data-api-key="<?php echo admin_e($swapConverterApiKey); ?>"
+                                                    data-fee="<?php echo admin_e(number_format($swapFeeDecimal, 6, '.', '')); ?>"
+                                                    data-allowed-chains="<?php echo admin_e(json_encode(array_values($swapConverterAllowedChainIds), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT)); ?>"
+                                                    data-loading-label="<?php echo admin_e(admin_t($messages, 'swap_converter_widget_loading', 'Loading LI.FI widget...')); ?>"
+                                                    data-error-label="<?php echo admin_e(admin_t($messages, 'swap_converter_widget_error', 'Unable to load LI.FI widget. Check your connection and configuration.')); ?>">
+                                                    <div class="admin-swap-loader" role="status" aria-live="polite">
+                                                        <span class="admin-swap-loader__spinner" aria-hidden="true"></span>
+                                                        <span><?php echo admin_e(admin_t($messages, 'swap_converter_widget_loading', 'Loading LI.FI widget...')); ?></span>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($mixerEnabled): ?>
+                                            <div class="admin-swap-view" data-admin-swap-view="mixer"<?php echo $swapDefaultMode !== 'mixer' ? ' hidden' : ''; ?>>
+                                                <div
+                                                    class="admin-mixer-widget<?php echo $mixerInputsDisabled ? ' is-disabled' : ''; ?>"
+                                                    aria-label="<?php echo admin_e(admin_t($messages, 'mixer_page_title', 'Swapper')); ?>"
+                                                    data-admin-mixer-widget
+                                                    data-vault-ready="<?php echo $mixerVaultReady ? '1' : '0'; ?>"
+                                                    data-route-ready="<?php echo $mixerRouteReady ? '1' : '0'; ?>"
+                                                    data-input-assets="<?php echo admin_e($mixerInputAssetUiOptionsJson !== false ? $mixerInputAssetUiOptionsJson : '[]'); ?>"
+                                                    data-input-asset-key="<?php echo admin_e($mixerPreviewInputKey); ?>"
+                                                    data-input-asset="<?php echo admin_e($mixerPreviewInputSymbol); ?>"
+                                                    data-input-network="<?php echo admin_e($mixerPreviewInputNetwork); ?>"
+                                                    data-output-network-key="<?php echo admin_e($mixerActiveNetworkKey); ?>"
+                                                    data-output-network-mode="<?php echo admin_e($mixerActiveNetworkMode); ?>"
+                                                    data-output-chain-id="<?php echo (int)$mixerActiveChainId; ?>"
+                                                    data-output-chain-hex="<?php echo admin_e($mixerActiveChainHex); ?>"
+                                                    data-output-rpc-url="<?php echo admin_e($mixerActiveRpcUrl); ?>"
+                                                    data-output-native-symbol="<?php echo admin_e((string)($mixerActiveNetworkOption['native_symbol'] ?? $mixerPreviewOutputSymbol)); ?>"
+                                                    data-payout-explorer-url="<?php echo admin_e($mixerActiveExplorerTxUrl); ?>"
+                                                    data-output-asset-key="<?php echo admin_e($mixerPreviewOutputKey); ?>"
+                                                    data-output-asset="<?php echo admin_e($mixerPreviewOutputSymbol); ?>"
+                                                    data-output-network="<?php echo admin_e($mixerPreviewOutputNetwork); ?>"
+                                                    data-deposit-address="<?php echo admin_e($mixerPreviewDepositAddress); ?>"
+                                                    data-quote-lifetime-minutes="<?php echo (int)$mixerQuoteLifetimeMinutes; ?>"
+                                                    data-fee-percent="<?php echo admin_e(number_format($mixerFeePercent, 2, '.', '')); ?>"
+                                                    data-csrf="<?php echo admin_e($csrfToken); ?>"
+                                                    data-ajax-url="/admin/?page=swap-converter"
+                                                    data-connect-error-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_connect_error', 'Unable to connect wallet. Paste the recipient address manually.')); ?>"
+                                                    data-connected-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_wallet_connected', 'Wallet connected')); ?>"
+                                                    data-no-wallet-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_no_wallet', 'No EVM wallet extension detected. Paste the recipient address manually.')); ?>"
+                                                    data-fill-required-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_fill_required', 'Enter the amount and a valid recipient address to continue.')); ?>"
+                                                    data-backend-pending-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_backend_pending', 'Deposit order generation will be enabled after the watcher and payout executor are connected.')); ?>"
+                                                    data-pay-warning-label="<?php echo admin_e(admin_t($messages, 'mixer_payment_do_not_refresh', 'Do not close or refresh this page while the payment is being detected. This order is saved locally and will be restored after refresh.')); ?>"
+                                                    data-copied-label="<?php echo admin_e(admin_t($messages, 'copied', 'Copied')); ?>">
+                                                    <div data-admin-mixer-form>
+                                                    <div class="admin-mixer-widget__heading">
+                                                        <h3><?php echo admin_e(admin_t($messages, 'mixer_exchange_title', 'Swapper')); ?></h3>
+                                                    </div>
+
+                                                    <div class="admin-mixer-network" data-admin-mixer-network>
+                                                        <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_network', 'Network')); ?></span>
+                                                        <div class="admin-mixer-network__options" role="list" aria-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_network', 'Network')); ?>">
+                                                            <?php foreach ($mixerNetworkOptions as $networkKey => $networkOption): ?>
+                                                                <?php
+                                                                $networkKeyString = (string)$networkKey;
+                                                                $networkAvailable = !empty($networkOption['available']);
+                                                                $networkVisible = $networkAvailable && in_array($networkKeyString, $mixerAllowedNetworks, true);
+                                                                if (!$networkVisible) {
+                                                                    continue;
+                                                                }
+                                                                $networkMode = $networkKeyString === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+                                                                $networkEffectiveOption = admin_mixer_effective_network_option($networkKeyString, $networkMode);
+                                                                $networkIcon = (string)($networkOption['icon'] ?? '');
+                                                                ?>
+                                                                <button
+                                                                    type="button"
+                                                                    class="admin-mixer-network__option<?php echo $networkKeyString === $mixerActiveNetworkKey ? ' is-active' : ''; ?>"
+                                                                    data-admin-mixer-network-option="<?php echo admin_e($networkKeyString); ?>"
+                                                                    aria-pressed="<?php echo $networkKeyString === $mixerActiveNetworkKey ? 'true' : 'false'; ?>"
+                                                                    <?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
+                                                                    <?php if ($networkIcon !== ''): ?>
+                                                                        <img src="<?php echo admin_e($networkIcon); ?>" alt="">
+                                                                    <?php endif; ?>
+                                                                    <span>
+                                                                        <strong><?php echo admin_e((string)($networkEffectiveOption['label'] ?? $networkKeyString)); ?></strong>
+                                                                        <em><?php echo admin_e((string)($networkEffectiveOption['native_symbol'] ?? '')); ?></em>
+                                                                    </span>
+                                                                </button>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    </div>
+
+                                                    <?php if ($mixerShowPoolLiquidity): ?>
+                                                        <div class="admin-mixer-pool<?php echo $mixerPoolReady && $mixerPoolHasLiquidity ? ' is-ready' : ' is-warning'; ?>">
+                                                            <span>
+                                                                <i class="bi bi-bank" aria-hidden="true"></i>
+                                                                <?php echo admin_e(admin_t($messages, 'mixer_widget_pool_available', 'Pool available')); ?>
+                                                            </span>
+                                                            <strong><?php echo admin_e((string)($mixerActivePoolState['label'] ?? '0 ' . $mixerPreviewOutputSymbol)); ?></strong>
+                                                        </div>
+                                                    <?php endif; ?>
+
+                                                    <div class="admin-mixer-widget__route">
+                                                        <div class="admin-mixer-widget__asset-card">
+                                                            <div class="admin-mixer-widget__label-row">
+                                                                <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_from', 'From')); ?></span>
+                                                                <?php if (count($mixerInputAssetUiOptions) > 1): ?>
+                                                                    <select class="admin-mixer-widget__asset-select" data-admin-mixer-input-select aria-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_input_asset', 'Input asset')); ?>"<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
+                                                                        <?php foreach ($mixerInputAssetUiOptions as $inputAssetUiOption): ?>
+                                                                            <option value="<?php echo admin_e((string)$inputAssetUiOption['key']); ?>"<?php echo (string)$inputAssetUiOption['key'] === $mixerPreviewInputKey ? ' selected' : ''; ?>>
+                                                                                <?php echo admin_e((string)$inputAssetUiOption['symbol']); ?>
+                                                                            </option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <div class="admin-mixer-widget__asset-row">
+                                                                <span class="admin-mixer-widget__token admin-mixer-widget__token--<?php echo admin_e(strtolower($mixerPreviewInputKey)); ?>" data-admin-mixer-input-token>
+                                                                    <?php if ($mixerPreviewInputIcon !== ''): ?>
+                                                                        <img class="admin-mixer-widget__token-logo" src="<?php echo admin_e($mixerPreviewInputIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputSymbol); ?>" data-admin-mixer-input-token-img>
+                                                                        <span data-admin-mixer-input-token-text hidden><?php echo admin_e($mixerPreviewInputSymbol); ?></span>
+                                                                    <?php else: ?>
+                                                                        <img class="admin-mixer-widget__token-logo" src="" alt="" data-admin-mixer-input-token-img hidden>
+                                                                        <span data-admin-mixer-input-token-text><?php echo admin_e($mixerPreviewInputSymbol); ?></span>
+                                                                    <?php endif; ?>
+                                                                    <small>
+                                                                        <?php if ($mixerPreviewInputNetworkIcon !== ''): ?>
+                                                                            <img src="<?php echo admin_e($mixerPreviewInputNetworkIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputNetwork); ?>" data-admin-mixer-input-network-img>
+                                                                            <span data-admin-mixer-input-network-text hidden><?php echo admin_e($mixerPreviewInputBadge); ?></span>
+                                                                        <?php else: ?>
+                                                                            <img src="" alt="" data-admin-mixer-input-network-img hidden>
+                                                                            <span data-admin-mixer-input-network-text><?php echo admin_e($mixerPreviewInputBadge); ?></span>
+                                                                        <?php endif; ?>
+                                                                    </small>
+                                                                </span>
+                                                                <span class="admin-mixer-widget__asset-copy">
+                                                                    <strong data-admin-mixer-input-symbol><?php echo admin_e($mixerPreviewInputSymbol); ?></strong>
+                                                                    <em data-admin-mixer-input-network-label><?php echo admin_e($mixerPreviewInputNetwork); ?></em>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <span class="admin-mixer-widget__route-arrow" aria-hidden="true">
+                                                            <i class="bi bi-arrow-right"></i>
+                                                        </span>
+                                                        <div class="admin-mixer-widget__asset-card">
+                                                            <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_to', 'To')); ?></span>
+                                                            <div class="admin-mixer-widget__asset-row">
+                                                                <span class="admin-mixer-widget__token admin-mixer-widget__token--<?php echo admin_e(strtolower($mixerPreviewOutputSymbol)); ?>">
+                                                                    <?php if ($mixerPreviewOutputIcon !== ''): ?>
+                                                                        <img class="admin-mixer-widget__token-logo" src="<?php echo admin_e($mixerPreviewOutputIcon); ?>" alt="<?php echo admin_e($mixerPreviewOutputSymbol); ?>">
+                                                                    <?php else: ?>
+                                                                        <span><?php echo admin_e($mixerPreviewOutputSymbol); ?></span>
+                                                                    <?php endif; ?>
+                                                                    <small>
+                                                                        <?php if ($mixerPreviewOutputNetworkIcon !== ''): ?>
+                                                                            <img src="<?php echo admin_e($mixerPreviewOutputNetworkIcon); ?>" alt="<?php echo admin_e($mixerPreviewOutputNetwork); ?>">
+                                                                        <?php else: ?>
+                                                                            <?php echo admin_e($mixerPreviewOutputBadge); ?>
+                                                                        <?php endif; ?>
+                                                                    </small>
+                                                                </span>
+                                                                <span class="admin-mixer-widget__asset-copy">
+                                                                    <strong><?php echo admin_e($mixerPreviewOutputSymbol); ?></strong>
+                                                                    <em><?php echo admin_e($mixerPreviewOutputNetwork); ?></em>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-mixer-widget__field-card">
+                                                        <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_amount_label', 'Amount to send')); ?></span>
+                                                        <div class="admin-mixer-widget__amount-row">
+                                                            <span class="admin-mixer-widget__token admin-mixer-widget__token--<?php echo admin_e(strtolower($mixerPreviewInputKey)); ?>" data-admin-mixer-input-token>
+                                                                <?php if ($mixerPreviewInputIcon !== ''): ?>
+                                                                    <img class="admin-mixer-widget__token-logo" src="<?php echo admin_e($mixerPreviewInputIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputSymbol); ?>" data-admin-mixer-input-token-img>
+                                                                    <span data-admin-mixer-input-token-text hidden><?php echo admin_e($mixerPreviewInputSymbol); ?></span>
+                                                                <?php else: ?>
+                                                                    <img class="admin-mixer-widget__token-logo" src="" alt="" data-admin-mixer-input-token-img hidden>
+                                                                    <span data-admin-mixer-input-token-text><?php echo admin_e($mixerPreviewInputSymbol); ?></span>
+                                                                <?php endif; ?>
+                                                                <small>
+                                                                    <?php if ($mixerPreviewInputNetworkIcon !== ''): ?>
+                                                                        <img src="<?php echo admin_e($mixerPreviewInputNetworkIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputNetwork); ?>" data-admin-mixer-input-network-img>
+                                                                        <span data-admin-mixer-input-network-text hidden><?php echo admin_e($mixerPreviewInputBadge); ?></span>
+                                                                    <?php else: ?>
+                                                                        <img src="" alt="" data-admin-mixer-input-network-img hidden>
+                                                                        <span data-admin-mixer-input-network-text><?php echo admin_e($mixerPreviewInputBadge); ?></span>
+                                                                    <?php endif; ?>
+                                                                </small>
+                                                            </span>
+                                                            <span class="admin-mixer-widget__amount-copy">
+                                                                <label class="admin-mixer-widget__amount-input">
+                                                                    <input
+                                                                        type="text"
+                                                                        inputmode="decimal"
+                                                                        autocomplete="off"
+                                                                        spellcheck="false"
+                                                                        data-admin-mixer-amount
+                                                                        placeholder="0"
+                                                                        aria-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_amount_label', 'Amount to send')); ?>"<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
+                                                                </label>
+                                                                <em data-admin-mixer-usd>0.00 USD</em>
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="admin-mixer-widget__field-card">
+                                                        <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_send_to_wallet', 'Send to wallet')); ?> <b>*</b></span>
+                                                        <div class="admin-mixer-widget__recipient-row">
+                                                            <span class="admin-mixer-widget__recipient-icon">
+                                                                <small>
+                                                                    <?php if ($mixerPreviewOutputNetworkIcon !== ''): ?>
+                                                                        <img src="<?php echo admin_e($mixerPreviewOutputNetworkIcon); ?>" alt="<?php echo admin_e($mixerPreviewOutputNetwork); ?>">
+                                                                    <?php else: ?>
+                                                                        <?php echo admin_e($mixerPreviewOutputBadge); ?>
+                                                                    <?php endif; ?>
+                                                                </small>
+                                                            </span>
+                                                            <input
+                                                                type="text"
+                                                                autocomplete="off"
+                                                                spellcheck="false"
+                                                                data-admin-mixer-recipient
+                                                                placeholder="<?php echo admin_e(admin_t($messages, 'mixer_widget_wallet_placeholder', 'Enter wallet address')); ?>"
+                                                                aria-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_wallet_placeholder', 'Enter wallet address')); ?>"<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
+                                                        </div>
+                                                        <button type="button" class="admin-mixer-widget__connect admin-mixer-widget__connect--inline" data-admin-mixer-connect<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
+                                                            <span><?php echo admin_e(admin_t($messages, 'mixer_connect_wallet', 'Connect wallet')); ?></span>
+                                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                        </button>
+                                                    </div>
+
+                                                    <div class="admin-mixer-widget__notice<?php echo $mixerRouteReady ? '' : ' is-warning'; ?>" role="status" data-admin-mixer-notice>
+                                                        <i class="bi <?php echo $mixerVaultReady ? ($mixerRouteReady ? 'bi-credit-card-2-front' : 'bi-info-circle') : 'bi-lock-fill'; ?>" aria-hidden="true" data-admin-mixer-notice-icon></i>
+                                                        <span data-admin-mixer-notice-text><?php echo admin_e($mixerNoticeText); ?></span>
+                                                    </div>
+
+                                                    <button type="button" class="admin-mixer-widget__button" data-admin-mixer-create-order disabled>
+                                                        <?php echo admin_e($mixerButtonText); ?>
+                                                    </button>
+
+                                                    <div class="admin-mixer-widget__footer">
+                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_powered_by', 'Powered by')); ?></span>
+                                                        <strong>SWAPPER</strong>
+                                                    </div>
+                                                    </div>
+
+                                                    <div class="admin-mixer-order" data-admin-mixer-order hidden>
+                                                        <div class="admin-mixer-order__head">
+                                                            <button type="button" class="admin-mixer-order__back" data-admin-mixer-order-back>
+                                                                <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                                                                <?php echo admin_e(admin_t($messages, 'mixer_order_back', 'Back')); ?>
+                                                            </button>
+                                                            <span class="admin-mixer-order__status" data-admin-mixer-order-status>
+                                                                <?php echo admin_e(admin_t($messages, 'mixer_order_status_waiting', 'Waiting deposit')); ?>
+                                                            </span>
+                                                        </div>
+
+                                                        <div class="admin-mixer-order__progress" aria-label="<?php echo admin_e(admin_t($messages, 'mixer_order_progress', 'Swap progress')); ?>">
+                                                            <div class="admin-mixer-order__progress-bar">
+                                                                <span data-admin-mixer-progress-bar style="width: 12%;"></span>
+                                                            </div>
+                                                            <strong data-admin-mixer-progress-label>12%</strong>
+                                                        </div>
+
+                                                        <div class="admin-mixer-order__layout">
+                                                            <div class="admin-mixer-order__qr">
+                                                                <img src="" alt="QR code" data-admin-mixer-qr>
+                                                            </div>
+
+                                                            <div class="admin-mixer-order__main">
+                                                                <div class="admin-mixer-order__title">
+                                                                    <img src="<?php echo admin_e($mixerPreviewInputIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputSymbol); ?>" data-admin-mixer-order-input-icon>
+                                                                    <div>
+                                                                        <strong><?php echo admin_e(admin_t($messages, 'mixer_order_title', 'Send exact payment')); ?></strong>
+                                                                        <span data-admin-mixer-order-pair><?php echo admin_e($mixerPreviewInputSymbol . ' -> ' . $mixerPreviewOutputSymbol . ' ' . $mixerPreviewOutputNetwork); ?></span>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div class="admin-mixer-order__grid">
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_amount', 'Amount')); ?></span>
+                                                                        <button type="button" class="admin-mixer-order__copy" data-admin-mixer-copy="amount">
+                                                                            <strong data-admin-mixer-order-amount>0</strong>
+                                                                            <small data-admin-mixer-order-input-symbol><?php echo admin_e($mixerPreviewInputSymbol); ?></small>
+                                                                        </button>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_deposit_address', 'Deposit address')); ?></span>
+                                                                        <button type="button" class="admin-mixer-order__copy admin-mixer-order__copy--break" data-admin-mixer-copy="address">
+                                                                            <strong data-admin-mixer-order-address><?php echo admin_e($mixerPreviewDepositAddress !== '' ? $mixerPreviewDepositAddress : '-'); ?></strong>
+                                                                        </button>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_recipient', 'Recipient')); ?></span>
+                                                                        <strong data-admin-mixer-order-recipient>-</strong>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_estimated_receive', 'Estimated receive')); ?></span>
+                                                                        <strong data-admin-mixer-order-estimated>-</strong>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_quote', 'Quote source')); ?></span>
+                                                                        <strong><?php echo admin_e(admin_t($messages, 'mixer_order_quote_source', 'Backend CoinGecko cache')); ?></strong>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div class="admin-mixer-order__warning">
+                                                                    <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                                                    <span data-admin-mixer-order-warning><?php echo admin_e(admin_t($messages, 'mixer_payment_do_not_refresh', 'Do not close or refresh this page while the payment is being detected. This order is saved locally and will be restored after refresh.')); ?></span>
+                                                                </div>
+
+                                                                <div class="admin-mixer-order__meta">
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_time_left', 'Time left')); ?></span>
+                                                                        <strong data-admin-mixer-countdown>--:--</strong>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_confirmations', 'Confirmations')); ?></span>
+                                                                        <strong data-admin-mixer-confirmations>0/3</strong>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_deposit_hash', 'Deposit tx')); ?></span>
+                                                                        <a href="#" target="_blank" rel="noopener noreferrer" data-admin-mixer-deposit-link hidden>Explorer</a>
+                                                                        <strong data-admin-mixer-deposit-empty>-</strong>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_payout_hash', 'Payout tx')); ?></span>
+                                                                        <a href="#" target="_blank" rel="noopener noreferrer" data-admin-mixer-payout-link hidden>Explorer</a>
+                                                                        <strong data-admin-mixer-payout-empty>-</strong>
+                                                                    </div>
+                                                                </div>
+
+                                                                <ol class="admin-mixer-order__steps">
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_1', 'Open Trust Wallet and choose the selected input asset.')); ?></li>
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_2', 'Copy the amount and deposit address from this screen.')); ?></li>
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_3', 'Send the payment from your wallet and wait for confirmations.')); ?></li>
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_4', 'After detection, the backend calculates the real paid amount and sends the payout.')); ?></li>
+                                                                </ol>
+
+                                                                <div class="admin-mixer-order__actions">
+                                                                    <button type="button" class="btn btn-outline-dark btn-md" data-admin-mixer-order-cancel>
+                                                                        <?php echo admin_e(admin_t($messages, 'mixer_order_cancel', 'Cancel order')); ?>
+                                                                    </button>
+                                                                    <span class="admin-mixer-order__copy-feedback" data-admin-mixer-copy-feedback><?php echo admin_e(admin_t($messages, 'copied', 'Copied')); ?></span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <section class="admin-mixer-history" data-admin-mixer-history hidden>
+                                                        <div class="admin-mixer-history__head">
+                                                            <div>
+                                                                <strong><?php echo admin_e(admin_t($messages, 'mixer_history_title', 'Local Swapper history')); ?></strong>
+                                                                <span data-admin-mixer-history-wallet>-</span>
+                                                            </div>
+                                                            <small><?php echo admin_e(admin_t($messages, 'mixer_history_local_only', 'Saved only in this browser')); ?></small>
+                                                        </div>
+                                                        <p class="admin-mixer-history__state" data-admin-mixer-history-state>
+                                                            <?php echo admin_e(admin_t($messages, 'mixer_history_empty', 'No local history for this wallet yet.')); ?>
+                                                        </p>
+                                                        <div class="admin-mixer-history__list" data-admin-mixer-history-list></div>
+                                                    </section>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($rangoConverterEnabled): ?>
+                                            <div class="admin-swap-view" data-admin-swap-view="rango"<?php echo $swapDefaultMode !== 'rango' ? ' hidden' : ''; ?>>
+                                                <?php if ($rangoApiKey === ''): ?>
+                                                    <div class="alert alert-warning mb-0">
+                                                        <?php echo admin_e(admin_t($messages, 'rango_converter_missing_api_key', 'Rango API key is missing. Fill it in Settings (admin mode).')); ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <div
+                                                        class="admin-rango-widget"
+                                                        id="adminRangoConverterMount"
+                                                        data-api-key="<?php echo admin_e($rangoApiKey); ?>"
+                                                        data-walletconnect-project-id="<?php echo admin_e($rangoWalletConnectProjectId); ?>"
+                                                        data-affiliate-ref="<?php echo admin_e($rangoAffiliateRef); ?>"
+                                                        data-affiliate-percent="<?php echo admin_e(number_format($rangoAffiliateFeePercent, 2, '.', '')); ?>"
+                                                        data-affiliate-wallets="<?php echo admin_e($rangoAffiliateWallets); ?>"
+                                                        data-enable-centralized-swappers="<?php echo $rangoCentralizedSwappersEnabled ? '1' : '0'; ?>"
+                                                        data-loading-label="<?php echo admin_e(admin_t($messages, 'rango_converter_loading', 'Loading Rango widget...')); ?>"
+                                                        data-error-label="<?php echo admin_e(admin_t($messages, 'rango_converter_error', 'Unable to load Rango widget. Check your API key and configuration.')); ?>">
+                                                        <div class="admin-swap-loader" role="status" aria-live="polite">
+                                                            <span class="admin-swap-loader__spinner" aria-hidden="true"></span>
+                                                            <span><?php echo admin_e(admin_t($messages, 'rango_converter_loading', 'Loading Rango widget...')); ?></span>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </section>
+                                    <?php
+                                    break;
+
                                 case 'orders':
                                     if ($orderShowCreate):
                                         $productsJson = [];
@@ -10920,8 +12144,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-wallet-editor-page">
                                             <?php
                                             $editorOwnerFullName = trim((string)($walletEditor['owner_full_name'] ?? ''));
-                                            if ($editorOwnerFullName === '') {
+                                            $editorNotes = trim((string)($walletEditor['notes'] ?? ''));
+                                            if ($walletCreateMode && $editorOwnerFullName === '') {
+                                                $generatedOwnerProfile = admin_random_wallet_owner_profile();
+                                                $editorOwnerFullName = (string)($generatedOwnerProfile['full_name'] ?? '');
+                                                $editorNotes = app_wallet_notes_with_location($editorNotes, (string)($generatedOwnerProfile['location'] ?? ''));
+                                            } elseif ($editorOwnerFullName === '') {
                                                 $editorOwnerFullName = admin_random_wallet_owner_name();
+                                            }
+                                            if ($editorNotes === '') {
+                                                $editorNotes = app_wallet_notes_with_location($editorNotes, admin_wallet_owner_location_by_name($editorOwnerFullName));
                                             }
                                             $editorExplorerUrl = !empty($walletEditor['id'])
                                                 ? admin_crypto_wallet_explorer_url(
@@ -11092,7 +12324,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                                         <div class="col-12">
                                                             <label class="form-label" for="wallet_notes"><?php echo admin_e(admin_t($messages, 'wallet_notes', 'Notes')); ?></label>
-                                                            <textarea class="form-control" id="wallet_notes" name="notes" rows="3"><?php echo admin_e((string)($walletEditor['notes'] ?? '')); ?></textarea>
+                                                            <textarea class="form-control" id="wallet_notes" name="notes" rows="3"><?php echo admin_e($editorNotes); ?></textarea>
                                                         </div>
                                                     </div>
 
@@ -13205,6 +14437,100 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $settingsProtectedSiteFieldDisabledAttr = !$settingsAdminMode ? ' disabled' : '';
                                     $settingsAdminModeUrl = '/admin/?page=settings&admin=true';
                                     $settingsAdminModeHintVisible = strtolower(trim((string)($adminUser['login_name'] ?? ''))) === 'admin';
+                                    $mixerActiveCryptoCodes = [];
+                                    foreach (admin_crypto_asset_rows($db, true) as $cryptoAssetRow) {
+                                        $cryptoAssetCode = strtoupper(trim((string)($cryptoAssetRow['code'] ?? '')));
+                                        if ($cryptoAssetCode !== '') {
+                                            $mixerActiveCryptoCodes[$cryptoAssetCode] = true;
+                                        }
+                                    }
+                                    $mixerVaultTokenContracts = [
+                                        'polygon' => [
+                                            'mainnet' => [
+                                                'USDT' => '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+                                            ],
+                                            'testnet' => [],
+                                        ],
+                                        'bsc' => [
+                                            'mainnet' => [
+                                                'USDT' => '0x55d398326f99059fF775485246999027B3197955',
+                                            ],
+                                            'testnet' => [],
+                                        ],
+                                    ];
+                                    $mixerVaultOwnerNetworks = [];
+                                    foreach ($mixerNetworkOptions as $networkKey => $networkOption) {
+                                        $networkKeyString = (string)$networkKey;
+                                        $networkMode = $networkKeyString === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+                                        $networkEffectiveOption = admin_mixer_effective_network_option($networkKeyString, $networkMode);
+                                        $networkVault = $networkKeyString === 'bsc'
+                                            ? ($networkMode === 'testnet' ? $mixerBscTestnetVaultContract : $mixerBscVaultContract)
+                                            : ($networkMode === 'testnet' ? $mixerPolygonTestnetVaultContract : $mixerPolygonVaultContract);
+                                        $networkRpc = $networkKeyString === 'bsc'
+                                            ? ($networkMode === 'testnet' ? $mixerBscTestnetRpcUrl : $mixerBscRpcUrl)
+                                            : ($networkMode === 'testnet' ? $mixerPolygonTestnetRpcUrl : $mixerPolygonRpcUrl);
+                                        if ($networkRpc === '') {
+                                            $networkRpc = admin_mixer_default_rpc_url($networkKeyString, $networkMode);
+                                        }
+
+                                        $nativeSymbol = strtoupper((string)($networkEffectiveOption['native_symbol'] ?? ''));
+                                        $networkAssets = [];
+                                        if ($nativeSymbol !== '' && (!isset($mixerActiveCryptoCodes[$nativeSymbol]) || !empty($mixerActiveCryptoCodes[$nativeSymbol]))) {
+                                            $networkAssets[] = [
+                                                'key' => 'native',
+                                                'type' => 'native',
+                                                'symbol' => $nativeSymbol,
+                                                'label' => $nativeSymbol . ' native',
+                                                'address' => '0x0000000000000000000000000000000000000000',
+                                                'decimals' => 18,
+                                            ];
+                                        }
+
+                                        if (!empty($mixerActiveCryptoCodes['USDT'])) {
+                                            $usdtContract = (string)($mixerVaultTokenContracts[$networkKeyString][$networkMode]['USDT'] ?? '');
+                                            if ($usdtContract !== '') {
+                                                $networkAssets[] = [
+                                                    'key' => 'USDT',
+                                                    'type' => 'token',
+                                                    'symbol' => 'USDT',
+                                                    'label' => 'USDT',
+                                                    'address' => $usdtContract,
+                                                    'decimals' => 6,
+                                                ];
+                                            }
+                                        }
+
+                                        $mixerVaultOwnerNetworks[] = [
+                                            'key' => $networkKeyString,
+                                            'mode' => $networkMode,
+                                            'label' => (string)($networkEffectiveOption['label'] ?? $networkKeyString),
+                                            'nativeSymbol' => $nativeSymbol,
+                                            'chainId' => (int)($networkEffectiveOption['chain_id'] ?? 0),
+                                            'chainHex' => '0x' . dechex(max(1, (int)($networkEffectiveOption['chain_id'] ?? 1))),
+                                            'vault' => $networkVault,
+                                            'rpcUrl' => $networkRpc,
+                                            'explorerUrl' => preg_replace('/\/tx\/?$/i', '', (string)($networkEffectiveOption['explorer_tx_url'] ?? '')) ?: '',
+                                            'available' => !empty($networkOption['available']),
+                                            'assets' => $networkAssets,
+                                        ];
+                                    }
+                                    $mixerVaultOwnerConfig = [
+                                        'networks' => $mixerVaultOwnerNetworks,
+                                        'labels' => [
+                                            'connect' => admin_t($messages, 'settings_mixer_owner_connect', 'Connect owner wallet'),
+                                            'connected' => admin_t($messages, 'settings_mixer_owner_connected', 'Wallet connected'),
+                                            'notOwner' => admin_t($messages, 'settings_mixer_owner_not_owner', 'Connected wallet is not the vault owner. Controls are locked.'),
+                                            'ownerReady' => admin_t($messages, 'settings_mixer_owner_ready', 'Owner detected. Vault controls are unlocked.'),
+                                            'noWallet' => admin_t($messages, 'settings_mixer_owner_no_wallet', 'No EVM wallet extension detected.'),
+                                            'txSent' => admin_t($messages, 'settings_mixer_owner_tx_sent', 'Transaction sent'),
+                                            'txFailed' => admin_t($messages, 'settings_mixer_owner_tx_failed', 'Transaction was rejected or failed.'),
+                                            'refreshFailed' => admin_t($messages, 'settings_mixer_owner_refresh_failed', 'Unable to read vault data. Check RPC, network and vault address.'),
+                                            'invalidAmount' => admin_t($messages, 'settings_mixer_owner_invalid_amount', 'Enter a valid amount.'),
+                                            'invalidRecipient' => admin_t($messages, 'settings_mixer_owner_invalid_recipient', 'Enter a valid recipient address.'),
+                                            'confirmWithdrawAll' => admin_t($messages, 'settings_mixer_owner_confirm_withdraw_all', 'Withdraw the full selected balance from the vault?'),
+                                        ],
+                                    ];
+                                    $mixerVaultOwnerConfigJson = json_encode($mixerVaultOwnerConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                                     ?>
                                     <div class="admin-settings-tabs-wrap">
                                         <div class="admin-settings-tabs-scroller">
@@ -13597,6 +14923,649 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_bank_account_shared_assignments_enabled_help', 'If OFF, one bank account can be assigned to one user only.')); ?></small>
                                                 </div>
+                                                <?php if ($settingsAdminMode): ?>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="swap_converter_enabled" name="swap_converter_enabled" data-admin-feature-settings-toggle aria-controls="settingsSwapConverterBody"<?php echo $swapConverterEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="swap_converter_enabled"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_enabled', 'Swap Converter (LI.FI)')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_enabled_help', 'If OFF, only the LI.FI exchange mode is hidden from the Swap Converter page. The sidebar entry stays visible while any swap module is ON.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12 admin-feature-settings__body" id="settingsSwapConverterBody" data-admin-feature-settings-body="swap_converter_enabled"<?php echo $swapConverterEnabled ? '' : ' hidden'; ?>>
+                                                        <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="swap_converter_integrator"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_integrator', 'Integrator (LI.FI)')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="swap_converter_integrator"
+                                                            name="swap_converter_integrator"
+                                                            value="<?php echo admin_e($swapConverterIntegrator); ?>"
+                                                            placeholder="your-integrator-name">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_integrator_help', 'Enter the integrator name from your LI.FI portal. Required when this feature is enabled.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="swap_converter_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_fee_percent', 'Integrator fee (%)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max="10"
+                                                            step="0.01"
+                                                            class="form-control"
+                                                            id="swap_converter_fee_percent"
+                                                            name="swap_converter_fee_percent"
+                                                            value="<?php echo admin_e(number_format($swapConverterFeePercent, 2, '.', '')); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_fee_percent_help', 'Set a value from 0 to 10. Example: 1 means 1% fee sent to your fee wallet configured in LI.FI.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="swap_converter_api_key"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_api_key', 'API key (LI.FI)')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="swap_converter_api_key"
+                                                            name="swap_converter_api_key"
+                                                            value="<?php echo admin_e($swapConverterApiKey); ?>"
+                                                            placeholder="LI.FI API key">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_api_key_help', 'Optional. If provided, the key is used by the widget in the browser.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_chains', 'Visible LI.FI chains')); ?></label>
+                                                        <div class="row g-2">
+                                                            <?php foreach ($swapConverterChainOptions as $chainKey => $chainOption): ?>
+                                                                <?php
+                                                                $chainAvailable = !empty($chainOption['available']);
+                                                                $chainInputId = 'swap_converter_chain_' . preg_replace('/[^a-z0-9_-]+/i', '_', (string)$chainKey);
+                                                                $chainChecked = in_array((string)$chainKey, $swapConverterAllowedChainKeys, true);
+                                                                ?>
+                                                                <div class="col-sm-6 col-xl-4">
+                                                                    <div class="form-check">
+                                                                        <input
+                                                                            class="form-check-input"
+                                                                            type="checkbox"
+                                                                            id="<?php echo admin_e($chainInputId); ?>"
+                                                                            name="swap_converter_allowed_chains[]"
+                                                                            value="<?php echo admin_e((string)$chainKey); ?>"
+                                                                            <?php echo $chainChecked && $chainAvailable ? ' checked' : ''; ?>
+                                                                            <?php echo !$chainAvailable ? ' disabled' : ''; ?>>
+                                                                        <label class="form-check-label" for="<?php echo admin_e($chainInputId); ?>">
+                                                                            <?php echo admin_e((string)($chainOption['label'] ?? $chainKey)); ?>
+                                                                            <?php if (!$chainAvailable): ?>
+                                                                                <span class="text-muted">(<?php echo admin_e(admin_t($messages, 'settings_swap_converter_chain_unavailable', 'not available in LI.FI')); ?>)</span>
+                                                                            <?php endif; ?>
+                                                                        </label>
+                                                                    </div>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_chains_help', 'Only selected chains will be visible in the LI.FI widget. DOGE is shown as unavailable because LI.FI does not currently return Dogecoin as a supported chain.')); ?></small>
+                                                    </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="hinkal_private_send_enabled" name="hinkal_private_send_enabled" data-admin-feature-settings-toggle aria-controls="settingsHinkalPrivateSendBody"<?php echo $hinkalPrivateSendEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="hinkal_private_send_enabled"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_enabled', 'Private Send (Hinkal)')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_enabled_help', 'If OFF, the Private Send mode is hidden from the Swap Converter page.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12 admin-feature-settings__body" id="settingsHinkalPrivateSendBody" data-admin-feature-settings-body="hinkal_private_send_enabled"<?php echo $hinkalPrivateSendEnabled ? '' : ' hidden'; ?>>
+                                                        <div class="row g-3">
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="hinkal_private_send_fee_wallet"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_wallet', 'Hinkal fee wallet (Polygon)')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="hinkal_private_send_fee_wallet"
+                                                            name="hinkal_private_send_fee_wallet"
+                                                            value="<?php echo admin_e($hinkalPrivateSendFeeWallet); ?>"
+                                                            placeholder="0x...">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_wallet_help', 'Required for the 1% Private Send fee. Use a Polygon/EVM wallet that can receive USDT on Polygon.')); ?></small>
+                                                    </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="rango_converter_enabled" name="rango_converter_enabled" data-admin-feature-settings-toggle aria-controls="settingsRangoConverterBody"<?php echo $rangoConverterEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="rango_converter_enabled"><?php echo admin_e(admin_t($messages, 'settings_rango_converter_enabled', 'BTC/DOGE Converter (Rango)')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_converter_enabled_help', 'If OFF, the BTC/DOGE tab is hidden from the Swap Converter page.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12 admin-feature-settings__body" id="settingsRangoConverterBody" data-admin-feature-settings-body="rango_converter_enabled"<?php echo $rangoConverterEnabled ? '' : ' hidden'; ?>>
+                                                        <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="rango_api_key"><?php echo admin_e(admin_t($messages, 'settings_rango_api_key', 'API key (Rango)')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="rango_api_key"
+                                                            name="rango_api_key"
+                                                            value="<?php echo admin_e($rangoApiKey); ?>"
+                                                            placeholder="Rango API key">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_api_key_help', 'Required when BTC/DOGE Converter is enabled.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="rango_walletconnect_project_id"><?php echo admin_e(admin_t($messages, 'settings_rango_walletconnect_project_id', 'WalletConnect project ID')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="rango_walletconnect_project_id"
+                                                            name="rango_walletconnect_project_id"
+                                                            value="<?php echo admin_e($rangoWalletConnectProjectId); ?>"
+                                                            placeholder="WalletConnect Cloud project ID">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_walletconnect_project_id_help', 'Used by mobile wallets and WalletConnect connections.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="rango_affiliate_ref"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_ref', 'Affiliate ref (Rango)')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="rango_affiliate_ref"
+                                                            name="rango_affiliate_ref"
+                                                            value="<?php echo admin_e($rangoAffiliateRef); ?>"
+                                                            placeholder="your-rango-ref">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_ref_help', 'Referral code from the Rango affiliate panel.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="rango_affiliate_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_fee_percent', 'Affiliate fee (%)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max="3"
+                                                            step="0.01"
+                                                            class="form-control"
+                                                            id="rango_affiliate_fee_percent"
+                                                            name="rango_affiliate_fee_percent"
+                                                            value="<?php echo admin_e(number_format($rangoAffiliateFeePercent, 2, '.', '')); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_fee_percent_help', 'Default 1%. Rango accepts the fee only when the affiliate ref and wallets are configured correctly.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="rango_affiliate_wallets"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_wallets', 'Affiliate wallets JSON (Rango)')); ?></label>
+                                                        <textarea
+                                                            class="form-control"
+                                                            id="rango_affiliate_wallets"
+                                                            name="rango_affiliate_wallets"
+                                                            rows="4"
+                                                            placeholder='{"BTC":"bc1...","DOGE":"D...","POLYGON":"0x...","BSC":"0x..."}'><?php echo admin_e($rangoAffiliateWallets); ?></textarea>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_wallets_help', 'JSON object mapping route blockchain names to your fee wallet addresses, for example BTC, DOGE, POLYGON, BSC, ETH.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="rango_enable_centralized_swappers" name="rango_enable_centralized_swappers"<?php echo $rangoCentralizedSwappersEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="rango_enable_centralized_swappers"><?php echo admin_e(admin_t($messages, 'settings_rango_enable_centralized_swappers', 'Enable centralized Rango routes')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_enable_centralized_swappers_help', 'Recommended for BTC and DOGE routes because they often require providers such as SWFT/XO-style routing.')); ?></small>
+                                                    </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <hr class="my-2">
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="mixer_enabled" name="mixer_enabled" data-admin-feature-settings-toggle aria-controls="settingsMixerBody"<?php echo $mixerEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="mixer_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled', 'Swapper (BTC/DOGE -> Polygon vault)')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled_help', 'If OFF, the internal Swapper tab is hidden from the Swap Converter page.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12 admin-feature-settings__body" id="settingsMixerBody" data-admin-feature-settings-body="mixer_enabled"<?php echo $mixerEnabled ? '' : ' hidden'; ?>>
+                                                        <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_mixer_input_assets', 'Input assets')); ?></label>
+                                                        <div class="row g-2">
+                                                            <?php foreach ($mixerInputAssetOptions as $assetKey => $assetOption): ?>
+                                                                <?php $mixerInputId = 'mixer_input_asset_' . strtolower((string)$assetKey); ?>
+                                                                <div class="col-sm-6">
+                                                                    <div class="form-check">
+                                                                        <input
+                                                                            class="form-check-input"
+                                                                            type="checkbox"
+                                                                            id="<?php echo admin_e($mixerInputId); ?>"
+                                                                            name="mixer_allowed_input_assets[]"
+                                                                            value="<?php echo admin_e((string)$assetKey); ?>"
+                                                                            <?php echo in_array((string)$assetKey, $mixerAllowedInputAssets, true) ? ' checked' : ''; ?>>
+                                                                        <label class="form-check-label" for="<?php echo admin_e($mixerInputId); ?>">
+                                                                            <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
+                                                                        </label>
+                                                                    </div>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_mixer_output_assets', 'Output assets')); ?></label>
+                                                        <div class="row g-2">
+                                                            <?php foreach ($mixerOutputAssetOptions as $assetKey => $assetOption): ?>
+                                                                <?php
+                                                                $mixerOutputId = 'mixer_output_asset_' . strtolower((string)$assetKey);
+                                                                $mixerOutputAvailable = !empty($assetOption['available']);
+                                                                ?>
+                                                                <div class="col-sm-6">
+                                                                    <div class="form-check">
+                                                                        <input
+                                                                            class="form-check-input"
+                                                                            type="checkbox"
+                                                                            id="<?php echo admin_e($mixerOutputId); ?>"
+                                                                            name="mixer_allowed_output_assets[]"
+                                                                            value="<?php echo admin_e((string)$assetKey); ?>"
+                                                                            <?php echo $mixerOutputAvailable && in_array((string)$assetKey, $mixerAllowedOutputAssets, true) ? ' checked' : ''; ?>
+                                                                            <?php echo !$mixerOutputAvailable ? ' disabled' : ''; ?>>
+                                                                        <label class="form-check-label" for="<?php echo admin_e($mixerOutputId); ?>">
+                                                                            <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
+                                                                            <?php if (!$mixerOutputAvailable): ?>
+                                                                                <span class="text-muted">(<?php echo admin_e(admin_t($messages, 'settings_mixer_output_asset_planned', 'planned')); ?>)</span>
+                                                                            <?php endif; ?>
+                                                                        </label>
+                                                                    </div>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="admin-mixer-settings-networks">
+                                                            <div class="admin-mixer-settings-networks__head">
+                                                                <div>
+                                                                    <h4><?php echo admin_e(admin_t($messages, 'settings_mixer_networks', 'Swapper networks')); ?></h4>
+                                                                    <p><?php echo admin_e(admin_t($messages, 'settings_mixer_networks_help', 'Choose payout networks and keep each network vault/RPC configuration in one place. Polygon is active now; BSC is prepared for future support.')); ?></p>
+                                                                </div>
+                                                            </div>
+                                                            <div class="form-check form-switch admin-mixer-settings-networks__visibility">
+                                                                <input class="form-check-input" type="checkbox" role="switch" id="mixer_show_pool_liquidity" name="mixer_show_pool_liquidity"<?php echo $mixerShowPoolLiquidity ? ' checked' : ''; ?>>
+                                                                <label class="form-check-label" for="mixer_show_pool_liquidity"><?php echo admin_e(admin_t($messages, 'settings_mixer_show_pool_liquidity', 'Show pool balance in Swapper')); ?></label>
+                                                            </div>
+                                                            <ul class="nav nav-pills admin-mixer-settings-networks__tabs" role="tablist">
+                                                                <?php foreach ($mixerNetworkOptions as $networkKey => $networkOption): ?>
+                                                                    <?php
+                                                                    $networkKeyString = (string)$networkKey;
+                                                                    $networkTabId = 'mixer-network-tab-' . preg_replace('/[^a-z0-9_]+/i', '-', $networkKeyString);
+                                                                    $networkPaneId = 'mixer-network-pane-' . preg_replace('/[^a-z0-9_]+/i', '-', $networkKeyString);
+                                                                    $networkTabActive = $networkKeyString === 'polygon';
+                                                                    $networkIcon = (string)($networkOption['icon'] ?? '');
+                                                                    ?>
+                                                                    <li class="nav-item" role="presentation">
+                                                                        <button
+                                                                            class="nav-link<?php echo $networkTabActive ? ' active' : ''; ?>"
+                                                                            id="<?php echo admin_e($networkTabId); ?>"
+                                                                            data-bs-toggle="pill"
+                                                                            data-bs-target="#<?php echo admin_e($networkPaneId); ?>"
+                                                                            type="button"
+                                                                            role="tab"
+                                                                            aria-controls="<?php echo admin_e($networkPaneId); ?>"
+                                                                            aria-selected="<?php echo $networkTabActive ? 'true' : 'false'; ?>">
+                                                                            <?php if ($networkIcon !== ''): ?>
+                                                                                <img src="<?php echo admin_e($networkIcon); ?>" alt="">
+                                                                            <?php endif; ?>
+                                                                            <span><?php echo admin_e((string)($networkOption['label'] ?? $networkKeyString)); ?></span>
+                                                                        </button>
+                                                                    </li>
+                                                                <?php endforeach; ?>
+                                                            </ul>
+                                                            <div class="tab-content admin-mixer-settings-networks__content">
+                                                                <?php foreach ($mixerNetworkOptions as $networkKey => $networkOption): ?>
+                                                                    <?php
+                                                                    $networkKeyString = (string)$networkKey;
+                                                                    $networkAvailable = !empty($networkOption['available']);
+                                                                    $networkSelected = $networkAvailable && in_array($networkKeyString, $mixerAllowedNetworks, true);
+                                                                    $networkInputId = 'mixer_network_' . preg_replace('/[^a-z0-9_]+/i', '_', $networkKeyString);
+                                                                    $networkPaneId = 'mixer-network-pane-' . preg_replace('/[^a-z0-9_]+/i', '-', $networkKeyString);
+                                                                    $networkTabId = 'mixer-network-tab-' . preg_replace('/[^a-z0-9_]+/i', '-', $networkKeyString);
+                                                                    $networkModeName = (string)($networkOption['mode_setting_key'] ?? ('mixer_' . $networkKeyString . '_network_mode'));
+                                                                    $networkModeValue = $networkKeyString === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+                                                                    $networkEffectiveOption = admin_mixer_effective_network_option($networkKeyString, $networkModeValue);
+                                                                    $networkPoolState = $mixerNetworkPoolStates[$networkKeyString] ?? ['ok' => false, 'label' => '0 ' . (string)($networkEffectiveOption['native_symbol'] ?? '')];
+                                                                    $networkTabActive = $networkKeyString === 'polygon';
+                                                                    $networkIcon = (string)($networkOption['icon'] ?? '');
+                                                                    $networkSettingValues = [
+                                                                        'mixer_polygon_vault_contract' => $mixerPolygonVaultContract,
+                                                                        'mixer_polygon_rpc_url' => $mixerPolygonRpcUrl,
+                                                                        'mixer_polygon_testnet_vault_contract' => $mixerPolygonTestnetVaultContract,
+                                                                        'mixer_polygon_testnet_rpc_url' => $mixerPolygonTestnetRpcUrl,
+                                                                        'mixer_bsc_vault_contract' => $mixerBscVaultContract,
+                                                                        'mixer_bsc_rpc_url' => $mixerBscRpcUrl,
+                                                                        'mixer_bsc_testnet_vault_contract' => $mixerBscTestnetVaultContract,
+                                                                        'mixer_bsc_testnet_rpc_url' => $mixerBscTestnetRpcUrl,
+                                                                    ];
+                                                                    $networkEnvironments = is_array($networkOption['environments'] ?? null) ? (array)$networkOption['environments'] : [];
+                                                                    ?>
+                                                                    <div
+                                                                        class="tab-pane fade<?php echo $networkTabActive ? ' show active' : ''; ?>"
+                                                                        id="<?php echo admin_e($networkPaneId); ?>"
+                                                                        role="tabpanel"
+                                                                        aria-labelledby="<?php echo admin_e($networkTabId); ?>">
+                                                                        <div class="admin-mixer-settings-network">
+                                                                            <div class="admin-mixer-settings-network__top">
+                                                                                <div class="form-check">
+                                                                                    <input
+                                                                                        class="form-check-input"
+                                                                                        type="checkbox"
+                                                                                        id="<?php echo admin_e($networkInputId); ?>"
+                                                                                        name="mixer_allowed_networks[]"
+                                                                                        value="<?php echo admin_e($networkKeyString); ?>"
+                                                                                        <?php echo $networkSelected ? ' checked' : ''; ?>
+                                                                                        <?php echo !$networkAvailable ? ' disabled' : ''; ?>>
+                                                                                    <label class="form-check-label" for="<?php echo admin_e($networkInputId); ?>">
+                                                                                        <?php if ($networkIcon !== ''): ?>
+                                                                                            <img src="<?php echo admin_e($networkIcon); ?>" alt="">
+                                                                                        <?php endif; ?>
+                                                                                        <span>
+                                                                                            <strong><?php echo admin_e((string)($networkOption['label'] ?? $networkKeyString)); ?></strong>
+                                                                                            <em><?php echo admin_e((string)($networkOption['native_symbol'] ?? '')); ?></em>
+                                                                                        </span>
+                                                                                    </label>
+                                                                                </div>
+                                                                                <?php if (!$networkAvailable): ?>
+                                                                                    <span class="admin-mixer-settings-network__badge"><?php echo admin_e(admin_t($messages, 'settings_mixer_network_planned', 'planned')); ?></span>
+                                                                                <?php else: ?>
+                                                                                    <span class="admin-mixer-settings-network__badge is-live"><?php echo admin_e(admin_t($messages, 'settings_mixer_network_live', 'active')); ?></span>
+                                                                                <?php endif; ?>
+                                                                            </div>
+                                                                            <div class="admin-mixer-settings-network__pool<?php echo !empty($networkPoolState['ok']) ? ' is-ready' : ' is-warning'; ?>">
+                                                                                <span><?php echo admin_e(admin_t($messages, 'settings_mixer_pool_balance', 'Vault pool balance')); ?> · <?php echo admin_e((string)($networkEffectiveOption['label'] ?? $networkKeyString)); ?></span>
+                                                                                <strong><?php echo admin_e((string)($networkPoolState['label'] ?? '0 ' . (string)($networkOption['native_symbol'] ?? ''))); ?></strong>
+                                                                            </div>
+                                                                            <div class="admin-mixer-settings-network__mode">
+                                                                                <span><?php echo admin_e(admin_t($messages, 'settings_mixer_network_environment', 'Environment')); ?></span>
+                                                                                <div class="admin-mixer-settings-network__mode-options">
+                                                                                    <?php foreach ($mixerNetworkModeOptions as $modeKey => $modeLabel): ?>
+                                                                                        <?php
+                                                                                        $modeKeyString = (string)$modeKey;
+                                                                                        $modeInputId = $networkModeName . '_' . $modeKeyString;
+                                                                                        ?>
+                                                                                        <input
+                                                                                            type="radio"
+                                                                                            class="btn-check"
+                                                                                            id="<?php echo admin_e($modeInputId); ?>"
+                                                                                            name="<?php echo admin_e($networkModeName); ?>"
+                                                                                            value="<?php echo admin_e($modeKeyString); ?>"
+                                                                                            data-admin-mixer-env-choice="<?php echo admin_e($networkKeyString); ?>"
+                                                                                            <?php echo $networkModeValue === $modeKeyString ? ' checked' : ''; ?>>
+                                                                                        <label class="btn btn-outline-dark btn-sm" for="<?php echo admin_e($modeInputId); ?>">
+                                                                                            <?php echo admin_e((string)$modeLabel); ?>
+                                                                                        </label>
+                                                                                    <?php endforeach; ?>
+                                                                                </div>
+                                                                            </div>
+                                                                            <?php foreach ($networkEnvironments as $envKey => $envOption): ?>
+                                                                                <?php
+                                                                                $envKeyString = admin_mixer_normalize_network_mode($envKey);
+                                                                                $envVaultName = (string)($envOption['vault_setting_key'] ?? '');
+                                                                                $envRpcName = (string)($envOption['rpc_setting_key'] ?? '');
+                                                                                $envVaultValue = (string)($networkSettingValues[$envVaultName] ?? '');
+                                                                                $envRpcValue = (string)($networkSettingValues[$envRpcName] ?? '');
+                                                                                $envLabel = (string)($envOption['label'] ?? ucfirst($envKeyString));
+                                                                                ?>
+                                                                                <div
+                                                                                    class="admin-mixer-settings-network__fields"
+                                                                                    data-admin-mixer-env-panel="<?php echo admin_e($networkKeyString); ?>"
+                                                                                    data-admin-mixer-env="<?php echo admin_e($envKeyString); ?>"
+                                                                                    <?php echo $networkModeValue === $envKeyString ? '' : ' hidden'; ?>>
+                                                                                    <div class="admin-mixer-settings-network__fields-head">
+                                                                                        <strong><?php echo admin_e($envLabel); ?></strong>
+                                                                                        <span><?php echo admin_e(admin_t($messages, $envKeyString === 'testnet' ? 'settings_mixer_network_testnet_note' : 'settings_mixer_network_mainnet_note', $envKeyString === 'testnet' ? 'Use only testnet vaults and faucet tokens here.' : 'Use production vault and production liquidity here.')); ?></span>
+                                                                                    </div>
+                                                                                    <label class="form-label" for="<?php echo admin_e($envVaultName); ?>">
+                                                                                        <?php echo admin_e($networkKeyString === 'bsc' ? admin_t($messages, 'settings_mixer_bsc_vault_contract', 'BSC vault contract') : admin_t($messages, 'settings_mixer_polygon_vault_contract', 'Polygon vault contract')); ?>
+                                                                                    </label>
+                                                                                    <input
+                                                                                        type="text"
+                                                                                        class="form-control"
+                                                                                        id="<?php echo admin_e($envVaultName); ?>"
+                                                                                        name="<?php echo admin_e($envVaultName); ?>"
+                                                                                        value="<?php echo admin_e($envVaultValue); ?>"
+                                                                                        placeholder="0x...">
+                                                                                    <label class="form-label" for="<?php echo admin_e($envRpcName); ?>">
+                                                                                        <?php echo admin_e($networkKeyString === 'bsc' ? admin_t($messages, 'settings_mixer_bsc_rpc_url', 'BSC RPC URL') : admin_t($messages, 'settings_mixer_polygon_rpc_url', 'Polygon RPC URL')); ?>
+                                                                                    </label>
+                                                                                    <input
+                                                                                        type="url"
+                                                                                        class="form-control"
+                                                                                        id="<?php echo admin_e($envRpcName); ?>"
+                                                                                        name="<?php echo admin_e($envRpcName); ?>"
+                                                                                        value="<?php echo admin_e($envRpcValue); ?>"
+                                                                                        placeholder="<?php echo admin_e((string)($envOption['default_rpc_url'] ?? 'https://...')); ?>">
+                                                                                </div>
+                                                                            <?php endforeach; ?>
+                                                                        </div>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <?php if ($settingsAdminMode): ?>
+                                                    <div class="col-12">
+                                                        <section
+                                                            class="admin-mixer-owner-tools"
+                                                            data-admin-mixer-owner-tools
+                                                            data-config="<?php echo admin_e($mixerVaultOwnerConfigJson !== false ? $mixerVaultOwnerConfigJson : '{}'); ?>">
+                                                            <div class="admin-mixer-owner-tools__head">
+                                                                <div>
+                                                                    <h4><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_title', 'Vault owner controls')); ?></h4>
+                                                                    <p><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_intro', 'Connect the owner wallet to pause the vault, add liquidity or withdraw funds without opening Remix.')); ?></p>
+                                                                </div>
+                                                                <button type="button" class="btn btn-dark btn-sm" data-admin-vault-connect>
+                                                                    <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_connect', 'Connect owner wallet')); ?></span>
+                                                                </button>
+                                                            </div>
+                                                            <div class="admin-mixer-owner-tools__status is-muted" data-admin-vault-status>
+                                                                <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_status_idle', 'Connect the wallet that owns the selected vault contract.')); ?>
+                                                            </div>
+                                                            <div class="admin-mixer-owner-tools__grid">
+                                                                <div>
+                                                                    <label class="form-label" for="admin_vault_network"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_network', 'Vault network')); ?></label>
+                                                                    <select class="form-select" id="admin_vault_network" data-admin-vault-network></select>
+                                                                </div>
+                                                                <div>
+                                                                    <label class="form-label" for="admin_vault_asset"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset', 'Asset')); ?></label>
+                                                                    <select class="form-select" id="admin_vault_asset" data-admin-vault-asset></select>
+                                                                </div>
+                                                            </div>
+                                                            <div class="admin-mixer-owner-tools__metrics">
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_connected_wallet', 'Connected wallet')); ?></span>
+                                                                    <strong data-admin-vault-wallet>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_contract_owner', 'Contract owner')); ?></span>
+                                                                    <strong data-admin-vault-owner>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_wallet_balance', 'Wallet balance')); ?></span>
+                                                                    <strong data-admin-vault-wallet-balance>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_vault_balance', 'Vault balance')); ?></span>
+                                                                    <strong data-admin-vault-balance>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_pause_status', 'Pause status')); ?></span>
+                                                                    <strong data-admin-vault-paused>-</strong>
+                                                                </div>
+                                                            </div>
+                                                            <div class="admin-mixer-owner-tools__actions">
+                                                                <button type="button" class="btn btn-outline-dark btn-sm" data-admin-vault-refresh disabled>
+                                                                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+                                                                    <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_refresh', 'Refresh')); ?>
+                                                                </button>
+                                                                <button type="button" class="btn btn-outline-danger btn-sm" data-admin-vault-pause data-owner-action disabled>
+                                                                    <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                                                                    <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_pause', 'Pause vault')); ?>
+                                                                </button>
+                                                                <button type="button" class="btn btn-outline-success btn-sm" data-admin-vault-unpause data-owner-action disabled>
+                                                                    <i class="bi bi-play-circle" aria-hidden="true"></i>
+                                                                    <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_unpause', 'Unpause vault')); ?>
+                                                                </button>
+                                                            </div>
+                                                            <div class="admin-mixer-owner-tools__forms">
+                                                                <div class="admin-mixer-owner-tools__box">
+                                                                    <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_deposit_title', 'Add liquidity')); ?></h5>
+                                                                    <label class="form-label" for="admin_vault_deposit_amount"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_amount', 'Amount')); ?></label>
+                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_deposit_amount" data-admin-vault-deposit-amount placeholder="0.00">
+                                                                    <button type="button" class="btn btn-success w-100" data-admin-vault-deposit data-owner-action disabled>
+                                                                        <i class="bi bi-arrow-down-circle" aria-hidden="true"></i>
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_deposit', 'Deposit to vault')); ?>
+                                                                    </button>
+                                                                </div>
+                                                                <div class="admin-mixer-owner-tools__box">
+                                                                    <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_withdraw_title', 'Withdraw liquidity')); ?></h5>
+                                                                    <label class="form-label" for="admin_vault_withdraw_recipient"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_recipient', 'Recipient')); ?></label>
+                                                                    <input type="text" class="form-control" id="admin_vault_withdraw_recipient" data-admin-vault-recipient placeholder="0x...">
+                                                                    <label class="form-label" for="admin_vault_withdraw_amount"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_amount', 'Amount')); ?></label>
+                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_withdraw_amount" data-admin-vault-withdraw-amount placeholder="0.00">
+                                                                    <div class="admin-mixer-owner-tools__split-actions">
+                                                                        <button type="button" class="btn btn-dark" data-admin-vault-withdraw data-owner-action disabled>
+                                                                            <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_withdraw', 'Withdraw')); ?>
+                                                                        </button>
+                                                                        <button type="button" class="btn btn-outline-danger" data-admin-vault-withdraw-all data-owner-action disabled>
+                                                                            <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_withdraw_all', 'Withdraw all')); ?>
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="admin-mixer-owner-tools__box">
+                                                                    <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_config_title', 'Payout asset config')); ?></h5>
+                                                                    <div class="form-check form-switch mb-2">
+                                                                        <input class="form-check-input" type="checkbox" role="switch" id="admin_vault_asset_enabled" data-admin-vault-asset-enabled checked>
+                                                                        <label class="form-check-label" for="admin_vault_asset_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_enabled', 'Enable selected asset for payouts')); ?></label>
+                                                                    </div>
+                                                                    <label class="form-label" for="admin_vault_max_payout"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_max_payout', 'Max payout')); ?></label>
+                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_max_payout" data-admin-vault-max-payout placeholder="0.00">
+                                                                    <label class="form-label" for="admin_vault_daily_limit"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_daily_limit', 'Daily limit')); ?></label>
+                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_daily_limit" data-admin-vault-daily-limit placeholder="0.00">
+                                                                    <button type="button" class="btn btn-outline-dark w-100" data-admin-vault-set-asset data-owner-action disabled>
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_save_asset_config', 'Save asset config')); ?>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                            <div class="admin-mixer-owner-tools__note">
+                                                                <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_safety_note', 'No seed phrase or private key is stored here. Every transaction is signed inside your connected wallet.')); ?>
+                                                            </div>
+                                                        </section>
+                                                    </div>
+                                                    <?php endif; ?>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="mixer_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_mixer_fee_percent', 'Swapper fee (%)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max="5"
+                                                            step="0.01"
+                                                            class="form-control"
+                                                            id="mixer_fee_percent"
+                                                            name="mixer_fee_percent"
+                                                            value="<?php echo admin_e(number_format($mixerFeePercent, 2, '.', '')); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_fee_percent_help', 'Default 1.5%. It is subtracted before the Polygon vault payout.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="mixer_max_payout_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_max_payout_usd', 'Max payout per order (USD)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="5000"
+                                                            step="1"
+                                                            class="form-control"
+                                                            id="mixer_max_payout_usd"
+                                                            name="mixer_max_payout_usd"
+                                                            value="<?php echo admin_e(number_format($mixerMaxPayoutUsd, 2, '.', '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="mixer_daily_payout_limit_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_daily_payout_limit_usd', 'Daily payout limit (USD)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="50000"
+                                                            step="1"
+                                                            class="form-control"
+                                                            id="mixer_daily_payout_limit_usd"
+                                                            name="mixer_daily_payout_limit_usd"
+                                                            value="<?php echo admin_e(number_format($mixerDailyPayoutLimitUsd, 2, '.', '')); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="mixer_btc_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_confirmations_required', 'BTC confirmations')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="12"
+                                                            step="1"
+                                                            class="form-control"
+                                                            id="mixer_btc_confirmations_required"
+                                                            name="mixer_btc_confirmations_required"
+                                                            value="<?php echo admin_e((string)$mixerBtcConfirmationsRequired); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="mixer_doge_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_confirmations_required', 'DOGE confirmations')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="120"
+                                                            step="1"
+                                                            class="form-control"
+                                                            id="mixer_doge_confirmations_required"
+                                                            name="mixer_doge_confirmations_required"
+                                                            value="<?php echo admin_e((string)$mixerDogeConfirmationsRequired); ?>">
+                                                    </div>
+                                                    <div class="col-md-4">
+                                                        <label class="form-label" for="mixer_quote_lifetime_minutes"><?php echo admin_e(admin_t($messages, 'settings_mixer_quote_lifetime_minutes', 'Quote lifetime (minutes)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="240"
+                                                            step="1"
+                                                            class="form-control"
+                                                            id="mixer_quote_lifetime_minutes"
+                                                            name="mixer_quote_lifetime_minutes"
+                                                            value="<?php echo admin_e((string)$mixerQuoteLifetimeMinutes); ?>">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="mixer_detection_provider"><?php echo admin_e(admin_t($messages, 'settings_mixer_detection_provider', 'Deposit watcher provider')); ?></label>
+                                                        <select class="form-select" id="mixer_detection_provider" name="mixer_detection_provider">
+                                                            <?php foreach ($mixerDetectionProviderOptions as $providerKey => $providerLabel): ?>
+                                                                <option value="<?php echo admin_e((string)$providerKey); ?>"<?php echo (string)$providerKey === $mixerDetectionProvider ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)$providerLabel); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="mixer_notification_email"><?php echo admin_e(admin_t($messages, 'settings_mixer_notification_email', 'Notification email')); ?></label>
+                                                        <input
+                                                            type="email"
+                                                            class="form-control"
+                                                            id="mixer_notification_email"
+                                                            name="mixer_notification_email"
+                                                            value="<?php echo admin_e($mixerNotificationEmail); ?>"
+                                                            placeholder="admin@example.com">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="mixer_btc_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address', 'BTC public deposit address')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="mixer_btc_deposit_address"
+                                                            name="mixer_btc_deposit_address"
+                                                            value="<?php echo admin_e($mixerBtcDepositAddress); ?>"
+                                                            placeholder="bc1...">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address_help', 'Paste only your public BTC receiving address from Trust Wallet.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="mixer_doge_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address', 'DOGE public deposit address')); ?></label>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control"
+                                                            id="mixer_doge_deposit_address"
+                                                            name="mixer_doge_deposit_address"
+                                                            value="<?php echo admin_e($mixerDogeDepositAddress); ?>"
+                                                            placeholder="D...">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address_help', 'Paste only your public DOGE receiving address from Trust Wallet.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="mixer_auto_payout_enabled" name="mixer_auto_payout_enabled"<?php echo $mixerAutoPayoutEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="mixer_auto_payout_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_auto_payout_enabled', 'Enable automatic payouts')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_auto_payout_enabled_help', 'Keep OFF until the watcher, vault contract and payout executor are deployed and tested.')); ?></small>
+                                                    </div>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
                                                 <div class="col-12">
                                                     <div class="admin-settings-table-wrap">
                                                         <div class="admin-settings-access__copy">
@@ -14359,6 +16328,1520 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     </div>
 
     <script type="application/json" id="adminHelpTopicsData"><?php echo $adminHelpModalTopicsJson; ?></script>
+
+    <?php if ($route === 'settings'): ?>
+        <script>
+            (() => {
+                const settingsTabs = document.getElementById('adminSettingsTabs');
+                if (settingsTabs) {
+                    const storageKey = 'subme-admin-settings-active-tab';
+                    const tabButtons = Array.from(settingsTabs.querySelectorAll('[data-bs-toggle="tab"][id]'));
+                    const activateStoredTab = () => {
+                        let storedTabId = '';
+                        try {
+                            storedTabId = window.localStorage ? String(window.localStorage.getItem(storageKey) || '') : '';
+                        } catch (error) {
+                            storedTabId = '';
+                        }
+
+                        if (storedTabId === '') {
+                            return;
+                        }
+
+                        const storedTab = tabButtons.find((button) => button.id === storedTabId && !button.disabled);
+                        if (!storedTab) {
+                            return;
+                        }
+
+                        if (window.bootstrap && window.bootstrap.Tab) {
+                            window.bootstrap.Tab.getOrCreateInstance(storedTab).show();
+                            return;
+                        }
+
+                        const targetSelector = storedTab.dataset.bsTarget || storedTab.getAttribute('data-bs-target') || '';
+                        const targetPane = targetSelector ? document.querySelector(targetSelector) : null;
+                        if (!targetPane) {
+                            return;
+                        }
+
+                        tabButtons.forEach((button) => {
+                            const selector = button.dataset.bsTarget || button.getAttribute('data-bs-target') || '';
+                            const pane = selector ? document.querySelector(selector) : null;
+                            const isActive = button === storedTab;
+                            button.classList.toggle('active', isActive);
+                            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                            if (pane) {
+                                pane.classList.toggle('show', isActive);
+                                pane.classList.toggle('active', isActive);
+                            }
+                        });
+                    };
+
+                    activateStoredTab();
+                    tabButtons.forEach((button) => {
+                        button.addEventListener('shown.bs.tab', () => {
+                            try {
+                                if (window.localStorage) {
+                                    window.localStorage.setItem(storageKey, button.id);
+                                }
+                            } catch (error) {}
+                        });
+                        button.addEventListener('click', () => {
+                            try {
+                                if (window.localStorage) {
+                                    window.localStorage.setItem(storageKey, button.id);
+                                }
+                            } catch (error) {}
+                        });
+                    });
+                }
+
+                const toggles = Array.from(document.querySelectorAll('[data-admin-feature-settings-toggle]'));
+                if (!toggles.length) {
+                    return;
+                }
+
+                const syncFeatureBody = (toggle) => {
+                    const body = document.querySelector('[data-admin-feature-settings-body="' + toggle.id + '"]');
+                    if (!body) {
+                        return;
+                    }
+
+                    body.hidden = !toggle.checked;
+                    toggle.setAttribute('aria-expanded', toggle.checked ? 'true' : 'false');
+                };
+
+                toggles.forEach((toggle) => {
+                    syncFeatureBody(toggle);
+                    toggle.addEventListener('change', () => syncFeatureBody(toggle));
+                });
+
+                const envChoices = Array.from(document.querySelectorAll('[data-admin-mixer-env-choice]'));
+                const syncMixerEnvPanels = (networkKey) => {
+                    const selected = document.querySelector('[data-admin-mixer-env-choice="' + networkKey + '"]:checked');
+                    const mode = selected ? selected.value : 'mainnet';
+                    document.querySelectorAll('[data-admin-mixer-env-panel="' + networkKey + '"]').forEach((panel) => {
+                        panel.hidden = panel.dataset.adminMixerEnv !== mode;
+                    });
+                };
+
+                envChoices.forEach((choice) => {
+                    syncMixerEnvPanels(choice.dataset.adminMixerEnvChoice || '');
+                    choice.addEventListener('change', () => syncMixerEnvPanels(choice.dataset.adminMixerEnvChoice || ''));
+                });
+
+                const initVaultOwnerTools = () => {
+                    const root = document.querySelector('[data-admin-mixer-owner-tools]');
+                    if (!root || root.dataset.initialized === '1') {
+                        return;
+                    }
+                    root.dataset.initialized = '1';
+
+                    let config = {};
+                    try {
+                        config = JSON.parse(root.dataset.config || '{}') || {};
+                    } catch (error) {
+                        config = {};
+                    }
+
+                    const labels = config.labels || {};
+                    const networks = Array.isArray(config.networks) ? config.networks : [];
+                    const connectButton = root.querySelector('[data-admin-vault-connect]');
+                    const connectLabel = connectButton ? connectButton.querySelector('span') : null;
+                    const networkSelect = root.querySelector('[data-admin-vault-network]');
+                    const assetSelect = root.querySelector('[data-admin-vault-asset]');
+                    const statusBox = root.querySelector('[data-admin-vault-status]');
+                    const walletField = root.querySelector('[data-admin-vault-wallet]');
+                    const ownerField = root.querySelector('[data-admin-vault-owner]');
+                    const walletBalanceField = root.querySelector('[data-admin-vault-wallet-balance]');
+                    const vaultBalanceField = root.querySelector('[data-admin-vault-balance]');
+                    const pausedField = root.querySelector('[data-admin-vault-paused]');
+                    const refreshButton = root.querySelector('[data-admin-vault-refresh]');
+                    const pauseButton = root.querySelector('[data-admin-vault-pause]');
+                    const unpauseButton = root.querySelector('[data-admin-vault-unpause]');
+                    const depositInput = root.querySelector('[data-admin-vault-deposit-amount]');
+                    const withdrawInput = root.querySelector('[data-admin-vault-withdraw-amount]');
+                    const recipientInput = root.querySelector('[data-admin-vault-recipient]');
+                    const depositButton = root.querySelector('[data-admin-vault-deposit]');
+                    const withdrawButton = root.querySelector('[data-admin-vault-withdraw]');
+                    const withdrawAllButton = root.querySelector('[data-admin-vault-withdraw-all]');
+                    const assetEnabledInput = root.querySelector('[data-admin-vault-asset-enabled]');
+                    const maxPayoutInput = root.querySelector('[data-admin-vault-max-payout]');
+                    const dailyLimitInput = root.querySelector('[data-admin-vault-daily-limit]');
+                    const setAssetButton = root.querySelector('[data-admin-vault-set-asset]');
+                    const ownerActions = Array.from(root.querySelectorAll('[data-owner-action]'));
+                    const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
+                    const selectors = {
+                        owner: '0x8da5cb5b',
+                        paused: '0x5c975abb',
+                        pause: '0x8456cb59',
+                        unpause: '0x3f4ba83a',
+                        withdrawNative: '0x07b18bde',
+                        withdrawAllNative: '0xd9f66db1',
+                        withdrawToken: '0x01e33667',
+                        withdrawAllToken: '0x3aeebedb',
+                        setAssetConfig: '0xfae95931',
+                        balanceOf: '0x70a08231',
+                        transfer: '0xa9059cbb'
+                    };
+                    let provider = null;
+                    let connectedWallet = '';
+                    let contractOwner = '';
+                    let ownerVerified = false;
+                    let vaultPaused = false;
+
+                    const setStatus = (message, type = 'muted') => {
+                        if (!statusBox) {
+                            return;
+                        }
+                        statusBox.textContent = message;
+                        statusBox.classList.toggle('is-success', type === 'success');
+                        statusBox.classList.toggle('is-warning', type === 'warning');
+                        statusBox.classList.toggle('is-danger', type === 'danger');
+                    };
+
+                    const compactAddress = (address) => {
+                        const value = String(address || '').trim();
+                        return value.length > 14 ? value.slice(0, 6) + '...' + value.slice(-4) : (value || '-');
+                    };
+
+                    const cleanHex = (value) => String(value || '').replace(/^0x/i, '').toLowerCase();
+                    const pad64 = (value) => cleanHex(value).padStart(64, '0');
+                    const encodeAddress = (address) => pad64(address);
+                    const encodeUint = (value) => BigInt(value).toString(16).padStart(64, '0');
+                    const encodeBool = (value) => (value ? '1' : '0').padStart(64, '0');
+                    const decodeAddress = (hex) => {
+                        const clean = cleanHex(hex);
+                        return clean.length >= 40 ? ('0x' + clean.slice(-40)) : '';
+                    };
+                    const hexToBigInt = (hex) => {
+                        const clean = cleanHex(hex);
+                        return clean ? BigInt('0x' + clean) : 0n;
+                    };
+                    const bigIntToHex = (value) => '0x' + BigInt(value).toString(16);
+                    const tenPow = (decimals) => 10n ** BigInt(Math.max(0, Number(decimals) || 0));
+                    const parseUnits = (value, decimals) => {
+                        const normalized = String(value || '').trim().replace(',', '.');
+                        if (!/^\d+(\.\d+)?$/.test(normalized)) {
+                            throw new Error(labels.invalidAmount || 'Enter a valid amount.');
+                        }
+                        const parts = normalized.split('.');
+                        const whole = parts[0] || '0';
+                        const fraction = (parts[1] || '').slice(0, decimals).padEnd(decimals, '0');
+                        return (BigInt(whole) * tenPow(decimals)) + BigInt(fraction || '0');
+                    };
+                    const formatUnits = (value, decimals, symbol) => {
+                        const amount = BigInt(value || 0);
+                        const base = tenPow(decimals);
+                        const whole = amount / base;
+                        const fraction = (amount % base).toString().padStart(decimals, '0').replace(/0+$/, '').slice(0, 6);
+                        return whole.toString() + (fraction ? '.' + fraction : '') + (symbol ? ' ' + symbol : '');
+                    };
+
+                    const currentNetwork = () => networks.find((network) => network.key === (networkSelect ? networkSelect.value : '')) || networks[0] || null;
+                    const currentAsset = () => {
+                        const network = currentNetwork();
+                        const assets = network && Array.isArray(network.assets) ? network.assets : [];
+                        return assets.find((asset) => asset.key === (assetSelect ? assetSelect.value : '')) || assets[0] || null;
+                    };
+
+                    const setOwnerActions = (enabled) => {
+                        ownerActions.forEach((button) => {
+                            button.disabled = !enabled;
+                        });
+                        if (refreshButton) {
+                            refreshButton.disabled = !connectedWallet;
+                        }
+                        if (pauseButton) {
+                            pauseButton.disabled = !enabled || vaultPaused;
+                        }
+                        if (unpauseButton) {
+                            unpauseButton.disabled = !enabled || !vaultPaused;
+                        }
+                    };
+
+                    const fillSelects = () => {
+                        if (!networkSelect || !assetSelect) {
+                            return;
+                        }
+                        networkSelect.innerHTML = '';
+                        networks.forEach((network) => {
+                            const option = document.createElement('option');
+                            option.value = network.key;
+                            option.textContent = [network.label, network.mode === 'testnet' ? 'testnet' : 'mainnet'].filter(Boolean).join(' · ');
+                            option.disabled = !evmAddressPattern.test(String(network.vault || '')) || !network.chainHex;
+                            networkSelect.appendChild(option);
+                        });
+
+                        const syncAssets = () => {
+                            const network = currentNetwork();
+                            const assets = network && Array.isArray(network.assets) ? network.assets : [];
+                            assetSelect.innerHTML = '';
+                            assets.forEach((asset) => {
+                                const option = document.createElement('option');
+                                option.value = asset.key;
+                                option.textContent = asset.label || asset.symbol || asset.key;
+                                assetSelect.appendChild(option);
+                            });
+                            assetSelect.disabled = assets.length === 0;
+                        };
+
+                        syncAssets();
+                        networkSelect.addEventListener('change', () => {
+                            syncAssets();
+                            ownerVerified = false;
+                            setOwnerActions(false);
+                            if (connectedWallet) {
+                                refreshState().catch(() => {});
+                            }
+                        });
+                        assetSelect.addEventListener('change', () => {
+                            if (connectedWallet) {
+                                refreshState().catch(() => {});
+                            }
+                        });
+                    };
+
+                    const ethCall = (to, data) => provider.request({
+                        method: 'eth_call',
+                        params: [{ to, data }, 'latest']
+                    });
+
+                    const switchNetwork = async (network) => {
+                        if (!network || !network.chainHex) {
+                            throw new Error(labels.refreshFailed || 'Unable to read vault data.');
+                        }
+                        try {
+                            await provider.request({
+                                method: 'wallet_switchEthereumChain',
+                                params: [{ chainId: network.chainHex }]
+                            });
+                        } catch (switchError) {
+                            if (switchError && Number(switchError.code) === 4902 && network.rpcUrl) {
+                                await provider.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                        chainId: network.chainHex,
+                                        chainName: network.label || 'EVM network',
+                                        nativeCurrency: {
+                                            name: network.nativeSymbol || 'Native',
+                                            symbol: network.nativeSymbol || 'ETH',
+                                            decimals: 18
+                                        },
+                                        rpcUrls: [network.rpcUrl],
+                                        blockExplorerUrls: network.explorerUrl ? [network.explorerUrl] : []
+                                    }]
+                                });
+                            } else {
+                                throw switchError;
+                            }
+                        }
+                    };
+
+                    const readBalance = async (asset, address) => {
+                        if (!asset || !evmAddressPattern.test(address)) {
+                            return 0n;
+                        }
+                        if (asset.type === 'native') {
+                            return hexToBigInt(await provider.request({
+                                method: 'eth_getBalance',
+                                params: [address, 'latest']
+                            }));
+                        }
+                        return hexToBigInt(await ethCall(asset.address, selectors.balanceOf + encodeAddress(address)));
+                    };
+
+                    const refreshState = async () => {
+                        provider = window.ethereum;
+                        const network = currentNetwork();
+                        const asset = currentAsset();
+                        if (!provider || typeof provider.request !== 'function' || !network || !asset || !evmAddressPattern.test(String(network.vault || ''))) {
+                            setOwnerActions(false);
+                            setStatus(labels.refreshFailed || 'Unable to read vault data.', 'warning');
+                            return;
+                        }
+
+                        await switchNetwork(network);
+                        contractOwner = decodeAddress(await ethCall(network.vault, selectors.owner));
+                        vaultPaused = hexToBigInt(await ethCall(network.vault, selectors.paused)) !== 0n;
+                        ownerVerified = connectedWallet.toLowerCase() === contractOwner.toLowerCase();
+
+                        const walletBalance = connectedWallet ? await readBalance(asset, connectedWallet) : 0n;
+                        const vaultBalance = await readBalance(asset, network.vault);
+                        if (walletField) {
+                            walletField.textContent = compactAddress(connectedWallet);
+                        }
+                        if (ownerField) {
+                            ownerField.textContent = compactAddress(contractOwner);
+                        }
+                        if (walletBalanceField) {
+                            walletBalanceField.textContent = formatUnits(walletBalance, Number(asset.decimals || 18), asset.symbol || '');
+                        }
+                        if (vaultBalanceField) {
+                            vaultBalanceField.textContent = formatUnits(vaultBalance, Number(asset.decimals || 18), asset.symbol || '');
+                        }
+                        if (pausedField) {
+                            pausedField.textContent = vaultPaused ? 'Paused' : 'Active';
+                        }
+                        if (recipientInput && connectedWallet && !recipientInput.value) {
+                            recipientInput.value = connectedWallet;
+                        }
+
+                        setOwnerActions(ownerVerified);
+                        setStatus(ownerVerified ? (labels.ownerReady || 'Owner detected.') : (labels.notOwner || 'Connected wallet is not the vault owner.'), ownerVerified ? 'success' : 'warning');
+                    };
+
+                    const connectWallet = async () => {
+                        provider = window.ethereum;
+                        if (!provider || typeof provider.request !== 'function') {
+                            setStatus(labels.noWallet || 'No EVM wallet extension detected.', 'danger');
+                            return;
+                        }
+                        try {
+                            const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                            connectedWallet = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
+                            if (!evmAddressPattern.test(connectedWallet)) {
+                                throw new Error(labels.noWallet || 'No EVM wallet extension detected.');
+                            }
+                            if (connectLabel) {
+                                connectLabel.textContent = labels.connected || 'Wallet connected';
+                            }
+                            await refreshState();
+                        } catch (error) {
+                            setOwnerActions(false);
+                            setStatus(error && error.message ? error.message : (labels.txFailed || 'Transaction failed.'), 'danger');
+                        }
+                    };
+
+                    const sendTransaction = async (tx) => {
+                        if (!provider || !ownerVerified) {
+                            setStatus(labels.notOwner || 'Connected wallet is not the vault owner.', 'warning');
+                            return;
+                        }
+                        const network = currentNetwork();
+                        await switchNetwork(network);
+                        ownerActions.forEach((button) => {
+                            button.disabled = true;
+                        });
+                        try {
+                            const hash = await provider.request({
+                                method: 'eth_sendTransaction',
+                                params: [tx]
+                            });
+                            setStatus((labels.txSent || 'Transaction sent') + ': ' + hash, 'success');
+                            window.setTimeout(() => refreshState().catch(() => {}), 4500);
+                        } catch (error) {
+                            setStatus(error && error.message ? error.message : (labels.txFailed || 'Transaction was rejected or failed.'), 'danger');
+                            setOwnerActions(ownerVerified);
+                        }
+                    };
+
+                    const deposit = async () => {
+                        const network = currentNetwork();
+                        const asset = currentAsset();
+                        const amount = parseUnits(depositInput ? depositInput.value : '', Number(asset.decimals || 18));
+                        if (amount <= 0n) {
+                            throw new Error(labels.invalidAmount || 'Enter a valid amount.');
+                        }
+                        if (asset.type === 'native') {
+                            await sendTransaction({
+                                from: connectedWallet,
+                                to: network.vault,
+                                value: bigIntToHex(amount)
+                            });
+                            return;
+                        }
+                        await sendTransaction({
+                            from: connectedWallet,
+                            to: asset.address,
+                            data: selectors.transfer + encodeAddress(network.vault) + encodeUint(amount)
+                        });
+                    };
+
+                    const withdraw = async () => {
+                        const network = currentNetwork();
+                        const asset = currentAsset();
+                        const recipient = String(recipientInput ? recipientInput.value : '').trim();
+                        const amount = parseUnits(withdrawInput ? withdrawInput.value : '', Number(asset.decimals || 18));
+                        if (!evmAddressPattern.test(recipient)) {
+                            throw new Error(labels.invalidRecipient || 'Enter a valid recipient address.');
+                        }
+                        if (amount <= 0n) {
+                            throw new Error(labels.invalidAmount || 'Enter a valid amount.');
+                        }
+                        const data = asset.type === 'native'
+                            ? selectors.withdrawNative + encodeAddress(recipient) + encodeUint(amount)
+                            : selectors.withdrawToken + encodeAddress(asset.address) + encodeAddress(recipient) + encodeUint(amount);
+                        await sendTransaction({
+                            from: connectedWallet,
+                            to: network.vault,
+                            data
+                        });
+                    };
+
+                    const withdrawAll = async () => {
+                        if (!window.confirm(labels.confirmWithdrawAll || 'Withdraw the full selected balance from the vault?')) {
+                            return;
+                        }
+                        const network = currentNetwork();
+                        const asset = currentAsset();
+                        const recipient = String(recipientInput ? recipientInput.value : '').trim();
+                        if (!evmAddressPattern.test(recipient)) {
+                            throw new Error(labels.invalidRecipient || 'Enter a valid recipient address.');
+                        }
+                        const data = asset.type === 'native'
+                            ? selectors.withdrawAllNative + encodeAddress(recipient)
+                            : selectors.withdrawAllToken + encodeAddress(asset.address) + encodeAddress(recipient);
+                        await sendTransaction({
+                            from: connectedWallet,
+                            to: network.vault,
+                            data
+                        });
+                    };
+
+                    const setAssetConfig = async () => {
+                        const network = currentNetwork();
+                        const asset = currentAsset();
+                        const decimals = Number(asset.decimals || 18);
+                        const maxPayout = parseUnits(maxPayoutInput ? maxPayoutInput.value : '', decimals);
+                        const dailyLimit = parseUnits(dailyLimitInput ? dailyLimitInput.value : '', decimals);
+                        const assetAddress = asset.type === 'native' ? '0x0000000000000000000000000000000000000000' : asset.address;
+                        await sendTransaction({
+                            from: connectedWallet,
+                            to: network.vault,
+                            data: selectors.setAssetConfig + encodeAddress(assetAddress) + encodeBool(!!(assetEnabledInput && assetEnabledInput.checked)) + encodeUint(maxPayout) + encodeUint(dailyLimit)
+                        });
+                    };
+
+                    const bindSafe = (button, handler) => {
+                        if (!button) {
+                            return;
+                        }
+                        button.addEventListener('click', () => {
+                            handler().catch((error) => {
+                                setStatus(error && error.message ? error.message : (labels.txFailed || 'Transaction failed.'), 'danger');
+                                setOwnerActions(ownerVerified);
+                            });
+                        });
+                    };
+
+                    fillSelects();
+                    setOwnerActions(false);
+                    bindSafe(connectButton, connectWallet);
+                    bindSafe(refreshButton, refreshState);
+                    bindSafe(pauseButton, () => sendTransaction({ from: connectedWallet, to: currentNetwork().vault, data: selectors.pause }));
+                    bindSafe(unpauseButton, () => sendTransaction({ from: connectedWallet, to: currentNetwork().vault, data: selectors.unpause }));
+                    bindSafe(depositButton, deposit);
+                    bindSafe(withdrawButton, withdraw);
+                    bindSafe(withdrawAllButton, withdrawAll);
+                    bindSafe(setAssetButton, setAssetConfig);
+
+                    if (window.ethereum && typeof window.ethereum.on === 'function') {
+                        window.ethereum.on('accountsChanged', (accounts) => {
+                            connectedWallet = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
+                            ownerVerified = false;
+                            setOwnerActions(false);
+                            if (connectedWallet) {
+                                refreshState().catch(() => {});
+                            }
+                        });
+                        window.ethereum.on('chainChanged', () => {
+                            if (connectedWallet) {
+                                refreshState().catch(() => {});
+                            }
+                        });
+                    }
+                };
+
+                initVaultOwnerTools();
+            })();
+        </script>
+    <?php endif; ?>
+
+    <?php if ($route === 'swap-converter' && $swapConverterEnabled && $swapConverterIntegrator !== ''): ?>
+        <script src="/assets/js/admin-swap-converter.bundle.js?v=<?php echo admin_public_asset_version('assets/js/admin-swap-converter.bundle.js'); ?>"></script>
+    <?php endif; ?>
+    <?php if ($route === 'swap-converter' && $hinkalPrivateSendEnabled): ?>
+        <script src="/assets/js/admin-hinkal-private-send.bundle.js?v=<?php echo admin_public_asset_version('assets/js/admin-hinkal-private-send.bundle.js'); ?>"></script>
+    <?php endif; ?>
+    <?php if ($route === 'swap-converter' && $rangoConverterEnabled && $rangoApiKey !== ''): ?>
+        <script src="/assets/js/admin-rango-converter.bundle.js?v=<?php echo admin_public_asset_version('assets/js/admin-rango-converter.bundle.js'); ?>"></script>
+    <?php endif; ?>
+    <?php if ($route === 'swap-converter'): ?>
+        <script>
+            (() => {
+                const renderLifiWidget = () => {
+                    const mount = document.getElementById('adminSwapWidgetMount');
+                    if (!mount || mount.dataset.rendered === '1') {
+                        return;
+                    }
+
+                    const loadingLabel = mount.dataset.loadingLabel || 'Loading LI.FI widget...';
+                    const errorLabel = mount.dataset.errorLabel || 'Unable to load LI.FI widget.';
+                    const integrator = (mount.dataset.integrator || '').trim();
+                    const apiKey = (mount.dataset.apiKey || '').trim();
+                    const fee = Number.parseFloat(mount.dataset.fee || '0.01');
+                    const safeFee = Number.isFinite(fee) ? Math.max(0, Math.min(0.1, fee)) : 0.01;
+                    let allowedChains = [];
+                    try {
+                        allowedChains = JSON.parse(mount.dataset.allowedChains || '[]');
+                        if (!Array.isArray(allowedChains)) {
+                            allowedChains = [];
+                        }
+                    } catch (error) {
+                        allowedChains = [];
+                    }
+
+                    if (!integrator) {
+                        mount.innerHTML = '<div class="alert alert-warning mb-0"><?php echo admin_e(admin_t($messages, 'swap_converter_widget_missing_integrator', 'LI.FI integrator name is missing. Fill it in Settings (admin mode).')); ?></div>';
+                        return;
+                    }
+
+                    mount.innerHTML = '<div class="admin-swap-loader" role="status" aria-live="polite"><span class="admin-swap-loader__spinner" aria-hidden="true"></span><span>' + loadingLabel + '</span></div>';
+
+                    try {
+                        if (!window.AdminSwapConverter || typeof window.AdminSwapConverter.render !== 'function') {
+                            throw new Error('Local LI.FI widget bundle is unavailable.');
+                        }
+
+                        window.AdminSwapConverter.render(mount, {
+                            integrator,
+                            apiKey: apiKey || undefined,
+                            fee: safeFee,
+                            allowedChains
+                        });
+                        mount.dataset.rendered = '1';
+                    } catch (error) {
+                        const errorText = (error && (error.message || error.toString())) ? String(error.message || error.toString()) : '';
+                        mount.innerHTML = '<div class="alert alert-danger mb-0">' + errorLabel + (errorText ? '<br><small>' + errorText + '</small>' : '') + '</div>';
+                    }
+                };
+
+                const renderPrivateSend = () => {
+                    const mount = document.getElementById('adminHinkalPrivateSendMount');
+                    if (!mount || mount.dataset.rendered === '1') {
+                        return;
+                    }
+
+                    const loadingLabel = mount.dataset.loadingLabel || 'Loading Hinkal module...';
+                    const errorLabel = mount.dataset.errorLabel || 'Unable to load Hinkal module.';
+                    const feePercent = Number.parseFloat(mount.dataset.feePercent || '1');
+                    const feeWallet = (mount.dataset.feeWallet || '').trim();
+                    const walletConnectProjectId = (mount.dataset.walletconnectProjectId || '').trim();
+
+                    mount.innerHTML = '<div class="admin-swap-loader admin-private-send-loader" role="status" aria-live="polite"><span class="admin-swap-loader__spinner" aria-hidden="true"></span><span>' + loadingLabel + '</span></div>';
+
+                    try {
+                        if (!window.AdminHinkalPrivateSend || typeof window.AdminHinkalPrivateSend.render !== 'function') {
+                            throw new Error('Local Hinkal bundle is unavailable.');
+                        }
+
+                        window.AdminHinkalPrivateSend.render(mount, {
+                            feePercent: Number.isFinite(feePercent) ? feePercent : 1,
+                            feeWallet,
+                            walletConnectProjectId
+                        });
+                        mount.dataset.rendered = '1';
+                    } catch (error) {
+                        const errorText = (error && (error.message || error.toString())) ? String(error.message || error.toString()) : '';
+                        mount.innerHTML = '<div class="alert alert-danger mb-0">' + errorLabel + (errorText ? '<br><small>' + errorText + '</small>' : '') + '</div>';
+                    }
+                };
+
+                const renderRangoWidget = async () => {
+                    const mount = document.getElementById('adminRangoConverterMount');
+                    if (!mount || mount.dataset.rendered === '1' || mount.dataset.rendering === '1') {
+                        return;
+                    }
+
+                    const loadingLabel = mount.dataset.loadingLabel || 'Loading Rango widget...';
+                    const errorLabel = mount.dataset.errorLabel || 'Unable to load Rango widget.';
+                    const apiKey = (mount.dataset.apiKey || '').trim();
+                    const walletConnectProjectId = (mount.dataset.walletconnectProjectId || '').trim();
+                    const affiliateRef = (mount.dataset.affiliateRef || '').trim();
+                    const affiliatePercent = Number.parseFloat(mount.dataset.affiliatePercent || '1');
+                    const affiliateWallets = mount.dataset.affiliateWallets || '';
+                    const enableCentralizedSwappers = mount.dataset.enableCentralizedSwappers === '1';
+
+                    mount.dataset.rendering = '1';
+                    mount.innerHTML = '<div class="admin-swap-loader" role="status" aria-live="polite"><span class="admin-swap-loader__spinner" aria-hidden="true"></span><span>' + loadingLabel + '</span></div>';
+
+                    try {
+                        if (!apiKey) {
+                            throw new Error('Missing Rango API key.');
+                        }
+                        const accessResponse = await fetch('https://api.rango.exchange/meta/dapp/config?apiKey=' + encodeURIComponent(apiKey), {
+                            method: 'GET',
+                            cache: 'no-store'
+                        });
+                        if (!accessResponse.ok) {
+                            throw new Error('Rango API rejected this domain.');
+                        }
+                        if (!window.AdminRangoConverter || typeof window.AdminRangoConverter.render !== 'function') {
+                            throw new Error('Local Rango bundle is unavailable.');
+                        }
+
+                        window.AdminRangoConverter.render(mount, {
+                            apiKey,
+                            walletConnectProjectId,
+                            affiliateRef,
+                            affiliatePercent: Number.isFinite(affiliatePercent) ? affiliatePercent : 1,
+                            affiliateWallets,
+                            enableCentralizedSwappers
+                        });
+                        mount.dataset.rendered = '1';
+                        mount.dataset.rendering = '0';
+                    } catch (error) {
+                        mount.dataset.rendering = '0';
+                        const errorText = (error && (error.message || error.toString())) ? String(error.message || error.toString()) : '';
+                        const isAccessError = /failed to fetch|cors|rejected this domain/i.test(errorText);
+                        const message = isAccessError
+                            ? 'Rango BTC/DOGE wymaga API key z odblokowaną domeną dla CORS. Ten darmowy klucz może działać lokalnie, ale na domenie/subdomenie musi zostać zatwierdzony przez Rango.'
+                            : errorLabel;
+                        mount.innerHTML = '<div class="alert alert-warning mb-0">' + message + (errorText && !isAccessError ? '<br><small>' + errorText + '</small>' : '') + '</div>';
+                    }
+                };
+
+                const initSwapperWidget = () => {
+                    const widget = document.querySelector('[data-admin-mixer-widget]');
+                    if (!widget || widget.dataset.initialized === '1') {
+                        return;
+                    }
+
+                    widget.dataset.initialized = '1';
+
+                    const vaultReady = widget.dataset.vaultReady === '1';
+                    const routeReady = widget.dataset.routeReady === '1';
+                    const connectButton = widget.querySelector('[data-admin-mixer-connect]');
+                    const amountInput = widget.querySelector('[data-admin-mixer-amount]');
+                    const recipientInput = widget.querySelector('[data-admin-mixer-recipient]');
+                    const createButton = widget.querySelector('[data-admin-mixer-create-order]');
+                    const formView = widget.querySelector('[data-admin-mixer-form]');
+                    const orderView = widget.querySelector('[data-admin-mixer-order]');
+                    const orderAmount = widget.querySelector('[data-admin-mixer-order-amount]');
+                    const orderAddress = widget.querySelector('[data-admin-mixer-order-address]');
+                    const orderRecipient = widget.querySelector('[data-admin-mixer-order-recipient]');
+                    const orderEstimated = widget.querySelector('[data-admin-mixer-order-estimated]');
+                    const orderStatus = widget.querySelector('[data-admin-mixer-order-status]');
+                    const orderQr = widget.querySelector('[data-admin-mixer-qr]');
+                    const orderCountdown = widget.querySelector('[data-admin-mixer-countdown]');
+                    const orderConfirmations = widget.querySelector('[data-admin-mixer-confirmations]');
+                    const orderWarning = widget.querySelector('[data-admin-mixer-order-warning]');
+                    const depositLink = widget.querySelector('[data-admin-mixer-deposit-link]');
+                    const depositEmpty = widget.querySelector('[data-admin-mixer-deposit-empty]');
+                    const payoutLink = widget.querySelector('[data-admin-mixer-payout-link]');
+                    const payoutEmpty = widget.querySelector('[data-admin-mixer-payout-empty]');
+                    const progressBar = widget.querySelector('[data-admin-mixer-progress-bar]');
+                    const progressLabel = widget.querySelector('[data-admin-mixer-progress-label]');
+                    const copyFeedback = widget.querySelector('[data-admin-mixer-copy-feedback]');
+                    const backButton = widget.querySelector('[data-admin-mixer-order-back]');
+                    const cancelButton = widget.querySelector('[data-admin-mixer-order-cancel]');
+                    const historyView = widget.querySelector('[data-admin-mixer-history]');
+                    const historyWallet = widget.querySelector('[data-admin-mixer-history-wallet]');
+                    const historyState = widget.querySelector('[data-admin-mixer-history-state]');
+                    const historyList = widget.querySelector('[data-admin-mixer-history-list]');
+                    const notice = widget.querySelector('[data-admin-mixer-notice]');
+                    const noticeIcon = widget.querySelector('[data-admin-mixer-notice-icon]');
+                    const noticeText = widget.querySelector('[data-admin-mixer-notice-text]');
+                    const inputSelect = widget.querySelector('[data-admin-mixer-input-select]');
+                    const inputTokenNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-token]'));
+                    const inputTokenImages = Array.from(widget.querySelectorAll('[data-admin-mixer-input-token-img]'));
+                    const inputTokenTextNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-token-text]'));
+                    const inputNetworkImages = Array.from(widget.querySelectorAll('[data-admin-mixer-input-network-img]'));
+                    const inputNetworkTextNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-network-text]'));
+                    const inputSymbolNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-symbol]'));
+                    const inputNetworkLabelNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-network-label]'));
+                    const orderInputIcon = widget.querySelector('[data-admin-mixer-order-input-icon]');
+                    const orderPair = widget.querySelector('[data-admin-mixer-order-pair]');
+                    const orderInputSymbol = widget.querySelector('[data-admin-mixer-order-input-symbol]');
+                    const outputAssetKey = widget.dataset.outputAssetKey || 'POLYGON_POL';
+                    const outputAsset = widget.dataset.outputAsset || 'POL';
+                    const outputNetwork = widget.dataset.outputNetwork || 'Polygon';
+                    const outputChainHex = widget.dataset.outputChainHex || '0x89';
+                    const outputRpcUrl = widget.dataset.outputRpcUrl || '';
+                    const outputNativeSymbol = widget.dataset.outputNativeSymbol || outputAsset;
+                    const payoutExplorerBase = widget.dataset.payoutExplorerUrl || 'https://polygonscan.com/tx/';
+                    const quoteLifetimeMinutes = Number.parseInt(widget.dataset.quoteLifetimeMinutes || '15', 10) || 15;
+                    const csrfToken = widget.dataset.csrf || '';
+                    const ajaxUrl = widget.dataset.ajaxUrl || window.location.href;
+                    const connectErrorLabel = widget.dataset.connectErrorLabel || 'Unable to connect wallet. Paste the recipient address manually.';
+                    const connectedLabel = widget.dataset.connectedLabel || 'Wallet connected';
+                    const noWalletLabel = widget.dataset.noWalletLabel || 'No EVM wallet extension detected. Paste the recipient address manually.';
+                    const fillRequiredLabel = widget.dataset.fillRequiredLabel || 'Enter the amount and a valid recipient address to continue.';
+                    const backendPendingLabel = widget.dataset.backendPendingLabel || 'Deposit order generation will be enabled after the watcher and payout executor are connected.';
+                    const payWarningLabel = widget.dataset.payWarningLabel || 'Do not close or refresh this page while the payment is being detected.';
+                    const copiedLabel = widget.dataset.copiedLabel || 'Copied';
+                    const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
+                    const orderStorageKey = 'subme-admin-swapper-active-order';
+                    const historyStoragePrefix = 'subme-admin-swapper-recipient-history:';
+                    const inputAssetFallback = {
+                        key: String(widget.dataset.inputAssetKey || widget.dataset.inputAsset || 'BTC').toUpperCase(),
+                        symbol: widget.dataset.inputAsset || widget.dataset.inputAssetKey || 'BTC',
+                        network: widget.dataset.inputNetwork || 'Bitcoin',
+                        icon: '',
+                        networkIcon: '',
+                        badge: String(widget.dataset.inputAssetKey || widget.dataset.inputAsset || 'BTC').toUpperCase().slice(0, 1),
+                        depositAddress: (widget.dataset.depositAddress || '').trim()
+                    };
+                    let inputAssetOptions = [];
+                    let countdownTimer = 0;
+                    let statusTimer = 0;
+                    let connectedWalletAddress = '';
+
+                    try {
+                        const parsedInputAssets = JSON.parse(widget.dataset.inputAssets || '[]');
+                        inputAssetOptions = Array.isArray(parsedInputAssets) ? parsedInputAssets.map((asset) => {
+                            const key = String(asset && asset.key ? asset.key : '').trim().toUpperCase();
+                            return {
+                                key,
+                                symbol: String(asset && asset.symbol ? asset.symbol : key).trim() || key,
+                                network: String(asset && asset.network ? asset.network : (key === 'DOGE' ? 'Dogecoin' : 'Bitcoin')).trim(),
+                                icon: String(asset && asset.icon ? asset.icon : '').trim(),
+                                networkIcon: String(asset && asset.networkIcon ? asset.networkIcon : '').trim(),
+                                badge: String(asset && asset.badge ? asset.badge : key.slice(0, 1)).trim() || key.slice(0, 1),
+                                depositAddress: String(asset && asset.depositAddress ? asset.depositAddress : '').trim()
+                            };
+                        }).filter((asset) => asset.key !== '') : [];
+                    } catch (error) {
+                        inputAssetOptions = [];
+                    }
+
+                    if (inputAssetOptions.length === 0) {
+                        inputAssetOptions = [inputAssetFallback];
+                    }
+
+                    const buildFallbackInputAssetOption = (key) => {
+                        const normalized = String(key || '').trim().toUpperCase();
+                        const safeKey = normalized || inputAssetFallback.key || 'BTC';
+                        return {
+                            key: safeKey,
+                            symbol: safeKey,
+                            network: safeKey === 'DOGE' ? 'Dogecoin' : 'Bitcoin',
+                            icon: safeKey === 'DOGE' ? '/img/crypto/doge.png' : '/img/crypto/btc.png',
+                            networkIcon: safeKey === 'DOGE' ? '/img/crypto/doge.png' : '/img/crypto/btc.png',
+                            badge: safeKey.slice(0, 1),
+                            depositAddress: ''
+                        };
+                    };
+
+                    const findInputAssetOption = (key, fallbackToFirst = true) => {
+                        const normalized = String(key || '').trim().toUpperCase();
+                        const found = inputAssetOptions.find((asset) => asset.key === normalized);
+                        if (found) {
+                            return found;
+                        }
+                        return fallbackToFirst ? (inputAssetOptions[0] || inputAssetFallback) : buildFallbackInputAssetOption(normalized);
+                    };
+
+                    let selectedInputAsset = findInputAssetOption(inputSelect ? inputSelect.value : widget.dataset.inputAssetKey);
+                    const currentInputAsset = () => selectedInputAsset || inputAssetOptions[0] || inputAssetFallback;
+
+                    const setNotice = (message, type = 'info') => {
+                        if (!notice || !noticeText) {
+                            return;
+                        }
+                        notice.classList.toggle('is-warning', type === 'warning');
+                        notice.classList.toggle('is-success', type === 'success');
+                        noticeText.textContent = message;
+                        if (noticeIcon) {
+                            noticeIcon.className = 'bi ' + (type === 'success' ? 'bi-check2-circle' : (type === 'warning' ? 'bi-info-circle' : 'bi-credit-card-2-front'));
+                        }
+                    };
+
+                    const setImageNode = (image, src, alt) => {
+                        if (!image) {
+                            return;
+                        }
+                        const safeSrc = String(src || '').trim();
+                        if (safeSrc !== '') {
+                            image.src = safeSrc;
+                            image.alt = String(alt || '').trim();
+                            image.hidden = false;
+                        } else {
+                            image.removeAttribute('src');
+                            image.alt = '';
+                            image.hidden = true;
+                        }
+                    };
+
+                    const copyText = (value) => {
+                        const text = String(value || '').trim();
+                        if (!text) {
+                            return Promise.resolve();
+                        }
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            return navigator.clipboard.writeText(text);
+                        }
+                        return new Promise((resolve, reject) => {
+                            const textarea = document.createElement('textarea');
+                            textarea.value = text;
+                            textarea.setAttribute('readonly', '');
+                            textarea.style.position = 'absolute';
+                            textarea.style.left = '-9999px';
+                            document.body.appendChild(textarea);
+                            textarea.select();
+                            try {
+                                document.execCommand('copy');
+                                document.body.removeChild(textarea);
+                                resolve();
+                            } catch (error) {
+                                document.body.removeChild(textarea);
+                                reject(error);
+                            }
+                        });
+                    };
+
+                    const showCopyFeedback = () => {
+                        if (!copyFeedback) {
+                            return;
+                        }
+                        copyFeedback.textContent = copiedLabel;
+                        copyFeedback.classList.add('is-visible');
+                        window.clearTimeout(Number(copyFeedback.dataset.timer || 0));
+                        copyFeedback.dataset.timer = String(window.setTimeout(() => {
+                            copyFeedback.classList.remove('is-visible');
+                        }, 1400));
+                    };
+
+                    const postSwapper = (action, payload = {}) => {
+                        const body = new URLSearchParams();
+                        body.set('_csrf', csrfToken);
+                        body.set(action, '1');
+                        Object.keys(payload).forEach((key) => {
+                            body.set(key, String(payload[key] ?? ''));
+                        });
+
+                        return fetch(ajaxUrl, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                                'Accept': 'application/json'
+                            },
+                            body: body.toString()
+                        }).then(async (response) => {
+                            const data = await response.json().catch(() => ({}));
+                            if (!response.ok || !data || data.ok === false) {
+                                throw new Error((data && data.message) ? data.message : 'Swapper request failed.');
+                            }
+                            return data;
+                        });
+                    };
+
+                    const depositExplorerUrl = (order) => {
+                        const txid = String(order && order.depositTxid ? order.depositTxid : '').trim();
+                        if (!txid) {
+                            return '';
+                        }
+                        return String(order.inputAsset || '').toUpperCase() === 'DOGE'
+                            ? 'https://blockchair.com/dogecoin/transaction/' + encodeURIComponent(txid)
+                            : 'https://mempool.space/tx/' + encodeURIComponent(txid);
+                    };
+
+                    const payoutExplorerUrl = (order) => {
+                        const txid = String(order && order.payoutTxid ? order.payoutTxid : '').trim();
+                        const base = String(order && order.payoutExplorerBase ? order.payoutExplorerBase : payoutExplorerBase).trim();
+                        return txid && base ? base + encodeURIComponent(txid) : '';
+                    };
+
+                    const compactAddress = (address) => {
+                        const text = String(address || '').trim();
+                        return text.length > 14 ? (text.slice(0, 6) + '...' + text.slice(-4)) : text;
+                    };
+
+                    const historyKeyForWallet = (address) => {
+                        const normalized = String(address || '').trim().toLowerCase();
+                        return normalized && evmAddressPattern.test(normalized) ? historyStoragePrefix + normalized : '';
+                    };
+
+                    const loadWalletHistory = (address) => {
+                        const key = historyKeyForWallet(address);
+                        if (!key) {
+                            return [];
+                        }
+
+                        try {
+                            const raw = window.localStorage ? window.localStorage.getItem(key) : '';
+                            const parsed = raw ? JSON.parse(raw) : [];
+                            return Array.isArray(parsed) ? parsed : [];
+                        } catch (error) {
+                            return [];
+                        }
+                    };
+
+                    const saveWalletHistory = (address, entries) => {
+                        const key = historyKeyForWallet(address);
+                        if (!key || !window.localStorage) {
+                            return;
+                        }
+
+                        try {
+                            window.localStorage.setItem(key, JSON.stringify(entries.slice(0, 10)));
+                        } catch (error) {}
+                    };
+
+                    const renderWalletHistory = (address) => {
+                        if (!historyView || !historyList || !historyState) {
+                            return;
+                        }
+
+                        const walletAddress = String(address || '').trim();
+                        if (!evmAddressPattern.test(walletAddress)) {
+                            historyView.hidden = true;
+                            return;
+                        }
+
+                        historyView.hidden = false;
+                        if (historyWallet) {
+                            historyWallet.textContent = compactAddress(walletAddress);
+                        }
+
+                        const entries = loadWalletHistory(walletAddress);
+                        historyList.innerHTML = '';
+                        historyState.hidden = entries.length > 0;
+
+                        if (entries.length === 0) {
+                            historyState.hidden = false;
+                            return;
+                        }
+
+                        entries.forEach((entry) => {
+                            const item = document.createElement('div');
+                            item.className = 'admin-mixer-history__item';
+
+                            const left = document.createElement('div');
+                            const title = document.createElement('strong');
+                            title.textContent = [
+                                String(entry.estimatedOutputAmount || entry.outputAmount || '').trim(),
+                                String(entry.outputAsset || '').trim(),
+                                String(entry.outputNetwork || '').trim()
+                            ].filter(Boolean).join(' ') || 'Swapper payout';
+                            const meta = document.createElement('span');
+                            meta.textContent = [
+                                String(entry.inputAmount || '').trim() && String(entry.inputAsset || '').trim()
+                                    ? String(entry.inputAmount).trim() + ' ' + String(entry.inputAsset).trim()
+                                    : '',
+                                String(entry.statusLabel || entry.status || '').trim(),
+                                entry.updatedAt ? new Date(Number(entry.updatedAt)).toLocaleString() : ''
+                            ].filter(Boolean).join(' • ');
+                            left.appendChild(title);
+                            left.appendChild(meta);
+
+                            const right = document.createElement('div');
+                            right.className = 'admin-mixer-history__tx';
+                            const txid = String(entry.payoutTxid || '').trim();
+                            if (txid) {
+                                const link = document.createElement('a');
+                                const explorerBase = String(entry.payoutExplorerBase || payoutExplorerBase || '').trim();
+                                link.href = (explorerBase || 'https://polygonscan.com/tx/') + encodeURIComponent(txid);
+                                link.target = '_blank';
+                                link.rel = 'noopener noreferrer';
+                                link.textContent = String(entry.outputNetwork || '').toLowerCase().includes('amoy') ? 'AmoyScan' : 'Explorer';
+                                right.appendChild(link);
+                            } else {
+                                right.textContent = '-';
+                            }
+
+                            item.appendChild(left);
+                            item.appendChild(right);
+                            historyList.appendChild(item);
+                        });
+                    };
+
+                    const rememberWalletHistoryOrder = (order) => {
+                        const recipient = String(order && order.recipient ? order.recipient : '').trim();
+                        if (!evmAddressPattern.test(recipient)) {
+                            return;
+                        }
+
+                        const entries = loadWalletHistory(recipient);
+                        const orderId = String(order.id || '').trim();
+                        const historyEntry = {
+                            id: orderId || ('local-' + Date.now()),
+                            inputAsset: String(order.inputAsset || currentInputAsset().symbol || currentInputAsset().key || '').trim(),
+                            inputAmount: String(order.detected_amount || order.amount || '').trim(),
+                            outputAsset: String(order.outputAsset || outputAsset || '').trim(),
+                            outputNetwork: String(order.outputNetwork || outputNetwork || '').trim(),
+                            estimatedOutputAmount: String(order.estimated_output_amount || order.estimatedOutputAmount || '').trim(),
+                            status: String(order.status || '').trim(),
+                            statusLabel: String(order.statusLabel || '').trim(),
+                            payoutTxid: String(order.payoutTxid || '').trim(),
+                            payoutExplorerBase: String(order.payoutExplorerBase || payoutExplorerBase || '').trim(),
+                            updatedAt: Date.now()
+                        };
+                        const nextEntries = entries.filter((entry) => String(entry.id || '') !== historyEntry.id);
+                        nextEntries.unshift(historyEntry);
+                        saveWalletHistory(recipient, nextEntries);
+
+                        if (connectedWalletAddress && recipient.toLowerCase() === connectedWalletAddress.toLowerCase()) {
+                            renderWalletHistory(connectedWalletAddress);
+                        }
+                    };
+
+                    const saveOrder = (order) => {
+                        try {
+                            if (window.localStorage) {
+                                window.localStorage.setItem(orderStorageKey, JSON.stringify(order));
+                            }
+                        } catch (error) {}
+                    };
+
+                    const loadOrder = () => {
+                        try {
+                            if (!window.localStorage) {
+                                return null;
+                            }
+                            const raw = window.localStorage.getItem(orderStorageKey);
+                            if (!raw) {
+                                return null;
+                            }
+                            const parsed = JSON.parse(raw);
+                            return parsed && typeof parsed === 'object' ? parsed : null;
+                        } catch (error) {
+                            return null;
+                        }
+                    };
+
+                    const clearOrder = () => {
+                        try {
+                            if (window.localStorage) {
+                                window.localStorage.removeItem(orderStorageKey);
+                            }
+                        } catch (error) {}
+                    };
+
+                    const formatCountdown = (seconds) => {
+                        const safeSeconds = Math.max(0, Number.parseInt(String(seconds), 10) || 0);
+                        const minutes = Math.floor(safeSeconds / 60);
+                        const rest = safeSeconds % 60;
+                        return String(minutes).padStart(2, '0') + ':' + String(rest).padStart(2, '0');
+                    };
+
+                    const updateProgress = (percent, status) => {
+                        const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+                        if (progressBar) {
+                            progressBar.style.width = safePercent + '%';
+                        }
+                        if (progressLabel) {
+                            progressLabel.textContent = Math.round(safePercent) + '%';
+                        }
+                        if (orderStatus && status) {
+                            orderStatus.textContent = status;
+                        }
+                    };
+
+                    const renderOrder = (order) => {
+                        if (!orderView || !formView) {
+                            return;
+                        }
+                        const orderInputAsset = findInputAssetOption(order && order.inputAsset ? order.inputAsset : currentInputAsset().key, false);
+                        const orderInputSymbolText = String(order && order.inputAsset ? order.inputAsset : (orderInputAsset.symbol || orderInputAsset.key || 'BTC')).toUpperCase();
+                        formView.hidden = true;
+                        orderView.hidden = false;
+                        setImageNode(orderInputIcon, orderInputAsset.icon, orderInputSymbolText);
+                        if (orderPair) {
+                            orderPair.textContent = [
+                                orderInputSymbolText,
+                                '->',
+                                String(order.outputAsset || outputAsset || '').trim(),
+                                String(order.outputNetwork || outputNetwork || '').trim()
+                            ].filter(Boolean).join(' ');
+                        }
+                        if (orderInputSymbol) {
+                            orderInputSymbol.textContent = orderInputSymbolText;
+                        }
+                        if (orderAmount) {
+                            orderAmount.textContent = order.amount;
+                        }
+                        if (orderAddress) {
+                            orderAddress.textContent = order.depositAddress || '-';
+                        }
+                        if (orderRecipient) {
+                            orderRecipient.textContent = order.recipient || '-';
+                        }
+                        if (orderEstimated) {
+                            const estimated = String(order.estimated_output_amount || order.estimatedOutputAmount || '').trim();
+                            orderEstimated.textContent = estimated ? (estimated + ' ' + (order.outputAsset || outputAsset)) : '-';
+                        }
+                        if (orderWarning) {
+                            orderWarning.textContent = payWarningLabel;
+                        }
+                        if (orderConfirmations) {
+                            const confirmations = Number.parseInt(String(order.confirmations || 0), 10) || 0;
+                            const confirmationsRequired = Number.parseInt(String(order.confirmationsRequired || (orderInputSymbolText === 'DOGE' ? 20 : 3)), 10) || 3;
+                            orderConfirmations.textContent = confirmations + '/' + confirmationsRequired;
+                        }
+                        if (orderQr && order.depositAddress) {
+                            orderQr.src = 'https://quickchart.io/qr?size=300&text=' + encodeURIComponent(order.depositAddress);
+                        }
+                        const depositUrl = depositExplorerUrl(order);
+                        if (depositLink && depositEmpty) {
+                            depositLink.hidden = depositUrl === '';
+                            depositEmpty.hidden = depositUrl !== '';
+                            if (depositUrl !== '') {
+                                depositLink.href = depositUrl;
+                            }
+                        }
+                        const payoutUrl = payoutExplorerUrl(order);
+                        if (payoutLink && payoutEmpty) {
+                            payoutLink.hidden = payoutUrl === '';
+                            payoutEmpty.hidden = payoutUrl !== '';
+                            if (payoutUrl !== '') {
+                                payoutLink.href = payoutUrl;
+                            }
+                        }
+                        rememberWalletHistoryOrder(order);
+                        updateProgress(order.progress || 12, order.statusLabel || 'Waiting deposit');
+
+                        window.clearInterval(countdownTimer);
+                        countdownTimer = window.setInterval(() => {
+                            const remaining = Math.max(0, Math.floor((Number(order.expiresAt) - Date.now()) / 1000));
+                            if (orderCountdown) {
+                                orderCountdown.textContent = remaining > 0 ? formatCountdown(remaining) : 'Expired';
+                            }
+                            if (remaining <= 0) {
+                                window.clearInterval(countdownTimer);
+                                if (String(order.status || '') === 'waiting_deposit') {
+                                    updateProgress(0, 'Expired');
+                                }
+                            }
+                        }, 1000);
+                    };
+
+                    const showForm = () => {
+                        window.clearInterval(countdownTimer);
+                        window.clearInterval(statusTimer);
+                        if (formView) {
+                            formView.hidden = false;
+                        }
+                        if (orderView) {
+                            orderView.hidden = true;
+                        }
+                    };
+
+                    const pollOrder = (publicId) => {
+                        window.clearInterval(statusTimer);
+                        if (!publicId || String(publicId).indexOf('local-') === 0 || !csrfToken) {
+                            return;
+                        }
+
+                        statusTimer = window.setInterval(() => {
+                            postSwapper('admin_mixer_order_status_ajax', { public_id: publicId })
+                                .then((data) => {
+                                    if (!data.order) {
+                                        return;
+                                    }
+                                    saveOrder(data.order);
+                                    renderOrder(data.order);
+                                    if (['paid', 'cancelled', 'expired', 'failed'].includes(String(data.order.status || ''))) {
+                                        window.clearInterval(statusTimer);
+                                    }
+                                })
+                                .catch(() => {});
+                        }, 15000);
+                    };
+
+                    const updateCreateState = () => {
+                        if (!createButton) {
+                            return;
+                        }
+                        const activeInputAsset = currentInputAsset();
+                        const amount = Number.parseFloat(String(amountInput ? amountInput.value : '').replace(',', '.'));
+                        const recipient = String(recipientInput ? recipientInput.value : '').trim();
+                        const formReady = vaultReady && routeReady && String(activeInputAsset.depositAddress || '').trim() !== '' && Number.isFinite(amount) && amount > 0 && evmAddressPattern.test(recipient);
+                        createButton.disabled = !formReady;
+                    };
+
+                    const updateInputAssetView = () => {
+                        const activeInputAsset = currentInputAsset();
+                        const key = String(activeInputAsset.key || 'BTC').toLowerCase();
+                        const symbol = String(activeInputAsset.symbol || activeInputAsset.key || 'BTC').trim();
+                        const network = String(activeInputAsset.network || '').trim();
+                        const badge = String(activeInputAsset.badge || symbol.slice(0, 1)).trim();
+
+                        inputTokenNodes.forEach((token) => {
+                            token.classList.remove('admin-mixer-widget__token--btc', 'admin-mixer-widget__token--doge');
+                            token.classList.add('admin-mixer-widget__token--' + key);
+                        });
+                        inputTokenImages.forEach((image) => setImageNode(image, activeInputAsset.icon, symbol));
+                        inputTokenTextNodes.forEach((node) => {
+                            node.textContent = symbol;
+                            node.hidden = String(activeInputAsset.icon || '').trim() !== '';
+                        });
+                        inputNetworkImages.forEach((image) => setImageNode(image, activeInputAsset.networkIcon, network || symbol));
+                        inputNetworkTextNodes.forEach((node) => {
+                            node.textContent = badge;
+                            node.hidden = String(activeInputAsset.networkIcon || '').trim() !== '';
+                        });
+                        inputSymbolNodes.forEach((node) => {
+                            node.textContent = symbol;
+                        });
+                        inputNetworkLabelNodes.forEach((node) => {
+                            node.textContent = network;
+                        });
+                        if (inputSelect && inputSelect.value !== activeInputAsset.key) {
+                            inputSelect.value = activeInputAsset.key;
+                        }
+                        updateCreateState();
+                    };
+
+                    if (!vaultReady) {
+                        updateInputAssetView();
+                        return;
+                    }
+
+                    if (inputSelect) {
+                        inputSelect.disabled = false;
+                        inputSelect.addEventListener('change', () => {
+                            selectedInputAsset = findInputAssetOption(inputSelect.value);
+                            updateInputAssetView();
+                            if (routeReady && String(currentInputAsset().depositAddress || '').trim() === '') {
+                                setNotice(fillRequiredLabel, 'warning');
+                            }
+                        });
+                    }
+
+                    if (connectButton) {
+                        connectButton.disabled = false;
+                        connectButton.addEventListener('click', async () => {
+                            const provider = window.ethereum;
+                            if (!provider || typeof provider.request !== 'function') {
+                                setNotice(noWalletLabel, 'warning');
+                                return;
+                            }
+
+                            try {
+                                const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                                try {
+                                    await provider.request({
+                                        method: 'wallet_switchEthereumChain',
+                                        params: [{ chainId: outputChainHex }]
+                                    });
+                                } catch (switchError) {
+                                    if (switchError && Number(switchError.code) === 4902 && outputRpcUrl) {
+                                        const explorerUrl = payoutExplorerBase.replace(/\/tx\/?$/i, '');
+                                        try {
+                                            await provider.request({
+                                                method: 'wallet_addEthereumChain',
+                                                params: [{
+                                                    chainId: outputChainHex,
+                                                    chainName: outputNetwork,
+                                                    nativeCurrency: {
+                                                        name: outputNativeSymbol,
+                                                        symbol: outputNativeSymbol,
+                                                        decimals: 18
+                                                    },
+                                                    rpcUrls: [outputRpcUrl],
+                                                    blockExplorerUrls: explorerUrl ? [explorerUrl] : []
+                                                }]
+                                            });
+                                        } catch (addError) {}
+                                    }
+                                }
+                                const address = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
+                                if (!evmAddressPattern.test(address)) {
+                                    setNotice(connectErrorLabel, 'warning');
+                                    return;
+                                }
+
+                                if (recipientInput) {
+                                    recipientInput.value = address;
+                                }
+                                connectedWalletAddress = address;
+                                renderWalletHistory(address);
+                                const connectLabel = connectButton.querySelector('span');
+                                if (connectLabel) {
+                                    connectLabel.textContent = connectedLabel;
+                                }
+                                setNotice(fillRequiredLabel, 'success');
+                                updateCreateState();
+                            } catch (error) {
+                                setNotice(connectErrorLabel, 'warning');
+                            }
+                        });
+                    }
+
+                    if (amountInput) {
+                        amountInput.disabled = false;
+                        amountInput.addEventListener('input', updateCreateState);
+                    }
+
+                    if (recipientInput) {
+                        recipientInput.disabled = false;
+                        recipientInput.addEventListener('input', updateCreateState);
+                    }
+
+                    if (createButton) {
+                        createButton.addEventListener('click', () => {
+                            const activeInputAsset = currentInputAsset();
+                            const depositAddress = String(activeInputAsset.depositAddress || '').trim();
+                            const amount = String(amountInput ? amountInput.value : '').trim().replace(',', '.');
+                            const recipient = String(recipientInput ? recipientInput.value : '').trim();
+                            const parsedAmount = Number.parseFloat(amount);
+                            if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || !evmAddressPattern.test(recipient) || !depositAddress) {
+                                setNotice(fillRequiredLabel, 'warning');
+                                updateCreateState();
+                                return;
+                            }
+
+                            createButton.disabled = true;
+                            postSwapper('admin_mixer_create_order_ajax', {
+                                input_asset: activeInputAsset.key,
+                                output_asset: outputAssetKey,
+                                amount,
+                                recipient_address: recipient
+                            }).then((data) => {
+                                const order = data.order || {
+                                    id: 'local-' + Date.now(),
+                                    amount,
+                                    inputAsset: activeInputAsset.key,
+                                    inputNetwork: activeInputAsset.network,
+                                    outputAsset,
+                                    outputNetwork,
+                                    recipient,
+                                    depositAddress,
+                                    status: 'waiting_deposit',
+                                    statusLabel: 'Waiting deposit',
+                                    progress: 12,
+                                    createdAt: Date.now(),
+                                    expiresAt: Date.now() + quoteLifetimeMinutes * 60 * 1000
+                                };
+                                saveOrder(order);
+                                renderOrder(order);
+                                pollOrder(order.id);
+                            }).catch((error) => {
+                                setNotice(error && error.message ? error.message : backendPendingLabel, 'warning');
+                            }).finally(() => {
+                                updateCreateState();
+                            });
+                        });
+                    }
+
+                    widget.addEventListener('click', (event) => {
+                        const copyButton = event.target.closest('[data-admin-mixer-copy]');
+                        if (!copyButton) {
+                            return;
+                        }
+                        event.preventDefault();
+                        const activeOrder = loadOrder();
+                        const copyType = copyButton.dataset.adminMixerCopy;
+                        const value = copyType === 'amount'
+                            ? (activeOrder ? activeOrder.amount : '')
+                            : (activeOrder ? activeOrder.depositAddress : '');
+                        copyText(value).then(showCopyFeedback).catch(() => {});
+                    });
+
+                    if (backButton) {
+                        backButton.addEventListener('click', () => {
+                            showForm();
+                        });
+                    }
+
+                    if (cancelButton) {
+                        cancelButton.addEventListener('click', () => {
+                            const activeOrder = loadOrder();
+                            const publicId = activeOrder && activeOrder.id ? activeOrder.id : '';
+                            if (!publicId || publicId.indexOf('local-') === 0) {
+                                clearOrder();
+                                showForm();
+                                setNotice(fillRequiredLabel, 'info');
+                                return;
+                            }
+
+                            cancelButton.disabled = true;
+                            postSwapper('admin_mixer_cancel_order_ajax', { public_id: publicId })
+                                .then(() => {
+                                    clearOrder();
+                                    showForm();
+                                    setNotice(fillRequiredLabel, 'info');
+                                })
+                                .catch((error) => {
+                                    setNotice(error && error.message ? error.message : fillRequiredLabel, 'warning');
+                                })
+                                .finally(() => {
+                                    cancelButton.disabled = false;
+                                });
+                        });
+                    }
+
+                    const storedOrder = loadOrder();
+                    if (storedOrder && storedOrder.depositAddress && storedOrder.amount && storedOrder.recipient) {
+                        renderOrder(storedOrder);
+                        pollOrder(storedOrder.id);
+                    }
+
+                    updateInputAssetView();
+                };
+
+                const switchRoot = document.querySelector('[data-admin-swap-mode-root]');
+                const switchButtons = switchRoot ? Array.from(switchRoot.querySelectorAll('[data-admin-swap-mode]')) : [];
+                const views = Array.from(document.querySelectorAll('[data-admin-swap-view]'));
+                const modeStorageKey = 'subme-swap-converter-active-mode';
+                const validModes = views
+                    .map((view) => view.dataset.adminSwapView || '')
+                    .filter(Boolean);
+                const defaultMode = (switchRoot && switchRoot.dataset.adminSwapDefaultMode && validModes.includes(switchRoot.dataset.adminSwapDefaultMode))
+                    ? switchRoot.dataset.adminSwapDefaultMode
+                    : (validModes[0] || 'lifi');
+
+                const getStoredMode = () => {
+                    try {
+                        const storedMode = window.localStorage ? window.localStorage.getItem(modeStorageKey) : '';
+                        return validModes.includes(storedMode) ? storedMode : '';
+                    } catch (error) {
+                        return '';
+                    }
+                };
+
+                const storeMode = (mode) => {
+                    try {
+                        if (window.localStorage) {
+                            window.localStorage.setItem(modeStorageKey, mode);
+                        }
+                    } catch (error) {
+                        // localStorage can be unavailable in private or locked-down browser contexts.
+                    }
+                };
+
+                const modeExists = (mode) => views.some((view) => view.dataset.adminSwapView === mode);
+
+                const setMode = (mode, persist = true) => {
+                    const requestedMode = validModes.includes(mode) ? mode : defaultMode;
+                    const nextMode = modeExists(requestedMode) ? requestedMode : defaultMode;
+                    switchButtons.forEach((button) => {
+                        const isActive = button.dataset.adminSwapMode === nextMode;
+                        button.classList.toggle('is-active', isActive);
+                        button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                    });
+                    views.forEach((view) => {
+                        view.hidden = view.dataset.adminSwapView !== nextMode;
+                    });
+
+                    if (nextMode === 'private') {
+                        renderPrivateSend();
+                    } else if (nextMode === 'rango') {
+                        renderRangoWidget();
+                    } else if (nextMode === 'lifi') {
+                        renderLifiWidget();
+                    } else if (nextMode === 'mixer') {
+                        initSwapperWidget();
+                    }
+
+                    if (persist) {
+                        storeMode(nextMode);
+                    }
+                };
+
+                switchButtons.forEach((button) => {
+                    button.addEventListener('click', () => {
+                        setMode(button.dataset.adminSwapMode || 'lifi');
+                    });
+                });
+
+                setMode(getStoredMode() || defaultMode, false);
+            })();
+        </script>
+    <?php endif; ?>
 
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
