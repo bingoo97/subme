@@ -1,8 +1,26 @@
 # Dokumentacja Aplikacji
 
-Ten katalog opisuje tylko aktualny sposob dzialania aplikacji, deployu i bazy danych.
+Ten katalog opisuje aktualny sposob dzialania aplikacji, deployu i bazy danych.
 
 Nie trzymamy tu juz planow historycznych, starych modeli multi-instance ani notatek o wersjach przejsciowych.
+
+Kierunek produktowy i zalozenia biznesowe sa zapisane osobno:
+
+- `docs/PRODUCT_DIRECTION_PAID_CONTENT_PLATFORM.md`
+
+## Co to jest za projekt
+
+To jest panel do sprzedazy subskrypcji, platnych dostepow i uslug cyfrowych.
+
+Obecna aplikacja ma fundament systemu resellerowo-subskrypcyjnego: konta klientow, produkty, zamowienia, platnosci, saldo, panel admina, komunikacje i tresci informacyjne. Kierunek produktowy jest szerszy: platforma do monetyzacji wiedzy, materialow, nagran, webinarow, konsultacji i zamknietych tresci online.
+
+Najprostszy model dzialania:
+
+```text
+produkt -> platnosc -> dostep -> wygasniecie / odnowienie
+```
+
+Produkt powinien pozostac uniwersalny technicznie. Nie ograniczamy go do jednej branzy, np. tylko fizjoterapeutow. Konkretne segmenty, takie jak trenerzy, edukatorzy, konsultanci, fizjoterapeuci czy organizatorzy webinarow, traktujemy jako scenariusze sprzedazowe.
 
 ## Najwazniejsze zasady
 
@@ -211,6 +229,7 @@ Szczegolnie sekcje:
 ## Najwazniejsze pliki w tym katalogu
 
 - `docs/FUNCTIONALITY.md`
+- `docs/PRODUCT_DIRECTION_PAID_CONTENT_PLATFORM.md`
 - `docs/NEW_SERVER_CHECKLIST.md`
 - `docs/LOCAL_DOCKER.md`
 - `docs/00_SYSTEM_MAINTENANCE_RUNNER.md`
