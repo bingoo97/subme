@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/chat_security.php';
 
 admin_send_security_headers();
+header('Content-Type: application/json; charset=utf-8');
 admin_start_session();
 
 $db = Mysql_ks::get_instance();
@@ -13,6 +15,13 @@ $adminUser = admin_load_session_user($db);
 if ($adminUser === null) {
     http_response_code(401);
     echo json_encode(['ok' => false, 'message' => 'Unauthorized.']);
+    exit;
+}
+
+if (!admin_user_can_access_route($adminUser, 'live-chat')) {
+    http_response_code(403);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok' => false, 'message' => 'Access denied.']);
     exit;
 }
 
@@ -26,6 +35,29 @@ if (function_exists('chat_demo_showcase_sync')) {
 $action = isset($_POST['action']) ? (string)$_POST['action'] : (isset($_GET['action']) ? (string)$_GET['action'] : 'fetch');
 $conversationId = isset($_POST['conversation_id']) ? (int)$_POST['conversation_id'] : (isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : 0);
 
+header('Content-Type: application/json; charset=utf-8');
+$messageLimit = admin_chat_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0);
+$mutatingActions = admin_chat_mutating_actions();
+if (in_array($action, $mutatingActions, true)) {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        http_response_code(405);
+        header('Allow: POST');
+        echo json_encode(['ok' => false, 'message' => 'POST is required.']);
+        exit;
+    }
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(419);
+        echo json_encode(['ok' => false, 'message' => 'CSRF validation failed.']);
+        exit;
+    }
+}
+
+// Slow previews and audio streaming must not hold the administrator's session lock.
+if (in_array($action, ['voice_file', 'link_preview', 'payment_modal', 'payment_preview'], true)
+    && session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
+
 if ($action === 'voice_file') {
     $messageId = isset($_GET['message_id']) ? (int)$_GET['message_id'] : 0;
     if ($messageId <= 0) {
@@ -34,13 +66,14 @@ if ($action === 'voice_file') {
     }
 
     $messageRow = $db->select_user(
-        "SELECT id, audio_path, audio_mime_type, message_type
+        "SELECT id, conversation_id, audio_path, audio_mime_type, message_type
          FROM support_messages
          WHERE id = {$messageId}
+           AND (expires_at IS NULL OR expires_at > NOW())
          LIMIT 1"
     );
 
-    if (!is_array($messageRow)) {
+    if (!is_array($messageRow) || !admin_chat_conversation_access_allowed($db, $adminUser, (int)($messageRow['conversation_id'] ?? 0), $appSettings)) {
         http_response_code(404);
         exit;
     }
@@ -55,16 +88,6 @@ if ($action === 'voice_file') {
 
     $absolutePath = app_chat_attachment_absolute_path($audioPath, true);
     chat_stream_audio_response($absolutePath, $audioMimeType !== '' ? $audioMimeType : 'audio/webm');
-}
-
-header('Content-Type: application/json; charset=utf-8');
-$messageLimit = admin_chat_normalize_message_limit($_POST['message_limit'] ?? $_GET['message_limit'] ?? 0);
-$mutatingActions = ['start_conversation', 'delete_conversation', 'send', 'upload', 'voice_upload', 'send_quick_reply', 'update_quick_reply_message', 'delete_message', 'edit_message', 'toggle_reaction', 'set_customer_block_status', 'create_crypto_payment_request', 'create_bank_payment_request', 'create_group', 'invite_group_members', 'respond_group_invite', 'leave_group', 'toggle_group_read_only', 'set_group_retention', 'set_group_email_notifications', 'quick_create_customer'];
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $mutatingActions, true) && !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-    http_response_code(419);
-    echo json_encode(['ok' => false, 'message' => 'CSRF validation failed.']);
-    exit;
 }
 
 if ($action === 'validate_group_email' && !admin_csrf_is_valid($_POST['_csrf'] ?? $_GET['_csrf'] ?? '')) {
@@ -262,6 +285,13 @@ if ($action === 'start_conversation') {
     }
 }
 
+if (in_array($action, ['delete_conversation', 'quick_replies'], true)
+    && !admin_chat_conversation_access_allowed($db, $adminUser, $conversationId, $appSettings)) {
+    http_response_code(403);
+    echo json_encode(['ok' => false, 'message' => 'Access denied.']);
+    exit;
+}
+
 if ($action === 'delete_conversation') {
     if ($conversationId <= 0) {
         http_response_code(422);
@@ -427,7 +457,17 @@ if (!is_array($conversationRow) || empty($conversationRow['id'])) {
     exit;
 }
 
-if (chat_is_group_like_conversation_type((string)($conversationRow['conversation_type'] ?? 'live_chat')) && !chat_group_accessible_for_admin($db, (int)$adminUser['id'], $conversationId)) {
+if (
+    function_exists('chat_is_global_group_conversation_type')
+    && chat_is_global_group_conversation_type((string)($conversationRow['conversation_type'] ?? ''))
+    && !admin_customer_global_group_enabled($appSettings)
+) {
+    http_response_code(404);
+    echo json_encode(['ok' => false, 'message' => 'Conversation not found.']);
+    exit;
+}
+
+if (!admin_chat_conversation_access_allowed($db, $adminUser, $conversationId, $appSettings)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'message' => 'Access denied.']);
     exit;
@@ -520,6 +560,11 @@ if ($action === 'link_preview') {
 
 if ($action === 'send') {
     $messageBody = trim((string)($_POST['message'] ?? ''));
+    if (!admin_chat_message_body_valid($messageBody)) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Message is empty or too long.']);
+        exit;
+    }
     if ($messageBody !== '') {
         $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
         $replyToMessageId = chat_validate_reply_target($db, $conversationId, $replyToMessageId) ?? 0;
@@ -532,7 +577,11 @@ if ($action === 'send') {
             empty($_POST['link_preview_removed']),
             trim((string)($_POST['link_preview_url'] ?? ''))
         );
-        admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], $messageBody, null, $replyToMessageId > 0 ? $replyToMessageId : null);
+        if (!admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], $messageBody, null, $replyToMessageId > 0 ? $replyToMessageId : null)) {
+            http_response_code(422);
+            echo json_encode(['ok' => false, 'message' => 'Message could not be saved.']);
+            exit;
+        }
     }
 }
 
@@ -600,6 +649,13 @@ if ($action === 'send_quick_reply') {
     }
 }
 
+if (($action === 'upload' && empty($_FILES['file']['tmp_name']))
+    || ($action === 'voice_upload' && (empty($_FILES['voice_file']['tmp_name']) || !admin_messenger_voice_enabled($appSettings)))) {
+    http_response_code(422);
+    echo json_encode(['ok' => false, 'message' => 'Attachment is missing or this feature is disabled.']);
+    exit;
+}
+
 if ($action === 'upload' && !empty($_FILES['file']['tmp_name'])) {
     $attachmentPath = admin_chat_store_uploaded_image($_FILES['file'], (int)$adminUser['id']);
     if ($attachmentPath === null) {
@@ -610,7 +666,12 @@ if ($action === 'upload' && !empty($_FILES['file']['tmp_name'])) {
 
     $replyToMessageId = isset($_POST['reply_to_message_id']) ? (int)$_POST['reply_to_message_id'] : 0;
     $replyToMessageId = chat_validate_reply_target($db, $conversationId, $replyToMessageId) ?? 0;
-    admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], '', $attachmentPath, $replyToMessageId > 0 ? $replyToMessageId : null);
+    if (!admin_chat_insert_message($db, $conversationId, (int)$adminUser['id'], '', $attachmentPath, $replyToMessageId > 0 ? $replyToMessageId : null)) {
+        app_chat_delete_attachment_file($attachmentPath);
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'message' => 'Image could not be saved.']);
+        exit;
+    }
 }
 
 if ($action === 'voice_upload' && !empty($_FILES['voice_file']['tmp_name'])) {
@@ -660,7 +721,7 @@ if ($action === 'delete_message') {
 if ($action === 'edit_message') {
     $messageId = isset($_POST['message_id']) ? (int)$_POST['message_id'] : 0;
     $messageBody = trim((string)($_POST['message'] ?? ''));
-    $updated = admin_update_chat_message($db, $conversationId, $messageId, (int)$adminUser['id'], $messageBody);
+    $updated = admin_chat_message_body_valid($messageBody) && admin_update_chat_message($db, $conversationId, $messageId, (int)$adminUser['id'], $messageBody);
     if (!$updated) {
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => 'Unable to save message.']);

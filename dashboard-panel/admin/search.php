@@ -129,6 +129,8 @@ if ($action === 'create_quick_crypto_payment_request') {
 }
 
 $query = trim((string)($_GET['q'] ?? ''));
+if (strlen($query) > 512) { http_response_code(422); echo json_encode(['ok'=>false]); exit; }
+session_write_close();
 
 if ($query === '' || (!ctype_digit($query) && strlen($query) < 2)) {
     echo json_encode([

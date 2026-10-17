@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/config/mysql.php';
 require_once dirname(__DIR__) . '/bootstrap/schema.php';
+require_once dirname(__DIR__) . '/bootstrap/session.php';
 require_once dirname(__DIR__) . '/bootstrap/application.php';
 require_once dirname(__DIR__) . '/bootstrap/chat.php';
+require_once __DIR__ . '/billing.php';
+require_once __DIR__ . '/crypto_safety.php';
 
 $__adminBootstrapChatRuntimeDb = Mysql_ks::get_instance();
 chat_ensure_group_chat_runtime($__adminBootstrapChatRuntimeDb);
@@ -17,20 +20,34 @@ function admin_start_session(): void
         return;
     }
 
+    $lifetime = app_session_cookie_lifetime();
+    $sessionDirectory = dirname(app_session_storage_directory()) . DIRECTORY_SEPARATOR . 'admin';
+    if (!is_dir($sessionDirectory)) {
+        @mkdir($sessionDirectory, 0700, true);
+    }
+    if (!is_dir($sessionDirectory) || !is_writable($sessionDirectory)) {
+        throw new RuntimeException('Admin session storage is not writable.');
+    }
+
+    ini_set('session.gc_maxlifetime', (string)$lifetime);
+    ini_set('session.cookie_lifetime', (string)$lifetime);
     ini_set('session.use_only_cookies', '1');
     ini_set('session.use_strict_mode', '1');
     ini_set('session.cookie_httponly', '1');
 
+    session_save_path($sessionDirectory);
     session_name('reseller_admin_sid');
     session_set_cookie_params([
-        'lifetime' => 0,
+        'lifetime' => $lifetime,
         'path' => '/',
-        'secure' => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
+        'domain' => '',
+        'secure' => app_is_https_request(),
         'httponly' => true,
         'samesite' => 'Lax',
     ]);
 
     session_start();
+    app_refresh_session_cookie($lifetime);
 }
 
 function admin_send_security_headers(): void
@@ -54,6 +71,15 @@ function admin_normalize_locale(?string $locale): string
     $locale = strtolower(trim((string)$locale));
     $supported = admin_supported_locales();
     return isset($supported[$locale]) ? $locale : 'en';
+}
+
+function admin_current_locale(): string
+{
+    if (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['admin_locale'])) {
+        return admin_normalize_locale((string)$_SESSION['admin_locale']);
+    }
+
+    return 'en';
 }
 
 function admin_load_messages(string $locale): array
@@ -87,6 +113,56 @@ function admin_e($value): string
     return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
+function admin_localize_payment_request_note(string $note, ?string $locale = null): string
+{
+    $note = trim($note);
+    if ($note === '') {
+        return '';
+    }
+
+    $locale = admin_normalize_locale($locale ?? admin_current_locale());
+    $translations = [
+        'pl' => [
+            'Created from balance top-up wizard' => 'Utworzono z kreatora doładowania salda.',
+            'Created from customer payment wizard' => 'Utworzono z kreatora płatności klienta.',
+            'Updated from customer payment wizard' => 'Zaktualizowano z kreatora płatności klienta.',
+            'Updated from customer crypto renewal flow' => 'Zaktualizowano z przedłużenia kryptowalutą.',
+            'Updated from customer bank renewal flow' => 'Zaktualizowano z przedłużenia przelewem bankowym.',
+            'Created from admin payments quick create' => 'Utworzono z szybkiego tworzenia płatności w panelu admina.',
+            'Updated from admin payments quick create' => 'Zaktualizowano z szybkiego tworzenia płatności w panelu admina.',
+            'Created from admin live chat crypto request' => 'Utworzono z requestu krypto w live chat admina.',
+            'Updated from admin live chat crypto request' => 'Zaktualizowano z requestu krypto w live chat admina.',
+            'Renewed from admin payments' => 'Odnowiono z płatności w panelu admina.',
+            'Created as balance top-up after order deletion' => 'Utworzono jako doładowanie salda po usunięciu zamówienia.',
+            'Created as balance top-up after order cleanup' => 'Utworzono jako doładowanie salda po czyszczeniu zamówienia.',
+            'Converted to balance top-up after order deletion' => 'Zmieniono na doładowanie salda po usunięciu zamówienia.',
+            'Converted to balance top-up after order cleanup' => 'Zmieniono na doładowanie salda po czyszczeniu zamówienia.',
+        ],
+        'en' => [
+            'Utworzono z kreatora doładowania salda.' => 'Created from balance top-up wizard',
+            'Utworzono z kreatora płatności klienta.' => 'Created from customer payment wizard',
+            'Zaktualizowano z kreatora płatności klienta.' => 'Updated from customer payment wizard',
+            'Zaktualizowano z przedłużenia kryptowalutą.' => 'Updated from customer crypto renewal flow',
+            'Zaktualizowano z przedłużenia przelewem bankowym.' => 'Updated from customer bank renewal flow',
+            'Utworzono z szybkiego tworzenia płatności w panelu admina.' => 'Created from admin payments quick create',
+            'Zaktualizowano z szybkiego tworzenia płatności w panelu admina.' => 'Updated from admin payments quick create',
+            'Utworzono z requestu krypto w live chat admina.' => 'Created from admin live chat crypto request',
+            'Zaktualizowano z requestu krypto w live chat admina.' => 'Updated from admin live chat crypto request',
+            'Odnowiono z płatności w panelu admina.' => 'Renewed from admin payments',
+            'Utworzono jako doładowanie salda po usunięciu zamówienia.' => 'Created as balance top-up after order deletion',
+            'Utworzono jako doładowanie salda po czyszczeniu zamówienia.' => 'Created as balance top-up after order cleanup',
+            'Zmieniono na doładowanie salda po usunięciu zamówienia.' => 'Converted to balance top-up after order deletion',
+            'Zmieniono na doładowanie salda po czyszczeniu zamówienia.' => 'Converted to balance top-up after order cleanup',
+        ],
+    ];
+
+    foreach ($translations[$locale] ?? [] as $source => $replacement) {
+        $note = str_replace($source, $replacement, $note);
+    }
+
+    return $note;
+}
+
 function admin_csrf_token(): string
 {
     if (empty($_SESSION['admin_csrf_token'])) {
@@ -116,7 +192,13 @@ function admin_app_settings(Mysql_ks $db): array
     }
 
     $settings = $db->select_user("SELECT * FROM app_settings WHERE id = 1 LIMIT 1");
-    return is_array($settings) ? $settings : [];
+    if (!is_array($settings)) {
+        return [];
+    }
+
+    return function_exists('app_enforce_panel_subscription_maintenance')
+        ? app_enforce_panel_subscription_maintenance($db, $settings)
+        : $settings;
 }
 
 function admin_core_crypto_asset_definitions(): array
@@ -125,12 +207,43 @@ function admin_core_crypto_asset_definitions(): array
         'BTC' => ['name' => 'Bitcoin', 'coingecko_id' => 'bitcoin', 'is_active' => 1],
         'ETH' => ['name' => 'Ethereum', 'coingecko_id' => 'ethereum', 'is_active' => 1],
         'DOGE' => ['name' => 'Dogecoin', 'coingecko_id' => 'dogecoin', 'is_active' => 1],
-        'BNB' => ['name' => 'BNB', 'coingecko_id' => 'binancecoin', 'is_active' => 1],
-        'POL' => ['name' => 'Polygon', 'coingecko_id' => 'polygon-ecosystem-token', 'is_active' => 1],
+        'BNB' => ['name' => 'BNB', 'coingecko_id' => 'binancecoin', 'is_active' => 0],
+        'POL' => ['name' => 'Polygon', 'coingecko_id' => 'polygon-ecosystem-token', 'is_active' => 0],
         'USDT' => ['name' => 'Tether', 'coingecko_id' => 'tether', 'is_active' => 1],
-        'USDC' => ['name' => 'USD Coin', 'coingecko_id' => 'usd-coin', 'is_active' => 1],
+        'USDC' => ['name' => 'USD Coin', 'coingecko_id' => 'usd-coin', 'is_active' => 0],
         'SOL' => ['name' => 'Solana', 'coingecko_id' => 'solana', 'is_active' => 1],
+        'TRX' => ['name' => 'TRON', 'coingecko_id' => 'tron', 'is_active' => 0],
     ];
+}
+
+function admin_crypto_asset_allows_customer_payments(string $assetCode): bool
+{
+    if (function_exists('app_crypto_asset_allows_customer_payments')) {
+        return app_crypto_asset_allows_customer_payments($assetCode);
+    }
+
+    $assetCode = strtoupper(trim($assetCode));
+    return $assetCode !== '' && !in_array($assetCode, ['BNB', 'POL', 'USDC'], true);
+}
+
+function admin_crypto_customer_payment_asset_sql_filter(Mysql_ks $db, string $alias = 'crypto_assets'): string
+{
+    $disabledCodes = function_exists('app_crypto_customer_payment_disabled_asset_codes')
+        ? array_keys(app_crypto_customer_payment_disabled_asset_codes())
+        : ['BNB', 'POL', 'USDC'];
+    $disabledCodes = array_values(array_unique(array_filter(array_map(
+        static fn($code): string => strtoupper(trim((string)$code)),
+        $disabledCodes
+    ))));
+
+    if (!$disabledCodes) {
+        return '';
+    }
+
+    $escapedCodes = array_map(static fn($code): string => "'" . $db->escape($code) . "'", $disabledCodes);
+    $safeAlias = preg_match('/^[a-zA-Z0-9_]+$/', $alias) ? $alias : 'crypto_assets';
+
+    return " AND UPPER({$safeAlias}.code) NOT IN (" . implode(', ', $escapedCodes) . ")";
 }
 
 function admin_ensure_core_crypto_assets(Mysql_ks $db): void
@@ -158,8 +271,7 @@ function admin_ensure_core_crypto_assets(Mysql_ks $db): void
                     WHEN UPPER(code) IN ('BNB', 'POL') THEN VALUES(coingecko_id)
                     ELSE IF(COALESCE(TRIM(coingecko_id), '') = '', VALUES(coingecko_id), coingecko_id)
                 END,
-                rate_currency_code = IF(COALESCE(TRIM(rate_currency_code), '') = '', 'USD', rate_currency_code),
-                is_active = CASE WHEN UPPER(code) IN ('BNB', 'POL') THEN 1 ELSE is_active END"
+                rate_currency_code = IF(COALESCE(TRIM(rate_currency_code), '') = '', 'USD', rate_currency_code)"
         );
     }
 }
@@ -425,6 +537,11 @@ function admin_payment_test_mode_notice_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'payment_test_mode_notice_enabled', false);
 }
 
+function admin_crypto_auto_accept_enabled(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'crypto_auto_accept_enabled', true);
+}
+
 function admin_crypto_daily_backup_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'crypto_daily_backup_enabled', false);
@@ -450,6 +567,12 @@ function admin_hinkal_private_send_enabled(array $settings): bool
     return admin_setting_is_enabled($settings, 'hinkal_private_send_enabled', true);
 }
 
+function admin_hinkal_private_send_input_asset(array $settings): string
+{
+    $asset = strtoupper(trim((string)($settings['hinkal_private_send_input_asset'] ?? 'POL')));
+    return in_array($asset, ['POL', 'USDT'], true) ? $asset : 'POL';
+}
+
 function admin_rango_converter_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'rango_converter_enabled', false);
@@ -463,6 +586,11 @@ function admin_rango_centralized_swappers_enabled(array $settings): bool
 function admin_mixer_enabled(array $settings): bool
 {
     return admin_setting_is_enabled($settings, 'mixer_enabled', false);
+}
+
+function admin_mixer_show_fee_breakdown(array $settings): bool
+{
+    return admin_setting_is_enabled($settings, 'mixer_show_fee_breakdown', true);
 }
 
 function admin_swap_converter_chain_options(): array
@@ -546,6 +674,71 @@ function admin_swap_converter_chain_ids_for_keys(array $keys): array
     return array_values(array_unique($ids));
 }
 
+function admin_swap_converter_default_asset_options(): array
+{
+    $nativeToken = '0x0000000000000000000000000000000000000000';
+
+    return [
+        'eth:native' => [
+            'label' => 'ETH - Ethereum',
+            'chain_key' => 'eth',
+            'chain_id' => 1,
+            'symbol' => 'ETH',
+            'token_address' => $nativeToken,
+        ],
+        'eth:usdt' => [
+            'label' => 'USDT - Ethereum',
+            'chain_key' => 'eth',
+            'chain_id' => 1,
+            'symbol' => 'USDT',
+            'token_address' => '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        ],
+        'pol:native' => [
+            'label' => 'POL - Polygon',
+            'chain_key' => 'pol',
+            'chain_id' => 137,
+            'symbol' => 'POL',
+            'token_address' => $nativeToken,
+        ],
+        'pol:usdt' => [
+            'label' => 'USDT - Polygon',
+            'chain_key' => 'pol',
+            'chain_id' => 137,
+            'symbol' => 'USDT',
+            'token_address' => '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+        ],
+        'bsc:native' => [
+            'label' => 'BNB - BNB Smart Chain',
+            'chain_key' => 'bsc',
+            'chain_id' => 56,
+            'symbol' => 'BNB',
+            'token_address' => $nativeToken,
+        ],
+        'bsc:usdt' => [
+            'label' => 'USDT - BNB Smart Chain',
+            'chain_key' => 'bsc',
+            'chain_id' => 56,
+            'symbol' => 'USDT',
+            'token_address' => '0x55d398326f99059fF775485246999027B3197955',
+        ],
+    ];
+}
+
+function admin_swap_converter_normalize_default_asset_key($value, string $fallback = 'bsc:native'): string
+{
+    $options = admin_swap_converter_default_asset_options();
+    $key = strtolower(trim((string)$value));
+
+    if (isset($options[$key])) {
+        return $key;
+    }
+    if (isset($options[$fallback])) {
+        return $fallback;
+    }
+
+    return (string)array_key_first($options);
+}
+
 function admin_mixer_input_asset_options(): array
 {
     return [
@@ -565,7 +758,102 @@ function admin_mixer_input_asset_options(): array
             'network_icon' => '/img/crypto/doge.png',
             'default_enabled' => true,
         ],
+        'SOL' => [
+            'label' => 'Solana (SOL)',
+            'network' => 'Solana',
+            'symbol' => 'SOL',
+            'icon' => '/img/crypto/sol.png',
+            'network_icon' => '/img/crypto/sol.png',
+            'default_enabled' => false,
+        ],
     ];
+}
+
+function admin_mixer_input_asset_network_code(string $assetKey): string
+{
+    $assetKey = strtoupper(trim($assetKey));
+    if ($assetKey === 'DOGE') {
+        return 'dogecoin';
+    }
+    if ($assetKey === 'SOL') {
+        return 'solana';
+    }
+
+    return 'bitcoin';
+}
+
+function admin_mixer_input_asset_deposit_setting_key(string $assetKey): string
+{
+    $assetKey = strtoupper(trim($assetKey));
+    if ($assetKey === 'DOGE') {
+        return 'mixer_doge_deposit_address';
+    }
+    if ($assetKey === 'SOL') {
+        return 'mixer_sol_deposit_address';
+    }
+
+    return 'mixer_btc_deposit_address';
+}
+
+function admin_mixer_input_asset_deposit_address(array $settings, string $assetKey): string
+{
+    return trim((string)($settings[admin_mixer_input_asset_deposit_setting_key($assetKey)] ?? ''));
+}
+
+function admin_mixer_is_valid_solana_address(string $address): bool
+{
+    $address = trim($address);
+    if ($address === '' || preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,44}$/', $address) !== 1) {
+        return false;
+    }
+
+    $alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    $bytes = [0];
+    $length = strlen($address);
+    for ($index = 0; $index < $length; $index++) {
+        $value = strpos($alphabet, $address[$index]);
+        if ($value === false) {
+            return false;
+        }
+
+        $carry = $value;
+        $byteCount = count($bytes);
+        for ($byteIndex = 0; $byteIndex < $byteCount; $byteIndex++) {
+            $carry += $bytes[$byteIndex] * 58;
+            $bytes[$byteIndex] = $carry & 0xff;
+            $carry >>= 8;
+        }
+        while ($carry > 0) {
+            $bytes[] = $carry & 0xff;
+            $carry >>= 8;
+        }
+    }
+
+    $leadingZeroes = 0;
+    while ($leadingZeroes < $length && $address[$leadingZeroes] === '1') {
+        $leadingZeroes++;
+    }
+
+    $decodedLength = count($bytes) + $leadingZeroes;
+    if (count($bytes) === 1 && $bytes[0] === 0) {
+        $decodedLength--;
+    }
+
+    return $decodedLength === 32;
+}
+
+function admin_mixer_is_valid_input_deposit_address(string $assetKey, string $address): bool
+{
+    $assetKey = strtoupper(trim($assetKey));
+    $address = trim($address);
+    if ($assetKey === 'DOGE') {
+        return preg_match('/^[DA9][a-km-zA-HJ-NP-Z1-9]{25,39}$/', $address) === 1;
+    }
+    if ($assetKey === 'SOL') {
+        return admin_mixer_is_valid_solana_address($address);
+    }
+
+    return preg_match('/^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,39})$/i', $address) === 1;
 }
 
 function admin_mixer_default_input_assets(): array
@@ -593,6 +881,32 @@ function admin_mixer_allowed_input_assets($value, bool $defaultWhenEmpty = true)
     return $selected !== [] || !$defaultWhenEmpty ? $selected : admin_mixer_default_input_assets();
 }
 
+function admin_mixer_normalize_input_asset_key($value, array $allowedAssets = [], string $fallback = 'BTC'): string
+{
+    $options = admin_mixer_input_asset_options();
+    $allowedLookup = $allowedAssets !== [] ? array_flip(array_map('strtoupper', $allowedAssets)) : [];
+    $key = strtoupper(trim((string)$value));
+    $isAllowed = static fn(string $assetKey): bool => $allowedLookup === [] || isset($allowedLookup[$assetKey]);
+
+    if (isset($options[$key]) && $isAllowed($key)) {
+        return $key;
+    }
+
+    $fallback = strtoupper(trim($fallback));
+    if (isset($options[$fallback]) && $isAllowed($fallback)) {
+        return $fallback;
+    }
+
+    foreach ($allowedAssets as $assetKey) {
+        $assetKey = strtoupper((string)$assetKey);
+        if (isset($options[$assetKey])) {
+            return $assetKey;
+        }
+    }
+
+    return (string)array_key_first($options);
+}
+
 function admin_mixer_output_asset_options(): array
 {
     return [
@@ -602,6 +916,10 @@ function admin_mixer_output_asset_options(): array
             'symbol' => 'POL',
             'icon' => '/img/crypto/matic.png',
             'network_icon' => '/img/crypto/matic.png',
+            'network_key' => 'polygon',
+            'asset_type' => 'native',
+            'asset_address' => '0x0000000000000000000000000000000000000000',
+            'decimals' => 18,
             'default_enabled' => true,
             'available' => true,
         ],
@@ -611,9 +929,25 @@ function admin_mixer_output_asset_options(): array
             'symbol' => 'USDT',
             'icon' => '/img/crypto/tether.png',
             'network_icon' => '/img/crypto/matic.png',
+            'network_key' => 'polygon',
+            'asset_type' => 'token',
+            'asset_address' => '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+            'decimals' => 6,
             'default_enabled' => false,
-            'available' => false,
-            'note' => 'planned',
+            'available' => true,
+        ],
+        'BSC_BNB' => [
+            'label' => 'BNB on BNB Smart Chain',
+            'network' => 'BNB Smart Chain',
+            'symbol' => 'BNB',
+            'icon' => '/img/crypto/bnb.png',
+            'network_icon' => '/img/crypto/bnb.png',
+            'network_key' => 'bsc',
+            'asset_type' => 'native',
+            'asset_address' => '0x0000000000000000000000000000000000000000',
+            'decimals' => 18,
+            'default_enabled' => false,
+            'available' => true,
         ],
         'BSC_USDT' => [
             'label' => 'USDT on BNB Smart Chain',
@@ -621,9 +955,12 @@ function admin_mixer_output_asset_options(): array
             'symbol' => 'USDT',
             'icon' => '/img/crypto/tether.png',
             'network_icon' => '/img/crypto/bnb.png',
+            'network_key' => 'bsc',
+            'asset_type' => 'token',
+            'asset_address' => '0x55d398326f99059fF775485246999027B3197955',
+            'decimals' => 18,
             'default_enabled' => false,
-            'available' => false,
-            'note' => 'planned',
+            'available' => true,
         ],
     ];
 }
@@ -651,6 +988,32 @@ function admin_mixer_allowed_output_assets($value, bool $defaultWhenEmpty = true
 
     $selected = array_values(array_unique($selected));
     return $selected !== [] || !$defaultWhenEmpty ? $selected : admin_mixer_default_output_assets();
+}
+
+function admin_mixer_normalize_output_asset_key($value, array $allowedAssets = [], string $fallback = 'POLYGON_POL'): string
+{
+    $options = admin_mixer_output_asset_options();
+    $allowedLookup = $allowedAssets !== [] ? array_flip(array_map('strtoupper', $allowedAssets)) : [];
+    $key = strtoupper(trim((string)$value));
+    $isAllowed = static fn(string $assetKey): bool => $allowedLookup === [] || isset($allowedLookup[$assetKey]);
+
+    if (isset($options[$key]) && !empty($options[$key]['available']) && $isAllowed($key)) {
+        return $key;
+    }
+
+    $fallback = strtoupper(trim($fallback));
+    if (isset($options[$fallback]) && !empty($options[$fallback]['available']) && $isAllowed($fallback)) {
+        return $fallback;
+    }
+
+    foreach ($allowedAssets as $assetKey) {
+        $assetKey = strtoupper((string)$assetKey);
+        if (isset($options[$assetKey]) && !empty($options[$assetKey]['available'])) {
+            return $assetKey;
+        }
+    }
+
+    return (string)array_key_first($options);
 }
 
 function admin_mixer_network_options(): array
@@ -697,8 +1060,7 @@ function admin_mixer_network_options(): array
             'default_rpc_url' => 'https://bsc-dataseed.binance.org',
             'explorer_tx_url' => 'https://bscscan.com/tx/',
             'default_enabled' => false,
-            'available' => false,
-            'note' => 'planned',
+            'available' => true,
             'vault_setting_key' => 'mixer_bsc_vault_contract',
             'rpc_setting_key' => 'mixer_bsc_rpc_url',
             'mode_setting_key' => 'mixer_bsc_network_mode',
@@ -782,11 +1144,40 @@ function admin_mixer_allowed_networks($value, bool $defaultWhenEmpty = true): ar
 function admin_mixer_network_key_for_output_asset(string $outputAsset): string
 {
     $outputAsset = strtoupper(trim($outputAsset));
-    if (strpos($outputAsset, 'BSC_') === 0) {
-        return 'bsc';
+    $options = admin_mixer_output_asset_options();
+    if (isset($options[$outputAsset]['network_key'])) {
+        return strtolower((string)$options[$outputAsset]['network_key']);
     }
 
     return 'polygon';
+}
+
+function admin_mixer_output_asset_option(string $outputAsset): array
+{
+    $outputAsset = strtoupper(trim($outputAsset));
+    $options = admin_mixer_output_asset_options();
+    return $options[$outputAsset] ?? $options['POLYGON_POL'];
+}
+
+function admin_mixer_output_asset_address(string $outputAsset): string
+{
+    $option = admin_mixer_output_asset_option($outputAsset);
+    $address = trim((string)($option['asset_address'] ?? ''));
+    return preg_match('/^0x[a-fA-F0-9]{40}$/', $address) === 1
+        ? $address
+        : '0x0000000000000000000000000000000000000000';
+}
+
+function admin_mixer_output_asset_decimals(string $outputAsset): int
+{
+    $decimals = (int)(admin_mixer_output_asset_option($outputAsset)['decimals'] ?? 18);
+    return max(0, min(36, $decimals));
+}
+
+function admin_mixer_output_asset_is_native(string $outputAsset): bool
+{
+    $option = admin_mixer_output_asset_option($outputAsset);
+    return strtolower(trim((string)($option['asset_type'] ?? 'native'))) !== 'token';
 }
 
 function admin_mixer_default_rpc_url(string $networkKey, string $mode = 'mainnet'): string
@@ -881,6 +1272,101 @@ function admin_mixer_native_pool_state(string $rpcUrl, string $vaultContract, st
     ];
 }
 
+function admin_mixer_erc20_balance_state(string $rpcUrl, string $tokenContract, string $walletAddress, string $symbol, int $decimals): array
+{
+    static $cache = [];
+
+    $rpcUrl = trim($rpcUrl);
+    $tokenContract = trim($tokenContract);
+    $walletAddress = trim($walletAddress);
+    $symbol = strtoupper(trim($symbol));
+    $decimals = max(0, min(36, $decimals));
+
+    if ($tokenContract === '' || preg_match('/^0x[a-fA-F0-9]{40}$/', $tokenContract) !== 1) {
+        return [
+            'ok' => false,
+            'configured' => false,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'Token contract is missing.',
+        ];
+    }
+
+    if ($walletAddress === '' || preg_match('/^0x[a-fA-F0-9]{40}$/', $walletAddress) !== 1) {
+        return [
+            'ok' => false,
+            'configured' => false,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'Wallet address is missing.',
+        ];
+    }
+
+    if ($rpcUrl === '') {
+        return [
+            'ok' => false,
+            'configured' => false,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'RPC URL is missing.',
+        ];
+    }
+
+    $cacheKey = sha1($rpcUrl . '|' . strtolower($tokenContract) . '|' . strtolower($walletAddress) . '|' . $symbol . '|' . $decimals);
+    if (isset($cache[$cacheKey])) {
+        return $cache[$cacheKey];
+    }
+
+    $data = '0x70a08231' . admin_mixer_abi_address($walletAddress);
+    $response = admin_http_post_json($rpcUrl, [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'eth_call',
+        'params' => [[
+            'to' => $tokenContract,
+            'data' => $data,
+        ], 'latest'],
+    ]);
+
+    $hexBalance = is_array($response) ? (string)($response['result'] ?? '') : '';
+    if ($hexBalance === '' || strpos($hexBalance, '0x') !== 0) {
+        return $cache[$cacheKey] = [
+            'ok' => false,
+            'configured' => true,
+            'balance' => 0.0,
+            'label' => '0 ' . $symbol,
+            'error' => 'RPC token balance read failed.',
+        ];
+    }
+
+    $balance = admin_mixer_hex_to_float($hexBalance) / (10 ** $decimals);
+
+    return $cache[$cacheKey] = [
+        'ok' => true,
+        'configured' => true,
+        'balance' => $balance,
+        'label' => admin_mixer_format_pool_balance($balance, $symbol),
+        'error' => '',
+    ];
+}
+
+function admin_mixer_pool_state_for_output_asset(string $rpcUrl, string $vaultContract, string $outputAsset): array
+{
+    $option = admin_mixer_output_asset_option($outputAsset);
+    $symbol = strtoupper(trim((string)($option['symbol'] ?? $outputAsset)));
+    if (admin_mixer_output_asset_is_native($outputAsset)) {
+        return admin_mixer_native_pool_state($rpcUrl, $vaultContract, $symbol);
+    }
+
+    return admin_mixer_erc20_balance_state(
+        $rpcUrl,
+        admin_mixer_output_asset_address($outputAsset),
+        $vaultContract,
+        $symbol,
+        admin_mixer_output_asset_decimals($outputAsset)
+    );
+}
+
 function admin_mixer_detection_provider_options(): array
 {
     return [
@@ -894,14 +1380,843 @@ function admin_mixer_public_id(): string
     return 'swp_' . bin2hex(random_bytes(10));
 }
 
+function admin_mixer_crypto_runtime_available(): bool
+{
+    return extension_loaded('gmp')
+        && function_exists('gmp_init')
+        && function_exists('gmp_cmp')
+        && function_exists('gmp_invert');
+}
+
+function admin_mixer_crypto_runtime_missing_message(): string
+{
+    return 'PHP GMP extension is not enabled. Rebuild the Docker image or enable php-gmp on the server before using vault payouts.';
+}
+
+function admin_mixer_gmp_mod($value, $modulus)
+{
+    $result = gmp_mod($value, $modulus);
+    return gmp_cmp($result, 0) < 0 ? gmp_add($result, $modulus) : $result;
+}
+
+function admin_mixer_gmp_hex($value, int $bytes = 32): string
+{
+    $hex = gmp_strval($value, 16);
+    return str_pad($hex, $bytes * 2, '0', STR_PAD_LEFT);
+}
+
+function admin_mixer_lane_from_bytes(string $bytes)
+{
+    $bytes = str_pad(substr($bytes, 0, 8), 8, "\0");
+    return gmp_init(bin2hex(strrev($bytes)), 16);
+}
+
+function admin_mixer_lane_to_bytes($lane): string
+{
+    $hex = str_pad(gmp_strval($lane, 16), 16, '0', STR_PAD_LEFT);
+    return strrev(hex2bin($hex) ?: str_repeat("\0", 8));
+}
+
+function admin_mixer_rotl64($value, int $shift)
+{
+    static $mask = null;
+    if ($mask === null) {
+        $mask = gmp_init('FFFFFFFFFFFFFFFF', 16);
+    }
+
+    $shift %= 64;
+    $value = gmp_and($value, $mask);
+    if ($shift === 0) {
+        return $value;
+    }
+
+    return gmp_and(gmp_or(gmp_mul($value, gmp_pow(2, $shift)), gmp_div_q($value, gmp_pow(2, 64 - $shift))), $mask);
+}
+
+function admin_mixer_keccak_f1600(array $state): array
+{
+    static $roundConstants = null;
+    static $rhoOffsets = null;
+    static $mask = null;
+
+    if ($roundConstants === null) {
+        $roundConstants = array_map(
+            static fn(string $hex) => gmp_init($hex, 16),
+            [
+                '0000000000000001', '0000000000008082', '800000000000808A', '8000000080008000',
+                '000000000000808B', '0000000080000001', '8000000080008081', '8000000000008009',
+                '000000000000008A', '0000000000000088', '0000000080008009', '000000008000000A',
+                '000000008000808B', '800000000000008B', '8000000000008089', '8000000000008003',
+                '8000000000008002', '8000000000000080', '000000000000800A', '800000008000000A',
+                '8000000080008081', '8000000000008080', '0000000080000001', '8000000080008008',
+            ]
+        );
+        $rhoOffsets = [
+            0, 1, 62, 28, 27,
+            36, 44, 6, 55, 20,
+            3, 10, 43, 25, 39,
+            41, 45, 15, 21, 8,
+            18, 2, 61, 56, 14,
+        ];
+        $mask = gmp_init('FFFFFFFFFFFFFFFF', 16);
+    }
+
+    for ($round = 0; $round < 24; $round++) {
+        $c = [];
+        $d = [];
+        for ($x = 0; $x < 5; $x++) {
+            $c[$x] = $state[$x];
+            for ($y = 1; $y < 5; $y++) {
+                $c[$x] = gmp_xor($c[$x], $state[$x + 5 * $y]);
+            }
+        }
+        for ($x = 0; $x < 5; $x++) {
+            $d[$x] = gmp_xor($c[($x + 4) % 5], admin_mixer_rotl64($c[($x + 1) % 5], 1));
+        }
+        for ($x = 0; $x < 5; $x++) {
+            for ($y = 0; $y < 5; $y++) {
+                $state[$x + 5 * $y] = gmp_and(gmp_xor($state[$x + 5 * $y], $d[$x]), $mask);
+            }
+        }
+
+        $b = array_fill(0, 25, gmp_init(0));
+        for ($x = 0; $x < 5; $x++) {
+            for ($y = 0; $y < 5; $y++) {
+                $source = $x + 5 * $y;
+                $target = $y + 5 * ((2 * $x + 3 * $y) % 5);
+                $b[$target] = admin_mixer_rotl64($state[$source], $rhoOffsets[$source]);
+            }
+        }
+
+        for ($x = 0; $x < 5; $x++) {
+            for ($y = 0; $y < 5; $y++) {
+                $idx = $x + 5 * $y;
+                $next = (($x + 1) % 5) + 5 * $y;
+                $next2 = (($x + 2) % 5) + 5 * $y;
+                $state[$idx] = gmp_and(gmp_xor($b[$idx], gmp_and(gmp_xor($b[$next], $mask), $b[$next2])), $mask);
+            }
+        }
+
+        $state[0] = gmp_and(gmp_xor($state[0], $roundConstants[$round]), $mask);
+    }
+
+    return $state;
+}
+
+function admin_mixer_keccak256_hex(string $input): string
+{
+    $rateBytes = 136;
+    $state = array_fill(0, 25, gmp_init(0));
+    $padded = $input . "\x01";
+    while ((strlen($padded) % $rateBytes) !== ($rateBytes - 1)) {
+        $padded .= "\0";
+    }
+    $padded .= "\x80";
+
+    $length = strlen($padded);
+    for ($offset = 0; $offset < $length; $offset += $rateBytes) {
+        $block = substr($padded, $offset, $rateBytes);
+        for ($lane = 0; $lane < ($rateBytes / 8); $lane++) {
+            $state[$lane] = gmp_xor($state[$lane], admin_mixer_lane_from_bytes(substr($block, $lane * 8, 8)));
+        }
+        $state = admin_mixer_keccak_f1600($state);
+    }
+
+    $output = '';
+    for ($lane = 0; strlen($output) < 32; $lane++) {
+        $output .= admin_mixer_lane_to_bytes($state[$lane]);
+    }
+
+    return bin2hex(substr($output, 0, 32));
+}
+
+function admin_mixer_secp256k1_params(): array
+{
+    static $params = null;
+    if ($params !== null) {
+        return $params;
+    }
+
+    return $params = [
+        'p' => gmp_init('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F', 16),
+        'n' => gmp_init('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141', 16),
+        'gx' => gmp_init('79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798', 16),
+        'gy' => gmp_init('483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8', 16),
+    ];
+}
+
+function admin_mixer_secp256k1_point_add(?array $left, ?array $right): ?array
+{
+    if ($left === null) {
+        return $right;
+    }
+    if ($right === null) {
+        return $left;
+    }
+
+    $params = admin_mixer_secp256k1_params();
+    $p = $params['p'];
+    $x1 = $left['x'];
+    $y1 = $left['y'];
+    $x2 = $right['x'];
+    $y2 = $right['y'];
+
+    if (gmp_cmp($x1, $x2) === 0) {
+        if (gmp_cmp(admin_mixer_gmp_mod(gmp_add($y1, $y2), $p), 0) === 0) {
+            return null;
+        }
+        $denominator = admin_mixer_gmp_mod(gmp_mul(2, $y1), $p);
+        $inverse = gmp_invert($denominator, $p);
+        if ($inverse === false) {
+            return null;
+        }
+        $lambda = admin_mixer_gmp_mod(gmp_mul(gmp_mul(3, gmp_mul($x1, $x1)), $inverse), $p);
+    } else {
+        $denominator = admin_mixer_gmp_mod(gmp_sub($x2, $x1), $p);
+        $inverse = gmp_invert($denominator, $p);
+        if ($inverse === false) {
+            return null;
+        }
+        $lambda = admin_mixer_gmp_mod(gmp_mul(gmp_sub($y2, $y1), $inverse), $p);
+    }
+
+    $x3 = admin_mixer_gmp_mod(gmp_sub(gmp_sub(gmp_mul($lambda, $lambda), $x1), $x2), $p);
+    $y3 = admin_mixer_gmp_mod(gmp_sub(gmp_mul($lambda, gmp_sub($x1, $x3)), $y1), $p);
+
+    return ['x' => $x3, 'y' => $y3];
+}
+
+function admin_mixer_secp256k1_point_mul($scalar, array $point): ?array
+{
+    $result = null;
+    $addend = $point;
+    $k = $scalar;
+
+    while (gmp_cmp($k, 0) > 0) {
+        if (gmp_testbit($k, 0)) {
+            $result = admin_mixer_secp256k1_point_add($result, $addend);
+        }
+        $addend = admin_mixer_secp256k1_point_add($addend, $addend);
+        $k = gmp_div_q($k, 2);
+    }
+
+    return $result;
+}
+
+function admin_mixer_sign_digest_hex(string $digestHex, string $privateKeyHex): ?array
+{
+    $digestHex = strtolower(preg_replace('/^0x/i', '', trim($digestHex)));
+    $privateKeyHex = strtolower(preg_replace('/^0x/i', '', trim($privateKeyHex)));
+    if (!preg_match('/^[a-f0-9]{64}$/', $digestHex) || !preg_match('/^[a-f0-9]{64}$/', $privateKeyHex)) {
+        return null;
+    }
+
+    $params = admin_mixer_secp256k1_params();
+    $n = $params['n'];
+    $d = gmp_init($privateKeyHex, 16);
+    if (gmp_cmp($d, 0) <= 0 || gmp_cmp($d, $n) >= 0) {
+        return null;
+    }
+
+    $z = gmp_init($digestHex, 16);
+    $g = ['x' => $params['gx'], 'y' => $params['gy']];
+    $halfN = gmp_div_q($n, 2);
+
+    for ($attempt = 0; $attempt < 32; $attempt++) {
+        $k = gmp_add(admin_mixer_gmp_mod(gmp_init(bin2hex(random_bytes(32)), 16), gmp_sub($n, 1)), 1);
+        $rPoint = admin_mixer_secp256k1_point_mul($k, $g);
+        if ($rPoint === null || gmp_cmp($rPoint['x'], $n) >= 0) {
+            continue;
+        }
+
+        $r = admin_mixer_gmp_mod($rPoint['x'], $n);
+        if (gmp_cmp($r, 0) === 0) {
+            continue;
+        }
+
+        $kInverse = gmp_invert($k, $n);
+        if ($kInverse === false) {
+            continue;
+        }
+        $s = admin_mixer_gmp_mod(gmp_mul($kInverse, gmp_add($z, gmp_mul($r, $d))), $n);
+        if (gmp_cmp($s, 0) === 0) {
+            continue;
+        }
+
+        $recoveryId = gmp_intval(gmp_mod($rPoint['y'], 2));
+        if (gmp_cmp($s, $halfN) > 0) {
+            $s = gmp_sub($n, $s);
+            $recoveryId ^= 1;
+        }
+
+        $v = 27 + $recoveryId;
+        $signature = admin_mixer_gmp_hex($r, 32) . admin_mixer_gmp_hex($s, 32) . str_pad(dechex($v), 2, '0', STR_PAD_LEFT);
+
+        return [
+            'r' => '0x' . admin_mixer_gmp_hex($r, 32),
+            's' => '0x' . admin_mixer_gmp_hex($s, 32),
+            'v' => $v,
+            'signature' => '0x' . $signature,
+        ];
+    }
+
+    return null;
+}
+
+function admin_mixer_decimal_to_base_units(string $value, int $decimals): string
+{
+    $normalized = trim(str_replace(',', '.', $value));
+    if (!preg_match('/^\d+(?:\.\d+)?$/', $normalized)) {
+        return '0';
+    }
+
+    [$whole, $fraction] = array_pad(explode('.', $normalized, 2), 2, '');
+    $fraction = substr($fraction, 0, $decimals);
+    $fraction = str_pad($fraction, $decimals, '0');
+    $units = ltrim($whole . $fraction, '0');
+
+    return $units === '' ? '0' : $units;
+}
+
+function admin_mixer_abi_uint256($value): string
+{
+    $gmpValue = $value instanceof GMP ? $value : gmp_init((string)$value, 10);
+    return admin_mixer_gmp_hex($gmpValue, 32);
+}
+
+function admin_mixer_abi_address(string $address): string
+{
+    $clean = strtolower(preg_replace('/^0x/i', '', trim($address)));
+    return str_pad($clean, 64, '0', STR_PAD_LEFT);
+}
+
+function admin_mixer_abi_bytes32(string $hex): string
+{
+    return str_pad(strtolower(preg_replace('/^0x/i', '', trim($hex))), 64, '0', STR_PAD_LEFT);
+}
+
+function admin_mixer_abi_dynamic_bytes(string $hex): string
+{
+    $clean = strtolower(preg_replace('/^0x/i', '', trim($hex)));
+    $byteLength = intdiv(strlen($clean), 2);
+    $paddedLength = (int)(ceil($byteLength / 32) * 64);
+    return admin_mixer_abi_uint256((string)$byteLength) . str_pad($clean, $paddedLength, '0', STR_PAD_RIGHT);
+}
+
+function admin_mixer_order_payout_id(string $publicId): string
+{
+    return '0x' . admin_mixer_keccak256_hex('subme-swapper:' . trim($publicId));
+}
+
+function admin_mixer_payout_digest_hex(int $chainId, string $vaultContract, string $orderIdHex, string $assetAddress, string $recipient, string $amountBaseUnits, int $deadline): string
+{
+    $domainTypeHash = admin_mixer_keccak256_hex('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)');
+    $payoutTypeHash = admin_mixer_keccak256_hex('Payout(bytes32 orderId,address asset,address recipient,uint256 amount,uint256 deadline)');
+    $nameHash = admin_mixer_keccak256_hex('SubmeSwapperVault');
+    $versionHash = admin_mixer_keccak256_hex('1');
+
+    $domainEncoded = admin_mixer_abi_bytes32($domainTypeHash)
+        . admin_mixer_abi_bytes32($nameHash)
+        . admin_mixer_abi_bytes32($versionHash)
+        . admin_mixer_abi_uint256((string)$chainId)
+        . admin_mixer_abi_address($vaultContract);
+    $domainSeparator = admin_mixer_keccak256_hex(hex2bin($domainEncoded) ?: '');
+
+    $structEncoded = admin_mixer_abi_bytes32($payoutTypeHash)
+        . admin_mixer_abi_bytes32($orderIdHex)
+        . admin_mixer_abi_address($assetAddress)
+        . admin_mixer_abi_address($recipient)
+        . admin_mixer_abi_uint256($amountBaseUnits)
+        . admin_mixer_abi_uint256((string)$deadline);
+    $structHash = admin_mixer_keccak256_hex(hex2bin($structEncoded) ?: '');
+
+    return admin_mixer_keccak256_hex("\x19\x01" . (hex2bin($domainSeparator) ?: '') . (hex2bin($structHash) ?: ''));
+}
+
+function admin_mixer_payout_native_tx_data(string $orderIdHex, string $recipient, string $amountBaseUnits, int $deadline, string $signature): string
+{
+    $selector = substr(admin_mixer_keccak256_hex('payoutNative(bytes32,address,uint256,uint256,bytes)'), 0, 8);
+    $head = admin_mixer_abi_bytes32($orderIdHex)
+        . admin_mixer_abi_address($recipient)
+        . admin_mixer_abi_uint256($amountBaseUnits)
+        . admin_mixer_abi_uint256((string)$deadline)
+        . admin_mixer_abi_uint256('160');
+
+    return '0x' . $selector . $head . admin_mixer_abi_dynamic_bytes($signature);
+}
+
+function admin_mixer_payout_token_tx_data(string $orderIdHex, string $tokenAddress, string $recipient, string $amountBaseUnits, int $deadline, string $signature): string
+{
+    $selector = substr(admin_mixer_keccak256_hex('payoutToken(bytes32,address,address,uint256,uint256,bytes)'), 0, 8);
+    $head = admin_mixer_abi_bytes32($orderIdHex)
+        . admin_mixer_abi_address($tokenAddress)
+        . admin_mixer_abi_address($recipient)
+        . admin_mixer_abi_uint256($amountBaseUnits)
+        . admin_mixer_abi_uint256((string)$deadline)
+        . admin_mixer_abi_uint256('192');
+
+    return '0x' . $selector . $head . admin_mixer_abi_dynamic_bytes($signature);
+}
+
+function admin_mixer_secret_storage_mode($value): string
+{
+    $mode = strtolower(trim((string)$value));
+    return in_array($mode, ['database_encrypted', 'db_encrypted'], true) ? 'database_encrypted' : 'file';
+}
+
+function admin_mixer_secret_storage_modes(): array
+{
+    return [
+        'file' => 'Server env/file secret',
+        'database_encrypted' => 'Encrypted in admin panel',
+    ];
+}
+
+function admin_mixer_secret_master_key_path(): string
+{
+    $secretsRoot = function_exists('app_secrets_root_path') ? app_secrets_root_path() : '';
+    if ($secretsRoot !== '') {
+        return rtrim($secretsRoot, '/') . '/swapper_storage_master.key';
+    }
+
+    $backendRoot = function_exists('app_backend_root_path') ? app_backend_root_path() : dirname(__DIR__);
+    return rtrim($backendRoot, '/') . '/storage/swapper_storage_master.key';
+}
+
+function admin_mixer_secret_master_key(): string
+{
+    $envKey = trim((string)(getenv('SUBME_SWAPPER_SECRET_KEY') ?: getenv('MIXER_SECRET_KEY') ?: getenv('APP_KEY') ?: ''));
+    if ($envKey !== '') {
+        return hash('sha256', $envKey, true);
+    }
+
+    $path = admin_mixer_secret_master_key_path();
+    $directory = dirname($path);
+    if (!is_dir($directory)) {
+        @mkdir($directory, 0700, true);
+    }
+
+    if (is_file($path) && is_readable($path)) {
+        $stored = trim((string)file_get_contents($path));
+        if (preg_match('/^[a-fA-F0-9]{64}$/', $stored) === 1) {
+            return hex2bin($stored) ?: '';
+        }
+        if ($stored !== '') {
+            return hash('sha256', $stored, true);
+        }
+    }
+
+    try {
+        $key = random_bytes(32);
+    } catch (Throwable $exception) {
+        return '';
+    }
+
+    if (is_dir($directory) && is_writable($directory)) {
+        @file_put_contents($path, bin2hex($key), LOCK_EX);
+        @chmod($path, 0600);
+    }
+
+    return $key;
+}
+
+function admin_mixer_encrypt_secret(string $plainText): string
+{
+    $plainText = trim($plainText);
+    if ($plainText === '') {
+        return '';
+    }
+
+    $key = admin_mixer_secret_master_key();
+    if (strlen($key) !== 32) {
+        return '';
+    }
+
+    if (function_exists('sodium_crypto_secretbox') && function_exists('sodium_crypto_secretbox_keygen')) {
+        try {
+            $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+            $cipher = sodium_crypto_secretbox($plainText, $nonce, $key);
+            return 'v1s:' . base64_encode($nonce . $cipher);
+        } catch (Throwable $exception) {
+            return '';
+        }
+    }
+
+    if (function_exists('openssl_encrypt')) {
+        try {
+            $iv = random_bytes(12);
+            $tag = '';
+            $cipher = openssl_encrypt($plainText, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+            return is_string($cipher) ? ('v1o:' . base64_encode($iv . $tag . $cipher)) : '';
+        } catch (Throwable $exception) {
+            return '';
+        }
+    }
+
+    return '';
+}
+
+function admin_mixer_decrypt_secret(string $encoded): string
+{
+    $encoded = trim($encoded);
+    if ($encoded === '') {
+        return '';
+    }
+
+    $key = admin_mixer_secret_master_key();
+    if (strlen($key) !== 32) {
+        return '';
+    }
+
+    if (strpos($encoded, 'v1s:') === 0 && function_exists('sodium_crypto_secretbox_open')) {
+        $raw = base64_decode(substr($encoded, 4), true);
+        if (!is_string($raw) || strlen($raw) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) {
+            return '';
+        }
+        $nonce = substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+        $cipher = substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+        $plain = sodium_crypto_secretbox_open($cipher, $nonce, $key);
+        return is_string($plain) ? trim($plain) : '';
+    }
+
+    if (strpos($encoded, 'v1o:') === 0 && function_exists('openssl_decrypt')) {
+        $raw = base64_decode(substr($encoded, 4), true);
+        if (!is_string($raw) || strlen($raw) <= 28) {
+            return '';
+        }
+        $iv = substr($raw, 0, 12);
+        $tag = substr($raw, 12, 16);
+        $cipher = substr($raw, 28);
+        $plain = openssl_decrypt($cipher, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+        return is_string($plain) ? trim($plain) : '';
+    }
+
+    return '';
+}
+
+function admin_mixer_payout_signer_private_key(array $settings = []): string
+{
+    $mode = admin_mixer_secret_storage_mode($settings['mixer_payout_secret_storage_mode'] ?? 'file');
+    if ($mode === 'database_encrypted') {
+        $encryptedSecret = trim((string)($settings['mixer_payout_signer_private_key_encrypted'] ?? ''));
+        $dbSecret = admin_mixer_decrypt_secret($encryptedSecret);
+        if ($dbSecret !== '') {
+            return $dbSecret;
+        }
+    }
+
+    $envSecret = trim((string)(getenv('MIXER_PAYOUT_SIGNER_PRIVATE_KEY') ?: getenv('SUBME_MIXER_PAYOUT_SIGNER_PRIVATE_KEY') ?: ''));
+    if ($envSecret !== '') {
+        return $envSecret;
+    }
+
+    $secretsRoot = function_exists('app_secrets_root_path') ? app_secrets_root_path() : '';
+    if ($secretsRoot === '') {
+        return '';
+    }
+
+    foreach (['swapper_payout_signer.key', 'mixer_payout_signer.key'] as $filename) {
+        $path = rtrim($secretsRoot, '/') . '/' . $filename;
+        if (!is_file($path) || !is_readable($path)) {
+            continue;
+        }
+
+        $fileSecret = trim((string)file_get_contents($path));
+        if ($fileSecret !== '') {
+            return $fileSecret;
+        }
+    }
+
+    return '';
+}
+
+function admin_mixer_payout_signer_is_configured(array $settings = []): bool
+{
+    return admin_mixer_crypto_runtime_available()
+        && preg_match('/^(?:0x)?[a-fA-F0-9]{64}$/', trim(admin_mixer_payout_signer_private_key($settings))) === 1;
+}
+
+function admin_mixer_payout_executor_private_key(array $settings = []): string
+{
+    $envSecret = trim((string)(getenv('MIXER_PAYOUT_EXECUTOR_PRIVATE_KEY') ?: getenv('SUBME_MIXER_PAYOUT_EXECUTOR_PRIVATE_KEY') ?: ''));
+    if ($envSecret !== '') {
+        return $envSecret;
+    }
+
+    $secretsRoot = function_exists('app_secrets_root_path') ? app_secrets_root_path() : '';
+    if ($secretsRoot !== '') {
+        foreach (['swapper_payout_executor.key', 'mixer_payout_executor.key'] as $filename) {
+            $path = rtrim($secretsRoot, '/') . '/' . $filename;
+            if (!is_file($path) || !is_readable($path)) {
+                continue;
+            }
+
+            $fileSecret = trim((string)file_get_contents($path));
+            if ($fileSecret !== '') {
+                return $fileSecret;
+            }
+        }
+    }
+
+    return admin_mixer_payout_signer_private_key($settings);
+}
+
+function admin_mixer_payout_executor_is_configured(array $settings = []): bool
+{
+    return admin_mixer_crypto_runtime_available()
+        && preg_match('/^(?:0x)?[a-fA-F0-9]{64}$/', trim(admin_mixer_payout_executor_private_key($settings))) === 1;
+}
+
+function admin_mixer_private_key_to_address(string $privateKeyHex): string
+{
+    if (!admin_mixer_crypto_runtime_available()) {
+        return '';
+    }
+
+    $privateKeyHex = strtolower(preg_replace('/^0x/i', '', trim($privateKeyHex)));
+    if (!preg_match('/^[a-f0-9]{64}$/', $privateKeyHex)) {
+        return '';
+    }
+
+    $params = admin_mixer_secp256k1_params();
+    $point = admin_mixer_secp256k1_point_mul(
+        gmp_init($privateKeyHex, 16),
+        ['x' => $params['gx'], 'y' => $params['gy']]
+    );
+    if ($point === null) {
+        return '';
+    }
+
+    $publicKey = hex2bin(admin_mixer_gmp_hex($point['x'], 32) . admin_mixer_gmp_hex($point['y'], 32));
+    if (!is_string($publicKey)) {
+        return '';
+    }
+
+    return '0x' . substr(admin_mixer_keccak256_hex($publicKey), -40);
+}
+
+function admin_mixer_hex_to_gmp(string $hex)
+{
+    $clean = strtolower(preg_replace('/^0x/i', '', trim($hex)));
+    return $clean === '' ? gmp_init(0) : gmp_init($clean, 16);
+}
+
+function admin_mixer_gmp_to_minimal_bytes($value): string
+{
+    if (gmp_cmp($value, 0) <= 0) {
+        return '';
+    }
+
+    $hex = gmp_strval($value, 16);
+    if ((strlen($hex) % 2) === 1) {
+        $hex = '0' . $hex;
+    }
+
+    return hex2bin($hex) ?: '';
+}
+
+function admin_mixer_hex_to_bytes(string $hex): string
+{
+    $clean = strtolower(preg_replace('/^0x/i', '', trim($hex)));
+    if ($clean === '') {
+        return '';
+    }
+    if ((strlen($clean) % 2) === 1) {
+        $clean = '0' . $clean;
+    }
+
+    return hex2bin($clean) ?: '';
+}
+
+function admin_mixer_rlp_encode_string(string $bytes): string
+{
+    $length = strlen($bytes);
+    if ($length === 1 && ord($bytes) < 0x80) {
+        return $bytes;
+    }
+    if ($length <= 55) {
+        return chr(0x80 + $length) . $bytes;
+    }
+
+    $lengthBytes = admin_mixer_gmp_to_minimal_bytes(gmp_init((string)$length, 10));
+    return chr(0xb7 + strlen($lengthBytes)) . $lengthBytes . $bytes;
+}
+
+function admin_mixer_rlp_encode_list(array $encodedItems): string
+{
+    $payload = implode('', $encodedItems);
+    $length = strlen($payload);
+    if ($length <= 55) {
+        return chr(0xc0 + $length) . $payload;
+    }
+
+    $lengthBytes = admin_mixer_gmp_to_minimal_bytes(gmp_init((string)$length, 10));
+    return chr(0xf7 + strlen($lengthBytes)) . $lengthBytes . $payload;
+}
+
+function admin_mixer_ethereum_rpc(string $rpcUrl, string $method, array $params = []): ?array
+{
+    $response = admin_http_post_json($rpcUrl, [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => $method,
+        'params' => $params,
+    ]);
+
+    return is_array($response) ? $response : null;
+}
+
+function admin_mixer_rpc_error_message(?array $response, string $fallback): string
+{
+    if (!is_array($response) || empty($response['error']) || !is_array($response['error'])) {
+        return $fallback;
+    }
+
+    $message = trim((string)($response['error']['message'] ?? ''));
+    $data = trim((string)($response['error']['data'] ?? ''));
+    if ($message !== '' && $data !== '') {
+        return $fallback . ' RPC error: ' . $message . ' (' . $data . ').';
+    }
+    if ($message !== '') {
+        return $fallback . ' RPC error: ' . $message . '.';
+    }
+
+    return $fallback;
+}
+
+function admin_mixer_sign_legacy_eip155_transaction(
+    string $privateKeyHex,
+    int $chainId,
+    string $nonceHex,
+    string $gasPriceHex,
+    string $gasLimitHex,
+    string $to,
+    string $valueHex,
+    string $dataHex
+): ?string {
+    $toBytes = admin_mixer_hex_to_bytes($to);
+    if (strlen($toBytes) !== 20 || $chainId <= 0) {
+        return null;
+    }
+
+    $unsigned = [
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($nonceHex))),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($gasPriceHex))),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($gasLimitHex))),
+        admin_mixer_rlp_encode_string($toBytes),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($valueHex))),
+        admin_mixer_rlp_encode_string(admin_mixer_hex_to_bytes($dataHex)),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(gmp_init((string)$chainId, 10))),
+        admin_mixer_rlp_encode_string(''),
+        admin_mixer_rlp_encode_string(''),
+    ];
+    $digest = admin_mixer_keccak256_hex(admin_mixer_rlp_encode_list($unsigned));
+    $signature = admin_mixer_sign_digest_hex($digest, $privateKeyHex);
+    if (!is_array($signature)) {
+        return null;
+    }
+
+    $recoveryId = ((int)($signature['v'] ?? 27)) - 27;
+    $v = gmp_add(gmp_init((string)(35 + max(0, $recoveryId)), 10), gmp_mul(gmp_init((string)$chainId, 10), 2));
+    $signed = [
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($nonceHex))),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($gasPriceHex))),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($gasLimitHex))),
+        admin_mixer_rlp_encode_string($toBytes),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes(admin_mixer_hex_to_gmp($valueHex))),
+        admin_mixer_rlp_encode_string(admin_mixer_hex_to_bytes($dataHex)),
+        admin_mixer_rlp_encode_string(admin_mixer_gmp_to_minimal_bytes($v)),
+        admin_mixer_rlp_encode_string(admin_mixer_hex_to_bytes((string)($signature['r'] ?? ''))),
+        admin_mixer_rlp_encode_string(admin_mixer_hex_to_bytes((string)($signature['s'] ?? ''))),
+    ];
+
+    return '0x' . bin2hex(admin_mixer_rlp_encode_list($signed));
+}
+
+function admin_mixer_submit_prepared_payout(array $payout, array $settings = []): array
+{
+    if (!admin_mixer_crypto_runtime_available()) {
+        return ['ok' => false, 'message' => admin_mixer_crypto_runtime_missing_message()];
+    }
+
+    $executorSecret = strtolower(preg_replace('/^0x/i', '', trim(admin_mixer_payout_executor_private_key($settings))));
+    if (!preg_match('/^[a-f0-9]{64}$/', $executorSecret)) {
+        return ['ok' => false, 'message' => 'Payout executor private key is not configured.'];
+    }
+
+    $rpcUrl = trim((string)($payout['rpcUrl'] ?? ''));
+    $chainId = (int)($payout['chainId'] ?? 0);
+    $to = trim((string)($payout['to'] ?? ''));
+    $data = trim((string)($payout['data'] ?? ''));
+    $value = trim((string)($payout['value'] ?? '0x0'));
+    if ($rpcUrl === '' || $chainId <= 0 || !preg_match('/^0x[a-fA-F0-9]{40}$/', $to) || strpos($data, '0x') !== 0) {
+        return ['ok' => false, 'message' => 'Prepared payout transaction is incomplete.'];
+    }
+
+    $from = admin_mixer_private_key_to_address($executorSecret);
+    if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $from)) {
+        return ['ok' => false, 'message' => 'Payout executor address cannot be derived.'];
+    }
+
+    $nonceResponse = admin_mixer_ethereum_rpc($rpcUrl, 'eth_getTransactionCount', [$from, 'pending']);
+    $gasPriceResponse = admin_mixer_ethereum_rpc($rpcUrl, 'eth_gasPrice', []);
+    $nonceHex = is_array($nonceResponse) ? (string)($nonceResponse['result'] ?? '') : '';
+    $gasPriceHex = is_array($gasPriceResponse) ? (string)($gasPriceResponse['result'] ?? '') : '';
+    if (strpos($nonceHex, '0x') !== 0 || strpos($gasPriceHex, '0x') !== 0) {
+        $nonceMessage = admin_mixer_rpc_error_message($nonceResponse, 'Unable to read executor nonce.');
+        $gasMessage = admin_mixer_rpc_error_message($gasPriceResponse, 'Unable to read gas price.');
+        return ['ok' => false, 'message' => $nonceMessage . ' ' . $gasMessage];
+    }
+
+    $txForEstimate = [
+        'from' => $from,
+        'to' => $to,
+        'value' => $value !== '' ? $value : '0x0',
+        'data' => $data,
+    ];
+    $estimateResponse = admin_mixer_ethereum_rpc($rpcUrl, 'eth_estimateGas', [$txForEstimate]);
+    $estimateHex = is_array($estimateResponse) ? (string)($estimateResponse['result'] ?? '') : '';
+    if (strpos($estimateHex, '0x') !== 0) {
+        return ['ok' => false, 'message' => admin_mixer_rpc_error_message($estimateResponse, 'Unable to estimate payout gas.')];
+    }
+
+    $gasLimit = gmp_div_q(gmp_mul(admin_mixer_hex_to_gmp($estimateHex), 13), 10);
+    $gasPrice = gmp_div_q(gmp_mul(admin_mixer_hex_to_gmp($gasPriceHex), 12), 10);
+    $rawTx = admin_mixer_sign_legacy_eip155_transaction(
+        $executorSecret,
+        $chainId,
+        $nonceHex,
+        '0x' . gmp_strval($gasPrice, 16),
+        '0x' . gmp_strval($gasLimit, 16),
+        $to,
+        $value !== '' ? $value : '0x0',
+        $data
+    );
+    if ($rawTx === null) {
+        return ['ok' => false, 'message' => 'Unable to sign payout transaction.'];
+    }
+
+    $sendResponse = admin_mixer_ethereum_rpc($rpcUrl, 'eth_sendRawTransaction', [$rawTx]);
+    $txHash = is_array($sendResponse) ? (string)($sendResponse['result'] ?? '') : '';
+    if (!preg_match('/^0x[a-fA-F0-9]{64}$/', $txHash)) {
+        return ['ok' => false, 'message' => admin_mixer_rpc_error_message($sendResponse, 'Unable to broadcast payout transaction.')];
+    }
+
+    return ['ok' => true, 'tx_hash' => $txHash, 'from' => $from];
+}
+
 function admin_mixer_asset_coingecko_id(string $assetKey): string
 {
     $assetKey = strtoupper(trim($assetKey));
     $map = [
         'BTC' => 'bitcoin',
         'DOGE' => 'dogecoin',
+        'SOL' => 'solana',
+        'POL' => 'polygon-ecosystem-token',
+        'BNB' => 'binancecoin',
         'POLYGON_POL' => 'polygon-ecosystem-token',
         'POLYGON_USDT' => 'tether',
+        'BSC_BNB' => 'binancecoin',
         'BSC_USDT' => 'tether',
     ];
 
@@ -957,7 +2272,27 @@ function admin_mixer_price_usd(array $coingeckoIds, int $ttlSeconds = 60): array
 function admin_mixer_price_usd_from_crypto_assets(Mysql_ks $db, array $assetKeys, int $ttlSeconds = 300): array
 {
     admin_ensure_core_crypto_assets($db);
-    $rows = admin_refresh_crypto_asset_rates($db, 'USD', max(60, $ttlSeconds));
+    $assetCodes = [];
+    foreach ($assetKeys as $assetKey) {
+        $assetKey = strtoupper(trim((string)$assetKey));
+        if ($assetKey === '') {
+            continue;
+        }
+
+        $code = $assetKey;
+        if (strpos($assetKey, '_') !== false) {
+            $parts = explode('_', $assetKey);
+            $code = strtoupper((string)end($parts));
+        }
+        if ($code === 'POLYGON') {
+            $code = 'POL';
+        }
+        if ($code !== '') {
+            $assetCodes[$code] = true;
+        }
+    }
+
+    $rows = admin_refresh_crypto_asset_rates($db, 'USD', max(900, $ttlSeconds), array_keys($assetCodes), true);
     $byCode = [];
 
     foreach ($rows as $row) {
@@ -967,7 +2302,7 @@ function admin_mixer_price_usd_from_crypto_assets(Mysql_ks $db, array $assetKeys
         }
 
         $rate = (float)($row['current_rate_fiat'] ?? 0);
-        if ($rate <= 0) {
+        if ($rate <= 0 || !app_crypto_rate_is_usable($row, 'USD')) {
             continue;
         }
 
@@ -979,8 +2314,13 @@ function admin_mixer_price_usd_from_crypto_assets(Mysql_ks $db, array $assetKeys
     }
 
     $result = [];
+    $missingCoingeckoIds = [];
+    $missingKeyToId = [];
     foreach ($assetKeys as $assetKey) {
         $assetKey = strtoupper(trim((string)$assetKey));
+        if ($assetKey === '') {
+            continue;
+        }
         $code = $assetKey;
         if (strpos($assetKey, '_') !== false) {
             $parts = explode('_', $assetKey);
@@ -993,6 +2333,29 @@ function admin_mixer_price_usd_from_crypto_assets(Mysql_ks $db, array $assetKeys
 
         if (isset($byCode[$code])) {
             $result[$assetKey] = $byCode[$code];
+            continue;
+        }
+
+        $coingeckoId = admin_mixer_asset_coingecko_id($assetKey);
+        if ($coingeckoId === '') {
+            $coingeckoId = admin_default_coingecko_id($code);
+        }
+        if ($coingeckoId !== '') {
+            $missingCoingeckoIds[$coingeckoId] = true;
+            $missingKeyToId[$assetKey] = $coingeckoId;
+        }
+    }
+
+    if ($missingCoingeckoIds) {
+        $fallbackPrices = admin_mixer_price_usd(array_keys($missingCoingeckoIds), max(60, $ttlSeconds));
+        foreach ($missingKeyToId as $assetKey => $coingeckoId) {
+            if (!empty($fallbackPrices[$coingeckoId]['usd'])) {
+                $result[$assetKey] = [
+                    'usd' => (float)$fallbackPrices[$coingeckoId]['usd'],
+                    'updated_at' => (string)($fallbackPrices[$coingeckoId]['updated_at'] ?? ''),
+                    'source' => 'coingecko',
+                ];
+            }
         }
     }
 
@@ -1025,6 +2388,142 @@ function admin_mixer_find_order_by_public_id(Mysql_ks $db, string $publicId): ?a
     $publicIdSql = $db->escape($publicId);
     $row = $db->select_user("SELECT * FROM admin_mixer_orders WHERE public_id = '{$publicIdSql}' LIMIT 1");
     return is_array($row) ? $row : null;
+}
+
+function admin_mixer_order_is_final(array $row): bool
+{
+    $status = strtolower(trim((string)($row['status'] ?? '')));
+    return in_array($status, ['paid', 'cancelled', 'failed', 'expired'], true);
+}
+
+function admin_mixer_order_is_waiting_expired(array $row): bool
+{
+    $status = strtolower(trim((string)($row['status'] ?? '')));
+    $depositTxid = trim((string)($row['deposit_txid'] ?? ''));
+    $expiresAt = trim((string)($row['expires_at'] ?? ''));
+    if ($status !== 'waiting_deposit' || $depositTxid !== '' || $expiresAt === '') {
+        return false;
+    }
+
+    $expiresAtTs = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime($expiresAt)
+        : strtotime($expiresAt);
+
+    return $expiresAtTs > 0 && $expiresAtTs < time();
+}
+
+function admin_mixer_find_active_order(Mysql_ks $db, array $settings): ?array
+{
+    if (!schema_object_exists($db, 'admin_mixer_orders')) {
+        return null;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT *
+         FROM admin_mixer_orders
+         WHERE status NOT IN ('paid', 'cancelled', 'failed', 'expired')
+         ORDER BY
+            FIELD(status, 'ready_to_pay', 'confirming', 'waiting_deposit', 'paying', 'manual_review') ASC,
+            updated_at DESC,
+            id DESC
+         LIMIT 12"
+    );
+    if (!is_array($rows)) {
+        return null;
+    }
+
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $refreshed = admin_mixer_refresh_order_from_chain($db, $settings, $row);
+        if (admin_mixer_order_is_final($refreshed)) {
+            continue;
+        }
+        if (admin_mixer_order_is_waiting_expired($refreshed)) {
+            $db->update(['status'], ['expired'], 'admin_mixer_orders', 'WHERE id = ' . (int)($refreshed['id'] ?? 0));
+            continue;
+        }
+
+        return $refreshed;
+    }
+
+    return null;
+}
+
+function admin_mixer_ready_payout_orders(Mysql_ks $db, array $settings, array $messages = [], int $limit = 12): array
+{
+    if (!schema_object_exists($db, 'admin_mixer_orders')) {
+        return [];
+    }
+
+    $limit = max(1, min(50, $limit));
+    $rows = $db->select_full_user(
+        "SELECT *
+         FROM admin_mixer_orders
+         WHERE status IN ('ready_to_pay', 'confirming')
+           AND (payout_txid IS NULL OR TRIM(payout_txid) = '')
+         ORDER BY updated_at DESC, id DESC
+         LIMIT {$limit}"
+    );
+    if (!is_array($rows)) {
+        return [];
+    }
+
+    $orders = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $refreshed = admin_mixer_refresh_order_from_chain($db, $settings, $row);
+        $status = strtolower(trim((string)($refreshed['status'] ?? '')));
+        $payoutTxid = trim((string)($refreshed['payout_txid'] ?? ''));
+        if ($status !== 'ready_to_pay' || $payoutTxid !== '') {
+            continue;
+        }
+
+        $orders[] = admin_mixer_order_payload($refreshed, $messages);
+    }
+
+    return $orders;
+}
+
+function admin_mixer_recent_payout_orders(Mysql_ks $db, array $settings, array $messages = [], int $limit = 12): array
+{
+    if (!schema_object_exists($db, 'admin_mixer_orders')) {
+        return [];
+    }
+
+    $limit = max(1, min(50, $limit));
+    $rows = $db->select_full_user(
+        "SELECT *
+         FROM admin_mixer_orders
+         WHERE payout_txid IS NOT NULL
+           AND TRIM(payout_txid) != ''
+           AND updated_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)
+         ORDER BY updated_at DESC, id DESC
+         LIMIT {$limit}"
+    );
+    if (!is_array($rows)) {
+        return [];
+    }
+
+    $orders = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $refreshed = admin_mixer_refresh_order_from_chain($db, $settings, $row);
+        if (trim((string)($refreshed['payout_txid'] ?? '')) === '') {
+            continue;
+        }
+
+        $orders[] = admin_mixer_order_payload($refreshed, $messages);
+    }
+
+    return $orders;
 }
 
 function admin_mixer_progress_for_status(string $status): int
@@ -1073,8 +2572,9 @@ function admin_mixer_order_payload(array $row, array $messages = []): array
         'amount' => rtrim(rtrim(number_format((float)($row['expected_input_amount'] ?? 0), 12, '.', ''), '0'), '.'),
         'detected_amount' => rtrim(rtrim(number_format((float)($row['detected_input_amount'] ?? 0), 12, '.', ''), '0'), '.'),
         'estimated_output_amount' => rtrim(rtrim(number_format((float)($row['payout_amount'] ?? 0), 12, '.', ''), '0'), '.'),
+        'outputAmount' => $status === 'paid' ? rtrim(rtrim(number_format((float)($row['payout_amount'] ?? 0), 12, '.', ''), '0'), '.') : '',
         'inputAsset' => $inputAsset,
-        'inputNetwork' => $inputAsset === 'DOGE' ? 'Dogecoin' : 'Bitcoin',
+        'inputNetwork' => (string)(admin_mixer_input_asset_options()[$inputAsset]['network'] ?? ucfirst(admin_mixer_input_asset_network_code($inputAsset))),
         'outputAsset' => (string)($outputOption['symbol'] ?? 'POL'),
         'outputNetwork' => (string)($networkOption['label'] ?? ($outputOption['network'] ?? 'Polygon')),
         'outputNetworkKey' => $outputNetworkKey,
@@ -1087,18 +2587,1422 @@ function admin_mixer_order_payload(array $row, array $messages = []): array
         'statusLabel' => admin_t($messages, 'mixer_order_status_' . $status, ucwords(str_replace('_', ' ', $status))),
         'progress' => admin_mixer_progress_for_status($status),
         'confirmations' => (int)($row['confirmations'] ?? 0),
-        'confirmationsRequired' => max(1, (int)($row['confirmations_required'] ?? ($inputAsset === 'DOGE' ? 20 : 3))),
+        'confirmationsRequired' => max(1, (int)($row['confirmations_required'] ?? admin_mixer_required_confirmations_for_asset([], $inputAsset))),
         'depositTxid' => (string)($row['deposit_txid'] ?? ''),
         'payoutTxid' => (string)($row['payout_txid'] ?? ''),
         'expiresAt' => $expiresAtMs,
         'createdAt' => app_timestamp_from_runtime_datetime((string)($row['created_at'] ?? '')) * 1000,
+        'updatedAt' => app_timestamp_from_runtime_datetime((string)($row['updated_at'] ?? '')) * 1000,
     ];
+}
+
+function admin_mixer_required_confirmations_for_asset(array $settings, string $inputAsset): int
+{
+    $inputAsset = strtoupper(trim($inputAsset));
+    if ($inputAsset === 'DOGE') {
+        return max(1, min(120, (int)($settings['mixer_doge_confirmations_required'] ?? 20)));
+    }
+    if ($inputAsset === 'SOL') {
+        return max(1, min(32, (int)($settings['mixer_sol_confirmations_required'] ?? 1)));
+    }
+
+    return max(1, min(12, (int)($settings['mixer_btc_confirmations_required'] ?? 3)));
+}
+
+function admin_mixer_min_order_usd(array $settings = []): float
+{
+    $value = round((float)($settings['mixer_min_order_usd'] ?? 10.00), 2);
+    if ($value < 0.01) {
+        return 0.01;
+    }
+    if ($value > 1000.00) {
+        return 1000.00;
+    }
+
+    return $value;
+}
+
+function admin_mixer_deposit_tx_key(string $inputAsset, string $txid): string
+{
+    $txid = trim($txid);
+    if ($txid === '') {
+        return '';
+    }
+
+    return strtoupper(trim($inputAsset)) === 'SOL' ? $txid : strtolower($txid);
+}
+
+function admin_mixer_claimed_deposit_txids(Mysql_ks $db, string $inputAsset, int $currentOrderId): array
+{
+    $inputAsset = strtoupper(trim($inputAsset));
+    if ($inputAsset === '' || $currentOrderId <= 0) {
+        return [];
+    }
+
+    $claimed = [];
+    $assetSql = $db->escape($inputAsset);
+
+    if (schema_object_exists($db, 'admin_mixer_orders')) {
+        $rows = $db->select_full_user(
+            "SELECT deposit_txid AS txid
+             FROM admin_mixer_orders
+             WHERE id <> {$currentOrderId}
+               AND UPPER(input_asset) = '{$assetSql}'
+               AND deposit_txid IS NOT NULL
+               AND TRIM(deposit_txid) <> ''"
+        );
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $txid = admin_mixer_deposit_tx_key($inputAsset, (string)($row['txid'] ?? ''));
+                if ($txid !== '') {
+                    $claimed[$txid] = true;
+                }
+            }
+        }
+    }
+
+    if (schema_object_exists($db, 'admin_mixer_deposit_txs')) {
+        $rows = $db->select_full_user(
+            "SELECT txid
+             FROM admin_mixer_deposit_txs
+             WHERE (order_id IS NULL OR order_id <> {$currentOrderId})
+               AND UPPER(input_asset) = '{$assetSql}'
+               AND txid IS NOT NULL
+               AND TRIM(txid) <> ''"
+        );
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $txid = admin_mixer_deposit_tx_key($inputAsset, (string)($row['txid'] ?? ''));
+                if ($txid !== '') {
+                    $claimed[$txid] = true;
+                }
+            }
+        }
+    }
+
+    return array_keys($claimed);
+}
+
+function admin_mixer_deposit_tx_claimed_by_other_order(Mysql_ks $db, string $inputAsset, string $txid, int $currentOrderId): bool
+{
+    $txid = admin_mixer_deposit_tx_key($inputAsset, $txid);
+    if ($txid === '') {
+        return false;
+    }
+
+    return in_array($txid, admin_mixer_claimed_deposit_txids($db, $inputAsset, $currentOrderId), true);
+}
+
+function admin_mixer_reset_reused_deposit_tx(Mysql_ks $db, array $orderRow, string $txid): array
+{
+    $orderId = (int)($orderRow['id'] ?? 0);
+    $status = strtolower(trim((string)($orderRow['status'] ?? '')));
+    if ($orderId <= 0 || trim((string)($orderRow['payout_txid'] ?? '')) !== '' || in_array($status, ['paying', 'paid'], true)) {
+        return $orderRow;
+    }
+
+    $updateFields = ['status', 'deposit_txid', 'detected_input_amount', 'confirmations', 'detected_at', 'confirmed_at'];
+    $updateValues = ['waiting_deposit', null, null, 0, null, null];
+    if (schema_object_exists($db, 'admin_mixer_events')) {
+        $createdEvent = $db->select_user(
+            "SELECT payload_json
+             FROM admin_mixer_events
+             WHERE order_id = {$orderId}
+               AND event_type = 'order_created'
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        $payload = is_array($createdEvent) ? json_decode((string)($createdEvent['payload_json'] ?? ''), true) : null;
+        if (is_array($payload)) {
+            if (isset($payload['estimated_output_amount'])) {
+                $updateFields[] = 'payout_amount';
+                $updateValues[] = number_format(max(0.0, (float)$payload['estimated_output_amount']), 12, '.', '');
+            }
+            if (isset($payload['input_usd'])) {
+                $updateFields[] = 'quote_rate_usd';
+                $updateValues[] = number_format(max(0.0, (float)$payload['input_usd']), 12, '.', '');
+            }
+            if (isset($payload['output_usd'])) {
+                $updateFields[] = 'quote_output_rate_usd';
+                $updateValues[] = number_format(max(0.0, (float)$payload['output_usd']), 12, '.', '');
+            }
+            if (isset($payload['fee_usd'])) {
+                $updateFields[] = 'fee_amount_usd';
+                $updateValues[] = number_format(max(0.0, (float)$payload['fee_usd']), 2, '.', '');
+            }
+        }
+    }
+
+    $db->update(
+        $updateFields,
+        $updateValues,
+        'admin_mixer_orders',
+        "WHERE id = {$orderId} AND (payout_txid IS NULL OR payout_txid = '')"
+    );
+
+    if (schema_object_exists($db, 'admin_mixer_events')) {
+        $db->insert(
+            ['order_id', 'event_type', 'payload_json'],
+            [$orderId, 'deposit_tx_rejected_reused', json_encode([
+                'txid' => $txid,
+                'rejected_at' => date('Y-m-d H:i:s'),
+                'reason' => 'Transaction hash is already assigned to another Swapper order.',
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+            'admin_mixer_events'
+        );
+    }
+
+    $refetched = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+    return is_array($refetched) ? $refetched : $orderRow;
+}
+
+function admin_mixer_find_deposit_candidate(array $rows, array $orderRow, array $claimedTxids = []): ?array
+{
+    $inputAsset = strtoupper(trim((string)($orderRow['input_asset'] ?? '')));
+    $existingTxid = trim((string)($orderRow['deposit_txid'] ?? ''));
+    $createdAt = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($orderRow['created_at'] ?? ''))
+        : strtotime((string)($orderRow['created_at'] ?? ''));
+    $expectedAmount = max(0.0, (float)($orderRow['expected_input_amount'] ?? 0));
+    $claimedTxids = array_fill_keys(array_map(
+        static fn($txid): string => admin_mixer_deposit_tx_key($inputAsset, (string)$txid),
+        $claimedTxids
+    ), true);
+    $bestRow = null;
+    $bestScore = -1.0;
+
+    foreach ($rows as $row) {
+        if (!is_array($row) || strtolower(trim((string)($row['direction'] ?? ''))) !== 'incoming') {
+            continue;
+        }
+
+        $hash = trim((string)($row['hash'] ?? ''));
+        if ($hash !== '' && isset($claimedTxids[admin_mixer_deposit_tx_key($inputAsset, $hash)])) {
+            continue;
+        }
+
+        if ($existingTxid !== '' && hash_equals($existingTxid, $hash)) {
+            return $row;
+        }
+
+        if ($existingTxid !== '') {
+            continue;
+        }
+
+        $timestamp = (int)($row['timestamp'] ?? 0);
+        if ($createdAt > 0 && $timestamp > 0 && $timestamp < ($createdAt - 60)) {
+            continue;
+        }
+
+        $amount = (float)($row['amount_crypto'] ?? 0);
+        if ($amount <= 0) {
+            continue;
+        }
+
+        $score = (float)($row['candidate_score'] ?? 0.0);
+        if ($expectedAmount > 0) {
+            $ratio = abs($amount - $expectedAmount) / $expectedAmount;
+            $score += max(0.0, 2.0 - min(2.0, $ratio * 2.0));
+        }
+
+        if ($score > $bestScore) {
+            $bestScore = $score;
+            $bestRow = $row;
+        }
+    }
+
+    return $bestScore >= 5.0 ? $bestRow : null;
+}
+
+function admin_mixer_payout_notification_event_exists(Mysql_ks $db, int $orderId): bool
+{
+    if ($orderId <= 0 || !schema_object_exists($db, 'admin_mixer_events')) {
+        return false;
+    }
+
+    $row = $db->select_user(
+        "SELECT id
+         FROM admin_mixer_events
+         WHERE order_id = {$orderId}
+           AND event_type = 'payout_notification_sent'
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']);
+}
+
+function admin_mixer_order_started_notification_event_exists(Mysql_ks $db, int $orderId): bool
+{
+    if ($orderId <= 0 || !schema_object_exists($db, 'admin_mixer_events')) {
+        return false;
+    }
+
+    $row = $db->select_user(
+        "SELECT id
+         FROM admin_mixer_events
+         WHERE order_id = {$orderId}
+           AND event_type = 'order_started_notification_sent'
+         LIMIT 1"
+    );
+
+    return is_array($row) && !empty($row['id']);
+}
+
+function admin_mixer_notification_source_url(array $settings): string
+{
+    $candidates = [];
+
+    foreach (['site_url', 'page_url', 'apps_url'] as $settingKey) {
+        $value = trim((string)($settings[$settingKey] ?? ''));
+        if ($value !== '') {
+            $candidates[] = $value;
+        }
+    }
+
+    foreach (['APP_URL', 'PUBLIC_APP_URL', 'SITE_URL'] as $envKey) {
+        $value = trim((string)getenv($envKey));
+        if ($value !== '') {
+            $candidates[] = $value;
+        }
+    }
+
+    $host = trim((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? ''));
+    if ($host !== '') {
+        $scheme = trim((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? $_SERVER['REQUEST_SCHEME'] ?? ''));
+        if ($scheme === '') {
+            $scheme = (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') ? 'https' : 'http';
+        }
+        $candidates[] = $scheme . '://' . preg_replace('/\s+/', '', $host);
+    }
+
+    foreach ($candidates as $candidate) {
+        $candidate = trim((string)$candidate);
+        if ($candidate === '') {
+            continue;
+        }
+        if (!preg_match('#^https?://#i', $candidate)) {
+            $candidate = 'https://' . ltrim($candidate, '/');
+        }
+
+        $parts = parse_url($candidate);
+        $hostPart = trim((string)($parts['host'] ?? ''));
+        if ($hostPart === '') {
+            continue;
+        }
+
+        $schemePart = strtolower((string)($parts['scheme'] ?? 'https'));
+        if (!in_array($schemePart, ['http', 'https'], true)) {
+            $schemePart = 'https';
+        }
+
+        $portPart = isset($parts['port']) ? ':' . (int)$parts['port'] : '';
+        return $schemePart . '://' . $hostPart . $portPart;
+    }
+
+    return '';
+}
+
+function admin_mixer_notification_admin_login(Mysql_ks $db, array $orderRow): string
+{
+    $adminUserId = (int)($orderRow['created_by_admin_user_id'] ?? 0);
+    if ($adminUserId <= 0 || !schema_object_exists($db, 'admin_users')) {
+        return 'system';
+    }
+
+    $displaySql = function_exists('app_admin_display_name_sql')
+        ? app_admin_display_name_sql($db, 'admin_users')
+        : "COALESCE(NULLIF(TRIM(admin_users.login_name), ''), NULLIF(TRIM(admin_users.email), ''), '')";
+    $row = $db->select_user(
+        "SELECT admin_users.login_name, {$displaySql} AS admin_display_label
+         FROM admin_users
+         WHERE admin_users.id = {$adminUserId}
+         LIMIT 1"
+    );
+
+    if (!is_array($row)) {
+        return 'system';
+    }
+
+    $login = trim((string)($row['login_name'] ?? ''));
+    if ($login !== '') {
+        return $login;
+    }
+
+    $fallback = trim((string)($row['admin_display_label'] ?? ''));
+    return $fallback !== '' ? $fallback : 'system';
+}
+
+function admin_mixer_explorer_address_url(array $networkOption, string $address, string $assetCode = '', string $networkKey = ''): string
+{
+    $address = trim($address);
+    if ($address === '') {
+        return '';
+    }
+
+    $txExplorerBase = trim((string)($networkOption['explorer_tx_url'] ?? ''));
+    if ($txExplorerBase !== '') {
+        $addressExplorerBase = preg_replace('~/tx/?$~', '/address/', $txExplorerBase);
+        if (is_string($addressExplorerBase) && $addressExplorerBase !== $txExplorerBase) {
+            return $addressExplorerBase . rawurlencode($address);
+        }
+    }
+
+    $normalizedNetwork = strtolower(trim($networkKey));
+    if ($normalizedNetwork === 'bsc') {
+        $normalizedNetwork = 'bnb';
+    }
+
+    return admin_crypto_wallet_explorer_url($assetCode, $normalizedNetwork, $address);
+}
+
+function admin_mixer_email_link(string $url, string $label): string
+{
+    $url = trim($url);
+    $label = trim($label);
+    if ($url === '' || $label === '') {
+        return admin_e($label);
+    }
+
+    return '<a href="' . admin_e($url) . '" style="color:#2563eb;text-decoration:underline;font-weight:700;">' . admin_e($label) . '</a>';
+}
+
+function admin_hinkal_lifi_pol_to_usdt_quote(array $settings, string $fromAddress, string $fromAmount): array
+{
+    if (!admin_hinkal_private_send_enabled($settings)) {
+        return ['ok' => false, 'message' => 'Hinkal Private Send is disabled.'];
+    }
+    if (admin_hinkal_private_send_input_asset($settings) !== 'POL') {
+        return ['ok' => false, 'message' => 'POL input is not enabled for Hinkal Private Send.'];
+    }
+
+    $fromAddress = trim($fromAddress);
+    $fromAmount = trim($fromAmount);
+    if (preg_match('/^0x[a-fA-F0-9]{40}$/', $fromAddress) !== 1) {
+        return ['ok' => false, 'message' => 'Invalid sender wallet address.'];
+    }
+    if (preg_match('/^[0-9]{1,40}$/', $fromAmount) !== 1 || trim($fromAmount, '0') === '') {
+        return ['ok' => false, 'message' => 'Invalid POL amount.'];
+    }
+
+    $apiKey = trim((string)($settings['swap_converter_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return ['ok' => false, 'message' => 'LI.FI API key is not configured.'];
+    }
+
+    $integrator = trim((string)($settings['swap_converter_integrator'] ?? 'Subme-PRO'));
+    if ($integrator === '' || preg_match('/^[a-zA-Z0-9_.-]{2,64}$/', $integrator) !== 1) {
+        $integrator = 'Subme-PRO';
+    }
+
+    $polygonUsdt = '0xc2132D05D31c914a87C6611C10748AEb04B58e8F';
+    $query = http_build_query([
+        'fromChain' => '137',
+        'toChain' => '137',
+        'fromToken' => '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        'toToken' => $polygonUsdt,
+        'fromAmount' => $fromAmount,
+        'fromAddress' => $fromAddress,
+        'toAddress' => $fromAddress,
+        'slippage' => '0.007',
+        'integrator' => $integrator,
+    ], '', '&', PHP_QUERY_RFC3986);
+    $url = 'https://li.quest/v1/quote?' . $query;
+    $response = null;
+    $httpCode = 0;
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_CONNECTTIMEOUT => 8,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'User-Agent: Reseller-Admin/1.0',
+                'x-lifi-api-key: ' . $apiKey,
+            ],
+        ]);
+        $rawResponse = curl_exec($ch);
+        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        $response = is_string($rawResponse) && $rawResponse !== '' ? json_decode($rawResponse, true) : null;
+    } else {
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => 20,
+                'ignore_errors' => true,
+                'header' => "Accept: application/json\r\nUser-Agent: Reseller-Admin/1.0\r\nx-lifi-api-key: {$apiKey}\r\n",
+            ],
+        ]);
+        $rawResponse = @file_get_contents($url, false, $context);
+        $response = is_string($rawResponse) && $rawResponse !== '' ? json_decode($rawResponse, true) : null;
+    }
+
+    if ($httpCode === 429) {
+        return ['ok' => false, 'message' => 'LI.FI quote limit reached. Please wait a moment and try again.', 'rate_limited' => true];
+    }
+    if ($httpCode >= 400 || !is_array($response)) {
+        $providerMessage = is_array($response) ? trim((string)($response['message'] ?? '')) : '';
+        return [
+            'ok' => false,
+            'message' => $providerMessage !== ''
+                ? 'LI.FI could not prepare this conversion: ' . mb_substr($providerMessage, 0, 240)
+                : 'LI.FI could not prepare the POL to USDT conversion.',
+        ];
+    }
+
+    $transactionRequest = is_array($response['transactionRequest'] ?? null) ? $response['transactionRequest'] : [];
+    $estimate = is_array($response['estimate'] ?? null) ? $response['estimate'] : [];
+    $txTo = trim((string)($transactionRequest['to'] ?? ''));
+    $txFrom = trim((string)($transactionRequest['from'] ?? ''));
+    $txData = trim((string)($transactionRequest['data'] ?? ''));
+    $toAmount = trim((string)($estimate['toAmount'] ?? ''));
+    $toAmountMin = trim((string)($estimate['toAmountMin'] ?? $toAmount));
+    $chainIdRaw = $transactionRequest['chainId'] ?? 137;
+    $chainId = is_string($chainIdRaw) && str_starts_with(strtolower($chainIdRaw), '0x')
+        ? hexdec(substr($chainIdRaw, 2))
+        : (int)$chainIdRaw;
+
+    if (
+        preg_match('/^0x[a-fA-F0-9]{40}$/', $txTo) !== 1
+        || ($txFrom !== '' && strcasecmp($txFrom, $fromAddress) !== 0)
+        || preg_match('/^0x[a-fA-F0-9]*$/', $txData) !== 1
+        || $chainId !== 137
+        || preg_match('/^[0-9]{1,40}$/', $toAmount) !== 1
+        || trim($toAmount, '0') === ''
+        || preg_match('/^[0-9]{1,40}$/', $toAmountMin) !== 1
+        || trim($toAmountMin, '0') === ''
+    ) {
+        return ['ok' => false, 'message' => 'LI.FI returned an invalid Polygon conversion request.'];
+    }
+
+    $safeTransactionRequest = [
+        'to' => $txTo,
+        'data' => $txData,
+        'chainId' => 137,
+    ];
+    foreach (['value', 'gasLimit', 'gasPrice', 'maxFeePerGas', 'maxPriorityFeePerGas'] as $field) {
+        $value = trim((string)($transactionRequest[$field] ?? ''));
+        if ($value === '') {
+            continue;
+        }
+        if (preg_match('/^(?:0x[a-fA-F0-9]+|[0-9]+)$/', $value) !== 1) {
+            return ['ok' => false, 'message' => 'LI.FI returned invalid transaction parameters.'];
+        }
+        $safeTransactionRequest[$field] = $value;
+    }
+
+    $toolName = trim((string)($response['toolDetails']['name'] ?? $response['tool'] ?? 'LI.FI'));
+    return [
+        'ok' => true,
+        'quote_id' => hash('sha256', $fromAddress . '|' . $fromAmount . '|' . $toAmountMin . '|' . $txTo . '|' . $txData),
+        'expires_at' => time() + 45,
+        'to_amount' => $toAmount,
+        'to_amount_min' => $toAmountMin,
+        'tool' => $toolName !== '' ? mb_substr($toolName, 0, 80) : 'LI.FI',
+        'transaction_request' => $safeTransactionRequest,
+    ];
+}
+
+function admin_hinkal_send_transaction_notification(
+    Mysql_ks $db,
+    array $settings,
+    array $adminUser,
+    array $payload
+): array {
+    if (!admin_hinkal_private_send_enabled($settings)) {
+        return ['ok' => true, 'message' => 'Hinkal is disabled.', 'skipped' => true];
+    }
+
+    $recipientEmail = strtolower(trim((string)($settings['hinkal_private_send_notification_email'] ?? '')));
+    if ($recipientEmail === '' || filter_var($recipientEmail, FILTER_VALIDATE_EMAIL) === false) {
+        return ['ok' => true, 'message' => 'Hinkal notification email is not configured.', 'skipped' => true];
+    }
+    if (!function_exists('app_email_smtp_is_configured') || !app_email_smtp_is_configured($settings)) {
+        return ['ok' => false, 'message' => 'SMTP is not configured.'];
+    }
+
+    $eventType = strtolower(trim((string)($payload['event_type'] ?? '')));
+    $eventLabels = [
+        'deposit_submitted' => ['subject' => 'Hinkal private send started', 'status' => 'Deposit submitted'],
+        'payout_completed' => ['subject' => 'Hinkal private send completed', 'status' => 'Payout completed'],
+        'payout_failed' => ['subject' => 'Hinkal private send failed', 'status' => 'Payout failed'],
+    ];
+    if (!isset($eventLabels[$eventType])) {
+        return ['ok' => false, 'message' => 'Unsupported Hinkal notification event.'];
+    }
+
+    $depositTxHash = trim((string)($payload['deposit_tx_hash'] ?? ''));
+    $scheduleId = trim((string)($payload['schedule_id'] ?? ''));
+    $recipientWallet = trim((string)($payload['recipient_wallet'] ?? ''));
+    $grossAmountText = str_replace(',', '.', trim((string)($payload['gross_amount'] ?? '')));
+    if (preg_match('/^0x[a-fA-F0-9]{64}$/', $depositTxHash) !== 1) {
+        return ['ok' => false, 'message' => 'Invalid Hinkal deposit transaction hash.'];
+    }
+    if ($scheduleId === '' || strlen($scheduleId) > 191 || preg_match('/^[a-zA-Z0-9_.:-]+$/', $scheduleId) !== 1) {
+        return ['ok' => false, 'message' => 'Invalid Hinkal schedule ID.'];
+    }
+    if (preg_match('/^0x[a-fA-F0-9]{40}$/', $recipientWallet) !== 1) {
+        return ['ok' => false, 'message' => 'Invalid Hinkal recipient wallet.'];
+    }
+    if (preg_match('/^\d+(?:\.\d{1,6})?$/', $grossAmountText) !== 1) {
+        return ['ok' => false, 'message' => 'Invalid Hinkal transaction amount.'];
+    }
+
+    $grossAmount = (float)$grossAmountText;
+    if (!is_finite($grossAmount) || $grossAmount <= 0 || $grossAmount > 1000000000) {
+        return ['ok' => false, 'message' => 'Hinkal transaction amount is outside the allowed range.'];
+    }
+
+    $payoutTxHashes = $payload['payout_tx_hashes'] ?? [];
+    if (is_string($payoutTxHashes)) {
+        $decodedHashes = json_decode($payoutTxHashes, true);
+        $payoutTxHashes = is_array($decodedHashes) ? $decodedHashes : [];
+    }
+    $payoutTxHashes = array_values(array_unique(array_filter(array_map(
+        static fn($hash): string => trim((string)$hash),
+        is_array($payoutTxHashes) ? $payoutTxHashes : []
+    ), static fn(string $hash): bool => preg_match('/^0x[a-fA-F0-9]{64}$/', $hash) === 1)));
+    $payoutTxHashes = array_slice($payoutTxHashes, 0, 10);
+
+    $feePercent = max(0.0, min(10.0, round((float)($settings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
+    $feeAmount = round($grossAmount * ($feePercent / 100), 6);
+    $recipientAmount = max(0.0, round($grossAmount - $feeAmount, 6));
+    $showFeeDetails = !array_key_exists('hinkal_private_send_show_fee_details', $settings)
+        || !empty($settings['hinkal_private_send_show_fee_details']);
+    $feeWallet = trim((string)($settings['hinkal_private_send_fee_wallet'] ?? ''));
+    $formatUsdt = static function (float $amount): string {
+        return rtrim(rtrim(number_format(max(0.0, $amount), 6, '.', ''), '0'), '.') . ' USDT';
+    };
+
+    $rows = [
+        'Status' => $eventLabels[$eventType]['status'],
+        'Network' => 'Polygon',
+        'Amount sent' => $formatUsdt($grossAmount),
+        'Recipient gets' => $formatUsdt($recipientAmount) . ' (approx. $' . number_format($recipientAmount, 2, '.', '') . ')',
+        'Recipient wallet' => $recipientWallet,
+        'Deposit transaction' => $depositTxHash,
+        'Hinkal schedule' => $scheduleId,
+    ];
+    if ($showFeeDetails) {
+        $rows['Fee'] = $formatUsdt($feeAmount) . ' (' . rtrim(rtrim(number_format($feePercent, 2, '.', ''), '0'), '.') . '%)';
+        if ($feeWallet !== '') {
+            $rows['Fee wallet'] = $feeWallet;
+        }
+    }
+
+    $tableRows = '';
+    foreach ($rows as $label => $value) {
+        $displayValue = admin_e((string)$value);
+        if ($label === 'Recipient wallet' || $label === 'Fee wallet') {
+            $displayValue = admin_mixer_email_link('https://polygonscan.com/address/' . rawurlencode((string)$value), (string)$value);
+        } elseif ($label === 'Deposit transaction') {
+            $displayValue = admin_mixer_email_link('https://polygonscan.com/tx/' . rawurlencode((string)$value), (string)$value);
+        }
+        $tableRows .= '<tr>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#4b5563;font-weight:700;">' . admin_e((string)$label) . '</td>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;word-break:break-word;">' . $displayValue . '</td>'
+            . '</tr>';
+    }
+    foreach ($payoutTxHashes as $index => $hash) {
+        $label = count($payoutTxHashes) > 1 ? 'Payout transaction ' . ($index + 1) : 'Payout transaction';
+        $tableRows .= '<tr>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#4b5563;font-weight:700;">' . admin_e($label) . '</td>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;word-break:break-word;">'
+            . admin_mixer_email_link('https://polygonscan.com/tx/' . rawurlencode($hash), $hash)
+            . '</td></tr>';
+    }
+
+    $sourceUrl = admin_mixer_notification_source_url($settings);
+    $adminLogin = trim((string)($adminUser['login_name'] ?? $adminUser['email'] ?? 'admin'));
+    $body = '<div style="margin:0 0 16px 0;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#111827;">'
+        . '<div style="font-size:13px;line-height:1.45;"><strong>Website URL:</strong> ' . admin_e($sourceUrl !== '' ? $sourceUrl : 'Unknown') . '</div>'
+        . '<div style="font-size:13px;line-height:1.45;margin-top:4px;"><strong>Login:</strong> ' . admin_e($adminLogin !== '' ? $adminLogin : 'admin') . '</div>'
+        . '</div>'
+        . '<p>Hinkal Private Send transaction update.</p>'
+        . '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;">'
+        . $tableRows
+        . '</table>'
+        . '<p style="margin-top:16px;color:#6b7280;">This is an automatic admin notification from the Hinkal module.</p>';
+
+    try {
+        $mail = app_email_mailer($settings);
+        $mail->clearAllRecipients();
+        $mail->clearAttachments();
+        $mail->addAddress($recipientEmail);
+        $mail->Subject = $eventLabels[$eventType]['subject'] . ' - ' . $formatUsdt($grossAmount);
+        $mail->Body = function_exists('app_email_wrap_html')
+            ? app_email_wrap_html($settings, $body, 'en')
+            : $body;
+        $mail->AltBody = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />', '</div>', '</tr>'], ["\n", "\n", "\n", "\n", "\n"], $body)));
+        $mail->send();
+
+        return ['ok' => true, 'message' => 'Hinkal transaction notification sent.'];
+    } catch (Throwable $exception) {
+        return ['ok' => false, 'message' => $exception->getMessage()];
+    }
+}
+
+function admin_mixer_send_order_started_notification(Mysql_ks $db, array $settings, array $orderRow): array
+{
+    $orderId = (int)($orderRow['id'] ?? 0);
+    if ($orderId <= 0) {
+        return ['ok' => false, 'message' => 'Swapper order is missing.'];
+    }
+    if (admin_mixer_order_started_notification_event_exists($db, $orderId)) {
+        return ['ok' => true, 'message' => 'Swapper order notification already sent.', 'skipped' => true];
+    }
+
+    $recipientEmail = strtolower(trim((string)($settings['mixer_notification_email'] ?? '')));
+    if ($recipientEmail === '' || filter_var($recipientEmail, FILTER_VALIDATE_EMAIL) === false) {
+        return ['ok' => false, 'message' => 'Swapper notification email is not configured.'];
+    }
+    if (!function_exists('app_email_smtp_is_configured') || !app_email_smtp_is_configured($settings)) {
+        return ['ok' => false, 'message' => 'SMTP is not configured.'];
+    }
+
+    $inputAsset = strtoupper(trim((string)($orderRow['input_asset'] ?? 'BTC')));
+    $outputAssetKey = strtoupper(trim((string)($orderRow['output_asset'] ?? 'POLYGON_POL')));
+    $outputOptions = admin_mixer_output_asset_options();
+    $outputOption = $outputOptions[$outputAssetKey] ?? ['symbol' => $outputAssetKey, 'network' => 'Polygon'];
+    $outputSymbol = strtoupper(trim((string)($outputOption['symbol'] ?? $outputAssetKey)));
+    $networkKey = strtolower(trim((string)($orderRow['payout_network'] ?? admin_mixer_network_key_for_output_asset($outputAssetKey))));
+    $networkMode = admin_mixer_normalize_network_mode($orderRow['payout_network_mode'] ?? 'mainnet');
+    $networkOption = admin_mixer_effective_network_option($networkKey, $networkMode);
+    $networkLabel = (string)($networkOption['label'] ?? ($outputOption['network'] ?? 'Polygon'));
+    $rpcSettingKey = (string)($networkOption['rpc_setting_key'] ?? 'mixer_polygon_rpc_url');
+    $vaultSettingKey = (string)($networkOption['vault_setting_key'] ?? 'mixer_polygon_vault_contract');
+    $rpcUrl = trim((string)($settings[$rpcSettingKey] ?? ''));
+    if ($rpcUrl === '') {
+        $rpcUrl = admin_mixer_default_rpc_url($networkKey, $networkMode);
+    }
+    $vaultContract = trim((string)($settings[$vaultSettingKey] ?? ''));
+    $poolState = admin_mixer_pool_state_for_output_asset($rpcUrl, $vaultContract, $outputAssetKey);
+    $poolLabel = !empty($poolState['ok'])
+        ? (string)($poolState['label'] ?? '')
+        : ('Unavailable' . (!empty($poolState['error']) ? ' - ' . (string)$poolState['error'] : ''));
+
+    $expectedInput = (float)($orderRow['expected_input_amount'] ?? 0);
+    $amountUsd = $expectedInput * (float)($orderRow['quote_rate_usd'] ?? 0);
+    $payoutAmount = (float)($orderRow['payout_amount'] ?? 0);
+    $feeUsd = (float)($orderRow['fee_amount_usd'] ?? 0);
+    $feePercent = (float)($orderRow['fee_percent'] ?? ($settings['mixer_fee_percent'] ?? 0));
+    $poolBalance = (float)($poolState['balance'] ?? 0.0);
+    $swapPossible = !empty($poolState['ok']) && $poolBalance >= $payoutAmount && $payoutAmount > 0;
+    $recipient = trim((string)($orderRow['recipient_address'] ?? ''));
+    $depositAddress = trim((string)($orderRow['deposit_address'] ?? ''));
+    $vaultExplorerUrl = admin_mixer_explorer_address_url($networkOption, $vaultContract, $outputSymbol, $networkKey);
+    $recipientExplorerUrl = admin_mixer_explorer_address_url($networkOption, $recipient, $outputSymbol, $networkKey);
+    $inputNetworkCode = admin_mixer_input_asset_network_code($inputAsset);
+    $depositAddressExplorerUrl = admin_crypto_wallet_explorer_url($inputAsset, $inputNetworkCode, $depositAddress);
+    $publicId = trim((string)($orderRow['public_id'] ?? ''));
+    $sourceUrl = admin_mixer_notification_source_url($settings);
+    $adminLogin = admin_mixer_notification_admin_login($db, $orderRow);
+
+    $formatAmount = static function (float $amount, string $symbol): string {
+        $normalizedSymbol = strtoupper($symbol);
+        $decimals = $normalizedSymbol === 'BTC' ? 8 : ($normalizedSymbol === 'SOL' ? 9 : 6);
+        $value = rtrim(rtrim(number_format(max(0.0, $amount), $decimals, '.', ''), '0'), '.');
+        return ($value !== '' ? $value : '0') . ' ' . strtoupper($symbol);
+    };
+
+    $rows = [
+        'Order' => $publicId !== '' ? $publicId : ('#' . $orderId),
+        'Status' => 'Started',
+        'Swap possible' => $swapPossible ? 'Yes - vault has enough liquidity' : 'No - vault balance is not enough right now',
+        'Input amount' => $formatAmount($expectedInput, $inputAsset),
+        'Input value' => '$' . number_format(max(0.0, $amountUsd), 2, '.', ''),
+        'Estimated payout' => $formatAmount($payoutAmount, $outputSymbol) . ' on ' . $networkLabel,
+    ];
+    if (admin_mixer_show_fee_breakdown($settings)) {
+        $rows['Fee'] = '$' . number_format(max(0.0, $feeUsd), 2, '.', '') . ($feePercent > 0 ? ' (' . rtrim(rtrim(number_format($feePercent, 2, '.', ''), '0'), '.') . '%)' : '');
+    }
+    $rows += [
+        'Vault balance' => $poolLabel,
+        'Vault contract' => $vaultContract,
+        'Deposit address' => $depositAddress,
+        'Recipient wallet' => $recipient,
+        'Expires at' => trim((string)($orderRow['expires_at'] ?? '')),
+    ];
+
+    $tableRows = '';
+    foreach ($rows as $label => $value) {
+        if (trim((string)$value) === '') {
+            continue;
+        }
+        $displayValue = admin_e((string)$value);
+        if ($label === 'Swap possible') {
+            $displayValue = '<span style="display:inline-block;padding:4px 9px;border-radius:6px;background:'
+                . ($swapPossible ? '#dcfce7;color:#166534;border:1px solid #86efac;' : '#fee2e2;color:#991b1b;border:1px solid #fca5a5;')
+                . 'font-weight:800;">' . admin_e((string)$value) . '</span>';
+        } elseif ($label === 'Vault contract') {
+            $displayValue = admin_mixer_email_link($vaultExplorerUrl, $vaultContract);
+        } elseif ($label === 'Deposit address') {
+            $displayValue = admin_mixer_email_link($depositAddressExplorerUrl, $depositAddress);
+        } elseif ($label === 'Recipient wallet') {
+            $displayValue = admin_mixer_email_link($recipientExplorerUrl, $recipient);
+        }
+        $tableRows .= '<tr>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#4b5563;font-weight:700;">' . admin_e($label) . '</td>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;word-break:break-word;">' . $displayValue . '</td>'
+            . '</tr>';
+    }
+
+    $subject = 'Swapper exchange started - ' . $formatAmount($expectedInput, $inputAsset) . ' to ' . $outputSymbol;
+    $sourceBlock = '<div style="margin:0 0 16px 0;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#111827;">'
+        . '<div style="font-size:13px;line-height:1.45;"><strong>Website URL:</strong> ' . admin_e($sourceUrl !== '' ? $sourceUrl : 'Unknown') . '</div>'
+        . '<div style="font-size:13px;line-height:1.45;margin-top:4px;"><strong>Login:</strong> ' . admin_e($adminLogin) . '</div>'
+        . '</div>';
+    $body = $sourceBlock
+        . '<p>A new Swapper exchange has been started.</p>'
+        . '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;">'
+        . $tableRows
+        . '</table>'
+        . '<p style="margin-top:16px;color:#6b7280;">This is an automatic admin notification from the Swapper module.</p>';
+
+    try {
+        $mail = app_email_mailer($settings);
+        $mail->clearAllRecipients();
+        $mail->clearAttachments();
+        $mail->addAddress($recipientEmail);
+        $mail->Subject = $subject;
+        $mail->Body = function_exists('app_email_wrap_html')
+            ? app_email_wrap_html($settings, $body, 'en')
+            : $body;
+        $mail->AltBody = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />', '</div>', '</tr>'], ["\n", "\n", "\n", "\n", "\n"], $body)));
+        $mail->send();
+
+        if (schema_object_exists($db, 'admin_mixer_events')) {
+            $db->insert(
+                ['order_id', 'event_type', 'payload_json'],
+                [$orderId, 'order_started_notification_sent', json_encode([
+                    'email' => $recipientEmail,
+                    'sent_at' => date('Y-m-d H:i:s'),
+                    'source_url' => $sourceUrl,
+                    'admin_login' => $adminLogin,
+                    'vault_balance' => $poolLabel,
+                    'swap_possible' => $swapPossible,
+                ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+                'admin_mixer_events'
+            );
+        }
+
+        return ['ok' => true, 'message' => 'Swapper order notification sent.'];
+    } catch (Throwable $exception) {
+        if (schema_object_exists($db, 'admin_mixer_events')) {
+            $db->insert(
+                ['order_id', 'event_type', 'payload_json'],
+                [$orderId, 'order_started_notification_failed', json_encode([
+                    'email' => $recipientEmail,
+                    'failed_at' => date('Y-m-d H:i:s'),
+                    'error' => $exception->getMessage(),
+                ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+                'admin_mixer_events'
+            );
+        }
+
+        return ['ok' => false, 'message' => $exception->getMessage()];
+    }
+}
+
+function admin_mixer_send_payout_notification(Mysql_ks $db, array $settings, array $orderRow): array
+{
+    $orderId = (int)($orderRow['id'] ?? 0);
+    if ($orderId <= 0) {
+        return ['ok' => false, 'message' => 'Swapper order is missing.'];
+    }
+    if (admin_mixer_payout_notification_event_exists($db, $orderId)) {
+        return ['ok' => true, 'message' => 'Swapper payout notification already sent.', 'skipped' => true];
+    }
+
+    $recipientEmail = strtolower(trim((string)($settings['mixer_notification_email'] ?? '')));
+    if ($recipientEmail === '' || filter_var($recipientEmail, FILTER_VALIDATE_EMAIL) === false) {
+        return ['ok' => false, 'message' => 'Swapper notification email is not configured.'];
+    }
+    if (!function_exists('app_email_smtp_is_configured') || !app_email_smtp_is_configured($settings)) {
+        return ['ok' => false, 'message' => 'SMTP is not configured.'];
+    }
+
+    $inputAsset = strtoupper(trim((string)($orderRow['input_asset'] ?? '')));
+    $outputAssetKey = strtoupper(trim((string)($orderRow['output_asset'] ?? 'POLYGON_POL')));
+    $outputOptions = admin_mixer_output_asset_options();
+    $outputOption = $outputOptions[$outputAssetKey] ?? ['symbol' => $outputAssetKey, 'network' => 'Polygon'];
+    $outputSymbol = strtoupper(trim((string)($outputOption['symbol'] ?? $outputAssetKey)));
+    $networkKey = strtolower(trim((string)($orderRow['payout_network'] ?? admin_mixer_network_key_for_output_asset($outputAssetKey))));
+    $networkMode = admin_mixer_normalize_network_mode($orderRow['payout_network_mode'] ?? 'mainnet');
+    $networkOption = admin_mixer_effective_network_option($networkKey, $networkMode);
+    $networkLabel = (string)($networkOption['label'] ?? ($outputOption['network'] ?? 'Polygon'));
+    $rpcSettingKey = (string)($networkOption['rpc_setting_key'] ?? 'mixer_polygon_rpc_url');
+    $vaultSettingKey = (string)($networkOption['vault_setting_key'] ?? 'mixer_polygon_vault_contract');
+    $rpcUrl = trim((string)($settings[$rpcSettingKey] ?? ''));
+    if ($rpcUrl === '') {
+        $rpcUrl = admin_mixer_default_rpc_url($networkKey, $networkMode);
+    }
+    $vaultContract = trim((string)($settings[$vaultSettingKey] ?? ''));
+    $poolState = admin_mixer_pool_state_for_output_asset($rpcUrl, $vaultContract, $outputAssetKey);
+    $poolLabel = !empty($poolState['ok'])
+        ? (string)($poolState['label'] ?? '')
+        : ('Unavailable' . (!empty($poolState['error']) ? ' - ' . (string)$poolState['error'] : ''));
+
+    $detectedInput = (float)($orderRow['detected_input_amount'] ?? $orderRow['expected_input_amount'] ?? 0);
+    $payoutAmount = (float)($orderRow['payout_amount'] ?? 0);
+    $feeUsd = (float)($orderRow['fee_amount_usd'] ?? 0);
+    $feePercent = (float)($orderRow['fee_percent'] ?? ($settings['mixer_fee_percent'] ?? 0));
+    $recipient = trim((string)($orderRow['recipient_address'] ?? ''));
+    $depositAddress = trim((string)($orderRow['deposit_address'] ?? ''));
+    $depositTxid = trim((string)($orderRow['deposit_txid'] ?? ''));
+    $payoutTxid = trim((string)($orderRow['payout_txid'] ?? ''));
+    $explorerBase = trim((string)($networkOption['explorer_tx_url'] ?? ''));
+    $payoutExplorerUrl = $payoutTxid !== '' && $explorerBase !== '' ? $explorerBase . rawurlencode($payoutTxid) : '';
+    $vaultExplorerUrl = admin_mixer_explorer_address_url($networkOption, $vaultContract, $outputSymbol, $networkKey);
+    $recipientExplorerUrl = admin_mixer_explorer_address_url($networkOption, $recipient, $outputSymbol, $networkKey);
+    $inputNetworkCode = admin_mixer_input_asset_network_code($inputAsset);
+    $depositAddressExplorerUrl = admin_crypto_wallet_explorer_url($inputAsset, $inputNetworkCode, $depositAddress);
+    $depositExplorerUrl = $depositTxid !== ''
+        ? admin_crypto_transaction_explorer_url($inputAsset, $inputNetworkCode, $depositTxid)
+        : '';
+    $publicId = trim((string)($orderRow['public_id'] ?? ''));
+    $sourceUrl = admin_mixer_notification_source_url($settings);
+    $adminLogin = admin_mixer_notification_admin_login($db, $orderRow);
+
+    $formatAmount = static function (float $amount, string $symbol): string {
+        $normalizedSymbol = strtoupper($symbol);
+        $decimals = $normalizedSymbol === 'BTC' ? 8 : ($normalizedSymbol === 'SOL' ? 9 : 6);
+        $value = rtrim(rtrim(number_format(max(0.0, $amount), $decimals, '.', ''), '0'), '.');
+        return ($value !== '' ? $value : '0') . ' ' . strtoupper($symbol);
+    };
+
+    $rows = [
+        'Order' => $publicId !== '' ? $publicId : ('#' . $orderId),
+        'Status' => 'Paid out',
+        'Input received' => $formatAmount($detectedInput, $inputAsset),
+        'Payout sent' => $formatAmount($payoutAmount, $outputSymbol) . ' on ' . $networkLabel,
+    ];
+    if (admin_mixer_show_fee_breakdown($settings)) {
+        $rows['Fee'] = '$' . number_format(max(0.0, $feeUsd), 2, '.', '') . ($feePercent > 0 ? ' (' . rtrim(rtrim(number_format($feePercent, 2, '.', ''), '0'), '.') . '%)' : '');
+    }
+    $rows += [
+        'Vault contract' => $vaultContract,
+        'Deposit address' => $depositAddress,
+        'Recipient wallet' => $recipient,
+        'Vault balance after payout' => $poolLabel,
+        'Deposit tx' => $depositTxid,
+        'Payout tx' => $payoutTxid,
+    ];
+
+    $tableRows = '';
+    foreach ($rows as $label => $value) {
+        if (trim((string)$value) === '') {
+            continue;
+        }
+        $displayValue = admin_e((string)$value);
+        if ($label === 'Deposit tx' && $depositExplorerUrl !== '') {
+            $displayValue = '<a href="' . admin_e($depositExplorerUrl) . '">' . admin_e($depositTxid) . '</a>';
+        } elseif ($label === 'Payout tx' && $payoutExplorerUrl !== '') {
+            $displayValue = '<a href="' . admin_e($payoutExplorerUrl) . '">' . admin_e($payoutTxid) . '</a>';
+        } elseif ($label === 'Vault contract') {
+            $displayValue = admin_mixer_email_link($vaultExplorerUrl, $vaultContract);
+        } elseif ($label === 'Deposit address') {
+            $displayValue = admin_mixer_email_link($depositAddressExplorerUrl, $depositAddress);
+        } elseif ($label === 'Recipient wallet') {
+            $displayValue = admin_mixer_email_link($recipientExplorerUrl, $recipient);
+        }
+        $tableRows .= '<tr>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#4b5563;font-weight:700;">' . admin_e($label) . '</td>'
+            . '<td style="padding:8px 10px;border:1px solid #e5e7eb;color:#111827;font-weight:600;word-break:break-word;">' . $displayValue . '</td>'
+            . '</tr>';
+    }
+
+    $subject = 'Swapper payout sent - ' . $formatAmount($payoutAmount, $outputSymbol);
+    $sourceBlock = '<div style="margin:0 0 16px 0;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#111827;">'
+        . '<div style="font-size:13px;line-height:1.45;"><strong>Website URL:</strong> ' . admin_e($sourceUrl !== '' ? $sourceUrl : 'Unknown') . '</div>'
+        . '<div style="font-size:13px;line-height:1.45;margin-top:4px;"><strong>Login:</strong> ' . admin_e($adminLogin) . '</div>'
+        . '</div>';
+    $body = $sourceBlock
+        . '<p>The Swapper payout has been confirmed on-chain.</p>'
+        . '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;">'
+        . $tableRows
+        . '</table>'
+        . '<p style="margin-top:16px;color:#6b7280;">This is an automatic admin notification from the Swapper module.</p>';
+
+    try {
+        $mail = app_email_mailer($settings);
+        $mail->clearAllRecipients();
+        $mail->clearAttachments();
+        $mail->addAddress($recipientEmail);
+        $mail->Subject = $subject;
+        $mail->Body = function_exists('app_email_wrap_html')
+            ? app_email_wrap_html($settings, $body, 'en')
+            : $body;
+        $mail->AltBody = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />', '</div>', '</tr>'], ["\n", "\n", "\n", "\n", "\n"], $body)));
+        $mail->send();
+
+        if (schema_object_exists($db, 'admin_mixer_events')) {
+            $db->insert(
+                ['order_id', 'event_type', 'payload_json'],
+                [$orderId, 'payout_notification_sent', json_encode([
+                    'email' => $recipientEmail,
+                    'sent_at' => date('Y-m-d H:i:s'),
+                    'source_url' => $sourceUrl,
+                    'admin_login' => $adminLogin,
+                    'payout_txid' => $payoutTxid,
+                    'vault_balance' => $poolLabel,
+                ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+                'admin_mixer_events'
+            );
+        }
+
+        return ['ok' => true, 'message' => 'Swapper payout notification sent.'];
+    } catch (Throwable $exception) {
+        if (schema_object_exists($db, 'admin_mixer_events')) {
+            $db->insert(
+                ['order_id', 'event_type', 'payload_json'],
+                [$orderId, 'payout_notification_failed', json_encode([
+                    'email' => $recipientEmail,
+                    'failed_at' => date('Y-m-d H:i:s'),
+                    'error' => $exception->getMessage(),
+                ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+                'admin_mixer_events'
+            );
+        }
+
+        return ['ok' => false, 'message' => $exception->getMessage()];
+    }
+}
+
+function admin_mixer_refresh_payout_receipt(Mysql_ks $db, array $settings, array $orderRow): array
+{
+    $orderId = (int)($orderRow['id'] ?? 0);
+    $txHash = trim((string)($orderRow['payout_txid'] ?? ''));
+    if ($orderId <= 0 || !preg_match('/^0x[a-fA-F0-9]{64}$/', $txHash)) {
+        return $orderRow;
+    }
+
+    $networkKey = strtolower(trim((string)($orderRow['payout_network'] ?? 'polygon')));
+    $networkMode = admin_mixer_normalize_network_mode($orderRow['payout_network_mode'] ?? 'mainnet');
+    $networkOption = admin_mixer_effective_network_option($networkKey, $networkMode);
+    $rpcSettingKey = (string)($networkOption['rpc_setting_key'] ?? 'mixer_polygon_rpc_url');
+    $rpcUrl = trim((string)($settings[$rpcSettingKey] ?? ''));
+    if ($rpcUrl === '') {
+        $rpcUrl = admin_mixer_default_rpc_url($networkKey, $networkMode);
+    }
+    if ($rpcUrl === '') {
+        return $orderRow;
+    }
+
+    $response = admin_http_post_json($rpcUrl, [
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'eth_getTransactionReceipt',
+        'params' => [$txHash],
+    ]);
+    $receipt = is_array($response) && isset($response['result']) && is_array($response['result']) ? $response['result'] : null;
+    if ($receipt === null) {
+        return $orderRow;
+    }
+
+    $receiptStatus = strtolower(trim((string)($receipt['status'] ?? '')));
+    if ($receiptStatus === '0x1') {
+        $now = date('Y-m-d H:i:s');
+        $paidConfirmations = max(
+            (int)($orderRow['confirmations'] ?? 0),
+            (int)($orderRow['confirmations_required'] ?? 0),
+            admin_mixer_required_confirmations_for_asset($settings, (string)($orderRow['input_asset'] ?? ''))
+        );
+        $db->update(
+            ['status', 'paid_at', 'confirmations', 'confirmed_at'],
+            ['paid', $now, $paidConfirmations, $now],
+            'admin_mixer_orders',
+            'WHERE id = ' . $orderId
+        );
+        if (schema_object_exists($db, 'admin_mixer_payout_attempts')) {
+            $txHashSql = $db->escape($txHash);
+            $db->query(
+                "UPDATE admin_mixer_payout_attempts
+                 SET status = 'confirmed'
+                 WHERE order_id = {$orderId}
+                   AND txid = '{$txHashSql}'"
+            );
+        }
+        if (schema_object_exists($db, 'admin_mixer_events')) {
+            $db->insert(
+                ['order_id', 'event_type', 'payload_json'],
+                [$orderId, 'payout_confirmed', json_encode(['txid' => $txHash, 'confirmed_at' => $now, 'receipt' => $receipt], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+                'admin_mixer_events'
+            );
+        }
+        $notifiedOrder = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+        if (is_array($notifiedOrder)) {
+            admin_mixer_send_payout_notification($db, $settings, $notifiedOrder);
+        }
+    } elseif ($receiptStatus === '0x0') {
+        $db->update(
+            ['status', 'payout_txid'],
+            ['ready_to_pay', null],
+            'admin_mixer_orders',
+            'WHERE id = ' . $orderId
+        );
+        if (schema_object_exists($db, 'admin_mixer_payout_attempts')) {
+            $txHashSql = $db->escape($txHash);
+            $db->query(
+                "UPDATE admin_mixer_payout_attempts
+                 SET status = 'failed', error_message = 'Transaction reverted on-chain.'
+                 WHERE order_id = {$orderId}
+                   AND txid = '{$txHashSql}'"
+            );
+        }
+    }
+
+    $refetched = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+    return is_array($refetched) ? $refetched : $orderRow;
+}
+
+function admin_mixer_doge_blockchair_confirmations(string $txid): ?int
+{
+    static $cache = [];
+
+    $txid = strtolower(trim($txid));
+    if (!preg_match('/^[a-f0-9]{64}$/', $txid)) {
+        return null;
+    }
+    if (array_key_exists($txid, $cache)) {
+        return $cache[$txid];
+    }
+
+    $metadataCacheKey = 'mixer_doge_blockchair_tx_meta_' . sha1($txid);
+    $metadata = admin_crypto_accept_preview_cache_read($metadataCacheKey, 2592000);
+    $blockId = (int)($metadata['block_id'] ?? 0);
+    $tipHeight = 0;
+
+    if ($blockId <= 0) {
+        $failureCacheKey = 'mixer_doge_blockchair_tx_failure_' . sha1($txid);
+        if (admin_crypto_accept_preview_cache_read($failureCacheKey, 180) !== null) {
+            return $cache[$txid] = null;
+        }
+
+        $transactionPayload = admin_http_json(
+            'https://api.blockchair.com/dogecoin/dashboards/transaction/' . rawurlencode($txid),
+            12,
+            5
+        );
+        $blockId = (int)($transactionPayload['data'][$txid]['transaction']['block_id'] ?? 0);
+        $tipHeight = (int)($transactionPayload['context']['state'] ?? 0);
+        if ($blockId > 0) {
+            admin_crypto_accept_preview_cache_write($metadataCacheKey, ['block_id' => $blockId]);
+        } else {
+            admin_crypto_accept_preview_cache_write($failureCacheKey, ['failed' => true]);
+            return $cache[$txid] = null;
+        }
+    }
+
+    if ($tipHeight > 0) {
+        admin_crypto_accept_preview_cache_write('mixer_doge_blockchair_tip', ['tip_height' => $tipHeight]);
+    } else {
+        $statsCache = admin_crypto_accept_preview_cache_read('mixer_doge_blockchair_tip', 300);
+        $tipHeight = (int)($statsCache['tip_height'] ?? 0);
+    }
+
+    if ($tipHeight <= 0) {
+        if (admin_crypto_accept_preview_cache_read('mixer_doge_blockchair_tip_failure', 180) !== null) {
+            return $cache[$txid] = null;
+        }
+
+        $statsPayload = admin_http_json('https://api.blockchair.com/dogecoin/stats', 8, 4);
+        $tipHeight = (int)($statsPayload['data']['best_block_height'] ?? ($statsPayload['data']['blocks'] ?? 0));
+        if ($tipHeight > 0) {
+            admin_crypto_accept_preview_cache_write('mixer_doge_blockchair_tip', ['tip_height' => $tipHeight]);
+        } else {
+            admin_crypto_accept_preview_cache_write('mixer_doge_blockchair_tip_failure', ['failed' => true]);
+        }
+    }
+
+    if ($tipHeight <= 0 || $tipHeight < $blockId) {
+        return $cache[$txid] = null;
+    }
+
+    $confirmations = max(1, $tipHeight - $blockId + 1);
+    return $cache[$txid] = $confirmations;
+}
+
+function admin_mixer_refresh_order_from_chain(Mysql_ks $db, array $settings, array $orderRow): array
+{
+    $orderId = (int)($orderRow['id'] ?? 0);
+    if ($orderId <= 0 || !schema_object_exists($db, 'admin_mixer_orders')) {
+        return $orderRow;
+    }
+
+    $latestOrderRow = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+    if (is_array($latestOrderRow)) {
+        $orderRow = $latestOrderRow;
+    }
+
+    $inputAsset = strtoupper(trim((string)($orderRow['input_asset'] ?? '')));
+    if (!in_array($inputAsset, ['BTC', 'DOGE', 'SOL'], true)) {
+        return $orderRow;
+    }
+
+    $status = strtolower(trim((string)($orderRow['status'] ?? 'waiting_deposit')));
+    if ($status === 'paid') {
+        admin_mixer_send_payout_notification($db, $settings, $orderRow);
+        return $orderRow;
+    }
+    if (in_array($status, ['cancelled', 'failed'], true)) {
+        return $orderRow;
+    }
+    if (trim((string)($orderRow['payout_txid'] ?? '')) !== '') {
+        return admin_mixer_refresh_payout_receipt($db, $settings, $orderRow);
+    }
+
+    $requiredConfirmations = admin_mixer_required_confirmations_for_asset($settings, $inputAsset);
+    $updates = [];
+    $values = [];
+
+    if ((int)($orderRow['confirmations_required'] ?? 0) !== $requiredConfirmations && !in_array($status, ['paying', 'paid'], true)) {
+        $updates[] = 'confirmations_required';
+        $values[] = $requiredConfirmations;
+        $orderRow['confirmations_required'] = $requiredConfirmations;
+    }
+
+    $depositAddress = trim((string)($orderRow['deposit_address'] ?? ''));
+    if ($depositAddress === '') {
+        if ($updates) {
+            $db->update($updates, $values, 'admin_mixer_orders', 'WHERE id = ' . $orderId);
+            $refetched = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+            return is_array($refetched) ? $refetched : $orderRow;
+        }
+        return $orderRow;
+    }
+
+    $expectedAmount = max(0.0, (float)($orderRow['expected_input_amount'] ?? 0));
+    $inputRateUsd = max(0.0, (float)($orderRow['quote_rate_usd'] ?? 0));
+    $paymentRow = [
+        'id' => $orderId,
+        'wallet_address' => $depositAddress,
+        'asset_code' => $inputAsset,
+        'network_code' => admin_mixer_input_asset_network_code($inputAsset),
+        'requested_at' => (string)($orderRow['created_at'] ?? ''),
+        'requested_amount_crypto' => $expectedAmount,
+        'requested_amount_value' => $inputRateUsd > 0 ? round($expectedAmount * $inputRateUsd, 2) : 0,
+        'exchange_rate' => $inputRateUsd,
+        'currency_code' => 'USD',
+        'currency_symbol' => '$',
+    ];
+
+    $existingTxid = trim((string)($orderRow['deposit_txid'] ?? ''));
+    if ($existingTxid !== '' && admin_mixer_deposit_tx_claimed_by_other_order($db, $inputAsset, $existingTxid, $orderId)) {
+        return admin_mixer_reset_reused_deposit_tx($db, $orderRow, $existingTxid);
+    }
+
+    $candidate = null;
+    if ($inputAsset === 'DOGE' && $existingTxid !== '') {
+        $savedDetectedAmount = max(0.0, (float)($orderRow['detected_input_amount'] ?? 0));
+        $savedConfirmations = max(0, (int)($orderRow['confirmations'] ?? 0));
+
+        if ($savedDetectedAmount > 0) {
+            $candidate = [
+                'hash' => $existingTxid,
+                'amount_crypto' => $savedDetectedAmount,
+                'confirmations' => $savedConfirmations,
+                'confirmations_label' => $savedConfirmations . ' conf',
+                'timestamp' => strtotime((string)($orderRow['detected_at'] ?? '')) ?: time(),
+                'source' => 'saved_deposit',
+            ];
+        } else {
+            $candidate = admin_crypto_accept_preview_doge_direct_tx_row($paymentRow, $existingTxid);
+        }
+    }
+    if (!$candidate) {
+        if ($inputAsset === 'DOGE') {
+            $rows = admin_crypto_accept_preview_doge_remote_rows($paymentRow, 72, false, true);
+        } elseif ($inputAsset === 'SOL') {
+            $rows = admin_crypto_accept_preview_sol_rows($paymentRow, 72, 'confirmed', 10);
+        } else {
+            $rows = admin_crypto_accept_preview_btc_remote_rows($paymentRow, 72, false);
+        }
+        $candidate = admin_mixer_find_deposit_candidate(
+            $rows,
+            $orderRow,
+            admin_mixer_claimed_deposit_txids($db, $inputAsset, $orderId)
+        );
+    }
+
+    if ($inputAsset === 'DOGE' && $existingTxid !== '') {
+        $knownConfirmations = max(
+            (int)($orderRow['confirmations'] ?? 0),
+            is_array($candidate) ? (int)($candidate['confirmations'] ?? 0) : 0
+        );
+        if ($knownConfirmations < $requiredConfirmations) {
+            $blockchairConfirmations = admin_mixer_doge_blockchair_confirmations($existingTxid);
+            if (is_int($blockchairConfirmations)) {
+                if (
+                    is_array($candidate)
+                    && hash_equals($existingTxid, trim((string)($candidate['hash'] ?? '')))
+                ) {
+                    $candidate['confirmations'] = max(
+                        (int)($candidate['confirmations'] ?? 0),
+                        $blockchairConfirmations
+                    );
+                    $candidate['confirmations_label'] = $candidate['confirmations'] . ' conf';
+                    $candidate['source'] = 'blockchair_confirmation_fallback';
+                } else {
+                    $detectedAmount = max(0.0, (float)($orderRow['detected_input_amount'] ?? 0));
+                    if ($detectedAmount > 0) {
+                        $detectedTimestamp = strtotime((string)($orderRow['detected_at'] ?? '')) ?: time();
+                        $candidate = [
+                            'hash' => $existingTxid,
+                            'amount_crypto' => $detectedAmount,
+                            'confirmations' => $blockchairConfirmations,
+                            'confirmations_label' => $blockchairConfirmations . ' conf',
+                            'timestamp' => $detectedTimestamp,
+                            'source' => 'blockchair_confirmation_fallback',
+                        ];
+                    }
+                }
+            }
+        }
+    }
+
+    if (!$candidate) {
+        if ($updates) {
+            $db->update($updates, $values, 'admin_mixer_orders', 'WHERE id = ' . $orderId);
+            $refetched = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+            return is_array($refetched) ? $refetched : $orderRow;
+        }
+        return $orderRow;
+    }
+
+    $txid = trim((string)($candidate['hash'] ?? ''));
+    $confirmations = max(0, (int)($candidate['confirmations'] ?? 0));
+    $detectedAmount = max(0.0, (float)($candidate['amount_crypto'] ?? 0));
+    if ($txid === '' || $detectedAmount <= 0) {
+        return $orderRow;
+    }
+    if (admin_mixer_deposit_tx_claimed_by_other_order($db, $inputAsset, $txid, $orderId)) {
+        return admin_mixer_reset_reused_deposit_tx($db, $orderRow, $txid);
+    }
+
+    $previousConfirmations = max(0, (int)($orderRow['confirmations'] ?? 0));
+    $sameDepositTx = trim((string)($orderRow['deposit_txid'] ?? '')) !== ''
+        && hash_equals(trim((string)$orderRow['deposit_txid']), $txid);
+    if ($sameDepositTx) {
+        $confirmations = max($confirmations, $previousConfirmations);
+    }
+
+    $prices = admin_mixer_price_usd_from_crypto_assets($db, [$inputAsset, strtoupper((string)($orderRow['output_asset'] ?? 'POLYGON_POL'))], 300);
+    $freshInputUsd = (float)($prices[$inputAsset]['usd'] ?? 0);
+    $outputAsset = strtoupper((string)($orderRow['output_asset'] ?? 'POLYGON_POL'));
+    $freshOutputUsd = (float)($prices[$outputAsset]['usd'] ?? 0);
+    $inputUsd = $freshInputUsd > 0 ? $freshInputUsd : max(0.0, (float)($orderRow['quote_rate_usd'] ?? 0));
+    $outputUsd = $freshOutputUsd > 0 ? $freshOutputUsd : max(0.0, (float)($orderRow['quote_output_rate_usd'] ?? 0));
+    $feePercent = max(0.0, min(5.0, (float)($orderRow['fee_percent'] ?? ($settings['mixer_fee_percent'] ?? 1.50))));
+    $detectedUsd = $detectedAmount * $inputUsd;
+    $feeUsd = round($detectedUsd * ($feePercent / 100), 2);
+    $payoutUsd = max(0.0, $detectedUsd - $feeUsd);
+    $payoutAmount = $outputUsd > 0 ? ($payoutUsd / $outputUsd) : (float)($orderRow['payout_amount'] ?? 0);
+    $nextStatus = $status;
+    if ($status === 'ready_to_pay') {
+        $confirmations = max($confirmations, $requiredConfirmations);
+        $nextStatus = 'ready_to_pay';
+    } elseif (!in_array($status, ['paying', 'paid'], true)) {
+        $nextStatus = $confirmations >= $requiredConfirmations ? 'ready_to_pay' : 'confirming';
+    }
+
+    $now = date('Y-m-d H:i:s');
+    $fieldMap = [
+        'detected_input_amount' => number_format($detectedAmount, 12, '.', ''),
+        'payout_amount' => number_format($payoutAmount, 12, '.', ''),
+        'quote_rate_usd' => number_format($inputUsd, 12, '.', ''),
+        'quote_output_rate_usd' => number_format($outputUsd, 12, '.', ''),
+        'fee_amount_usd' => number_format($feeUsd, 2, '.', ''),
+        'status' => $nextStatus,
+        'confirmations' => $confirmations,
+        'confirmations_required' => $requiredConfirmations,
+        'deposit_txid' => $txid,
+    ];
+
+    if (trim((string)($orderRow['detected_at'] ?? '')) === '') {
+        $fieldMap['detected_at'] = $now;
+    }
+    if ($confirmations >= $requiredConfirmations && trim((string)($orderRow['confirmed_at'] ?? '')) === '') {
+        $fieldMap['confirmed_at'] = $now;
+    }
+
+    foreach ($fieldMap as $field => $value) {
+        if ((string)($orderRow[$field] ?? '') !== (string)$value) {
+            $updates[] = $field;
+            $values[] = $value;
+        }
+    }
+
+    if ($updates) {
+        $db->update(
+            $updates,
+            $values,
+            'admin_mixer_orders',
+            "WHERE id = {$orderId} AND status NOT IN ('paying', 'paid') AND (payout_txid IS NULL OR payout_txid = '')"
+        );
+    }
+
+    if (schema_object_exists($db, 'admin_mixer_deposit_txs')) {
+        $txidSql = $db->escape($txid);
+        $assetSql = $db->escape($inputAsset);
+        $addressSql = $db->escape($depositAddress);
+        $amountSql = $db->escape(number_format($detectedAmount, 12, '.', ''));
+        $statusSql = $db->escape($confirmations >= $requiredConfirmations ? 'confirmed' : 'seen');
+        $rawJson = $db->escape(json_encode($candidate, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        $confirmedAtSql = $confirmations >= $requiredConfirmations ? "'" . $db->escape($now) . "'" : 'NULL';
+        $db->query(
+            "INSERT INTO admin_mixer_deposit_txs
+                (order_id, input_asset, deposit_address, txid, vout, amount, confirmations, status, first_seen_at, confirmed_at, raw_json)
+             VALUES
+                ({$orderId}, '{$assetSql}', '{$addressSql}', '{$txidSql}', 0, '{$amountSql}', {$confirmations}, '{$statusSql}', '{$now}', {$confirmedAtSql}, '{$rawJson}')
+             ON DUPLICATE KEY UPDATE
+                order_id = IF(order_id IS NULL OR order_id = 0 OR order_id = VALUES(order_id), VALUES(order_id), order_id),
+                amount = VALUES(amount),
+                confirmations = GREATEST(confirmations, VALUES(confirmations)),
+                status = IF(status = 'confirmed' OR VALUES(status) = 'confirmed', 'confirmed', VALUES(status)),
+                confirmed_at = IF(VALUES(confirmed_at) IS NULL, confirmed_at, VALUES(confirmed_at)),
+                raw_json = VALUES(raw_json)"
+        );
+    }
+
+    if (schema_object_exists($db, 'admin_mixer_events') && ($updates || (string)($orderRow['deposit_txid'] ?? '') !== $txid)) {
+        $eventPayload = [
+            'txid' => $txid,
+            'detected_input_amount' => $detectedAmount,
+            'confirmations' => $confirmations,
+            'confirmations_required' => $requiredConfirmations,
+            'status' => $nextStatus,
+        ];
+        $db->insert(
+            ['order_id', 'event_type', 'payload_json'],
+            [$orderId, 'deposit_status_refresh', json_encode($eventPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+            'admin_mixer_events'
+        );
+    }
+
+    $refetched = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+    return is_array($refetched) ? $refetched : $orderRow;
 }
 
 function admin_mixer_create_order(Mysql_ks $db, array $settings, array $adminUser, array $input): array
 {
     if (!admin_mixer_enabled($settings)) {
         return ['ok' => false, 'message' => 'Swapper is disabled.'];
+    }
+
+    $activeOrder = admin_mixer_find_active_order($db, $settings);
+    if (is_array($activeOrder)) {
+        return [
+            'ok' => true,
+            'active_existing' => true,
+            'message_key' => 'mixer_active_order_locked',
+            'message' => 'Finish the active Swapper transaction before creating a new one.',
+            'order' => admin_mixer_order_payload($activeOrder),
+            'quote' => [],
+        ];
     }
 
     $inputAsset = strtoupper(trim((string)($input['input_asset'] ?? 'BTC')));
@@ -1130,12 +4034,13 @@ function admin_mixer_create_order(Mysql_ks $db, array $settings, array $adminUse
         return ['ok' => false, 'message' => 'Recipient wallet address is invalid.'];
     }
 
-    $depositAddress = $inputAsset === 'DOGE'
-        ? trim((string)($settings['mixer_doge_deposit_address'] ?? ''))
-        : trim((string)($settings['mixer_btc_deposit_address'] ?? ''));
+    $depositAddress = admin_mixer_input_asset_deposit_address($settings, $inputAsset);
 
     if ($depositAddress === '') {
         return ['ok' => false, 'message' => 'Deposit address is missing in Settings.'];
+    }
+    if (!admin_mixer_is_valid_input_deposit_address($inputAsset, $depositAddress)) {
+        return ['ok' => false, 'message' => 'Deposit address configured in Settings is invalid.'];
     }
 
     $networkOptions = admin_mixer_network_options();
@@ -1162,32 +4067,64 @@ function admin_mixer_create_order(Mysql_ks $db, array $settings, array $adminUse
     $inputUsd = (float)($prices[$inputAsset]['usd'] ?? 0);
     $outputUsd = (float)($prices[$outputAsset]['usd'] ?? 0);
     if ($inputUsd <= 0 || $outputUsd <= 0) {
-        return ['ok' => false, 'message' => 'Price quote is not available right now.'];
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_price_quote_unavailable',
+            'message' => 'Price quote is not available right now.',
+        ];
     }
 
     $amountUsd = round($amount * $inputUsd, 2);
+    $minOrderUsd = admin_mixer_min_order_usd($settings);
+    if ($amountUsd < $minOrderUsd) {
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_order_minimum_amount',
+            'message_replacements' => [
+                'amount' => number_format($minOrderUsd, 2, '.', ''),
+            ],
+            'message' => 'Minimum swap amount is ' . number_format($minOrderUsd, 2, '.', '') . ' USD.',
+        ];
+    }
+
     $maxPayoutUsd = max(1.0, (float)($settings['mixer_max_payout_usd'] ?? 500.00));
     $dailyLimitUsd = max(1.0, (float)($settings['mixer_daily_payout_limit_usd'] ?? 1500.00));
     $dailyReservedUsd = admin_mixer_daily_reserved_usd($db);
 
     if ($amountUsd > $maxPayoutUsd) {
-        return ['ok' => false, 'message' => 'Amount is above the per-order limit.'];
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_swap_not_possible_later',
+            'message' => 'This swap is not possible right now. Please try again later.',
+        ];
     }
 
     if (($dailyReservedUsd + $amountUsd) > $dailyLimitUsd) {
-        return ['ok' => false, 'message' => 'Daily Swapper limit has been reached.'];
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_swap_not_possible_later',
+            'message' => 'This swap is not possible right now. Please try again later.',
+        ];
     }
 
     $feePercent = max(0.0, min(5.0, (float)($settings['mixer_fee_percent'] ?? 1.50)));
     $feeUsd = round($amountUsd * ($feePercent / 100), 2);
     $payoutUsd = max(0.0, $amountUsd - $feeUsd);
     $payoutAmount = $payoutUsd > 0 ? ($payoutUsd / $outputUsd) : 0.0;
-    $poolState = admin_mixer_native_pool_state($rpcUrl, $vaultContract, (string)($networkOption['native_symbol'] ?? ''));
+    $poolState = admin_mixer_pool_state_for_output_asset($rpcUrl, $vaultContract, $outputAsset);
     if (empty($poolState['ok'])) {
-        return ['ok' => false, 'message' => 'Unable to read Swapper vault balance. Check RPC URL in Settings.'];
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_swap_not_possible_later',
+            'message' => 'This swap is not possible right now. Please try again later.',
+        ];
     }
     if ((float)($poolState['balance'] ?? 0.0) < $payoutAmount) {
-        return ['ok' => false, 'message' => 'No routes available. The Swapper vault does not have enough liquidity.'];
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_vault_liquidity_missing',
+            'message' => 'This swap is not possible right now. Please try again later.',
+        ];
     }
 
     $quoteLifetime = max(1, min(240, (int)($settings['mixer_quote_lifetime_minutes'] ?? 15)));
@@ -1232,9 +4169,7 @@ function admin_mixer_create_order(Mysql_ks $db, array $settings, array $adminUse
             number_format($feePercent, 2, '.', ''),
             number_format($feeUsd, 2, '.', ''),
             'waiting_deposit',
-            $inputAsset === 'DOGE'
-                ? max(1, min(120, (int)($settings['mixer_doge_confirmations_required'] ?? 20)))
-                : max(1, min(12, (int)($settings['mixer_btc_confirmations_required'] ?? 3))),
+            admin_mixer_required_confirmations_for_asset($settings, $inputAsset),
             $expiresAt,
         ],
         'admin_mixer_orders'
@@ -1268,10 +4203,347 @@ function admin_mixer_create_order(Mysql_ks $db, array $settings, array $adminUse
         return ['ok' => false, 'message' => 'Unable to load created Swapper order.'];
     }
 
+    admin_mixer_send_order_started_notification($db, $settings, $row);
+
+    $publicQuote = $eventPayload;
+    if (!admin_mixer_show_fee_breakdown($settings)) {
+        unset($publicQuote['fee_percent'], $publicQuote['fee_usd']);
+    }
+
     return [
         'ok' => true,
         'order' => admin_mixer_order_payload($row),
-        'quote' => $eventPayload,
+        'quote' => $publicQuote,
+    ];
+}
+
+function admin_mixer_prepare_payout_request(Mysql_ks $db, array $settings, array $orderRow, array $adminUser): array
+{
+    if (!admin_mixer_crypto_runtime_available()) {
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_payout_runtime_missing',
+            'message' => admin_mixer_crypto_runtime_missing_message(),
+        ];
+    }
+
+    $orderRow = admin_mixer_refresh_order_from_chain($db, $settings, $orderRow);
+    $orderId = (int)($orderRow['id'] ?? 0);
+    if ($orderId <= 0) {
+        return ['ok' => false, 'message_key' => 'mixer_order_not_found', 'message' => 'Swapper order was not found.'];
+    }
+
+    $status = strtolower(trim((string)($orderRow['status'] ?? '')));
+    $confirmations = (int)($orderRow['confirmations'] ?? 0);
+    $requiredConfirmations = max(1, (int)($orderRow['confirmations_required'] ?? 1));
+    if ($confirmations < $requiredConfirmations && !in_array($status, ['ready_to_pay', 'paying', 'paid'], true)) {
+        return ['ok' => false, 'message_key' => 'mixer_payout_not_ready', 'message' => 'Payout is available after the required confirmations are complete.'];
+    }
+
+    if (trim((string)($orderRow['payout_txid'] ?? '')) !== '' || $status === 'paid') {
+        return ['ok' => false, 'message_key' => 'mixer_payout_already_sent', 'message' => 'This payout is already sent.'];
+    }
+
+    if ($status === 'paying') {
+        return ['ok' => false, 'message_key' => 'mixer_payout_in_progress', 'message' => 'Payout is already in progress.'];
+    }
+
+    $outputAsset = strtoupper(trim((string)($orderRow['output_asset'] ?? 'POLYGON_POL')));
+    $outputOption = admin_mixer_output_asset_option($outputAsset);
+    $outputSymbol = strtoupper(trim((string)($outputOption['symbol'] ?? $outputAsset)));
+    $assetAddress = admin_mixer_output_asset_address($outputAsset);
+    $assetDecimals = admin_mixer_output_asset_decimals($outputAsset);
+    $assetIsNative = admin_mixer_output_asset_is_native($outputAsset);
+
+    $recipient = trim((string)($orderRow['recipient_address'] ?? ''));
+    if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $recipient)) {
+        return ['ok' => false, 'message_key' => 'mixer_payout_recipient_invalid', 'message' => 'Recipient address is invalid.'];
+    }
+
+    $payoutAmount = max(0.0, (float)($orderRow['payout_amount'] ?? 0));
+    if ($payoutAmount <= 0) {
+        return ['ok' => false, 'message_key' => 'mixer_payout_amount_invalid', 'message' => 'Payout amount is invalid.'];
+    }
+
+    $networkKey = strtolower(trim((string)($orderRow['payout_network'] ?? 'polygon')));
+    $networkMode = admin_mixer_normalize_network_mode($orderRow['payout_network_mode'] ?? 'mainnet');
+    $networkOption = admin_mixer_effective_network_option($networkKey, $networkMode);
+    $vaultSettingKey = (string)($networkOption['vault_setting_key'] ?? 'mixer_polygon_vault_contract');
+    $rpcSettingKey = (string)($networkOption['rpc_setting_key'] ?? 'mixer_polygon_rpc_url');
+    $vaultContract = trim((string)($settings[$vaultSettingKey] ?? ''));
+    $rpcUrl = trim((string)($settings[$rpcSettingKey] ?? ''));
+    if ($rpcUrl === '') {
+        $rpcUrl = admin_mixer_default_rpc_url($networkKey, $networkMode);
+    }
+    if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $vaultContract) || $rpcUrl === '') {
+        return ['ok' => false, 'message_key' => 'mixer_payout_vault_missing', 'message' => 'Vault contract or RPC URL is missing.'];
+    }
+
+    $poolState = admin_mixer_pool_state_for_output_asset($rpcUrl, $vaultContract, $outputAsset);
+    if (empty($poolState['ok'])) {
+        return ['ok' => false, 'message_key' => 'mixer_swap_not_possible_later', 'message' => 'This swap is not possible right now. Please try again later.'];
+    }
+    if ((float)($poolState['balance'] ?? 0.0) < $payoutAmount) {
+        return ['ok' => false, 'message_key' => 'mixer_vault_liquidity_missing', 'message' => 'This swap is not possible right now. Please try again later.'];
+    }
+
+    $signerSecret = admin_mixer_payout_signer_private_key($settings);
+    if ($signerSecret === '') {
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_payout_executor_not_configured',
+            'message' => 'Payout executor is not configured yet. Add the payout signer secret on the backend first.',
+        ];
+    }
+    $signerSecret = strtolower(preg_replace('/^0x/i', '', $signerSecret));
+    if (!preg_match('/^[a-f0-9]{64}$/', $signerSecret)) {
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_payout_executor_not_configured',
+            'message' => 'Payout signer secret is invalid.',
+        ];
+    }
+
+    $chainId = (int)($orderRow['payout_chain_id'] ?? 0);
+    if ($chainId <= 0) {
+        $chainId = (int)($networkOption['chain_id'] ?? 0);
+    }
+    if ($chainId <= 0) {
+        return ['ok' => false, 'message_key' => 'mixer_payout_vault_missing', 'message' => 'Payout chain id is missing.'];
+    }
+
+    $amountBaseUnits = admin_mixer_decimal_to_base_units((string)($orderRow['payout_amount'] ?? '0'), $assetDecimals);
+    if (gmp_cmp(gmp_init($amountBaseUnits, 10), 0) <= 0) {
+        return ['ok' => false, 'message_key' => 'mixer_payout_amount_invalid', 'message' => 'Payout amount is invalid.'];
+    }
+
+    $publicId = trim((string)($orderRow['public_id'] ?? ''));
+    $orderIdHex = admin_mixer_order_payout_id($publicId);
+    $deadline = time() + 900;
+    $digestHex = admin_mixer_payout_digest_hex($chainId, $vaultContract, $orderIdHex, $assetAddress, $recipient, $amountBaseUnits, $deadline);
+    $signature = admin_mixer_sign_digest_hex($digestHex, $signerSecret);
+    if (!is_array($signature) || empty($signature['signature'])) {
+        return [
+            'ok' => false,
+            'message_key' => 'mixer_payout_executor_not_configured',
+            'message' => 'Payout signer could not create a valid signature.',
+        ];
+    }
+
+    $txData = $assetIsNative
+        ? admin_mixer_payout_native_tx_data($orderIdHex, $recipient, $amountBaseUnits, $deadline, (string)$signature['signature'])
+        : admin_mixer_payout_token_tx_data($orderIdHex, $assetAddress, $recipient, $amountBaseUnits, $deadline, (string)$signature['signature']);
+    $requestHash = '0x' . admin_mixer_keccak256_hex(hex2bin(preg_replace('/^0x/i', '', $txData)) ?: '');
+    if (schema_object_exists($db, 'admin_mixer_payout_attempts')) {
+        $db->insert(
+            [
+                'order_id',
+                'payout_network',
+                'payout_network_mode',
+                'payout_chain_id',
+                'output_asset',
+                'token_address',
+                'recipient_address',
+                'payout_amount',
+                'request_hash',
+                'status',
+            ],
+            [
+                $orderId,
+                $networkKey,
+                $networkMode,
+                $chainId,
+                $outputAsset,
+                $assetIsNative ? null : $assetAddress,
+                $recipient,
+                number_format($payoutAmount, 12, '.', ''),
+                $requestHash,
+                'prepared',
+            ],
+            'admin_mixer_payout_attempts'
+        );
+    }
+
+    if (schema_object_exists($db, 'admin_mixer_events')) {
+        $eventPayload = [
+            'order_id_hex' => $orderIdHex,
+            'asset' => $assetAddress,
+            'asset_symbol' => $outputSymbol,
+            'asset_decimals' => $assetDecimals,
+            'asset_type' => $assetIsNative ? 'native' : 'token',
+            'recipient' => $recipient,
+            'amount_base_units' => $amountBaseUnits,
+            'deadline' => $deadline,
+            'request_hash' => $requestHash,
+        ];
+        $db->insert(
+            ['order_id', 'event_type', 'payload_json'],
+            [$orderId, 'payout_prepared', json_encode($eventPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+            'admin_mixer_events'
+        );
+    }
+
+    return [
+        'ok' => true,
+        'message' => 'Payout prepared. Confirm the transaction in your wallet.',
+        'order' => admin_mixer_order_payload($orderRow),
+        'payout' => [
+            'chainId' => $chainId,
+            'chainHex' => '0x' . dechex($chainId),
+            'network' => $networkKey,
+            'networkMode' => $networkMode,
+            'rpcUrl' => $rpcUrl,
+            'vaultContract' => $vaultContract,
+            'to' => $vaultContract,
+            'value' => '0x0',
+            'data' => $txData,
+            'orderId' => $orderIdHex,
+            'asset' => $assetAddress,
+            'recipient' => $recipient,
+            'amountBaseUnits' => $amountBaseUnits,
+            'deadline' => $deadline,
+            'signature' => (string)$signature['signature'],
+            'requestHash' => $requestHash,
+            'explorerBase' => (string)($networkOption['explorer_tx_url'] ?? ''),
+        ],
+    ];
+}
+
+function admin_mixer_record_payout_submission(Mysql_ks $db, array $settings, array $orderRow, string $txHash): array
+{
+    $orderId = (int)($orderRow['id'] ?? 0);
+    $txHash = trim($txHash);
+    if ($orderId <= 0) {
+        return ['ok' => false, 'message_key' => 'mixer_order_not_found', 'message' => 'Swapper order was not found.'];
+    }
+    if (!preg_match('/^0x[a-fA-F0-9]{64}$/', $txHash)) {
+        return ['ok' => false, 'message_key' => 'mixer_payout_tx_invalid', 'message' => 'Payout transaction hash is invalid.'];
+    }
+
+    $orderRow = admin_mixer_refresh_order_from_chain($db, $settings, $orderRow);
+    $status = strtolower(trim((string)($orderRow['status'] ?? '')));
+    if (trim((string)($orderRow['payout_txid'] ?? '')) !== '' || in_array($status, ['paid', 'paying'], true)) {
+        return ['ok' => true, 'message' => 'Payout transaction is already saved.', 'order' => admin_mixer_order_payload($orderRow)];
+    }
+    if ($status !== 'ready_to_pay') {
+        return ['ok' => false, 'message_key' => 'mixer_payout_not_ready', 'message' => 'Payout is not ready.'];
+    }
+
+    $now = date('Y-m-d H:i:s');
+    $db->update(
+        ['status', 'payout_txid'],
+        ['paying', $txHash],
+        'admin_mixer_orders',
+        'WHERE id = ' . $orderId
+    );
+
+    if (schema_object_exists($db, 'admin_mixer_payout_attempts')) {
+        $txHashSql = $db->escape($txHash);
+        $db->query(
+            "UPDATE admin_mixer_payout_attempts
+             SET txid = '{$txHashSql}', status = 'submitted'
+             WHERE order_id = {$orderId}
+               AND status IN ('prepared', 'pending')
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+    }
+
+    if (schema_object_exists($db, 'admin_mixer_events')) {
+        $db->insert(
+            ['order_id', 'event_type', 'payload_json'],
+            [$orderId, 'payout_submitted', json_encode(['txid' => $txHash, 'submitted_at' => $now], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+            'admin_mixer_events'
+        );
+    }
+
+    $refetched = $db->select_user('SELECT * FROM admin_mixer_orders WHERE id = ' . $orderId . ' LIMIT 1');
+    return [
+        'ok' => true,
+        'message' => 'Payout transaction submitted.',
+        'order' => admin_mixer_order_payload(is_array($refetched) ? $refetched : $orderRow),
+    ];
+}
+
+function admin_mixer_process_auto_payouts(Mysql_ks $db, array $settings, int $limit = 3): array
+{
+    if (empty($settings['mixer_auto_payout_enabled'])) {
+        return ['ok' => true, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'Swapper auto payout is disabled.'];
+    }
+    if (!admin_mixer_crypto_runtime_available()) {
+        return ['ok' => false, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => admin_mixer_crypto_runtime_missing_message()];
+    }
+    if (!admin_mixer_payout_signer_is_configured($settings) || !admin_mixer_payout_executor_is_configured($settings)) {
+        return ['ok' => false, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'Payout executor is not configured.'];
+    }
+    if (!schema_object_exists($db, 'admin_mixer_orders')) {
+        return ['ok' => true, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'Swapper orders table is not available.'];
+    }
+
+    $limit = max(1, min(10, $limit));
+    $rows = $db->select_full_user(
+        "SELECT *
+         FROM admin_mixer_orders
+         WHERE (
+                status IN ('confirming', 'ready_to_pay')
+            AND (payout_txid IS NULL OR payout_txid = '')
+         )
+            OR status = 'paying'
+         ORDER BY FIELD(status, 'ready_to_pay', 'confirming', 'paying'), updated_at ASC, id ASC
+         LIMIT " . ($limit * 3)
+    );
+    if (!is_array($rows) || $rows === []) {
+        return ['ok' => true, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'No Swapper payouts are ready.'];
+    }
+
+    $processed = 0;
+    $sent = 0;
+    $failed = 0;
+    $errors = [];
+    foreach ($rows as $row) {
+        if (!is_array($row) || $processed >= $limit) {
+            continue;
+        }
+
+        $refreshed = admin_mixer_refresh_order_from_chain($db, $settings, $row);
+        $status = strtolower(trim((string)($refreshed['status'] ?? '')));
+        if ($status !== 'ready_to_pay' || trim((string)($refreshed['payout_txid'] ?? '')) !== '') {
+            continue;
+        }
+
+        $processed++;
+        $prepare = admin_mixer_prepare_payout_request($db, $settings, $refreshed, ['id' => 0, 'email' => 'system']);
+        if (empty($prepare['ok']) || empty($prepare['payout']) || !is_array($prepare['payout'])) {
+            $failed++;
+            $errors[] = trim((string)($prepare['message'] ?? 'Unable to prepare payout.'));
+            continue;
+        }
+
+        $submit = admin_mixer_submit_prepared_payout($prepare['payout'], $settings);
+        if (empty($submit['ok']) || empty($submit['tx_hash'])) {
+            $failed++;
+            $errors[] = trim((string)($submit['message'] ?? 'Unable to broadcast payout transaction.'));
+            continue;
+        }
+
+        $record = admin_mixer_record_payout_submission($db, $settings, $refreshed, (string)$submit['tx_hash']);
+        if (empty($record['ok'])) {
+            $failed++;
+            $errors[] = trim((string)($record['message'] ?? 'Unable to save payout transaction.'));
+            continue;
+        }
+
+        $sent++;
+    }
+
+    return [
+        'ok' => $failed === 0,
+        'processed' => $processed,
+        'sent' => $sent,
+        'failed' => $failed,
+        'message' => $failed === 0
+            ? 'Swapper auto payout finished.'
+            : 'Swapper auto payout finished with errors: ' . implode(' | ', array_slice(array_filter($errors), 0, 3)),
     ];
 }
 
@@ -1876,8 +5148,12 @@ function admin_create_admin_user(Mysql_ks $db, array $input, int $createdByAdmin
         return ['ok' => false, 'message' => 'Enter a valid email address.'];
     }
 
-    if (strlen($password) < 8) {
-        return ['ok' => false, 'message' => 'Password must contain at least 8 characters.'];
+    if ($password === '') {
+        return ['ok' => false, 'message' => 'Password cannot be empty.'];
+    }
+
+    if (strlen($password) > 72) {
+        return ['ok' => false, 'message' => 'Password cannot exceed 72 characters.'];
     }
 
     if ($password !== $repeatPassword) {
@@ -1988,8 +5264,12 @@ function admin_update_admin_user(
     }
 
     if ($password !== '' || $repeatPassword !== '') {
-        if (strlen($password) < 8) {
-            return ['ok' => false, 'message' => 'Password must contain at least 8 characters.'];
+        if ($password === '') {
+            return ['ok' => false, 'message' => 'Password cannot be empty.'];
+        }
+
+        if (strlen($password) > 72) {
+            return ['ok' => false, 'message' => 'Password cannot exceed 72 characters.'];
         }
 
         if ($password !== $repeatPassword) {
@@ -2193,6 +5473,7 @@ function admin_navigation_config(array $settings = [], ?array $adminUser = null)
         ],
         'finance' => [
             ['route' => 'payments', 'icon' => 'bi-credit-card-2-front', 'label_key' => 'nav_payments'],
+            ['route' => 'billing', 'icon' => 'bi-receipt-cutoff', 'label_key' => 'nav_billing'],
             ['route' => 'bank-accounts', 'icon' => 'bi-bank', 'label_key' => 'nav_bank_accounts'],
             ['route' => 'crypto-wallets', 'icon' => 'bi-currency-bitcoin', 'label_key' => 'nav_crypto_wallets'],
             ['route' => 'cryptocurrencies', 'icon' => 'bi-currency-exchange', 'label_key' => 'nav_cryptocurrencies'],
@@ -2218,6 +5499,14 @@ function admin_navigation_config(array $settings = [], ?array $adminUser = null)
         }
     }
 
+    if (!admin_billing_enabled($settings)) {
+        foreach ($navigation as $groupKey => $items) {
+            $navigation[$groupKey] = array_values(array_filter($items, static function (array $item): bool {
+                return (string)($item['route'] ?? '') !== 'billing';
+            }));
+        }
+    }
+
     if (is_array($adminUser) && !empty($adminUser)) {
         foreach ($navigation as $groupKey => $items) {
             $navigation[$groupKey] = array_values(array_filter($items, static function (array $item) use ($adminUser): bool {
@@ -2239,6 +5528,7 @@ function admin_allowed_routes(): array
     }
 
     $routes[] = 'swap-converter';
+    $routes[] = 'billing';
 
     return array_values(array_unique($routes));
 }
@@ -2324,166 +5614,179 @@ function admin_dashboard_metrics(Mysql_ks $db): array
     return $metrics;
 }
 
-function admin_dashboard_period_metrics(Mysql_ks $db): array
+function admin_dashboard_subscription_status_counts(Mysql_ks $db): array
 {
-    $hasOrders = schema_object_exists($db, 'orders');
-    $hasRenewals = schema_object_exists($db, 'order_renewals');
-    if (!$hasOrders && !$hasRenewals) {
-        return [];
-    }
-
-    $now = time();
-    $dateColumn = "COALESCE(orders.paid_at, orders.created_at)";
-    $periods = [
-        'daily' => [
-            'label' => 'Today',
-            'from' => date('Y-m-d 00:00:00', $now),
-            'to' => date('Y-m-d 23:59:59', $now),
-        ],
-        'weekly' => [
-            'label' => 'This week',
-            'from' => date('Y-m-d 00:00:00', strtotime('monday this week', $now)),
-            'to' => date('Y-m-d 23:59:59', strtotime('sunday this week', $now)),
-        ],
-        'monthly' => [
-            'label' => 'This month',
-            'from' => date('Y-m-01 00:00:00', $now),
-            'to' => date('Y-m-t 23:59:59', $now),
-        ],
-        'yearly' => [
-            'label' => 'This year',
-            'from' => date('Y-01-01 00:00:00', $now),
-            'to' => date('Y-12-31 23:59:59', $now),
-        ],
+    $counts = [
+        'active' => 0,
+        'expired' => 0,
     ];
 
-    $results = [];
-    foreach ($periods as $key => $period) {
-        $safeFrom = $db->escape((string)$period['from']);
-        $safeTo = $db->escape((string)$period['to']);
-        $paidOrders = 0;
-        $paidRevenue = 0.0;
-
-        if ($hasOrders) {
-            $row = $db->select_user(
-                "SELECT
-                    COUNT(*) AS paid_orders,
-                    COALESCE(SUM(orders.total_amount), 0) AS paid_revenue
-                 FROM orders
-                 WHERE orders.payment_status = 'paid'
-                   AND {$dateColumn} BETWEEN '{$safeFrom}' AND '{$safeTo}'"
-            );
-            $paidOrders += (int)($row['paid_orders'] ?? 0);
-            $paidRevenue += (float)($row['paid_revenue'] ?? 0);
-        }
-
-        if ($hasRenewals) {
-            $renewalsDateColumn = "COALESCE(order_renewals.applied_at, order_renewals.requested_at)";
-            $renewalRow = $db->select_user(
-                "SELECT
-                    COUNT(*) AS paid_orders,
-                    COALESCE(SUM(order_renewals.price_amount), 0) AS paid_revenue
-                 FROM order_renewals
-                 WHERE order_renewals.status = 'applied'
-                   AND {$renewalsDateColumn} BETWEEN '{$safeFrom}' AND '{$safeTo}'"
-            );
-            $paidOrders += (int)($renewalRow['paid_orders'] ?? 0);
-            $paidRevenue += (float)($renewalRow['paid_revenue'] ?? 0);
-        }
-
-        $results[$key] = [
-            'label' => (string)$period['label'],
-            'from' => (string)$period['from'],
-            'to' => (string)$period['to'],
-            'paid_orders' => $paidOrders,
-            'paid_revenue' => $paidRevenue,
-        ];
+    if (!schema_object_exists($db, 'orders')) {
+        return $counts;
     }
 
-    return $results;
+    $safeNow = $db->escape(admin_dashboard_sales_now()->format('Y-m-d H:i:s'));
+    $productsJoin = '';
+    $subscriptionWhere = '';
+    if (schema_object_exists($db, 'products')) {
+        $productsJoin = 'LEFT JOIN products ON products.id = orders.product_id';
+        if (schema_column_exists($db, 'products', 'product_type')) {
+            $subscriptionWhere = "AND (products.id IS NULL OR products.product_type = 'subscription')";
+        }
+    }
+
+    $row = $db->select_user(
+        "SELECT
+            COALESCE(SUM(
+                CASE
+                    WHEN orders.status = 'active'
+                     AND orders.expires_at IS NOT NULL
+                     AND orders.expires_at > '{$safeNow}'
+                    THEN 1 ELSE 0
+                END
+            ), 0) AS active_total,
+            COALESCE(SUM(
+                CASE
+                    WHEN COALESCE(orders.status, '') <> 'cancelled'
+                     AND orders.expires_at IS NOT NULL
+                     AND orders.expires_at <= '{$safeNow}'
+                    THEN 1 ELSE 0
+                END
+            ), 0) AS expired_total
+         FROM orders
+         {$productsJoin}
+         WHERE orders.payment_status = 'paid'
+         {$subscriptionWhere}"
+    );
+
+    if (!is_array($row)) {
+        return $counts;
+    }
+
+    $counts['active'] = max(0, (int)($row['active_total'] ?? 0));
+    $counts['expired'] = max(0, (int)($row['expired_total'] ?? 0));
+
+    return $counts;
 }
 
-function admin_dashboard_sales_series(Mysql_ks $db, int $days = 30): array
+require_once __DIR__ . '/dashboard_sales.php';
+
+function admin_dashboard_month_label(string $yearMonth, string $localeCode = 'pl'): string
 {
-    $hasOrders = schema_object_exists($db, 'orders');
-    $hasRenewals = schema_object_exists($db, 'order_renewals');
-    if (!$hasOrders && !$hasRenewals) {
+    $yearMonth = trim($yearMonth);
+    if (!preg_match('/^\d{4}\-\d{2}$/', $yearMonth)) {
+        return $yearMonth;
+    }
+
+    [$year, $month] = explode('-', $yearMonth, 2);
+    $monthNumber = (int)$month;
+    if ($monthNumber < 1 || $monthNumber > 12) {
+        return $yearMonth;
+    }
+
+    $localeCode = strtolower(trim($localeCode));
+    $monthsPl = [
+        1 => 'styczeń',
+        2 => 'luty',
+        3 => 'marzec',
+        4 => 'kwiecień',
+        5 => 'maj',
+        6 => 'czerwiec',
+        7 => 'lipiec',
+        8 => 'sierpień',
+        9 => 'wrzesień',
+        10 => 'październik',
+        11 => 'listopad',
+        12 => 'grudzień',
+    ];
+    $monthsEn = [
+        1 => 'January',
+        2 => 'February',
+        3 => 'March',
+        4 => 'April',
+        5 => 'May',
+        6 => 'June',
+        7 => 'July',
+        8 => 'August',
+        9 => 'September',
+        10 => 'October',
+        11 => 'November',
+        12 => 'December',
+    ];
+
+    $monthLabel = $localeCode === 'pl'
+        ? ($monthsPl[$monthNumber] ?? $yearMonth)
+        : ($monthsEn[$monthNumber] ?? $yearMonth);
+
+    return trim($monthLabel . ' ' . $year);
+}
+
+function admin_dashboard_product_sales_summary(Mysql_ks $db, int $limit = 120, ?int $yearFilter = null, ?DateTimeImmutable $asOf = null): array
+{
+    if (!schema_object_exists($db, 'products') || !schema_object_exists($db, 'orders')) {
         return [];
     }
-
-    $days = max(7, min(90, $days));
-    $startTimestamp = strtotime('-' . ($days - 1) . ' days midnight');
-    $startDate = date('Y-m-d', $startTimestamp);
-    $safeStartDate = $db->escape($startDate);
-    $mapped = [];
-
-    if ($hasOrders) {
-        $dateColumn = "DATE(COALESCE(orders.paid_at, orders.created_at))";
-        $rows = $db->select_full_user(
-            "SELECT
-                {$dateColumn} AS metric_date,
-                COUNT(*) AS paid_orders,
-                COALESCE(SUM(orders.total_amount), 0) AS paid_revenue
-             FROM orders
-             WHERE orders.payment_status = 'paid'
-               AND {$dateColumn} >= '{$safeStartDate}'
-             GROUP BY {$dateColumn}
-             ORDER BY {$dateColumn} ASC"
-        );
-
-        foreach ($rows as $row) {
-            $dateKey = (string)($row['metric_date'] ?? '');
-            if ($dateKey === '') {
-                continue;
-            }
-            $mapped[$dateKey] = [
-                'paid_orders' => (int)($row['paid_orders'] ?? 0),
-                'paid_revenue' => (float)($row['paid_revenue'] ?? 0),
-            ];
-        }
+    // $limit is retained for existing callers. A financial total must include every product.
+    $asOf = admin_dashboard_sales_now($asOf);
+    $safeNow = $db->escape($asOf->format('Y-m-d H:i:s'));
+    $source = admin_dashboard_sales_source_sql($db, $asOf);
+    $currencyId = (int)(admin_dashboard_sales_currency($db)['id'] ?? 0);
+    $yearFilter = $yearFilter !== null && $yearFilter > 0 ? $yearFilter : null;
+    $yearWhere = $yearFilter ? " AND YEAR(sales.sale_at) = {$yearFilter}" : '';
+    $activeYearWhere = $yearFilter ? " AND EXISTS (
+        SELECT 1 FROM ({$source}) active_sale
+        WHERE active_sale.order_id = orders.id AND YEAR(active_sale.sale_at) = {$yearFilter}
+    )" : '';
+    $historicalName = $db->escape(admin_t(admin_load_messages(admin_current_locale()),
+        'dashboard_historical_product_unknown', 'Historical / deleted product'));
+    $rows = $db->select_full_user("SELECT catalogue.*,
+        COALESCE(active_stats.active_sales_total, 0) AS active_sales_total,
+        COALESCE(stats.purchases_total, 0) AS purchases_total,
+        COALESCE(stats.renewals_total, 0) AS renewals_total,
+        COALESCE(stats.purchases_revenue, 0) AS purchases_revenue,
+        COALESCE(stats.renewals_revenue, 0) AS renewals_revenue
+        FROM (
+            SELECT products.id, products.name, products.duration_hours, products.price_amount,
+                currencies.code AS currency_code, product_providers.name AS provider_name
+            FROM products
+            LEFT JOIN currencies ON currencies.id = products.currency_id
+            LEFT JOIN product_providers ON product_providers.id = products.provider_id
+            UNION ALL SELECT 0, '{$historicalName}', 0, NULL, NULL, NULL
+        ) catalogue
+        LEFT JOIN (
+            SELECT COALESCE(products.id, 0) AS product_id,
+                SUM(sale_type = 'purchase') AS purchases_total,
+                SUM(sale_type = 'renewal') AS renewals_total,
+                SUM(CASE WHEN sale_type = 'purchase' AND sales.currency_id = {$currencyId} THEN amount ELSE 0 END) AS purchases_revenue,
+                SUM(CASE WHEN sale_type = 'renewal' AND sales.currency_id = {$currencyId} THEN amount ELSE 0 END) AS renewals_revenue
+            FROM ({$source}) sales LEFT JOIN products ON products.id = sales.product_id
+            WHERE 1 = 1 {$yearWhere}
+            GROUP BY COALESCE(products.id, 0)
+        ) stats ON stats.product_id = catalogue.id
+        LEFT JOIN (
+            SELECT COALESCE(active_product.id, 0) AS product_id, COUNT(*) AS active_sales_total
+            FROM orders LEFT JOIN products active_product ON active_product.id = orders.product_id
+            WHERE orders.payment_status = 'paid' AND orders.status = 'active'
+                AND (orders.expires_at IS NULL OR orders.expires_at > '{$safeNow}')
+                AND COALESCE(orders.initial_sale_paid_at, orders.paid_at, orders.created_at) <= '{$safeNow}'
+                {$activeYearWhere}
+            GROUP BY COALESCE(active_product.id, 0)
+        ) active_stats ON active_stats.product_id = catalogue.id
+        WHERE COALESCE(stats.purchases_total, 0) + COALESCE(stats.renewals_total, 0)
+            + COALESCE(active_stats.active_sales_total, 0) > 0
+        ORDER BY active_sales_total DESC, purchases_total DESC, renewals_total DESC, catalogue.id ASC");
+    if ($db->error) {
+        throw new RuntimeException('Sales summary query failed: ' . $db->error);
     }
-
-    if ($hasRenewals) {
-        $renewalsDateColumn = "DATE(COALESCE(order_renewals.applied_at, order_renewals.requested_at))";
-        $renewalRows = $db->select_full_user(
-            "SELECT
-                {$renewalsDateColumn} AS metric_date,
-                COUNT(*) AS paid_orders,
-                COALESCE(SUM(order_renewals.price_amount), 0) AS paid_revenue
-             FROM order_renewals
-             WHERE order_renewals.status = 'applied'
-               AND {$renewalsDateColumn} >= '{$safeStartDate}'
-             GROUP BY {$renewalsDateColumn}
-             ORDER BY {$renewalsDateColumn} ASC"
-        );
-
-        foreach ($renewalRows as $row) {
-            $dateKey = (string)($row['metric_date'] ?? '');
-            if ($dateKey === '') {
-                continue;
-            }
-            if (!isset($mapped[$dateKey])) {
-                $mapped[$dateKey] = ['paid_orders' => 0, 'paid_revenue' => 0.0];
-            }
-            $mapped[$dateKey]['paid_orders'] += (int)($row['paid_orders'] ?? 0);
-            $mapped[$dateKey]['paid_revenue'] += (float)($row['paid_revenue'] ?? 0);
-        }
+    $revenueMap = admin_dashboard_product_revenue_map($db, $yearFilter, $asOf);
+    foreach ($rows as &$row) {
+        $row['revenue_by_currency'] = $revenueMap[(int)$row['id']] ?? [];
+        $row['duration_label'] = admin_duration_label_from_hours((int)($row['duration_hours'] ?? 0));
+        $row['transactions_total'] = (int)$row['purchases_total'] + (int)$row['renewals_total'];
+        $row['revenue_total'] = (float)$row['purchases_revenue'] + (float)$row['renewals_revenue'];
     }
-
-    $series = [];
-    for ($offset = 0; $offset < $days; $offset++) {
-        $timestamp = strtotime('+' . $offset . ' days', $startTimestamp);
-        $dateKey = date('Y-m-d', $timestamp);
-        $dayData = $mapped[$dateKey] ?? ['paid_orders' => 0, 'paid_revenue' => 0.0];
-        $series[] = [
-            'date' => $dateKey,
-            'short_label' => date('d.m', $timestamp),
-            'paid_orders' => (int)$dayData['paid_orders'],
-            'paid_revenue' => (float)$dayData['paid_revenue'],
-        ];
-    }
-
-    return $series;
+    unset($row);
+    return $rows;
 }
 
 function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 6, int $productLimit = 5): array
@@ -2495,6 +5798,7 @@ function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 
     $providerLimit = max(1, min(12, $providerLimit));
     $productLimit = max(2, min(8, $productLimit));
 
+    $salesSql = admin_dashboard_sales_source_sql($db);
     $rows = $db->select_full_user(
         "SELECT
             product_providers.id AS provider_id,
@@ -2502,11 +5806,11 @@ function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 
             products.id AS product_id,
             products.name AS product_name,
             COUNT(*) AS sold_count,
-            COALESCE(SUM(orders.total_amount), 0) AS revenue_total
-         FROM orders
+            COALESCE(SUM(orders.amount), 0) AS revenue_total
+         FROM ({$salesSql}) AS orders
          INNER JOIN products ON products.id = orders.product_id
          INNER JOIN product_providers ON product_providers.id = products.provider_id
-         WHERE orders.payment_status = 'paid'
+         WHERE 1 = 1
          GROUP BY product_providers.id, product_providers.name, products.id, products.name
          ORDER BY product_providers.name ASC, sold_count DESC, products.name ASC"
     );
@@ -2530,6 +5834,7 @@ function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 
                 'provider_name' => (string)($row['provider_name'] ?? 'Provider'),
                 'total_sold' => 0,
                 'total_revenue' => 0.0,
+                'revenue_by_currency' => [],
                 'products' => [],
             ];
         }
@@ -2590,6 +5895,7 @@ function admin_dashboard_provider_breakdowns(Mysql_ks $db, int $providerLimit = 
         }
 
         $providers[$providerIndex]['products'] = $preparedProducts;
+        $providers[$providerIndex]['revenue_by_currency'] = admin_dashboard_provider_revenue($db, (int)$provider['provider_id']);
     }
 
     return $providers;
@@ -2620,19 +5926,19 @@ function admin_dashboard_chart_path(array $series, int $width = 640, int $height
     return implode(' ', $commands);
 }
 
+function admin_dashboard_chart_scale_max(array $series): int
+{
+    $maximum = max(1, (int)max(array_merge([0], array_column($series, 'paid_orders'))));
+    return $maximum <= 3 ? $maximum : (int)(ceil($maximum / 3) * 3);
+}
+
 function admin_dashboard_chart_points(array $series, int $width = 640, int $height = 240, int $paddingX = 28, int $paddingY = 18): array
 {
     if (!$series) {
         return [];
     }
 
-    $maxValue = 0;
-    foreach ($series as $point) {
-        $maxValue = max($maxValue, (int)($point['paid_orders'] ?? 0));
-    }
-    if ($maxValue <= 0) {
-        $maxValue = 1;
-    }
+    $maxValue = admin_dashboard_chart_scale_max($series);
 
     $count = count($series);
     $plotWidth = max(1, $width - ($paddingX * 2));
@@ -2743,22 +6049,42 @@ function admin_order_count(Mysql_ks $db, int $customerId = 0): int
     return (int)($row['total'] ?? 0);
 }
 
-function admin_order_count_filtered(Mysql_ks $db, int $customerId = 0, int $orderId = 0): int
+function admin_order_count_filtered(Mysql_ks $db, int $customerId = 0, int $orderId = 0, string $statusFilter = ''): int
 {
     if (!schema_object_exists($db, 'orders')) {
         return 0;
     }
 
+    $statusFilter = strtolower(trim($statusFilter));
     $whereParts = [];
     if ($customerId > 0) {
-        $whereParts[] = 'customer_id = ' . $customerId;
+        $whereParts[] = 'orders.customer_id = ' . $customerId;
     }
     if ($orderId > 0) {
-        $whereParts[] = 'id = ' . $orderId;
+        $whereParts[] = 'orders.id = ' . $orderId;
+    }
+
+    $productsJoin = '';
+    if ($statusFilter === 'expired') {
+        $whereParts[] = "COALESCE(orders.status, '') <> 'cancelled'";
+        $whereParts[] = "orders.payment_status = 'paid'";
+        $whereParts[] = 'orders.expires_at IS NOT NULL';
+        $whereParts[] = 'orders.expires_at <= NOW()';
+        if (schema_object_exists($db, 'products')) {
+            $productsJoin = 'LEFT JOIN products ON products.id = orders.product_id';
+            if (schema_column_exists($db, 'products', 'product_type')) {
+                $whereParts[] = "(products.id IS NULL OR products.product_type = 'subscription')";
+            }
+        }
     }
 
     $where = $whereParts ? (' WHERE ' . implode(' AND ', $whereParts)) : '';
-    $row = $db->select_user("SELECT COUNT(*) AS total FROM orders{$where}");
+    $row = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM orders
+         {$productsJoin}
+         {$where}"
+    );
     return (int)($row['total'] ?? 0);
 }
 
@@ -2785,6 +6111,8 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
     $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
         ? 'customers.public_handle'
         : "'' AS public_handle";
+    $progressStartedAtSelect = admin_order_progress_started_at_sql($db);
+    $progressDurationHoursSelect = admin_order_progress_duration_hours_sql($db);
     $where = $customerId > 0 ? 'WHERE orders.customer_id = ' . $customerId : '';
 
     return $db->select_full_user(
@@ -2806,6 +6134,8 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
             orders.started_at,
             orders.created_at,
             orders.expires_at,
+            {$progressStartedAtSelect} AS progress_started_at,
+            {$progressDurationHoursSelect} AS progress_duration_hours,
             orders.paid_at,
             customers.email AS customer_email,
             {$customerHandleSelect},
@@ -2885,7 +6215,16 @@ function admin_order_rows(Mysql_ks $db, int $limit = 20, int $offset = 0, int $c
     );
 }
 
-function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 0, int $customerId = 0, int $orderId = 0): array
+function admin_order_rows_filtered(
+    Mysql_ks $db,
+    int $limit = 20,
+    int $offset = 0,
+    int $customerId = 0,
+    int $orderId = 0,
+    string $statusFilter = '',
+    string $expirySortDirection = '',
+    string $idSortDirection = ''
+): array
 {
     if (!schema_object_exists($db, 'orders')) {
         return [];
@@ -2908,7 +6247,18 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
     $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
         ? 'customers.public_handle'
         : "'' AS public_handle";
+    $progressStartedAtSelect = admin_order_progress_started_at_sql($db);
+    $progressDurationHoursSelect = admin_order_progress_duration_hours_sql($db);
 
+    $statusFilter = strtolower(trim($statusFilter));
+    $expirySortDirection = strtolower(trim($expirySortDirection));
+    $expirySortDirection = in_array($expirySortDirection, ['asc', 'desc'], true)
+        ? strtoupper($expirySortDirection)
+        : '';
+    $idSortDirection = strtolower(trim($idSortDirection));
+    $idSortDirection = in_array($idSortDirection, ['asc', 'desc'], true)
+        ? strtoupper($idSortDirection)
+        : '';
     $whereParts = [];
     if ($customerId > 0) {
         $whereParts[] = 'orders.customer_id = ' . $customerId;
@@ -2916,8 +6266,26 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
     if ($orderId > 0) {
         $whereParts[] = 'orders.id = ' . $orderId;
     }
+    if ($statusFilter === 'expired') {
+        $whereParts[] = "COALESCE(orders.status, '') <> 'cancelled'";
+        $whereParts[] = "orders.payment_status = 'paid'";
+        $whereParts[] = 'orders.expires_at IS NOT NULL';
+        $whereParts[] = 'orders.expires_at <= NOW()';
+        if (schema_column_exists($db, 'products', 'product_type')) {
+            $whereParts[] = "(products.id IS NULL OR products.product_type = 'subscription')";
+        }
+    }
 
     $where = $whereParts ? ('WHERE ' . implode(' AND ', $whereParts)) : '';
+    if ($idSortDirection !== '') {
+        $orderBy = "orders.id {$idSortDirection}";
+    } elseif ($expirySortDirection !== '') {
+        $orderBy = "CASE WHEN orders.expires_at IS NULL THEN 1 ELSE 0 END ASC,
+            orders.expires_at {$expirySortDirection},
+            orders.id {$expirySortDirection}";
+    } else {
+        $orderBy = 'orders.id DESC';
+    }
 
     return $db->select_full_user(
         "SELECT
@@ -2938,6 +6306,8 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
             orders.started_at,
             orders.created_at,
             orders.expires_at,
+            {$progressStartedAtSelect} AS progress_started_at,
+            {$progressDurationHoursSelect} AS progress_duration_hours,
             orders.paid_at,
             customers.email AS customer_email,
             {$customerHandleSelect},
@@ -2991,7 +6361,7 @@ function admin_order_rows_filtered(Mysql_ks $db, int $limit = 20, int $offset = 
          LEFT JOIN product_providers ON product_providers.id = products.provider_id
          LEFT JOIN currencies ON currencies.id = orders.currency_id
          {$where}
-         ORDER BY orders.id DESC
+         ORDER BY {$orderBy}
          LIMIT {$offset}, {$limit}"
     );
 }
@@ -3112,6 +6482,11 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
     $isAwaitingActivation = $status === 'pending_payment'
         && $paymentStatus === 'paid'
         && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true);
+    $isOpenBalanceActivationCandidate = $customerId > 0
+        && $requiredAmount > 0
+        && in_array($status, ['pending', 'pending_payment', 'awaiting_review'], true)
+        && !in_array($paymentStatus, ['paid', 'refunded', 'archived'], true)
+        && !in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'cancelled'], true);
 
     if ($isAwaitingActivation) {
         admin_ensure_order_payment_balance_credit($db, $order);
@@ -3150,10 +6525,13 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
     $activationBudget = $existingDebitAmount > 0 ? $existingDebitAmount : $currentBalance;
     $canActivate = $activationBudget + 0.00001 >= $requiredAmount;
     $shortfall = max(0, round($requiredAmount - $activationBudget, 2));
+    $hasPartialBalanceForActivation = $isOpenBalanceActivationCandidate
+        && $currentBalance > 0
+        && !$canActivate;
 
     $suggestedProduct = null;
     if (
-        $isAwaitingActivation
+        ($isAwaitingActivation || $hasPartialBalanceForActivation)
         && !$canActivate
         && $providerId > 0
         && $productId > 0
@@ -3211,7 +6589,8 @@ function admin_order_balance_activation_context(Mysql_ks $db, array $order): arr
         'required_amount' => $requiredAmount,
         'shortfall_amount' => $shortfall,
         'can_activate' => $canActivate,
-        'needs_attention' => $isAwaitingActivation && !$canActivate,
+        'needs_attention' => ($isAwaitingActivation || $hasPartialBalanceForActivation) && !$canActivate,
+        'has_partial_balance_for_activation' => $hasPartialBalanceForActivation,
         'suggested_product' => $suggestedProduct,
     ];
 }
@@ -3347,7 +6726,9 @@ function admin_order_pending_renewal_context(Mysql_ks $db, array $order): array
             if (is_array($payment) && !empty($payment['id'])) {
                 $paymentAmount = 0.0;
                 if (isset($payment['received_fiat_amount']) && is_numeric((string)$payment['received_fiat_amount'])) {
-                    $paymentAmount = round((float)$payment['received_fiat_amount'], 2);
+                    $paymentAmount = $paymentType === 'crypto'
+                        ? admin_round_customer_crypto_fiat_credit($payment['received_fiat_amount'])
+                        : round((float)$payment['received_fiat_amount'], 2);
                 }
                 if ($paymentAmount <= 0) {
                     if (isset($payment['requested_amount_value']) && is_numeric((string)$payment['requested_amount_value'])) {
@@ -3659,14 +7040,20 @@ function admin_apply_order_balance_suggestion(
     }
 
     $durationHours = (int)($product['duration_hours'] ?? 0);
-    $newExpiry = $durationHours > 0 ? date('Y-m-d H:i:s', time() + ($durationHours * 3600)) : (string)($order['expires_at'] ?? null);
+    $newExpiry = $durationHours > 0
+        ? app_subscription_expiry_from_base_timestamp(time(), $durationHours)
+        : (string)($order['expires_at'] ?? null);
+    $previousStatus = strtolower(trim((string)($order['status'] ?? '')));
+    $nextStatus = strtotime($newExpiry) > time() ? 'active' : 'expired';
+
     $updated = $db->update_using_id(
-        ['product_id', 'total_amount', 'currency_id', 'expires_at'],
+        ['product_id', 'total_amount', 'currency_id', 'expires_at', 'status'],
         [
             $productId,
             number_format((float)($product['price_amount'] ?? 0), 2, '.', ''),
             (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
             $newExpiry,
+            $nextStatus,
         ],
         'orders',
         $orderId
@@ -3778,6 +7165,63 @@ function admin_order_payment_method_options(?string $current = ''): array
     return $options;
 }
 
+function admin_order_delivery_link_mode(array $order): string
+{
+    $deliveryLinksEnabled = !array_key_exists('supports_delivery_links', $order)
+        || !empty($order['supports_delivery_links']);
+
+    if (!$deliveryLinksEnabled || trim((string)($order['delivery_link'] ?? '')) === '') {
+        return '';
+    }
+
+    return !empty($order['delivery_link_visible']) ? 'url' : 'credentials';
+}
+
+function admin_order_progress_started_at_sql(Mysql_ks $db): string
+{
+    if (!schema_object_exists($db, 'order_renewals')) {
+        return 'NULL';
+    }
+
+    $dateExpression = schema_column_exists($db, 'order_renewals', 'applied_at')
+        ? 'COALESCE(progress_renewals.applied_at, progress_renewals.requested_at)'
+        : 'progress_renewals.requested_at';
+    $statusWhere = schema_column_exists($db, 'order_renewals', 'status')
+        ? " AND progress_renewals.status = 'applied'"
+        : '';
+
+    return "(
+        SELECT MAX({$dateExpression})
+        FROM order_renewals AS progress_renewals
+        WHERE progress_renewals.order_id = orders.id{$statusWhere}
+    )";
+}
+
+function admin_order_progress_duration_hours_sql(Mysql_ks $db): string
+{
+    if (
+        !schema_object_exists($db, 'order_renewals')
+        || !schema_column_exists($db, 'order_renewals', 'duration_hours')
+    ) {
+        return 'NULL';
+    }
+
+    $dateExpression = schema_column_exists($db, 'order_renewals', 'applied_at')
+        ? 'COALESCE(progress_renewals.applied_at, progress_renewals.requested_at)'
+        : 'progress_renewals.requested_at';
+    $statusWhere = schema_column_exists($db, 'order_renewals', 'status')
+        ? " AND progress_renewals.status = 'applied'"
+        : '';
+
+    return "(
+        SELECT progress_renewals.duration_hours
+        FROM order_renewals AS progress_renewals
+        WHERE progress_renewals.order_id = orders.id{$statusWhere}
+        ORDER BY {$dateExpression} DESC, progress_renewals.id DESC
+        LIMIT 1
+    )";
+}
+
 function admin_order_progress_data(array $order): array
 {
     if (!admin_product_type_uses_expiry($order['product_type'] ?? 'subscription')) {
@@ -3791,6 +7235,9 @@ function admin_order_progress_data(array $order): array
         ];
     }
 
+    $progressStartedAt = !empty($order['progress_started_at']) && function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)$order['progress_started_at'])
+        : (!empty($order['progress_started_at']) ? strtotime((string)$order['progress_started_at']) : 0);
     $createdAt = !empty($order['created_at']) && function_exists('app_timestamp_from_runtime_datetime')
         ? app_timestamp_from_runtime_datetime((string)$order['created_at'])
         : (!empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0);
@@ -3800,7 +7247,6 @@ function admin_order_progress_data(array $order): array
     $expiresAt = !empty($order['expires_at']) && function_exists('app_timestamp_from_runtime_datetime')
         ? app_timestamp_from_runtime_datetime((string)$order['expires_at'])
         : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
-    $durationHours = max(0, (int)($order['duration_hours'] ?? 0));
     $now = time();
 
     if ($expiresAt <= 0) {
@@ -3814,11 +7260,21 @@ function admin_order_progress_data(array $order): array
         ];
     }
 
-    if ($durationHours > 0) {
-        $totalSeconds = max(1, $durationHours * 3600);
-    } else {
-        $anchorTime = $startedAt > 0 ? $startedAt : ($createdAt > 0 ? $createdAt : $now);
-        $totalSeconds = max(1, $expiresAt - $anchorTime);
+    $anchorTime = $progressStartedAt > 0
+        ? $progressStartedAt
+        : ($startedAt > 0 ? $startedAt : ($createdAt > 0 ? $createdAt : $now));
+    $totalSeconds = max(1, $expiresAt - $anchorTime);
+    $durationHours = (int)($order['progress_duration_hours'] ?? $order['duration_hours'] ?? $order['duration'] ?? 0);
+    if ($progressStartedAt > 0 && $durationHours > 0) {
+        $renewalPeriodEnd = function_exists('app_subscription_expiry_from_base_timestamp')
+            ? app_subscription_expiry_from_base_timestamp($progressStartedAt, $durationHours)
+            : date('Y-m-d H:i:s', $progressStartedAt + ($durationHours * 3600));
+        $renewalPeriodEndAt = $renewalPeriodEnd !== null && $renewalPeriodEnd !== ''
+            ? strtotime($renewalPeriodEnd)
+            : 0;
+        if ($renewalPeriodEndAt > $progressStartedAt) {
+            $totalSeconds = $renewalPeriodEndAt - $progressStartedAt;
+        }
     }
     $remainingSeconds = max(0, $expiresAt - $now);
     $percent = (int)round(min(1, $remainingSeconds / $totalSeconds) * 100);
@@ -4333,6 +7789,15 @@ function admin_customer_order_rows(Mysql_ks $db, int $customerId, int $limit = 1
     }
 
     $limit = max(1, min(30, $limit));
+    $deliveryLinkSelect = schema_column_exists($db, 'orders', 'delivery_link')
+        ? 'orders.delivery_link'
+        : "'' AS delivery_link";
+    $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
+        ? 'orders.delivery_link_visible'
+        : '0 AS delivery_link_visible';
+    $supportsDeliveryLinksSelect = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1 AS supports_delivery_links';
 
     return $db->select_full_user(
         "SELECT
@@ -4343,12 +7808,15 @@ function admin_customer_order_rows(Mysql_ks $db, int $customerId, int $limit = 1
             orders.payment_method,
             orders.total_amount,
             orders.support_note,
+            {$deliveryLinkSelect},
+            {$deliveryLinkVisibleSelect},
             orders.created_at,
             orders.expires_at,
             currencies.code AS currency_code,
             products.name AS product_name,
             product_providers.name AS provider_name,
-            product_providers.logo_url AS provider_logo_url
+            product_providers.logo_url AS provider_logo_url,
+            {$supportsDeliveryLinksSelect}
          FROM orders
          LEFT JOIN currencies ON currencies.id = orders.currency_id
          LEFT JOIN products ON products.id = orders.product_id
@@ -4380,6 +7848,7 @@ function admin_customer_payment_activity(Mysql_ks $db, int $customerId, int $lim
                 crypto_deposit_requests.requested_fiat_amount AS requested_amount_value,
                 crypto_deposit_requests.requested_crypto_amount AS requested_amount_crypto,
                 crypto_deposit_requests.received_fiat_amount,
+                crypto_deposit_requests.received_fiat_actual_amount,
                 crypto_deposit_requests.received_crypto_amount,
                 crypto_deposit_requests.requested_at,
                 crypto_assets.code AS asset_code,
@@ -5127,6 +8596,253 @@ function admin_customer_log(
     admin_activity_log($db, $customerId, $adminUserId, $actionKey, $description, $ipAddress);
 }
 
+function admin_localize_activity_status(string $status): string
+{
+    $status = trim($status);
+    $map = [
+        'active' => 'aktywne',
+        'archived' => 'zarchiwizowane',
+        'awaiting_confirmation' => 'oczekuje na potwierdzenie',
+        'awaiting_review' => 'oczekuje na weryfikację',
+        'cancelled' => 'anulowane',
+        'completed' => 'zakończone',
+        'delivered' => 'zrealizowane',
+        'failed' => 'nieudane',
+        'fulfilled' => 'zrealizowane',
+        'paid' => 'opłacone',
+        'pending' => 'oczekuje',
+        'pending_payment' => 'oczekuje na płatność',
+        'rejected' => 'odrzucone',
+        'submitted' => 'wysłane',
+        'unpaid' => 'nieopłacone',
+        'unknown' => 'nieznany',
+    ];
+
+    return $map[strtolower($status)] ?? $status;
+}
+
+function admin_localize_activity_changes(string $changes): string
+{
+    $parts = array_map('trim', explode(',', $changes));
+    $labels = [
+        'status' => 'status',
+        'payment' => 'płatność',
+        'fulfillment' => 'realizacja',
+    ];
+
+    foreach ($parts as &$part) {
+        if (preg_match('/^(status|payment|fulfillment)\s+(.+?)\s+->\s+(.+)$/', $part, $matches)) {
+            $part = ($labels[$matches[1]] ?? $matches[1])
+                . ' ' . admin_localize_activity_status($matches[2])
+                . ' -> ' . admin_localize_activity_status($matches[3]);
+        }
+    }
+    unset($part);
+
+    return implode(', ', array_filter($parts, static fn($part): bool => $part !== ''));
+}
+
+function admin_localize_activity_description(string $actionKey, string $description): string
+{
+    if (admin_current_locale() !== 'pl') {
+        return $description;
+    }
+
+    $description = trim($description);
+    if ($description === '') {
+        return $description;
+    }
+
+    $exact = [
+        'Administrator logged in to the admin panel.' => 'Administrator zalogował się do panelu admina.',
+        'Customer account created by admin.' => 'Konto użytkownika zostało utworzone przez admina.',
+        'Customer password changed by admin.' => 'Hasło użytkownika zostało zmienione przez admina.',
+        'Customer profile updated by admin.' => 'Profil użytkownika został zaktualizowany przez admina.',
+        'Order updated from admin modal' => 'Zamówienie zaktualizowano w modalu admina',
+        'Order activated without customer balance debit by admin.' => 'Zamówienie aktywowano bez pobierania środków z salda klienta.',
+        'Order activated with full customer balance debit.' => 'Zapłacono z salda.',
+        'Customer balance debited.' => 'Zapłacono z salda.',
+        'Activated without balance debit.' => 'Bez pobrania salda.',
+    ];
+    if (isset($exact[$description])) {
+        return $exact[$description];
+    }
+
+    $replacements = [
+        'Activated order #' => 'Aktywowano zamówienie #',
+        ' with available balance. ' => ' z dostępnego salda. ',
+        'Marked as paid from customer balance for order #' => 'Oznaczono jako opłacone z salda klienta dla zamówienia #',
+        'Rollback after failed admin balance payment for order #' => 'Cofnięcie po nieudanym oznaczeniu płatności z salda dla zamówienia #',
+        'Released after cancelled crypto payment request deletion by admin' => 'Zwolniono po usunięciu anulowanego requestu płatności krypto przez admina',
+        'Released after crypto payment request deletion by admin' => 'Zwolniono po usunięciu requestu płatności krypto przez admina',
+        'Released after crypto payment request status changed to ' => 'Zwolniono po zmianie statusu requestu płatności krypto na ',
+        'Cancelled from admin payment editor' => 'Anulowano w edytorze płatności admina',
+        'Deleted from admin payments list' => 'Usunięto z listy płatności admina',
+        'Converted to balance top-up after order deletion' => 'Zamieniono na doładowanie salda po usunięciu zamówienia',
+        'Created as balance top-up after order deletion' => 'Utworzono jako doładowanie salda po usunięciu zamówienia',
+    ];
+    $description = str_replace(array_keys($replacements), array_values($replacements), $description);
+
+    if (preg_match('/^Order #(\d+) updated(?:: ([^.]+))?\\.(.*)$/', $description, $matches)) {
+        $suffix = trim((string)($matches[3] ?? ''));
+        $text = 'Zamówienie #' . $matches[1] . ' zaktualizowane';
+        if (!empty($matches[2])) {
+            $text .= ': ' . admin_localize_activity_changes($matches[2]);
+        }
+        if ($suffix !== '') {
+            $text .= '. ' . rtrim(ltrim($suffix), '.');
+        }
+        return rtrim($text, '.') . '.';
+    }
+
+    if (preg_match('/^Order #(\d+) marked as paid from customer balance\\.$/', $description, $matches)) {
+        return 'Zamówienie #' . $matches[1] . ' oznaczono jako opłacone z salda klienta.';
+    }
+
+    if (preg_match('/^Order #(\d+) deleted from admin panel\\.$/', $description, $matches)) {
+        return 'Zamówienie #' . $matches[1] . ' usunięto z panelu admina.';
+    }
+
+    if (preg_match('/^Order #(\d+) switched to suggested package #(\d+)(.*)\\.$/', $description, $matches)) {
+        return 'Zamówienie #' . $matches[1] . ' zmieniono na sugerowany pakiet #' . $matches[2] . $matches[3] . '.';
+    }
+
+    if (preg_match('/^Customer status changed from (.+?) to (.+)\\.$/', $description, $matches)) {
+        return 'Status użytkownika zmieniono z ' . admin_localize_activity_status($matches[1]) . ' na ' . admin_localize_activity_status($matches[2]) . '.';
+    }
+
+    if (preg_match('/^Balance (credited|debited) by admin: ([0-9.,]+)(.*)$/', $description, $matches)) {
+        return ($matches[1] === 'credited' ? 'Saldo zwiększone przez admina: ' : 'Saldo zmniejszone przez admina: ')
+            . $matches[2]
+            . $matches[3];
+    }
+
+    if (preg_match('/^Balance (credited|debited) automatically: ([0-9.,]+)(.*)$/', $description, $matches)) {
+        return ($matches[1] === 'credited' ? 'Saldo zwiększone automatycznie: ' : 'Saldo zmniejszone automatycznie: ')
+            . $matches[2]
+            . $matches[3];
+    }
+
+    if (preg_match('/^Crypto payment request #(\\d+) updated(?:: status ([^\\s.]+) -> ([^\\s.]+))?(?: for order #(\\d+))?(.*)\\.$/', $description, $matches)) {
+        $text = 'Request płatności krypto #' . $matches[1] . ' zaktualizowany';
+        if (!empty($matches[2])) {
+            $text .= ': status ' . admin_localize_activity_status($matches[2]) . ' -> ' . admin_localize_activity_status($matches[3]);
+        }
+        if (!empty($matches[4])) {
+            $text .= ' dla zamówienia #' . $matches[4];
+        }
+        if (!empty($matches[5])) {
+            $text .= str_replace('and invalid order link #', ' i nieprawidłowe powiązanie zamówienia #', $matches[5]);
+        }
+        return $text . '.';
+    }
+
+    if (preg_match('/^Bank payment request #(\\d+) updated(?:: status ([^\\s.]+) -> ([^\\s.]+))?(?: for order #(\\d+))?\\.$/', $description, $matches)) {
+        $text = 'Request płatności bankowej #' . $matches[1] . ' zaktualizowany';
+        if (!empty($matches[2])) {
+            $text .= ': status ' . admin_localize_activity_status($matches[2]) . ' -> ' . admin_localize_activity_status($matches[3]);
+        }
+        if (!empty($matches[4])) {
+            $text .= ' dla zamówienia #' . $matches[4];
+        }
+        return $text . '.';
+    }
+
+    if (preg_match('/^(Crypto|Bank|Legacy crypto|Crypto topup|Bank transfer) payment request #(\\d+) deleted( for order #(\\d+))?\\.$/i', $description, $matches)) {
+        $type = strtolower($matches[1]);
+        $label = str_contains($type, 'bank') ? 'bankowej' : 'krypto';
+        $text = 'Request płatności ' . $label . ' #' . $matches[2] . ' usunięto';
+        if (!empty($matches[4])) {
+            $text .= ' dla zamówienia #' . $matches[4];
+        }
+        return $text . '.';
+    }
+
+    if (preg_match('/^Bulk deleted cancelled (crypto|bank) payment request #(\\d+)( for order #(\\d+))?\\.$/', $description, $matches)) {
+        $text = 'Zbiorczo usunięto anulowany request płatności ' . ($matches[1] === 'bank' ? 'bankowej' : 'krypto') . ' #' . $matches[2];
+        if (!empty($matches[4])) {
+            $text .= ' dla zamówienia #' . $matches[4];
+        }
+        return $text . '.';
+    }
+
+    if (preg_match('/^Removed crypto wallet assignment(.*)\\.$/', $description, $matches)) {
+        return 'Usunięto przypisanie portfela krypto' . $matches[1] . '.';
+    }
+
+    if (preg_match('/^Removed bank account assignment(.*)\\.$/', $description, $matches)) {
+        return 'Usunięto przypisanie konta bankowego' . $matches[1] . '.';
+    }
+
+    if (preg_match('/^Customer account deleted: (.+)\\. Related operational data was removed\\.$/', $description, $matches)) {
+        return 'Konto użytkownika usunięte: ' . $matches[1] . '. Powiązane dane operacyjne zostały usunięte.';
+    }
+
+    return $description;
+}
+
+function admin_localize_order_support_note_text(string $note): string
+{
+    $note = trim($note);
+    if ($note === '') {
+        return '';
+    }
+
+    $locale = admin_current_locale();
+    $replacements = $locale === 'pl'
+        ? [
+            'Order activated with full customer balance debit.' => 'Zapłacono z salda.',
+            'Customer balance debited.' => 'Zapłacono z salda.',
+            'Pobrano saldo za zamówienie.' => 'Zapłacono z salda.',
+            'Order activated without customer balance debit by admin.' => 'Bez pobrania salda.',
+            'Activated without balance debit.' => 'Bez pobrania salda.',
+            'Aktywacja bez pobrania salda.' => 'Bez pobrania salda.',
+        ]
+        : [
+            'Order activated with full customer balance debit.' => 'Customer balance debited.',
+            'Order activated without customer balance debit by admin.' => 'Activated without balance debit.',
+        ];
+
+    return str_replace(array_keys($replacements), array_values($replacements), $note);
+}
+
+function admin_order_visible_support_note_text(string $note): string
+{
+    $note = trim(admin_localize_order_support_note_text($note));
+    if ($note === '') {
+        return '';
+    }
+
+    $neutralNotes = [
+        'Zapłacono z salda.',
+        'Zapłacono z salda',
+        'Customer balance debited.',
+        'Customer balance debited',
+        'Order activated with full customer balance debit.',
+        'Order activated with full customer balance debit',
+        'Pobrano saldo za zamówienie.',
+        'Pobrano saldo za zamówienie',
+    ];
+    $neutralLookup = array_fill_keys(array_map(static function (string $value): string {
+        return strtolower(trim(preg_replace('/\s+/u', ' ', $value) ?? $value));
+    }, $neutralNotes), true);
+
+    $visibleLines = [];
+    foreach (preg_split('/\R/u', $note) ?: [] as $line) {
+        $line = trim((string)$line);
+        if ($line === '') {
+            continue;
+        }
+        $normalized = strtolower(trim(preg_replace('/\s+/u', ' ', $line) ?? $line));
+        if (isset($neutralLookup[$normalized])) {
+            continue;
+        }
+        $visibleLines[] = $line;
+    }
+
+    return trim(implode("\n", $visibleLines));
+}
+
 function admin_activity_log(
     Mysql_ks $db,
     int $customerId,
@@ -5138,6 +8854,8 @@ function admin_activity_log(
     if (!schema_object_exists($db, 'customer_activity_logs')) {
         return;
     }
+
+    $description = admin_localize_activity_description($actionKey, $description);
 
     $insertColumns = ['customer_id', 'admin_user_id', 'actor_type', 'action_key', 'description', 'ip_address'];
     $insertValues = [$customerId > 0 ? $customerId : null, $adminUserId > 0 ? $adminUserId : null, 'admin', $actionKey, $description, $ipAddress !== '' ? $ipAddress : null];
@@ -5431,6 +9149,8 @@ function admin_apply_customer_balance_runtime_event(
     string $ipAddress = ''
 ): array
 {
+    $note = admin_localize_activity_description('balance_event_note', $note);
+
     $result = app_apply_customer_balance_runtime_event(
         $db,
         $customerId,
@@ -5482,6 +9202,20 @@ function admin_payment_success_statuses(string $paymentType): array
     }
 
     return ['confirmed', 'approved', 'paid', 'completed', 'archived'];
+}
+
+function admin_round_customer_crypto_fiat_credit($amount): float
+{
+    if ($amount === null || $amount === '' || !is_numeric((string)$amount)) {
+        return 0.0;
+    }
+
+    $amount = (float)$amount;
+    if ($amount <= 0) {
+        return 0.0;
+    }
+
+    return round(round($amount * 2) / 2, 2);
 }
 
 function admin_payment_cancelled_statuses(string $paymentType): array
@@ -5940,7 +9674,7 @@ function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): arr
                 orders.status <> 'active'
                 OR COALESCE(orders.fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
            )
-           AND COALESCE(orders.status, '') <> 'cancelled'
+           AND COALESCE(orders.status, '') NOT IN ('cancelled', 'expired')
          ORDER BY COALESCE(orders.paid_at, orders.created_at) DESC, orders.id DESC
          LIMIT {$limit}"
     );
@@ -5960,7 +9694,7 @@ function admin_topbar_notification_order_count(Mysql_ks $db): int
                 status <> 'active'
                 OR COALESCE(fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
            )
-           AND COALESCE(status, '') <> 'cancelled'"
+           AND COALESCE(status, '') NOT IN ('cancelled', 'expired')"
     );
 
     return (int)($row['total'] ?? 0);
@@ -5994,6 +9728,84 @@ function admin_topbar_notification_new_customer_rows(Mysql_ks $db, int $limit = 
          FROM customers
          WHERE DATE(customers.registered_at) = CURDATE()
          ORDER BY customers.registered_at DESC, customers.id DESC
+         LIMIT {$limit}"
+    );
+}
+
+function admin_topbar_notification_auto_accepted_crypto_payment_rows(Mysql_ks $db, int $limit = 5, int $hours = 24): array
+{
+    if (
+        !schema_object_exists($db, 'crypto_deposit_transactions')
+        || !schema_object_exists($db, 'crypto_deposit_requests')
+    ) {
+        return [];
+    }
+
+    app_ensure_payment_request_runtime_columns($db);
+    app_ensure_customer_runtime_columns($db);
+
+    $limit = max(1, min(20, $limit));
+    $hours = max(1, min(168, $hours));
+    $handleSql = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
+    $txStatusSql = schema_column_exists($db, 'crypto_deposit_transactions', 'status')
+        ? "AND crypto_deposit_transactions.status = 'auto_accepted'"
+        : '';
+    $txReceivedAtSql = schema_column_exists($db, 'crypto_deposit_transactions', 'received_at')
+        ? 'crypto_deposit_transactions.received_at'
+        : 'NULL';
+    $txAmountFiatSql = schema_column_exists($db, 'crypto_deposit_transactions', 'amount_fiat')
+        ? 'crypto_deposit_transactions.amount_fiat'
+        : 'NULL';
+    $txAmountCryptoSql = schema_column_exists($db, 'crypto_deposit_transactions', 'amount_crypto')
+        ? 'crypto_deposit_transactions.amount_crypto'
+        : 'NULL';
+    $txHashSql = schema_column_exists($db, 'crypto_deposit_transactions', 'transaction_hash')
+        ? 'crypto_deposit_transactions.transaction_hash'
+        : "''";
+    $receivedCryptoSql = schema_column_exists($db, 'crypto_deposit_requests', 'received_crypto_amount')
+        ? 'crypto_deposit_requests.received_crypto_amount'
+        : 'NULL';
+    $receivedFiatSql = schema_column_exists($db, 'crypto_deposit_requests', 'received_fiat_amount')
+        ? 'crypto_deposit_requests.received_fiat_amount'
+        : 'NULL';
+
+    return $db->select_full_user(
+        "SELECT
+            crypto_deposit_transactions.id AS transaction_id,
+            crypto_deposit_requests.id AS payment_id,
+            crypto_deposit_requests.order_id,
+            crypto_deposit_requests.customer_id,
+            crypto_deposit_requests.status AS payment_status,
+            {$txHashSql} AS transaction_hash,
+            {$txReceivedAtSql} AS received_at,
+            COALESCE({$receivedCryptoSql}, {$txAmountCryptoSql}, crypto_deposit_requests.requested_crypto_amount, 0) AS amount_crypto,
+            COALESCE({$receivedFiatSql}, {$txAmountFiatSql}, crypto_deposit_requests.requested_fiat_amount, 0) AS amount_fiat,
+            customers.email AS customer_email,
+            {$handleSql},
+            currencies.code AS currency_code,
+            currencies.symbol AS currency_symbol,
+            crypto_assets.code AS asset_code,
+            crypto_assets.name AS asset_name,
+            crypto_assets.logo_url AS asset_logo_url,
+            COALESCE(direct_wallet.network_code, assigned_wallet.network_code, '') AS network_code
+         FROM crypto_deposit_transactions
+         INNER JOIN crypto_deposit_requests
+           ON crypto_deposit_requests.id = crypto_deposit_transactions.deposit_request_id
+         LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
+         LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
+         LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
+         LEFT JOIN crypto_wallet_assignments AS payment_assignment
+           ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+         LEFT JOIN crypto_wallet_addresses AS direct_wallet
+           ON direct_wallet.id = crypto_deposit_requests.wallet_address_id
+         LEFT JOIN crypto_wallet_addresses AS assigned_wallet
+           ON assigned_wallet.id = payment_assignment.wallet_address_id
+         WHERE {$txReceivedAtSql} IS NOT NULL
+           AND {$txReceivedAtSql} >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL {$hours} HOUR)
+           {$txStatusSql}
+         ORDER BY {$txReceivedAtSql} DESC, crypto_deposit_transactions.id DESC
          LIMIT {$limit}"
     );
 }
@@ -6054,6 +9866,62 @@ function admin_topbar_notification_expiring_subscription_data(Mysql_ks $db, int 
     ];
 }
 
+function admin_topbar_notification_expired_subscription_data(Mysql_ks $db, int $limit = 8, int $hours = 168): array
+{
+    if (!schema_object_exists($db, 'orders')) {
+        return ['total' => 0, 'rows' => []];
+    }
+
+    app_ensure_customer_runtime_columns($db);
+
+    $limit = max(1, min(20, $limit));
+    $hours = max(1, min(720, $hours));
+    $handleSql = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "'' AS public_handle";
+
+    $whereSql = "orders.status = 'expired'
+           AND COALESCE(orders.payment_status, '') = 'paid'
+           AND orders.expires_at IS NOT NULL
+           AND orders.expires_at <= NOW()
+           AND orders.expires_at >= DATE_SUB(NOW(), INTERVAL {$hours} HOUR)";
+
+    $countRow = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM orders
+         WHERE {$whereSql}"
+    );
+
+    $rows = $db->select_full_user(
+        "SELECT
+            orders.id,
+            orders.customer_id,
+            orders.product_id,
+            orders.total_amount,
+            orders.expires_at,
+            customers.email AS customer_email,
+            {$handleSql},
+            products.provider_id,
+            products.name AS product_name,
+            product_providers.name AS provider_name,
+            product_providers.dashboard_url,
+            currencies.code AS currency_code
+         FROM orders
+         LEFT JOIN customers ON customers.id = orders.customer_id
+         LEFT JOIN products ON products.id = orders.product_id
+         LEFT JOIN product_providers ON product_providers.id = products.provider_id
+         LEFT JOIN currencies ON currencies.id = orders.currency_id
+         WHERE {$whereSql}
+         ORDER BY orders.expires_at DESC, orders.id DESC
+         LIMIT {$limit}"
+    );
+
+    return [
+        'total' => (int)($countRow['total'] ?? 0),
+        'rows' => $rows,
+    ];
+}
+
 function admin_topbar_manual_backup_notice(array $settings, int $intervalHours = 168): array
 {
     $lastBackupAt = trim((string)($settings['manual_database_backup_last_downloaded_at'] ?? ''));
@@ -6070,16 +9938,54 @@ function admin_topbar_manual_backup_notice(array $settings, int $intervalHours =
     ];
 }
 
+function admin_topbar_admin_panel_subscription_notice(array $settings, int $warningDays = 7): array
+{
+    $paidUntil = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
+    $renewalUrl = trim((string)($settings['admin_panel_subscription_renewal_url'] ?? ''));
+    $paidUntilTimestamp = $paidUntil !== '' ? strtotime($paidUntil . ' 23:59:59') : false;
+    $warningDays = max(1, $warningDays);
+
+    if ($paidUntilTimestamp === false) {
+        return [
+            'show' => false,
+            'paid_until' => $paidUntil,
+            'paid_until_label' => '',
+            'renewal_url' => $renewalUrl,
+            'days_left' => null,
+            'is_expired' => false,
+        ];
+    }
+
+    $secondsLeft = $paidUntilTimestamp - time();
+    $daysLeft = $secondsLeft >= 0
+        ? (int)ceil($secondsLeft / 86400)
+        : -1 * (int)ceil(abs($secondsLeft) / 86400);
+    $isExpired = $secondsLeft < 0;
+    $show = $isExpired || $daysLeft < $warningDays;
+
+    return [
+        'show' => $show,
+        'paid_until' => $paidUntil,
+        'paid_until_label' => date('d.m.Y', $paidUntilTimestamp),
+        'renewal_url' => $renewalUrl,
+        'days_left' => $daysLeft,
+        'is_expired' => $isExpired,
+        'warning_days' => $warningDays,
+    ];
+}
+
 function admin_topbar_notification_count(Mysql_ks $db, array $settings): int
 {
     $payments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($settings), 8);
     $orders = admin_topbar_notification_order_rows($db, 8);
-    $expiring = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
+    $autoAcceptedPayments = admin_topbar_notification_auto_accepted_crypto_payment_rows($db, 5, 24);
     $backup = admin_topbar_manual_backup_notice($settings, 168);
+    $adminPanelSubscription = admin_topbar_admin_panel_subscription_notice($settings, 7);
 
     return count($payments)
         + count($orders)
-        + (int)($expiring['total'] ?? 0)
+        + count($autoAcceptedPayments)
+        + (!empty($adminPanelSubscription['show']) ? 1 : 0)
         + (!empty($backup['show']) ? 1 : 0);
 }
 
@@ -6222,11 +10128,11 @@ function admin_payment_status_options(string $paymentType, string $current = '')
     $current = strtolower(trim($current));
 
     if ($paymentType === 'crypto') {
-        $options = ['pending', 'awaiting_review', 'awaiting_confirmation', 'expired', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
+        $options = ['pending', 'awaiting_review', 'expired', 'approved', 'archived', 'cancelled'];
     } elseif ($paymentType === 'crypto_topup') {
         $options = ['pending', 'archived'];
     } else {
-        $options = ['pending_payment', 'awaiting_review', 'expired', 'approved', 'archived', 'cancelled', 'rejected', 'failed'];
+        $options = ['pending_payment', 'awaiting_review', 'expired', 'approved', 'archived', 'cancelled'];
     }
 
     if ($current !== '' && !in_array($current, $options, true)) {
@@ -6383,7 +10289,21 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
     return null;
 }
 
-function admin_save_payment(
+function admin_save_payment(Mysql_ks $db, string $paymentType, int $paymentId, array $input, int $adminUserId = 0, string $ipAddress = ''): array
+{
+    $payment = admin_payment_find($db, $paymentType, $paymentId);
+    if (!$payment) return ['ok' => false, 'message' => 'Payment request not found.'];
+    $key = 'payment:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 16) . ':' . (int)$payment['customer_id'];
+    $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => false, 'message' => 'Another payment operation is in progress. Please retry shortly.'];
+    try {
+        return admin_save_payment_locked($db, $paymentType, $paymentId, $input, $adminUserId, $ipAddress);
+    } finally {
+        $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($key) . "') released");
+    }
+}
+
+function admin_save_payment_locked(
     Mysql_ks $db,
     string $paymentType,
     int $paymentId,
@@ -6392,6 +10312,7 @@ function admin_save_payment(
     string $ipAddress = ''
 ): array
 {
+    $messages = admin_load_messages(admin_current_locale());
     $payment = admin_payment_find($db, $paymentType, $paymentId);
     if (!is_array($payment) || empty($payment['id'])) {
         return ['ok' => false, 'message' => 'Payment request not found.'];
@@ -6453,7 +10374,7 @@ function admin_save_payment(
             : trim((string)($payment['received_crypto_amount'] ?? ''));
         $receivedFiatRaw = $receivedFiatProvided
             ? str_replace(',', '.', trim((string)($input['received_fiat_amount'] ?? '')))
-            : trim((string)($payment['received_fiat_amount'] ?? ''));
+            : trim((string)($payment['received_fiat_actual_amount'] ?? $payment['received_fiat_amount'] ?? ''));
         if ($amountValueRaw === '' || !is_numeric($amountValueRaw) || (float)$amountValueRaw <= 0) {
             return ['ok' => false, 'message' => 'Amount must be a valid number.'];
         }
@@ -6473,7 +10394,8 @@ function admin_save_payment(
         $amountValue = round((float)$amountValueRaw, 2);
         $amountCrypto = round((float)$amountCryptoRaw, 8);
         $receivedCrypto = $receivedCryptoRaw !== '' ? round((float)$receivedCryptoRaw, 8) : null;
-        $receivedFiat = $receivedFiatRaw !== '' ? round((float)$receivedFiatRaw, 2) : null;
+        $receivedFiatActual = $receivedFiatRaw !== '' ? round((float)$receivedFiatRaw, 2) : null;
+        $receivedFiat = $receivedFiatRaw !== '' ? admin_round_customer_crypto_fiat_credit($receivedFiatRaw) : null;
         if (in_array($status, admin_payment_success_statuses($paymentType), true)) {
             if ($receivedCrypto === null) {
                 $receivedCrypto = $amountCrypto;
@@ -6487,20 +10409,43 @@ function admin_save_payment(
             return ['ok' => false, 'message' => 'Wallet address record is unavailable for this payment.'];
         }
 
-        $duplicateWallet = $db->select_user(
-            "SELECT id
-             FROM crypto_wallet_addresses
-             WHERE address = '" . $db->escape($walletAddress) . "'
-               AND id <> {$walletAddressId}
-             LIMIT 1"
+        admin_ensure_crypto_wallet_address_indexes($db);
+
+        $paymentWalletNetworkCode = admin_normalize_crypto_wallet_network(
+            (string)($payment['asset_code'] ?? $payment['crypto_asset_code'] ?? ''),
+            (string)($payment['network_code'] ?? ''),
+            $walletAddress
         );
-        if (is_array($duplicateWallet) && !empty($duplicateWallet['id'])) {
-            return ['ok' => false, 'message' => 'This wallet address already exists in the database.'];
+        $duplicateContext = admin_crypto_wallet_address_duplicate_context(
+            $db,
+            $walletAddress,
+            (int)($payment['crypto_asset_id'] ?? 0),
+            $paymentWalletNetworkCode,
+            $walletAddressId
+        );
+        if (!empty($duplicateContext['has_existing']) && empty($duplicateContext['can_reuse'])) {
+            return [
+                'ok' => false,
+                'message' => admin_t($messages, (string)($duplicateContext['message_key'] ?? ''), (string)($duplicateContext['message'] ?? 'This wallet address already exists in the database.')),
+            ];
+        }
+
+        $walletUpdateFields = ['address', 'memo_tag'];
+        $walletUpdateValues = [$walletAddress, $paymentReference !== '' ? $paymentReference : null];
+        if (!empty($duplicateContext['has_existing']) && !empty($duplicateContext['can_reuse'])) {
+            $canonicalWallet = is_array($duplicateContext['canonical'] ?? null) ? $duplicateContext['canonical'] : [];
+            foreach (['owner_full_name', 'wallet_provider', 'notes'] as $walletSyncField) {
+                $walletSyncValue = trim((string)($canonicalWallet[$walletSyncField] ?? ''));
+                if ($walletSyncValue !== '') {
+                    $walletUpdateFields[] = $walletSyncField;
+                    $walletUpdateValues[] = $walletSyncValue;
+                }
+            }
         }
 
         $db->update_using_id(
-            ['address', 'memo_tag'],
-            [$walletAddress, $paymentReference !== '' ? $paymentReference : null],
+            $walletUpdateFields,
+            $walletUpdateValues,
             'crypto_wallet_addresses',
             $walletAddressId
         );
@@ -6528,6 +10473,10 @@ function admin_save_payment(
         if (schema_column_exists($db, 'crypto_deposit_requests', 'received_fiat_amount')) {
             $cryptoUpdateFields[] = 'received_fiat_amount';
             $cryptoUpdateValues[] = $receivedFiat;
+        }
+        if (schema_column_exists($db, 'crypto_deposit_requests', 'received_fiat_actual_amount')) {
+            $cryptoUpdateFields[] = 'received_fiat_actual_amount';
+            $cryptoUpdateValues[] = $receivedFiatActual;
         }
 
         $updated = $db->update_using_id(
@@ -6565,7 +10514,7 @@ function admin_save_payment(
                 return $finalizeResult;
             }
 
-            if (!in_array($previousStatus, $successStatuses, true) && empty($finalizeResult['underpaid_order'])) {
+            if (empty($finalizeResult['underpaid_order']) && empty($finalizeResult['already_applied'])) {
                 if ($linkedOrderId > 0) {
                     admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
                 } else {
@@ -6744,7 +10693,7 @@ function admin_save_payment(
             return $finalizeResult;
         }
 
-        if (!in_array($previousStatus, $successStatuses, true) && empty($finalizeResult['underpaid_order'])) {
+        if (empty($finalizeResult['underpaid_order']) && empty($finalizeResult['already_applied'])) {
             if ($linkedOrderId > 0) {
                 admin_notify_order_payment_approved_live_chat($db, (int)($payment['customer_id'] ?? 0));
             } else {
@@ -6872,11 +10821,14 @@ function admin_finalize_successful_payment(
             ? $payment['requested_amount_value']
             : ($payment['amount_value'] ?? 0)
     ), 2);
-    $amountValue = round((float)(
+    $creditAmountRaw = (
         isset($payment['received_fiat_amount']) && $payment['received_fiat_amount'] !== null && $payment['received_fiat_amount'] !== ''
             ? $payment['received_fiat_amount']
             : ($payment['amount_value'] ?? 0)
-    ), 2);
+    );
+    $amountValue = $paymentType === 'crypto'
+        ? admin_round_customer_crypto_fiat_credit($creditAmountRaw)
+        : round((float)$creditAmountRaw, 2);
     if ($customerId <= 0 || $amountValue <= 0) {
         return ['ok' => false, 'message' => 'This payment cannot be credited to customer balance.'];
     }
@@ -6998,9 +10950,8 @@ function admin_finalize_successful_payment(
             $renewalNote = trim((string)($pendingRenewal['renewal_note'] ?? ''));
             $approvalNote = 'Payment approved on ' . $approvalTimestamp . '. Waiting for manual extension in admin panel.';
             $updatedRenewal = $db->update_using_id(
-                ['status', 'renewal_note'],
+                ['renewal_note'],
                 [
-                    'paid_pending_activation',
                     $renewalNote !== '' ? ($renewalNote . "\n" . $approvalNote) : $approvalNote,
                 ],
                 'order_renewals',
@@ -7028,14 +10979,9 @@ function admin_finalize_successful_payment(
                 }
             }
 
-            $orderPaymentUpdated = $db->update_using_id(
-                ['payment_status', 'paid_at'],
-                ['paid', $approvalTimestamp],
-                'orders',
-                $orderId
-            );
+            $orderPaymentUpdated = app_mark_order_renewal_paid($db, $orderId, $renewalId, $approvalTimestamp);
             if (!$orderPaymentUpdated) {
-                return ['ok' => false, 'message' => 'Unable to update order payment timestamp.'];
+                return ['ok' => false, 'message' => 'Unable to record renewal payment.'];
             }
 
             return [
@@ -7580,8 +11526,9 @@ function admin_build_crypto_accept_payload(array $paymentRow, array $messages): 
     $requestedCryptoRaw = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
         ? (float)$paymentRow['requested_amount_crypto']
         : (float)($paymentRow['amount_crypto'] ?? 0);
-    $receivedFiatRaw = isset($paymentRow['received_fiat_amount']) && $paymentRow['received_fiat_amount'] !== null && $paymentRow['received_fiat_amount'] !== ''
-        ? (float)$paymentRow['received_fiat_amount']
+    $receivedFiatSource = $paymentRow['received_fiat_actual_amount'] ?? $paymentRow['received_fiat_amount'] ?? null;
+    $receivedFiatRaw = $receivedFiatSource !== null && $receivedFiatSource !== ''
+        ? round((float)$receivedFiatSource, 2)
         : null;
     $receivedCryptoRaw = isset($paymentRow['received_crypto_amount']) && $paymentRow['received_crypto_amount'] !== null && $paymentRow['received_crypto_amount'] !== ''
         ? (float)$paymentRow['received_crypto_amount']
@@ -7654,12 +11601,13 @@ function admin_crypto_accept_preview_theme(string $assetCode): array
 
 function admin_crypto_accept_preview_cache_dir(): string
 {
-    return app_backend_root_path() . '/templates_c/.crypto_accept_preview_cache';
+    return app_crypto_runtime_dir() . '/previews';
 }
 
 function admin_crypto_accept_preview_cache_path(string $key): string
 {
-    return admin_crypto_accept_preview_cache_dir() . '/' . preg_replace('/[^a-z0-9_.-]/i', '_', $key) . '.json';
+    $scope = (string)(getenv('DB_NAME') ?: 'reseller_v2');
+    return admin_crypto_accept_preview_cache_dir() . '/preview-' . hash('sha256', $scope . '|' . $key) . '.json';
 }
 
 function admin_crypto_accept_preview_cache_read(string $key, int $ttlSeconds = 120): ?array
@@ -7687,14 +11635,15 @@ function admin_crypto_accept_preview_cache_write(string $key, array $payload): v
 {
     $directory = admin_crypto_accept_preview_cache_dir();
     if (!is_dir($directory)) {
-        @mkdir($directory, 0775, true);
+        @mkdir($directory, 0700, true);
+        app_crypto_runtime_inherit_owner($directory);
     }
 
     if (!is_dir($directory)) {
         return;
     }
 
-    @file_put_contents(admin_crypto_accept_preview_cache_path($key), json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    app_crypto_runtime_write(admin_crypto_accept_preview_cache_path($key), $payload);
 }
 
 function admin_crypto_accept_preview_candidate_score(array $row, float $requestedCryptoAmount, float $requestedFiatAmount, float $lockedRate, int $requestedTimestamp): float
@@ -7764,6 +11713,120 @@ function admin_crypto_accept_preview_candidate_score(array $row, float $requeste
     }
 
     return $score;
+}
+
+function admin_crypto_accept_preview_fit_analysis(array $row, float $requestedCryptoAmount, float $requestedFiatAmount, float $lockedRate, int $requestedTimestamp, array $messages = []): array
+{
+    $direction = strtolower(trim((string)($row['direction'] ?? 'incoming')));
+    $amountCrypto = (float)($row['amount_crypto'] ?? 0);
+    $amountFiat = isset($row['amount_fiat']) && is_numeric((string)$row['amount_fiat'])
+        ? (float)$row['amount_fiat']
+        : ($lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0);
+    $timestamp = (int)($row['timestamp'] ?? 0);
+    $isLinkedCandidate = !empty($row['candidate']) && (float)($row['candidate_score'] ?? 0) >= 999.0;
+
+    if ($direction !== 'incoming') {
+        return [
+            'percent' => 0,
+            'score' => 0.0,
+            'tone' => 'danger',
+            'title' => admin_t($messages, 'payment_accept_modal_match_outgoing_title', 'Dopasowanie 0%'),
+            'text' => admin_t($messages, 'payment_accept_modal_match_outgoing_text', 'To nie jest wpłata przychodząca na ten adres, więc nie wygląda jak zapłata za ten request.'),
+        ];
+    }
+
+    if ($isLinkedCandidate) {
+        return [
+            'percent' => 100,
+            'score' => 10.0,
+            'tone' => 'success',
+            'title' => admin_t($messages, 'payment_accept_modal_match_linked_title', 'Dopasowanie 100%'),
+            'text' => admin_t($messages, 'payment_accept_modal_match_linked_text', 'Ta transakcja jest już przypisana do tego requestu płatności w systemie.'),
+        ];
+    }
+
+    $amountPercent = 0;
+    if ($requestedCryptoAmount > 0 && $amountCrypto > 0) {
+        $cryptoPaidPercent = ($amountCrypto / $requestedCryptoAmount) * 100;
+        $amountPercent = max($amountPercent, (int)round(max(0, min(100, $cryptoPaidPercent))));
+    }
+
+    if ($requestedFiatAmount > 0 && $amountFiat > 0) {
+        $fiatPaidPercent = ($amountFiat / $requestedFiatAmount) * 100;
+        $amountPercent = max($amountPercent, (int)round(max(0, min(100, $fiatPaidPercent))));
+    }
+
+    if ($amountPercent <= 0 && $amountCrypto > 0) {
+        $amountPercent = 35;
+    }
+
+    $timePercent = 50;
+    $timeText = admin_t($messages, 'payment_accept_modal_match_time_unknown', 'Nie udało się jednoznacznie porównać czasu transakcji z czasem utworzenia requestu.');
+    $deltaSeconds = null;
+    if ($requestedTimestamp > 0 && $timestamp > 0) {
+        $deltaSeconds = $timestamp - $requestedTimestamp;
+        $absMinutes = max(1, (int)round(abs($deltaSeconds) / 60));
+        if ($deltaSeconds < -900) {
+            $timePercent = 0;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_before_request', 'Ta wpłata jest wcześniejsza niż request płatności o około {minutes} min, więc nie traktuj jej jako pewnej zapłaty bez ręcznej weryfikacji.', ['minutes' => (string)$absMinutes]);
+        } elseif ($deltaSeconds < 0) {
+            $timePercent = 55;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_slightly_before_request', 'Transakcja jest minimalnie wcześniejsza niż request. Może to wynikać z czasu bloku, ale wymaga ostrożnej weryfikacji.');
+        } elseif ($deltaSeconds <= 3600) {
+            $timePercent = 100;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_after_request_fast', 'Czas wpłaty dobrze pasuje: transakcja pojawiła się po utworzeniu requestu.');
+        } elseif ($deltaSeconds <= 7200) {
+            $timePercent = 90;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_after_request_ok', 'Transakcja jest po utworzeniu requestu i nadal wygląda spójnie czasowo.');
+        } elseif ($deltaSeconds <= 21600) {
+            $timePercent = 72;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_after_request_late', 'Transakcja jest po utworzeniu requestu, ale z większym odstępem czasu.');
+        } elseif ($deltaSeconds <= 86400) {
+            $timePercent = 42;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_after_request_very_late', 'Transakcja jest po utworzeniu requestu, ale bardzo późno. Sprawdź ją ręcznie przed akceptacją.');
+        } else {
+            $timePercent = 20;
+            $timeText = admin_t($messages, 'payment_accept_modal_match_outside_time', 'Transakcja jest daleko poza typowym oknem czasowym dla tego requestu.');
+        }
+    }
+
+    $percent = (int)round(($amountPercent * 0.58) + ($timePercent * 0.37) + 5);
+    if ($deltaSeconds !== null && $deltaSeconds < -900) {
+        $percent = min($percent, $deltaSeconds < -3600 ? 25 : 35);
+    }
+    if ($amountPercent > 0 && $amountPercent < 35) {
+        $percent = min($percent, 58);
+    }
+    $percent = max(0, min(100, $percent));
+
+    if ($percent >= 85) {
+        $tone = 'success';
+        $title = admin_t($messages, 'payment_accept_modal_match_success_title', 'Dopasowanie {percent}%', ['percent' => (string)$percent]);
+        $text = admin_t($messages, 'payment_accept_modal_match_success_text', 'Kwota i czas wpłaty dobrze pasują do tego requestu. Nadal sprawdź szczegóły przed kliknięciem akceptacji.');
+    } elseif ($percent >= 70) {
+        $tone = 'info';
+        $title = admin_t($messages, 'payment_accept_modal_match_info_title', 'Dopasowanie {percent}%', ['percent' => (string)$percent]);
+        $text = admin_t($messages, 'payment_accept_modal_match_info_text', 'Ta wpłata wygląda możliwie poprawnie, ale wymaga sprawdzenia kwoty, czasu i adresu.');
+    } elseif ($percent >= 40) {
+        $tone = 'warning';
+        $title = admin_t($messages, 'payment_accept_modal_match_warning_title', 'Dopasowanie {percent}%', ['percent' => (string)$percent]);
+        $text = admin_t($messages, 'payment_accept_modal_match_warning_text', 'To nie jest pewne dopasowanie do requestu. {time}', ['time' => $timeText]);
+    } else {
+        $tone = 'danger';
+        $title = admin_t($messages, 'payment_accept_modal_match_danger_title', 'Dopasowanie {percent}%', ['percent' => (string)$percent]);
+        $text = admin_t($messages, 'payment_accept_modal_match_danger_text', 'Ta wpłata słabo pasuje do requestu. {time}', ['time' => $timeText]);
+    }
+
+    return [
+        'percent' => $percent,
+        'score' => round($percent / 10, 2),
+        'tone' => $tone,
+        'title' => $title,
+        'text' => $text,
+        'time_text' => $timeText,
+        'amount_percent' => $amountPercent,
+        'time_percent' => $timePercent,
+    ];
 }
 
 function admin_crypto_accept_preview_db_rows(Mysql_ks $db, array $paymentRow, int $windowHours = 24): array
@@ -7895,6 +11958,9 @@ function admin_crypto_accept_preview_normalize_network_code(string $networkCode,
         if ($assetCode === 'SOL') {
             return 'solana';
         }
+        if ($assetCode === 'TRX') {
+            return 'tron';
+        }
     }
 
     return $networkCode;
@@ -7941,7 +12007,7 @@ function admin_crypto_accept_preview_eth_token_rows(array $paymentRow, int $wind
     }
 
     $windowHours = max(1, min(72, $windowHours));
-    $cacheKey = 'eth_token_history_' . sha1($walletAddress . '|' . $assetCode . '|' . $networkCode . '|window:' . $windowHours);
+    $cacheKey = 'eth_token_history_' . sha1($walletAddress . '|' . $assetCode . '|' . $networkCode . '|window:' . $windowHours) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
     $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
     if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
         return $cached['rows'];
@@ -8039,7 +12105,7 @@ function admin_crypto_accept_preview_eth_native_rows(array $paymentRow, int $win
     }
 
     $windowHours = max(1, min(72, $windowHours));
-    $cacheKey = 'eth_native_history_' . sha1($walletAddress . '|' . $assetCode . '|' . $networkCode . '|window:' . $windowHours);
+    $cacheKey = 'eth_native_history_' . sha1($walletAddress . '|' . $assetCode . '|' . $networkCode . '|window:' . $windowHours) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
     $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
     if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
         return $cached['rows'];
@@ -8064,7 +12130,7 @@ function admin_crypto_accept_preview_eth_native_rows(array $paymentRow, int $win
     $rows = [];
 
     foreach ($payload as $transaction) {
-        if (!is_array($transaction)) {
+        if (!is_array($transaction) || ($transaction['success'] ?? null) !== true) {
             continue;
         }
 
@@ -8127,28 +12193,36 @@ function admin_crypto_accept_preview_eth_native_rows(array $paymentRow, int $win
     return $rows;
 }
 
-function admin_crypto_accept_preview_btc_remote_rows(array $paymentRow, int $windowHours = 24): array
+function admin_crypto_accept_preview_btc_remote_rows(array $paymentRow, int $windowHours = 24, bool $useCache = true): array
 {
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
     if ($walletAddress === '') {
         return [];
     }
 
-    $cacheKey = 'btc_rawaddr_' . sha1($walletAddress . '|window:' . $windowHours);
-    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
-    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+    $cacheKey = 'btc_rawaddr_' . sha1($walletAddress . '|window:' . $windowHours) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
+    $cached = $useCache ? admin_crypto_accept_preview_cache_read($cacheKey, 120) : null;
+    if ($useCache && is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
         return $cached['rows'];
     }
 
-    $payload = admin_http_json('https://blockchain.info/rawaddr/' . rawurlencode($walletAddress) . '?limit=25&offset=0');
+    $esploraRows = admin_crypto_accept_preview_btc_esplora_rows($paymentRow, $windowHours);
+    if ($esploraRows) {
+        if ($useCache) {
+            admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $esploraRows]);
+        }
+        return $esploraRows;
+    }
+
+    $payload = admin_http_json('https://blockchain.info/rawaddr/' . rawurlencode($walletAddress) . '?limit=25&offset=0', 8, 4);
     if (!is_array($payload) || empty($payload['txs']) || !is_array($payload['txs'])) {
         return [];
     }
 
-    $latestBlockPayload = admin_crypto_accept_preview_cache_read('btc_latest_block', 120);
+    $latestBlockPayload = $useCache ? admin_crypto_accept_preview_cache_read('btc_latest_block', 120) : null;
     if (!is_array($latestBlockPayload)) {
-        $latestBlockPayload = admin_http_json('https://blockchain.info/latestblock');
-        if (is_array($latestBlockPayload)) {
+        $latestBlockPayload = admin_http_json('https://blockchain.info/latestblock', 8, 4);
+        if ($useCache && is_array($latestBlockPayload)) {
             admin_crypto_accept_preview_cache_write('btc_latest_block', $latestBlockPayload);
         }
     }
@@ -8249,11 +12323,151 @@ function admin_crypto_accept_preview_btc_remote_rows(array $paymentRow, int $win
         return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
     });
 
-    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    if ($useCache) {
+        admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    }
     return $rows;
 }
 
-function admin_crypto_accept_preview_doge_remote_rows(array $paymentRow, int $windowHours = 24): array
+function admin_crypto_accept_preview_btc_esplora_rows(array $paymentRow, int $windowHours = 24): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    if ($walletAddress === '') {
+        return [];
+    }
+
+    $payload = admin_http_json('https://mempool.space/api/address/' . rawurlencode($walletAddress) . '/txs', 8, 4);
+    if (!is_array($payload)) {
+        return [];
+    }
+
+    $latestHeight = 0;
+    $latestHeightText = admin_http_text('https://mempool.space/api/blocks/tip/height', 8, 4);
+    if (is_string($latestHeightText) && preg_match('/^\d+$/', trim($latestHeightText))) {
+        $latestHeight = (int)trim($latestHeightText);
+    } else {
+        $latestBlockPayload = admin_http_json('https://blockchain.info/latestblock', 8, 4);
+        $latestHeight = (int)($latestBlockPayload['height'] ?? 0);
+    }
+
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $cutoff = time() - (max(1, min(72, $windowHours)) * 3600);
+    $rows = [];
+
+    foreach (array_slice($payload, 0, 25) as $tx) {
+        if (!is_array($tx)) {
+            continue;
+        }
+
+        $status = isset($tx['status']) && is_array($tx['status']) ? $tx['status'] : [];
+        $confirmed = !empty($status['confirmed']);
+        $timestamp = (int)($status['block_time'] ?? 0);
+        if ($timestamp <= 0) {
+            $timestamp = time();
+        }
+        if ($timestamp < $cutoff) {
+            continue;
+        }
+
+        $inputSats = 0.0;
+        $outputSats = 0.0;
+        $fromAddress = '';
+        $toAddress = '';
+
+        foreach ((array)($tx['vin'] ?? []) as $vin) {
+            if (!is_array($vin)) {
+                continue;
+            }
+            $prevout = isset($vin['prevout']) && is_array($vin['prevout']) ? $vin['prevout'] : [];
+            $candidateAddress = trim((string)($prevout['scriptpubkey_address'] ?? ''));
+            $value = (float)($prevout['value'] ?? 0);
+            if ($candidateAddress === $walletAddress) {
+                $inputSats += $value;
+            } elseif ($fromAddress === '' && $candidateAddress !== '') {
+                $fromAddress = $candidateAddress;
+            }
+        }
+
+        foreach ((array)($tx['vout'] ?? []) as $vout) {
+            if (!is_array($vout)) {
+                continue;
+            }
+            $candidateAddress = trim((string)($vout['scriptpubkey_address'] ?? ''));
+            $value = (float)($vout['value'] ?? 0);
+            if ($candidateAddress === $walletAddress) {
+                $outputSats += $value;
+            } elseif ($toAddress === '' && $candidateAddress !== '') {
+                $toAddress = $candidateAddress;
+            }
+        }
+
+        $netSats = $outputSats - $inputSats;
+        if (abs($netSats) <= 0) {
+            continue;
+        }
+
+        $direction = $netSats >= 0 ? 'incoming' : 'outgoing';
+        $amountCrypto = abs($netSats) / 100000000;
+        if ($amountCrypto <= 0) {
+            continue;
+        }
+
+        $blockHeight = (int)($status['block_height'] ?? 0);
+        $confirmations = $confirmed && $blockHeight > 0 && $latestHeight > 0 ? max(1, ($latestHeight - $blockHeight + 1)) : 0;
+        if ($direction === 'incoming') {
+            $toAddress = $walletAddress;
+        } else {
+            $fromAddress = $walletAddress;
+        }
+
+        $hash = trim((string)($tx['txid'] ?? ''));
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $rows[] = [
+            'hash' => $hash,
+            'hash_compact' => $hash !== '' ? admin_compact_wallet_address($hash, 6, 4) : '',
+            'hash_url' => $hash !== '' ? admin_crypto_transaction_explorer_url('BTC', (string)($paymentRow['network_code'] ?? ''), $hash) : '',
+            'direction' => $direction,
+            'direction_label' => $direction === 'incoming' ? 'Incoming' : 'Outgoing',
+            'direction_icon' => $direction === 'incoming' ? 'bi-arrow-down-left' : 'bi-arrow-up-right',
+            'amount_crypto' => $amountCrypto,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' BTC',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => !empty($tx['fee']) ? ('Fee ' . admin_decimal_input_value(((float)$tx['fee']) / 100000000, 8) . ' BTC') : '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => $confirmations,
+            'confirmations_label' => $confirmations > 0 ? ($confirmations . ' conf') : 'Unconfirmed',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => $toAddress !== '' ? admin_compact_wallet_address($toAddress, 8, 5) : '',
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => $direction,
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'esplora',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    return $rows;
+}
+
+function admin_crypto_accept_preview_doge_opreturn_rows(array $paymentRow, int $windowHours = 24): array
 {
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
     if ($walletAddress === '') {
@@ -8261,15 +12475,308 @@ function admin_crypto_accept_preview_doge_remote_rows(array $paymentRow, int $wi
     }
 
     $windowHours = max(1, min(72, $windowHours));
-    $cacheKey = 'doge_full_' . sha1($walletAddress . '|window:' . $windowHours);
-    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
-    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+    $addressPayload = admin_http_json('https://opreturn.net/api/doge/addr/' . rawurlencode($walletAddress) . '/1/', 8, 4);
+    $addressInfo = is_array($addressPayload) && !empty($addressPayload['success']) && isset($addressPayload['addr']) && is_array($addressPayload['addr'])
+        ? $addressPayload['addr']
+        : [];
+    $txRows = isset($addressInfo['tx']) && is_array($addressInfo['tx']) ? $addressInfo['tx'] : [];
+    if (!$txRows) {
+        return [];
+    }
+
+    $latestHeightPayload = admin_http_json('https://opreturn.net/api/doge/blockheight/', 8, 4);
+    $latestHeight = is_array($latestHeightPayload) ? (int)($latestHeightPayload['blockheight'] ?? 0) : 0;
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $cutoff = time() - ($windowHours * 3600);
+    $receivedByTx = [];
+
+    foreach ($txRows as $txRow) {
+        if (!is_array($txRow)) {
+            continue;
+        }
+        $txid = trim((string)($txRow['txid'] ?? ''));
+        $amountSats = (float)($txRow['value'] ?? 0);
+        if ($txid === '' || $amountSats <= 0) {
+            continue;
+        }
+        if (!isset($receivedByTx[$txid])) {
+            $receivedByTx[$txid] = [
+                'txid' => $txid,
+                'amount_sats' => 0.0,
+                'receive_block' => (int)($txRow['receive_block'] ?? 0),
+            ];
+        }
+        $receivedByTx[$txid]['amount_sats'] += $amountSats;
+        $receiveBlock = (int)($txRow['receive_block'] ?? 0);
+        if ($receiveBlock > 0 && ((int)$receivedByTx[$txid]['receive_block'] <= 0 || $receiveBlock < (int)$receivedByTx[$txid]['receive_block'])) {
+            $receivedByTx[$txid]['receive_block'] = $receiveBlock;
+        }
+    }
+
+    if (!$receivedByTx) {
+        return [];
+    }
+
+    $rows = [];
+    foreach (array_slice(array_values($receivedByTx), 0, 25) as $txSummary) {
+        $txid = (string)($txSummary['txid'] ?? '');
+        $amountCrypto = ((float)($txSummary['amount_sats'] ?? 0)) / 100000000;
+        if ($txid === '' || $amountCrypto <= 0) {
+            continue;
+        }
+
+        $txPayload = admin_http_json('https://opreturn.net/api/doge/tx/' . rawurlencode($txid) . '/1/', 8, 4);
+        $tx = is_array($txPayload) && !empty($txPayload['success']) && isset($txPayload['tx']) && is_array($txPayload['tx'])
+            ? $txPayload['tx']
+            : [];
+        $timestamp = (int)($tx['time'] ?? ($tx['blocktime'] ?? 0));
+        if ($timestamp <= 0) {
+            $receiveBlock = (int)($txSummary['receive_block'] ?? 0);
+            if ($receiveBlock > 0 && (int)($addressInfo['lastreceive_block'] ?? 0) === $receiveBlock) {
+                $timestamp = (int)($addressInfo['lastreceive_time'] ?? 0);
+            } elseif ($receiveBlock > 0 && (int)($addressInfo['firstreceive_block'] ?? 0) === $receiveBlock) {
+                $timestamp = (int)($addressInfo['firstreceive_time'] ?? 0);
+            }
+        }
+        if ($timestamp <= 0 || $timestamp < $cutoff) {
+            continue;
+        }
+
+        $receiveBlock = (int)($txSummary['receive_block'] ?? ($tx['blockheight'] ?? 0));
+        $confirmations = max(0, (int)($tx['confirmations'] ?? 0));
+        if ($confirmations <= 0 && $receiveBlock > 0 && $latestHeight > 0) {
+            $confirmations = max(1, $latestHeight - $receiveBlock + 1);
+        }
+
+        $fromAddress = '';
+        if (!empty($tx['vin']) && is_array($tx['vin'])) {
+            foreach ($tx['vin'] as $input) {
+                if (!is_array($input)) {
+                    continue;
+                }
+                $candidate = trim((string)($input['address'] ?? ($input['addr'] ?? '')));
+                if ($candidate !== '' && strcasecmp($candidate, $walletAddress) !== 0) {
+                    $fromAddress = $candidate;
+                    break;
+                }
+            }
+        }
+
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $rows[] = [
+            'hash' => $txid,
+            'hash_compact' => admin_compact_wallet_address($txid, 6, 4),
+            'hash_url' => admin_crypto_transaction_explorer_url('DOGE', (string)($paymentRow['network_code'] ?? ''), $txid),
+            'direction' => 'incoming',
+            'direction_label' => 'Incoming',
+            'direction_icon' => 'bi-arrow-down-left',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' DOGE',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => $confirmations,
+            'confirmations_label' => $confirmations > 0 ? ($confirmations . ' conf') : 'Unconfirmed',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => admin_compact_wallet_address($walletAddress, 8, 5),
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => 'incoming',
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'opreturn',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    return $rows;
+}
+
+function admin_crypto_accept_preview_doge_direct_tx_row(array $paymentRow, string $txid): ?array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    $txid = trim($txid);
+    if ($walletAddress === '' || !preg_match('/^[a-fA-F0-9]{64}$/', $txid)) {
+        return null;
+    }
+
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $walletAddressLower = strtolower($walletAddress);
+    $bestRow = null;
+
+    $buildRow = static function (float $amountCrypto, int $timestamp, int $confirmations, string $fromAddress = '') use ($paymentRow, $txid, $walletAddress, $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp): ?array {
+        if ($amountCrypto <= 0 || $timestamp <= 0) {
+            return null;
+        }
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+
+        return [
+            'hash' => $txid,
+            'hash_compact' => admin_compact_wallet_address($txid, 6, 4),
+            'hash_url' => admin_crypto_transaction_explorer_url('DOGE', (string)($paymentRow['network_code'] ?? ''), $txid),
+            'direction' => 'incoming',
+            'direction_label' => 'Incoming',
+            'direction_icon' => 'bi-arrow-down-left',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' DOGE',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => max(0, $confirmations),
+            'confirmations_label' => $confirmations > 0 ? ($confirmations . ' conf') : 'Unconfirmed',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => admin_compact_wallet_address($walletAddress, 8, 5),
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => 'incoming',
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'direct_tx',
+        ];
+    };
+
+    $opreturnPayload = admin_http_json('https://opreturn.net/api/doge/tx/' . rawurlencode($txid) . '/1/', 8, 4);
+    $opreturnTx = is_array($opreturnPayload) && !empty($opreturnPayload['success']) && isset($opreturnPayload['tx']) && is_array($opreturnPayload['tx'])
+        ? $opreturnPayload['tx']
+        : [];
+    if ($opreturnTx) {
+        $amountCrypto = 0.0;
+        if (!empty($opreturnTx['vout']) && is_array($opreturnTx['vout'])) {
+            foreach ($opreturnTx['vout'] as $output) {
+                if (!is_array($output)) {
+                    continue;
+                }
+                $scriptPubKey = isset($output['scriptPubKey']) && is_array($output['scriptPubKey']) ? $output['scriptPubKey'] : [];
+                $addresses = isset($scriptPubKey['addresses']) && is_array($scriptPubKey['addresses']) ? $scriptPubKey['addresses'] : [];
+                foreach ($addresses as $address) {
+                    if (strtolower(trim((string)$address)) === $walletAddressLower) {
+                        $amountCrypto += (float)($output['value'] ?? 0);
+                        break;
+                    }
+                }
+            }
+        }
+
+        $timestamp = (int)($opreturnTx['time'] ?? ($opreturnTx['blocktime'] ?? 0));
+        $confirmations = max(0, (int)($opreturnTx['confirmations'] ?? 0));
+        $row = $buildRow($amountCrypto, $timestamp, $confirmations);
+        if (is_array($row)) {
+            $bestRow = $row;
+        }
+    }
+
+    $blockCypherPayload = admin_http_json('https://api.blockcypher.com/v1/doge/main/txs/' . rawurlencode($txid), 5, 3);
+    if (is_array($blockCypherPayload)) {
+        $amountSats = 0.0;
+        if (!empty($blockCypherPayload['outputs']) && is_array($blockCypherPayload['outputs'])) {
+            foreach ($blockCypherPayload['outputs'] as $output) {
+                if (!is_array($output)) {
+                    continue;
+                }
+                $addresses = isset($output['addresses']) && is_array($output['addresses']) ? $output['addresses'] : [];
+                foreach ($addresses as $address) {
+                    if (strtolower(trim((string)$address)) === $walletAddressLower) {
+                        $amountSats += (float)($output['value'] ?? 0);
+                        break;
+                    }
+                }
+            }
+        }
+
+        $fromAddress = '';
+        if (!empty($blockCypherPayload['inputs']) && is_array($blockCypherPayload['inputs'])) {
+            foreach ($blockCypherPayload['inputs'] as $input) {
+                if (!is_array($input)) {
+                    continue;
+                }
+                $addresses = isset($input['addresses']) && is_array($input['addresses']) ? $input['addresses'] : [];
+                foreach ($addresses as $address) {
+                    $candidate = trim((string)$address);
+                    if ($candidate !== '' && strtolower($candidate) !== $walletAddressLower) {
+                        $fromAddress = $candidate;
+                        break 2;
+                    }
+                }
+            }
+        }
+
+        $receivedAt = trim((string)($blockCypherPayload['confirmed'] ?? ''));
+        if ($receivedAt === '') {
+            $receivedAt = trim((string)($blockCypherPayload['received'] ?? ''));
+        }
+        $timestamp = $receivedAt !== '' ? (int)strtotime($receivedAt) : 0;
+        $confirmations = max(0, (int)($blockCypherPayload['confirmations'] ?? 0));
+        $row = $buildRow($amountSats / 100000000, $timestamp, $confirmations, $fromAddress);
+        if (is_array($row) && (!is_array($bestRow) || (int)$row['confirmations'] > (int)$bestRow['confirmations'])) {
+            $bestRow = $row;
+        }
+    }
+
+    return is_array($bestRow) ? $bestRow : null;
+}
+
+function admin_crypto_accept_preview_doge_remote_rows(array $paymentRow, int $windowHours = 24, bool $useCache = true, bool $preferOpreturn = false): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    if ($walletAddress === '') {
+        return [];
+    }
+
+    $windowHours = max(1, min(72, $windowHours));
+    $cacheKey = 'doge_full_' . sha1($walletAddress . '|window:' . $windowHours) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
+    $cached = $useCache ? admin_crypto_accept_preview_cache_read($cacheKey, 120) : null;
+    if ($useCache && is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
         return $cached['rows'];
     }
 
-    $payload = admin_http_json('https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($walletAddress) . '/full?limit=25');
+    if ($preferOpreturn) {
+        $opreturnRows = admin_crypto_accept_preview_doge_opreturn_rows($paymentRow, $windowHours);
+        if ($opreturnRows) {
+            if ($useCache) {
+                admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $opreturnRows]);
+            }
+            return $opreturnRows;
+        }
+    }
+
+    $payload = admin_http_json('https://api.blockcypher.com/v1/doge/main/addrs/' . rawurlencode($walletAddress) . '/full?limit=25', $preferOpreturn ? 5 : 12, $preferOpreturn ? 3 : 6);
     if (!is_array($payload) || empty($payload['txs']) || !is_array($payload['txs'])) {
-        return [];
+        $fallbackRows = admin_crypto_accept_preview_doge_opreturn_rows($paymentRow, $windowHours);
+        if ($useCache && $fallbackRows) {
+            admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $fallbackRows]);
+        }
+        return $fallbackRows;
     }
 
     $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
@@ -8397,15 +12904,170 @@ function admin_crypto_accept_preview_doge_remote_rows(array $paymentRow, int $wi
         ];
     }
 
+    $fallbackRows = admin_crypto_accept_preview_doge_opreturn_rows($paymentRow, $windowHours);
+    if ($fallbackRows) {
+        $indexedRows = [];
+        foreach (array_merge($rows, $fallbackRows) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $hash = strtolower(trim((string)($row['hash'] ?? '')));
+            if ($hash === '') {
+                continue;
+            }
+            if (!isset($indexedRows[$hash])) {
+                $indexedRows[$hash] = $row;
+                continue;
+            }
+            $indexedRows[$hash]['amount_crypto'] = max((float)($indexedRows[$hash]['amount_crypto'] ?? 0), (float)($row['amount_crypto'] ?? 0));
+            $indexedRows[$hash]['confirmations'] = max((int)($indexedRows[$hash]['confirmations'] ?? 0), (int)($row['confirmations'] ?? 0));
+            $indexedRows[$hash]['candidate_score'] = max((float)($indexedRows[$hash]['candidate_score'] ?? 0), (float)($row['candidate_score'] ?? 0));
+            if ((int)($row['timestamp'] ?? 0) > (int)($indexedRows[$hash]['timestamp'] ?? 0)) {
+                $indexedRows[$hash]['timestamp'] = (int)$row['timestamp'];
+                $indexedRows[$hash]['received_at'] = $row['received_at'] ?? ($indexedRows[$hash]['received_at'] ?? '');
+                $indexedRows[$hash]['received_at_label'] = $row['received_at_label'] ?? ($indexedRows[$hash]['received_at_label'] ?? '');
+            }
+        }
+        $rows = array_values($indexedRows);
+    }
+
     usort($rows, static function (array $left, array $right): int {
         return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
     });
 
-    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    if (!$rows) {
+        $rows = $fallbackRows;
+    }
+
+    if ($useCache) {
+        admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    }
     return $rows;
 }
 
-function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHours = 24): array
+function admin_crypto_accept_preview_trx_rows(array $paymentRow, int $windowHours = 24): array
+{
+    $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
+    if ($walletAddress === '' || preg_match('/^T[1-9A-HJ-NP-Za-km-z]{33}$/', $walletAddress) !== 1) {
+        return [];
+    }
+
+    $windowHours = max(1, min(72, $windowHours));
+    $cacheKey = 'trx_history_' . sha1($walletAddress . '|window:' . $windowHours) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
+    if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
+        return $cached['rows'];
+    }
+
+    $cutoff = time() - ($windowHours * 3600);
+    $query = http_build_query([
+        'only_to' => 'true',
+        'only_confirmed' => 'true',
+        'limit' => 25,
+        'order_by' => 'block_timestamp,desc',
+        'min_timestamp' => $cutoff * 1000,
+    ], '', '&', PHP_QUERY_RFC3986);
+    $payload = admin_http_json(
+        'https://api.trongrid.io/v1/accounts/' . rawurlencode($walletAddress) . '/transactions?' . $query,
+        12,
+        6
+    );
+    $transactionRows = is_array($payload) && !empty($payload['success']) && isset($payload['data']) && is_array($payload['data'])
+        ? $payload['data']
+        : [];
+    if (!$transactionRows) {
+        return [];
+    }
+
+    $latestBlockPayload = admin_http_json('https://api.trongrid.io/wallet/getnowblock', 8, 4);
+    $latestBlock = is_array($latestBlockPayload)
+        ? (int)($latestBlockPayload['block_header']['raw_data']['number'] ?? 0)
+        : 0;
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $rows = [];
+
+    foreach ($transactionRows as $transaction) {
+        if (!is_array($transaction)) {
+            continue;
+        }
+
+        $contractResult = strtoupper(trim((string)($transaction['ret'][0]['contractRet'] ?? '')));
+        $contract = isset($transaction['raw_data']['contract'][0]) && is_array($transaction['raw_data']['contract'][0])
+            ? $transaction['raw_data']['contract'][0]
+            : [];
+        $contractType = trim((string)($contract['type'] ?? ''));
+        $contractValue = isset($contract['parameter']['value']) && is_array($contract['parameter']['value'])
+            ? $contract['parameter']['value']
+            : [];
+        $amountSun = (float)($contractValue['amount'] ?? 0);
+        $timestampMs = (int)($transaction['block_timestamp'] ?? ($transaction['raw_data']['timestamp'] ?? 0));
+        $timestamp = $timestampMs > 0 ? (int)floor($timestampMs / 1000) : 0;
+        $hash = trim((string)($transaction['txID'] ?? ''));
+        if ($contractResult !== 'SUCCESS' || $contractType !== 'TransferContract' || $amountSun <= 0 || $timestamp < $cutoff || $hash === '') {
+            continue;
+        }
+
+        $amountCrypto = $amountSun / 1000000;
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        $blockNumber = (int)($transaction['blockNumber'] ?? 0);
+        $confirmations = ($latestBlock > 0 && $blockNumber > 0)
+            ? max(1, $latestBlock - $blockNumber + 1)
+            : 1;
+        $fromAddress = trim((string)($contractValue['owner_address'] ?? ''));
+
+        $rows[] = [
+            'hash' => $hash,
+            'hash_compact' => admin_compact_wallet_address($hash, 6, 4),
+            'hash_url' => admin_crypto_transaction_explorer_url('TRX', 'tron', $hash),
+            'direction' => 'incoming',
+            'direction_label' => 'Incoming',
+            'direction_icon' => 'bi-arrow-down-left',
+            'amount_crypto' => $amountCrypto,
+            'amount_fiat' => $amountFiat,
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 6) . ' TRX',
+            'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
+            'fee_label' => '',
+            'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
+            'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
+            'timestamp' => $timestamp,
+            'confirmations' => $confirmations,
+            'confirmations_label' => $confirmations . ' conf',
+            'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
+            'to_label' => admin_compact_wallet_address($walletAddress, 8, 5),
+            'candidate' => false,
+            'candidate_score' => admin_crypto_accept_preview_candidate_score([
+                'direction' => 'incoming',
+                'amount_crypto' => $amountCrypto,
+                'amount_fiat' => $amountFiat,
+                'timestamp' => $timestamp,
+            ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'source' => 'trongrid',
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+
+    return $rows;
+}
+
+function admin_crypto_accept_preview_sol_rows(
+    array $paymentRow,
+    int $windowHours = 24,
+    string $commitment = 'finalized',
+    int $cacheTtlSeconds = 120
+): array
 {
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
     $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
@@ -8415,8 +13077,13 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
     }
 
     $windowHours = max(1, min(72, $windowHours));
-    $cacheKey = 'sol_native_history_' . sha1($walletAddress . '|window:' . $windowHours);
-    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
+    $commitment = strtolower(trim($commitment));
+    if (!in_array($commitment, ['confirmed', 'finalized'], true)) {
+        $commitment = 'finalized';
+    }
+    $cacheTtlSeconds = max(1, min(120, $cacheTtlSeconds));
+    $cacheKey = 'sol_native_history_' . sha1($walletAddress . '|window:' . $windowHours . '|commitment:' . $commitment) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, $cacheTtlSeconds);
     if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
         return $cached['rows'];
     }
@@ -8428,8 +13095,8 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
         'params' => [
             $walletAddress,
             [
-                'commitment' => 'finalized',
-                'limit' => 12,
+                'commitment' => $commitment,
+                'limit' => 8,
             ],
         ],
     ]);
@@ -8452,7 +13119,18 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
     $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
     $cutoff = time() - ($windowHours * 3600);
     $rows = [];
+    $latestConfirmedSlot = 0;
+    if ($commitment === 'confirmed') {
+        $slotPayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'getSlot',
+            'params' => [['commitment' => 'confirmed']],
+        ]);
+        $latestConfirmedSlot = max(0, (int)($slotPayload['result'] ?? 0));
+    }
 
+    $eligibleSignatures = [];
     foreach ($signatureRows as $signatureRow) {
         if (!is_array($signatureRow) || !empty($signatureRow['err'])) {
             continue;
@@ -8468,21 +13146,52 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
             continue;
         }
 
-        $transactionPayload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
+        $eligibleSignatures[] = [
+            'signature' => $signature,
+            'row' => $signatureRow,
+        ];
+    }
+
+    if (!$eligibleSignatures) {
+        admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => []]);
+        return [];
+    }
+
+    $transactionRequests = [];
+    foreach ($eligibleSignatures as $index => $signatureData) {
+        $transactionRequests[] = [
             'jsonrpc' => '2.0',
-            'id' => 1,
+            'id' => $index + 1,
             'method' => 'getTransaction',
             'params' => [
-                $signature,
+                (string)$signatureData['signature'],
                 [
                     'encoding' => 'jsonParsed',
+                    'commitment' => $commitment,
                     'maxSupportedTransactionVersion' => 0,
                 ],
             ],
-        ]);
-        $transaction = isset($transactionPayload['result']) && is_array($transactionPayload['result'])
-            ? $transactionPayload['result']
-            : null;
+        ];
+    }
+
+    $transactionPayload = admin_http_post_json('https://api.mainnet-beta.solana.com', $transactionRequests);
+    $transactionsById = [];
+    foreach (is_array($transactionPayload) ? $transactionPayload : [] as $transactionResponse) {
+        if (!is_array($transactionResponse)) {
+            continue;
+        }
+        $responseId = (int)($transactionResponse['id'] ?? 0);
+        if ($responseId > 0 && isset($transactionResponse['result']) && is_array($transactionResponse['result'])) {
+            $transactionsById[$responseId] = $transactionResponse['result'];
+        }
+    }
+
+    foreach ($eligibleSignatures as $index => $signatureData) {
+        $signature = (string)$signatureData['signature'];
+        $signatureRow = (array)$signatureData['row'];
+        $timestamp = (int)($signatureRow['blockTime'] ?? 0);
+
+        $transaction = $transactionsById[$index + 1] ?? null;
         if (!$transaction) {
             continue;
         }
@@ -8491,6 +13200,7 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
             ? $transaction['transaction']['message']
             : [];
         $meta = isset($transaction['meta']) && is_array($transaction['meta']) ? $transaction['meta'] : [];
+        if (!array_key_exists('err', $meta) || $meta['err'] !== null) continue;
         $accountKeys = isset($message['accountKeys']) && is_array($message['accountKeys']) ? $message['accountKeys'] : [];
         $walletIndex = null;
         foreach ($accountKeys as $index => $accountKey) {
@@ -8522,6 +13232,18 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
         $fromAddress = '';
         $toAddress = '';
         $instructions = isset($message['instructions']) && is_array($message['instructions']) ? $message['instructions'] : [];
+        foreach ((array)($meta['innerInstructions'] ?? []) as $inner) {
+            foreach ((array)($inner['instructions'] ?? []) as $instruction) $instructions[] = $instruction;
+        }
+        $verifiedIncomingLamports = 0.0;
+        foreach ($instructions as $instruction) {
+            if (($instruction['program'] ?? '') === 'system'
+                && in_array(($instruction['parsed']['type'] ?? ''), ['transfer', 'transferWithSeed'], true)
+                && ($instruction['parsed']['info']['destination'] ?? '') === $walletAddress
+                && ($instruction['parsed']['info']['source'] ?? '') !== $walletAddress) {
+                $verifiedIncomingLamports += max(0, (float)($instruction['parsed']['info']['lamports'] ?? 0));
+            }
+        }
         foreach ($instructions as $instruction) {
             $parsed = isset($instruction['parsed']) && is_array($instruction['parsed']) ? $instruction['parsed'] : [];
             $info = isset($parsed['info']) && is_array($parsed['info']) ? $parsed['info'] : [];
@@ -8545,9 +13267,17 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
             $fromAddress = $walletAddress;
         }
 
+        if ($direction === 'incoming' && $verifiedIncomingLamports > 0) $amountCrypto = min($deltaLamports, $verifiedIncomingLamports) / 1000000000;
         $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
         $feeLamports = isset($meta['fee']) ? (float)$meta['fee'] : 0.0;
-        $statusLabel = trim((string)($signatureRow['confirmationStatus'] ?? ''));
+        $statusLabel = strtolower(trim((string)($signatureRow['confirmationStatus'] ?? '')));
+        $confirmations = 0;
+        if ($commitment === 'confirmed' && in_array($statusLabel, ['confirmed', 'finalized'], true)) {
+            $transactionSlot = max(0, (int)($signatureRow['slot'] ?? ($transaction['slot'] ?? 0)));
+            $confirmations = $latestConfirmedSlot > 0 && $transactionSlot > 0
+                ? max(1, $latestConfirmedSlot - $transactionSlot + 1)
+                : 1;
+        }
         $rows[] = [
             'hash' => $signature,
             'hash_compact' => admin_compact_wallet_address($signature, 6, 4),
@@ -8557,13 +13287,15 @@ function admin_crypto_accept_preview_sol_rows(array $paymentRow, int $windowHour
             'direction_icon' => $direction === 'incoming' ? 'bi-arrow-down-left' : 'bi-arrow-up-right',
             'amount_crypto' => $amountCrypto,
             'amount_fiat' => $amountFiat,
-            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 8) . ' SOL',
+            'amount_crypto_label' => admin_decimal_input_value($amountCrypto, 9) . ' SOL',
             'amount_fiat_label' => $amountFiat > 0 ? admin_format_money_value_with_symbol($amountFiat, (string)($paymentRow['currency_code'] ?? ''), (string)($paymentRow['currency_symbol'] ?? '')) : '',
-            'fee_label' => $feeLamports > 0 ? ('Fee ' . admin_decimal_input_value($feeLamports / 1000000000, 8) . ' SOL') : '',
+            'fee_label' => $feeLamports > 0 ? ('Fee ' . admin_decimal_input_value($feeLamports / 1000000000, 9) . ' SOL') : '',
             'received_at' => app_datetime_utc_from_unix_timestamp($timestamp),
             'received_at_label' => app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($timestamp), 'd.m.Y H:i:s'),
             'timestamp' => $timestamp,
-            'confirmations' => 0,
+            'confirmation_status' => $statusLabel,
+            'transfer_verified' => $verifiedIncomingLamports > 0,
+            'confirmations' => $confirmations,
             'confirmations_label' => $statusLabel !== '' ? ucfirst($statusLabel) : '',
             'from_label' => $fromAddress !== '' ? admin_compact_wallet_address($fromAddress, 8, 5) : '',
             'to_label' => $toAddress !== '' ? admin_compact_wallet_address($toAddress, 8, 5) : '',
@@ -8595,7 +13327,7 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
         return ['crypto' => '', 'fiat' => ''];
     }
 
-    $cacheKey = 'wallet_balance_v2_' . sha1($assetCode . '|' . $networkCode . '|' . $walletAddress);
+    $cacheKey = 'wallet_balance_v2_' . sha1($assetCode . '|' . $networkCode . '|' . $walletAddress) . '|quote:' . sha1(json_encode([$paymentRow['id'] ?? 0, $paymentRow['exchange_rate'] ?? 0, $paymentRow['requested_at'] ?? '', $paymentRow['requested_amount_value'] ?? 0]));
     $cached = admin_crypto_accept_preview_cache_read($cacheKey, 120);
     if (is_array($cached)) {
         return [
@@ -8652,6 +13384,14 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
                 }
             }
         }
+    } elseif ($assetCode === 'TRX' || $networkCode === 'tron') {
+        $payload = admin_http_post_json('https://api.trongrid.io/wallet/getaccount', [
+            'address' => $walletAddress,
+            'visible' => true,
+        ]);
+        if (is_array($payload) && array_key_exists('balance', $payload)) {
+            $balanceCrypto = ((float)$payload['balance']) / 1000000;
+        }
     } elseif ($assetCode === 'SOL' || $networkCode === 'solana') {
         $payload = admin_http_post_json('https://api.mainnet-beta.solana.com', [
             'jsonrpc' => '2.0',
@@ -8690,25 +13430,78 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         $transactions = admin_crypto_accept_preview_eth_native_rows($paymentRow, $windowHours);
     } elseif (!$transactions && $networkCode === 'ethereum') {
         $transactions = admin_crypto_accept_preview_eth_token_rows($paymentRow, $windowHours);
+    } elseif (!$transactions && ($assetCode === 'TRX' || $networkCode === 'tron')) {
+        $transactions = admin_crypto_accept_preview_trx_rows($paymentRow, $windowHours);
     } elseif (!$transactions && ($assetCode === 'SOL' || $networkCode === 'solana')) {
         $transactions = admin_crypto_accept_preview_sol_rows($paymentRow, $windowHours);
     }
 
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
+        : strtotime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
+        ? (float)$paymentRow['requested_amount_crypto']
+        : (float)($paymentRow['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
+        ? (float)$paymentRow['requested_amount_value']
+        : (float)($paymentRow['amount_value'] ?? 0);
+    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
+
     $bestIndex = null;
-    $bestScore = 0.0;
+    $bestPercent = -1;
+    $bestAnalysis = null;
+    $linkedIndex = null;
     foreach ($transactions as $index => $row) {
-        $score = (float)($row['candidate_score'] ?? 0);
-        if ($score > $bestScore) {
-            $bestScore = $score;
+        $analysis = admin_crypto_accept_preview_fit_analysis($row, $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, (int)$requestedTimestamp, $messages);
+        $transactions[$index]['candidate'] = false;
+        $transactions[$index]['match_percent'] = (int)($analysis['percent'] ?? 0);
+        $transactions[$index]['match_score'] = (float)($analysis['score'] ?? 0.0);
+        $transactions[$index]['match_tone'] = (string)($analysis['tone'] ?? 'warning');
+        $transactions[$index]['match_title'] = (string)($analysis['title'] ?? '');
+        $transactions[$index]['match_text'] = (string)($analysis['text'] ?? '');
+
+        if (!empty($row['candidate']) && (float)($row['candidate_score'] ?? 0) >= 999.0) {
+            $linkedIndex = $index;
+        }
+
+        $percent = (int)($analysis['percent'] ?? 0);
+        if ($percent > $bestPercent) {
+            $bestPercent = $percent;
             $bestIndex = $index;
+            $bestAnalysis = $analysis;
         }
     }
     $hasCandidate = false;
     $candidateRow = null;
-    if ($bestIndex !== null && $bestScore >= 3.0) {
+    if ($linkedIndex !== null) {
+        $transactions[$linkedIndex]['candidate'] = true;
+        $hasCandidate = true;
+        $candidateRow = $transactions[$linkedIndex];
+        $bestIndex = $linkedIndex;
+        $bestPercent = (int)($transactions[$linkedIndex]['match_percent'] ?? 100);
+        $bestAnalysis = [
+            'title' => (string)($transactions[$linkedIndex]['match_title'] ?? ''),
+            'text' => (string)($transactions[$linkedIndex]['match_text'] ?? ''),
+            'tone' => (string)($transactions[$linkedIndex]['match_tone'] ?? 'success'),
+            'percent' => $bestPercent,
+        ];
+    } elseif ($bestIndex !== null && $bestPercent >= 70) {
         $transactions[$bestIndex]['candidate'] = true;
         $hasCandidate = true;
         $candidateRow = $transactions[$bestIndex];
+    }
+
+    $matchSummaryTitle = '';
+    $matchSummaryText = '';
+    $matchSummaryTone = 'warning';
+    $matchSummaryPercent = $bestPercent >= 0 ? $bestPercent : 0;
+    if ($bestIndex !== null && is_array($bestAnalysis)) {
+        $matchSummaryTitle = (string)($bestAnalysis['title'] ?? '');
+        $matchSummaryText = (string)($bestAnalysis['text'] ?? '');
+        $matchSummaryTone = (string)($bestAnalysis['tone'] ?? 'warning');
+        if (!$hasCandidate) {
+            $matchSummaryTitle = admin_t($messages, 'payment_accept_modal_best_match_title', 'Najlepsze dopasowanie {percent}%', ['percent' => (string)$matchSummaryPercent]);
+        }
     }
 
     $balance = admin_crypto_accept_preview_wallet_balance($paymentRow);
@@ -8730,11 +13523,16 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         'balance_fiat_label' => (string)($balance['fiat'] ?? ''),
         'transactions_title' => admin_t($messages, 'payment_accept_modal_transactions_title', 'Recent transactions'),
         'has_candidate' => $hasCandidate ? 1 : 0,
-        'candidate_warning_title' => admin_t($messages, 'payment_accept_modal_candidate_warning_title', 'No clear matching transaction'),
-        'candidate_warning_text' => admin_t($messages, 'payment_accept_modal_candidate_warning_text', 'There is no clearly matching transaction in the last 24 hours. If you have any doubts, verify the address manually in the explorer before accepting the payment.'),
+        'match_summary_title' => $matchSummaryTitle,
+        'match_summary_text' => $matchSummaryText,
+        'match_summary_tone' => $matchSummaryTone,
+        'match_summary_percent' => $matchSummaryPercent,
+        'candidate_warning_title' => admin_t($messages, 'payment_accept_modal_candidate_warning_title', 'Brak pewnego dopasowania transakcji'),
+        'candidate_warning_text' => admin_t($messages, 'payment_accept_modal_candidate_warning_text', 'Nie znaleziono transakcji, która jednoznacznie pasuje do czasu i kwoty tego requestu. Zweryfikuj adres, kwotę oraz godzinę w explorerze przed akceptacją.'),
         'empty_title' => admin_t($messages, 'payment_accept_modal_recent_empty_title', 'No recent transactions'),
         'empty_text' => admin_t($messages, 'payment_accept_modal_recent_empty_text', 'No transactions from the last 24 hours were found for this address.'),
-        'candidate_badge' => admin_t($messages, 'payment_accept_modal_candidate_badge', 'Best match'),
+        'candidate_badge' => admin_t($messages, 'payment_accept_modal_candidate_badge', 'Najlepsze dopasowanie'),
+        'match_badge_prefix' => admin_t($messages, 'payment_accept_modal_match_badge_prefix', 'Dopasowanie'),
         'candidate_crypto_amount' => $candidateRow !== null ? (string)($candidateRow['amount_crypto'] ?? '') : '',
         'candidate_crypto_label' => $candidateRow !== null ? (string)($candidateRow['amount_crypto_label'] ?? '') : '',
         'candidate_fiat_amount' => $candidateRow !== null ? (string)($candidateRow['amount_fiat'] ?? '') : '',
@@ -8749,6 +13547,502 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         'accent' => $theme['accent'],
         'soft' => $theme['soft'],
         'transactions' => $transactions,
+    ];
+}
+
+function admin_crypto_auto_accept_transaction_rows(Mysql_ks $db, array $paymentRow, int $windowMinutes): array
+{
+    $windowHours = max(1, min(72, (int)ceil(max(5, $windowMinutes) / 60) + 1));
+    $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
+    $rows = [];
+
+    foreach (admin_crypto_accept_preview_db_rows($db, $paymentRow, $windowHours) as $row) {
+        $hash = trim((string)($row['hash'] ?? ''));
+        if ($hash !== '') {
+            $rows[$hash] = $row;
+        }
+    }
+
+    if ($assetCode === 'BTC' || $networkCode === 'bitcoin') {
+        $remoteRows = admin_crypto_accept_preview_btc_remote_rows($paymentRow, $windowHours, true);
+    } elseif ($assetCode === 'DOGE' || $networkCode === 'dogecoin') {
+        $remoteRows = admin_crypto_accept_preview_doge_remote_rows($paymentRow, $windowHours, true, true);
+    } elseif ($networkCode === 'ethereum' && $assetCode === 'ETH') {
+        $remoteRows = admin_crypto_accept_preview_eth_native_rows($paymentRow, $windowHours);
+    } elseif ($networkCode === 'ethereum') {
+        $remoteRows = admin_crypto_accept_preview_eth_token_rows($paymentRow, $windowHours);
+    } elseif ($assetCode === 'TRX' || $networkCode === 'tron') {
+        $remoteRows = admin_crypto_accept_preview_trx_rows($paymentRow, $windowHours);
+    } elseif ($assetCode === 'SOL' || $networkCode === 'solana') {
+        $remoteRows = admin_crypto_accept_preview_sol_rows($paymentRow, $windowHours);
+    } else {
+        $remoteRows = [];
+    }
+
+    foreach ($remoteRows as $row) {
+        $hash = trim((string)($row['hash'] ?? ''));
+        if ($hash === '') {
+            continue;
+        }
+        $rows[$hash] = $row;
+    }
+
+    $result = array_values($rows);
+    usort($result, static function (array $left, array $right): int {
+        return (int)($right['timestamp'] ?? 0) <=> (int)($left['timestamp'] ?? 0);
+    });
+
+    return $result;
+}
+
+function admin_crypto_auto_accept_wallet_is_unambiguous(Mysql_ks $db, array $payment): bool
+{
+    $walletId = admin_crypto_payment_wallet_address_id($db, $payment);
+    $paymentId = (int)($payment['id'] ?? 0);
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    if ($walletId <= 0 || $paymentId <= 0 || $customerId <= 0 || !schema_object_exists($db, 'crypto_deposit_requests')) {
+        return false;
+    }
+
+    $openStatuses = app_payment_open_crypto_statuses();
+    $openStatusSql = "'" . implode("','", array_map([$db, 'escape'], $openStatuses)) . "'";
+    $conflict = $db->select_user(
+        "SELECT crypto_deposit_requests.id
+         FROM crypto_deposit_requests
+         LEFT JOIN crypto_wallet_assignments AS payment_assignment
+           ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
+         WHERE crypto_deposit_requests.id <> {$paymentId}
+           AND crypto_deposit_requests.status IN ({$openStatusSql})
+           AND (
+                crypto_deposit_requests.wallet_address_id = {$walletId}
+                OR payment_assignment.wallet_address_id = {$walletId}
+           )
+         LIMIT 1"
+    );
+    if (is_array($conflict) && !empty($conflict['id'])) {
+        return false;
+    }
+
+    if (schema_object_exists($db, 'crypto_wallet_assignments')) {
+        $assignmentConflict = $db->select_user(
+            "SELECT id
+             FROM crypto_wallet_assignments
+             WHERE wallet_address_id = {$walletId}
+               AND customer_id <> {$customerId}
+               AND status IN ('reserved', 'active')
+             LIMIT 1"
+        );
+        if (is_array($assignmentConflict) && !empty($assignmentConflict['id'])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function admin_crypto_auto_accept_transaction_is_unused(Mysql_ks $db, string $txHash, int $paymentId): bool
+{
+    $txHash = trim($txHash);
+    if ($txHash === '' || !schema_object_exists($db, 'crypto_deposit_transactions')) {
+        return true;
+    }
+
+    $existing = $db->select_user(
+        "SELECT deposit_request_id
+         FROM crypto_deposit_transactions
+         WHERE transaction_hash = '" . $db->escape($txHash) . "'
+         LIMIT 1"
+    );
+    if (!is_array($existing)) {
+        return true;
+    }
+
+    $linkedRequestId = (int)($existing['deposit_request_id'] ?? 0);
+    return $linkedRequestId <= 0 || $linkedRequestId === $paymentId;
+}
+
+function admin_crypto_auto_accept_candidate(Mysql_ks $db, array $payment, array $settings): ?array
+{
+    $windowMinutes = max(5, min(240, (int)($settings['crypto_auto_accept_window_minutes'] ?? 60)));
+    $minAmountPercent = max(50, min(100, (int)($settings['crypto_auto_accept_min_amount_percent'] ?? 80)));
+    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+        ? app_timestamp_from_runtime_datetime((string)($payment['requested_at'] ?? ''))
+        : strtotime((string)($payment['requested_at'] ?? ''));
+    if ($requestedTimestamp <= 0) {
+        return null;
+    }
+
+    $requestedCryptoAmount = isset($payment['requested_amount_crypto']) && $payment['requested_amount_crypto'] !== null
+        ? (float)$payment['requested_amount_crypto']
+        : (float)($payment['amount_crypto'] ?? 0);
+    $requestedFiatAmount = isset($payment['requested_amount_value']) && $payment['requested_amount_value'] !== null
+        ? (float)$payment['requested_amount_value']
+        : (float)($payment['amount_value'] ?? 0);
+    $lockedRate = (float)($payment['exchange_rate'] ?? 0);
+    $windowEnd = $requestedTimestamp + ($windowMinutes * 60);
+    $best = null;
+
+    $candidateRows = admin_crypto_auto_accept_transaction_rows($db, $payment, $windowMinutes);
+    $hashes = [];
+    foreach ($candidateRows as $row) if (trim((string)($row['hash'] ?? '')) !== '') $hashes[] = "'" . $db->escape((string)$row['hash']) . "'";
+    $used = [];
+    if ($hashes && schema_object_exists($db, 'crypto_deposit_transactions')) {
+        foreach ($db->select_full_user("SELECT transaction_hash FROM crypto_deposit_transactions WHERE transaction_hash IN (" . implode(',', $hashes) . ") AND deposit_request_id IS NOT NULL AND deposit_request_id <> " . (int)$payment['id']) ?: [] as $claimed) {
+            $used[strtolower((string)$claimed['transaction_hash'])] = true;
+        }
+    }
+    foreach ($candidateRows as $row) {
+        $hash = trim((string)($row['hash'] ?? ''));
+        $timestamp = (int)($row['timestamp'] ?? 0);
+        $amountCrypto = (float)($row['amount_crypto'] ?? 0);
+        $amountFiat = $lockedRate > 0 ? round($amountCrypto * $lockedRate, 2) : 0.0;
+        if (
+            $hash === ''
+            || strtolower(trim((string)($row['direction'] ?? 'incoming'))) !== 'incoming'
+            || $timestamp < $requestedTimestamp
+            || $timestamp > $windowEnd
+            || $timestamp > time()
+            || !is_finite($amountCrypto) || !is_finite($amountFiat) || !is_finite($lockedRate)
+            || $amountCrypto <= 0
+            || isset($used[strtolower($hash)])
+        ) {
+            continue;
+        }
+
+        $amountPercent = 0.0;
+        if ($requestedFiatAmount > 0 && $amountFiat > 0) {
+            $amountPercent = ($amountFiat / $requestedFiatAmount) * 100;
+        } elseif ($requestedCryptoAmount > 0 && $amountCrypto > 0) {
+            $amountPercent = ($amountCrypto / $requestedCryptoAmount) * 100;
+        }
+        if ($amountPercent + 0.0001 < $minAmountPercent) {
+            continue;
+        }
+
+        $row = admin_crypto_verified_incoming_row($payment, $row);
+        if ($row === null) continue;
+        $amountCrypto = (float)$row['amount_crypto'];
+        $amountFiat = round($amountCrypto * $lockedRate, 2);
+        $timestamp = (int)$row['timestamp'];
+        $amountPercent = $requestedFiatAmount > 0 ? ($amountFiat / $requestedFiatAmount) * 100 : 0;
+        if ($timestamp < $requestedTimestamp || $timestamp > min(time(), $windowEnd) || $amountFiat <= 0 || $amountPercent + 0.0001 < $minAmountPercent) continue;
+        $analysis = admin_crypto_accept_preview_fit_analysis(
+            $row,
+            $requestedCryptoAmount,
+            $requestedFiatAmount,
+            $lockedRate,
+            $requestedTimestamp,
+            []
+        );
+        $row['amount_fiat'] = $amountFiat;
+        $row['amount_percent'] = $amountPercent;
+        $row['match_percent'] = (int)($analysis['percent'] ?? 0);
+        $row['match_tone'] = (string)($analysis['tone'] ?? '');
+        $row['match_text'] = (string)($analysis['text'] ?? '');
+
+        $bestAmountPercent = is_array($best) ? (float)($best['amount_percent'] ?? 0) : 0.0;
+        $rowAmountPercent = (float)$row['amount_percent'];
+        if (
+            $best === null
+            || $rowAmountPercent > ($bestAmountPercent + 0.0001)
+            || (abs($rowAmountPercent - $bestAmountPercent) <= 0.0001 && (int)$row['timestamp'] < (int)($best['timestamp'] ?? PHP_INT_MAX))
+        ) {
+            $best = $row;
+        }
+    }
+
+    return is_array($best) ? $best : null;
+}
+
+function admin_crypto_manual_blockchain_check(Mysql_ks $db, array $payment, array $settings, array $messages = []): array
+{
+    $paymentId = (int)($payment['id'] ?? 0);
+    $paymentStatus = strtolower(trim((string)($payment['status'] ?? '')));
+    $allowedStatuses = array_merge(
+        admin_payment_expired_statuses('crypto'),
+        admin_payment_cancelled_statuses('crypto')
+    );
+    if ($paymentId <= 0 || (string)($payment['payment_type'] ?? '') !== 'crypto') {
+        return [
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_unavailable', 'Blockchain check is available only for crypto payment requests.'),
+        ];
+    }
+    if (!in_array($paymentStatus, $allowedStatuses, true)) {
+        return [
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_status_unavailable', 'Blockchain check is available only for expired or cancelled crypto requests.'),
+        ];
+    }
+    if (trim((string)($payment['wallet_address'] ?? '')) === '') {
+        return [
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_missing_wallet', 'This request has no wallet address to check.'),
+        ];
+    }
+    if (!admin_crypto_auto_accept_wallet_is_unambiguous($db, $payment)) {
+        return [
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_wallet_conflict', 'This wallet has another active assignment or payment request. Check it manually before linking any transaction.'),
+        ];
+    }
+
+    $candidate = admin_crypto_auto_accept_candidate($db, $payment, $settings);
+    if (!is_array($candidate)) {
+        $preview = admin_crypto_accept_preview_payload($db, $payment, $messages, 24);
+        return [
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_no_match', 'No safe matching incoming transaction was found for this request. Open the explorer and verify the wallet manually.'),
+            'explorer_url' => (string)($preview['explorer_url'] ?? ''),
+            'match_percent' => (int)($preview['match_summary_percent'] ?? 0),
+            'match_title' => (string)($preview['match_summary_title'] ?? ''),
+            'match_text' => (string)($preview['match_summary_text'] ?? ''),
+        ];
+    }
+
+    $amountCrypto = round((float)($candidate['amount_crypto'] ?? 0), 8);
+    $amountFiat = round((float)($candidate['amount_fiat'] ?? 0), 2);
+    $txHash = trim((string)($candidate['hash'] ?? ''));
+    if ($amountCrypto <= 0 || $amountFiat <= 0 || $txHash === '') {
+        return [
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_no_match', 'No safe matching incoming transaction was found for this request. Open the explorer and verify the wallet manually.'),
+        ];
+    }
+
+    $assetCode = strtoupper(trim((string)($payment['asset_code'] ?? '')));
+    $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($payment['network_code'] ?? ''), $assetCode);
+    $receivedAt = trim((string)($candidate['received_at'] ?? ''));
+    $receivedAtLabel = $receivedAt !== ''
+        ? app_format_utc_datetime_local($receivedAt, 'd.m.Y H:i:s')
+        : ((int)($candidate['timestamp'] ?? 0) > 0 ? app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp((int)$candidate['timestamp']), 'd.m.Y H:i:s') : '');
+    $cryptoLabel = admin_decimal_input_value($amountCrypto, 8) . ($assetCode !== '' ? ' ' . $assetCode : '');
+    $fiatLabel = admin_format_money_value_with_symbol($amountFiat, (string)($payment['currency_code'] ?? ''), (string)($payment['currency_symbol'] ?? ''));
+    $matchPercent = (int)($candidate['match_percent'] ?? 0);
+    $hashCompact = admin_compact_wallet_address($txHash, 6, 4);
+    $explorerUrl = admin_crypto_transaction_explorer_url($assetCode, $networkCode, $txHash);
+
+    return [
+        'ok' => true,
+        'message' => admin_t(
+            $messages,
+            'payment_blockchain_check_found_text',
+            'Detected {crypto} ({fiat}) with {percent}% match. Check the transaction in explorer and click Save payment if everything is correct.',
+            [
+                'crypto' => $cryptoLabel,
+                'fiat' => $fiatLabel,
+                'percent' => (string)$matchPercent,
+            ]
+        ),
+        'title' => admin_t($messages, 'payment_blockchain_check_found_title', 'Payment detected'),
+        'status' => 'approved',
+        'status_label' => admin_t($messages, 'enum_approved', 'Approved'),
+        'received_crypto_amount' => admin_decimal_input_value($amountCrypto, 8),
+        'received_fiat_amount' => number_format($amountFiat, 2, '.', ''),
+        'received_crypto_label' => $cryptoLabel,
+        'received_fiat_label' => $fiatLabel,
+        'tx_hash' => $txHash,
+        'tx_hash_compact' => $hashCompact,
+        'tx_url' => $explorerUrl,
+        'received_at_label' => $receivedAtLabel,
+        'match_percent' => $matchPercent,
+        'match_title' => (string)($candidate['match_title'] ?? ''),
+        'match_text' => (string)($candidate['match_text'] ?? ''),
+    ];
+}
+
+function admin_crypto_auto_accept_store_transaction(Mysql_ks $db, array $payment, array $candidate): bool
+{
+    if (!schema_object_exists($db, 'crypto_deposit_transactions')) {
+        return false;
+    }
+
+    $paymentId = (int)($payment['id'] ?? 0);
+    $walletId = admin_crypto_payment_wallet_address_id($db, $payment);
+    $customerId = (int)($payment['customer_id'] ?? 0);
+    $assetId = (int)($payment['crypto_asset_id'] ?? 0);
+    $txHash = trim((string)($candidate['hash'] ?? ''));
+    $amountCrypto = round((float)($candidate['amount_crypto'] ?? 0), 8);
+    $amountFiat = admin_round_customer_crypto_fiat_credit($candidate['amount_fiat'] ?? 0);
+    if ($paymentId <= 0 || $walletId <= 0 || $assetId <= 0 || $txHash === '' || $amountCrypto <= 0) {
+        return false;
+    }
+
+    $receivedAt = trim((string)($candidate['received_at'] ?? ''));
+    if ($receivedAt === '' && (int)($candidate['timestamp'] ?? 0) > 0) {
+        $receivedAt = app_datetime_utc_from_unix_timestamp((int)$candidate['timestamp']);
+    }
+    if ($receivedAt === '') {
+        $receivedAt = date('Y-m-d H:i:s');
+    }
+
+    $rawPayload = json_encode([
+        'source' => 'auto_accept',
+        'match_percent' => (int)($candidate['match_percent'] ?? 0),
+        'amount_percent' => round((float)($candidate['amount_percent'] ?? 0), 2),
+        'match_text' => (string)($candidate['match_text'] ?? ''),
+        'row_source' => (string)($candidate['source'] ?? ''),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+    $claimKey = 'crypto-tx:' . substr(hash('sha256', (string)getenv('DB_NAME') . '|' . $txHash), 0, 48);
+    $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($claimKey) . "', 0) acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) return false;
+    try {
+    $existing = $db->select_user(
+        "SELECT id, deposit_request_id, wallet_address_id, crypto_asset_id
+         FROM crypto_deposit_transactions
+         WHERE transaction_hash = '" . $db->escape($txHash) . "'
+         LIMIT 1"
+    );
+    if (is_array($existing) && !empty($existing['id'])) {
+        if ((int)($existing['wallet_address_id'] ?? 0) !== $walletId || (int)($existing['crypto_asset_id'] ?? 0) !== $assetId || ((int)($existing['deposit_request_id'] ?? 0) > 0 && (int)$existing['deposit_request_id'] !== $paymentId)) return false;
+        return (bool)$db->update_using_id(
+            ['deposit_request_id', 'customer_id', 'amount_crypto', 'amount_fiat', 'confirmations', 'status', 'received_at', 'raw_payload'],
+            [$paymentId, $customerId, $amountCrypto, $amountFiat > 0 ? $amountFiat : null, max(0, (int)($candidate['confirmations'] ?? 0)), 'detected', $receivedAt, $rawPayload],
+            'crypto_deposit_transactions',
+            (int)$existing['id']
+        );
+    }
+
+    return (bool)$db->insert(
+        ['deposit_request_id', 'wallet_address_id', 'customer_id', 'crypto_asset_id', 'transaction_hash', 'amount_crypto', 'amount_fiat', 'confirmations', 'status', 'received_at', 'raw_payload'],
+        [$paymentId, $walletId, $customerId, $assetId, $txHash, $amountCrypto, $amountFiat > 0 ? $amountFiat : null, max(0, (int)($candidate['confirmations'] ?? 0)), 'detected', $receivedAt, $rawPayload],
+        'crypto_deposit_transactions'
+    );
+    } finally { $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($claimKey) . "') released"); }
+}
+
+function admin_crypto_auto_accept_recent_payments(Mysql_ks $db, array $settings, array $options = []): array
+{
+    if (empty($settings['crypto_auto_accept_enabled'])) return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0];
+    $key = 'crypto-scan:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 32);
+    $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'busy' => true];
+    try {
+        app_ensure_payment_request_runtime_columns($db);
+        app_crypto_network_budget(10, 10);
+        return admin_crypto_auto_accept_recent_payments_locked($db, $settings, $options);
+    } finally { $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($key) . "') released"); }
+}
+
+function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $settings, array $options = []): array
+{
+    if (empty($settings['crypto_auto_accept_enabled'])) {
+        return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'message' => 'Crypto auto-accept is disabled.'];
+    }
+    if (!schema_object_exists($db, 'crypto_deposit_requests')) {
+        return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'message' => 'Crypto payments table is unavailable.'];
+    }
+
+    $windowMinutes = max(5, min(240, (int)($settings['crypto_auto_accept_window_minutes'] ?? 60)));
+    $scanBackMinutes = min(300, $windowMinutes + 30);
+    $limit = max(1, min(20, (int)($options['limit'] ?? 6)));
+    $safeNow = trim((string)($options['now'] ?? ''));
+    if ($safeNow === '') {
+        $safeNow = date('Y-m-d H:i:s');
+    }
+    $safeNowSql = $db->escape($safeNow);
+    // Each status uses the complete queue index order; only a bounded union is sorted.
+    $queues = [];
+    foreach (app_payment_open_crypto_statuses() as $status) {
+        $safeStatus = $db->escape($status);
+        $queues[] = "(SELECT id, blockchain_checked_at, requested_at
+            FROM crypto_deposit_requests
+            WHERE status = '{$safeStatus}'
+              AND (blockchain_checked_at IS NULL OR blockchain_checked_at < DATE_SUB('{$safeNowSql}', INTERVAL 120 SECOND))
+              AND requested_at <= '{$safeNowSql}'
+              AND requested_at >= DATE_SUB('{$safeNowSql}', INTERVAL {$scanBackMinutes} MINUTE)
+            ORDER BY blockchain_checked_at ASC, requested_at ASC, id ASC
+            LIMIT {$limit})";
+    }
+    $rows = $db->select_full_user(
+        'SELECT id FROM (' . implode(' UNION ALL ', $queues) . ") AS scan_queue
+         ORDER BY blockchain_checked_at ASC, requested_at ASC, id ASC
+         LIMIT {$limit}"
+    );
+
+    $checked = 0;
+    $accepted = 0;
+    $skipped = 0;
+    $errors = [];
+
+    foreach ($rows ?: [] as $row) {
+        if (microtime(true) >= ($GLOBALS['app_crypto_network_budget']['deadline'] ?? 0)) break;
+        $paymentId = (int)($row['id'] ?? 0);
+        if ($paymentId <= 0) {
+            continue;
+        }
+        $db->update_using_id(['blockchain_checked_at'], [$safeNow], 'crypto_deposit_requests', $paymentId);
+        $checked++;
+        $payment = admin_payment_find($db, 'crypto', $paymentId);
+        if (!is_array($payment) || empty($payment['id'])) {
+            $skipped++;
+            continue;
+        }
+        if (!admin_crypto_auto_accept_wallet_is_unambiguous($db, $payment)) {
+            $skipped++;
+            continue;
+        }
+
+        $candidate = admin_crypto_auto_accept_candidate($db, $payment, $settings);
+        if (!is_array($candidate)) {
+            $skipped++;
+            continue;
+        }
+
+        $amountCrypto = round((float)($candidate['amount_crypto'] ?? 0), 8);
+        $amountFiat = round((float)($candidate['amount_fiat'] ?? 0), 2);
+        if ($amountCrypto <= 0 || $amountFiat <= 0) {
+            $skipped++;
+            continue;
+        }
+
+        if (!admin_crypto_auto_accept_store_transaction($db, $payment, $candidate)) { $skipped++; continue; }
+        $result = admin_payment_apply_quick_action(
+            $db,
+            'crypto',
+            $paymentId,
+            'accept',
+            0,
+            'maintenance:auto-crypto-accept',
+            [
+                'received_crypto_amount' => admin_decimal_input_value($amountCrypto, 8),
+                'received_fiat_amount' => number_format($amountFiat, 2, '.', ''),
+            ]
+        );
+
+        if (!empty($result['ok'])) {
+            $db->query("UPDATE crypto_deposit_transactions SET status = 'auto_accepted' WHERE deposit_request_id = {$paymentId} AND transaction_hash = '" . $db->escape((string)$candidate['hash']) . "'");
+            $accepted++;
+            admin_log_customer_and_admin(
+                $db,
+                (int)($payment['customer_id'] ?? 0),
+                0,
+                'crypto_payment_auto_accepted',
+                'Crypto payment request #' . $paymentId . ' auto-accepted from transaction ' . trim((string)($candidate['hash'] ?? '')) . ' with ' . number_format((float)($candidate['amount_percent'] ?? 0), 2, '.', '') . '% amount match.',
+                'maintenance:auto-crypto-accept'
+            );
+        } else {
+            // A failed finalize must remain retryable; balance events themselves are idempotent.
+            $fresh = admin_payment_find($db, 'crypto', $paymentId);
+            if (in_array((string)($fresh['status'] ?? ''), admin_payment_success_statuses('crypto'), true)) {
+                $db->update_using_id(['status'], [(string)$payment['status']], 'crypto_deposit_requests', $paymentId);
+            }
+            $skipped++;
+            $errors[] = '#' . $paymentId . ': ' . trim((string)($result['message'] ?? 'accept failed'));
+        }
+    }
+
+    return [
+        'ok' => $errors === [],
+        'checked' => $checked,
+        'accepted' => $accepted,
+        'skipped' => $skipped,
+        'errors' => $errors,
+        'message' => $errors === []
+            ? 'Crypto auto-accept finished.'
+            : 'Crypto auto-accept finished with errors: ' . implode(' | ', array_slice($errors, 0, 3)),
     ];
 }
 
@@ -8858,6 +14152,35 @@ function admin_crypto_preview_network_probe_usdt_erc20(): array
     ];
 }
 
+function admin_crypto_preview_network_probe_trx(): array
+{
+    $sampleAddress = 'TUoHaVjx7n5xz8LwPRDckgFrDWhMhuSuJM';
+    $historyPayload = admin_http_json(
+        'https://api.trongrid.io/v1/accounts/' . rawurlencode($sampleAddress) . '/transactions?only_to=true&only_confirmed=true&limit=1',
+        10,
+        5
+    );
+    $balancePayload = admin_http_post_json('https://api.trongrid.io/wallet/getaccount', [
+        'address' => $sampleAddress,
+        'visible' => true,
+    ]);
+
+    $historyOk = is_array($historyPayload) && !empty($historyPayload['success']) && isset($historyPayload['data']) && is_array($historyPayload['data']);
+    $balanceOk = is_array($balancePayload) && (array_key_exists('balance', $balancePayload) || !empty($balancePayload['address']));
+
+    return [
+        'ok' => $historyOk || $balanceOk,
+        'ready' => $historyOk && $balanceOk,
+        'message' => $historyOk && $balanceOk
+            ? 'TronGrid zwraca potwierdzoną historię TRX i saldo portfela.'
+            : 'TRX preview nie ma pełnej odpowiedzi z TronGrid.',
+        'checks' => [
+            ['label' => 'Historia', 'ok' => $historyOk, 'detail' => $historyOk ? 'Potwierdzone transakcje TRX są dostępne.' : 'Brak historii TRX.'],
+            ['label' => 'Saldo', 'ok' => $balanceOk, 'detail' => $balanceOk ? 'Saldo TRX można odczytać.' : 'Brak odpowiedzi salda TRX.'],
+        ],
+    ];
+}
+
 function admin_crypto_preview_network_probe_sol(): array
 {
     $sampleAddress = 'Vote111111111111111111111111111111111111111';
@@ -8915,14 +14238,18 @@ function admin_crypto_preview_network_probe_sol(): array
 
 function admin_crypto_preview_network_status_rows(array $messages = [], bool $forceRefresh = false): array
 {
-    $cacheKey = 'crypto_preview_network_status_rows_v2';
-    if (!$forceRefresh) {
-        $cached = admin_crypto_accept_preview_cache_read($cacheKey, 300);
-        if (is_array($cached) && isset($cached['rows']) && is_array($cached['rows'])) {
-            return $cached['rows'];
-        }
+    if (!$forceRefresh) return admin_crypto_preview_network_status_rows_locked($messages, false);
+    $lock = app_crypto_runtime_lock(app_crypto_runtime_dir() . '/network-status.lock');
+    if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+        if ($lock) fclose($lock);
+        return admin_crypto_preview_network_status_rows_locked($messages, false);
     }
+    try { return admin_crypto_preview_network_status_rows_locked($messages, true); }
+    finally { flock($lock, LOCK_UN); fclose($lock); }
+}
 
+function admin_crypto_preview_network_status_rows_locked(array $messages = [], bool $forceRefresh = false): array
+{
     $checks = [
         [
             'key' => 'btc',
@@ -8953,6 +14280,13 @@ function admin_crypto_preview_network_status_rows(array $messages = [], bool $fo
             'probe' => 'admin_crypto_preview_network_probe_usdt_erc20',
         ],
         [
+            'key' => 'trx',
+            'asset_label' => 'TRX',
+            'network_label' => 'TRON',
+            'provider_label' => 'TronGrid',
+            'probe' => 'admin_crypto_preview_network_probe_trx',
+        ],
+        [
             'key' => 'sol',
             'asset_label' => 'SOL',
             'network_label' => 'Solana',
@@ -8961,39 +14295,54 @@ function admin_crypto_preview_network_status_rows(array $messages = [], bool $fo
         ],
     ];
 
-    $checkedAt = gmdate('Y-m-d H:i:s');
-    $rows = [];
-    foreach ($checks as $definition) {
-        $startedAt = microtime(true);
-        $probeResult = call_user_func($definition['probe']);
-        $latencyMs = (int)round((microtime(true) - $startedAt) * 1000);
-        $ready = !empty($probeResult['ready']);
-        $ok = !empty($probeResult['ok']);
-        $statusCode = $ready ? 'available' : ($ok ? 'warning' : 'danger');
-        $statusLabel = $ready
-            ? admin_t($messages, 'settings_crypto_preview_status_ready', 'Ready')
-            : ($ok
-                ? admin_t($messages, 'settings_crypto_preview_status_partial', 'Partial')
-                : admin_t($messages, 'settings_crypto_preview_status_error', 'Error'));
-
-        $rows[] = [
-            'key' => (string)$definition['key'],
-            'asset_label' => (string)$definition['asset_label'],
-            'network_label' => (string)$definition['network_label'],
-            'provider_label' => (string)$definition['provider_label'],
-            'status_code' => $statusCode,
-            'status_label' => $statusLabel,
-            'ready' => $ready,
-            'ok' => $ok,
-            'message' => trim((string)($probeResult['message'] ?? '')),
-            'checks' => isset($probeResult['checks']) && is_array($probeResult['checks']) ? $probeResult['checks'] : [],
-            'latency_ms' => $latencyMs,
-            'checked_at' => $checkedAt,
-            'checked_at_label' => app_format_utc_datetime_local($checkedAt, 'd.m.Y H:i:s'),
+    $cacheKey = 'crypto_preview_network_status_rows_v4';
+    $cached = admin_crypto_accept_preview_cache_read($cacheKey, 604800);
+    $previous = [];
+    foreach ((array)($cached['rows'] ?? []) as $row) $previous[(string)$row['key']] = $row;
+    if (!$forceRefresh && $previous) return array_values($previous);
+    if ($forceRefresh && admin_crypto_accept_preview_cache_read($cacheKey, 30) !== null) return array_values($previous);
+    if ($forceRefresh) app_crypto_network_budget(8, 16);
+    $ordered = $checks;
+    usort($ordered, static function ($a, $b) use ($previous): int {
+        $left = $previous[$a['key']] ?? []; $right = $previous[$b['key']] ?? [];
+        return (int)!empty($left['ready']) <=> (int)!empty($right['ready'])
+            ?: strcmp((string)($left['checked_at'] ?? ''), (string)($right['checked_at'] ?? ''));
+    });
+    $byKey = [];
+    foreach ($ordered as $definition) {
+        $old = $previous[$definition['key']] ?? null;
+        if ($forceRefresh && is_array($old) && !empty($old['ready']) && app_timestamp_from_utc_datetime((string)$old['checked_at']) > time() - 300) { $byKey[$definition['key']] = $old; continue; }
+        $probeResult = []; $latencyMs = 0; $deferred = !$forceRefresh;
+        if ($forceRefresh) {
+            $observationOffset = count($GLOBALS['app_crypto_api_observations'] ?? []);
+            $startedAt = microtime(true);
+            $probeResult = call_user_func($definition['probe']);
+            $latencyMs = (int)round((microtime(true) - $startedAt) * 1000);
+            foreach (array_slice($GLOBALS['app_crypto_api_observations'] ?? [], $observationOffset) as $observation) {
+                if (in_array($observation['reason'] ?? '', ['budget', 'cooldown', 'rate_limit', 'busy'], true)) $deferred = true;
+            }
+        }
+        if ($deferred && empty($probeResult['ready'])) {
+            foreach ((array)($probeResult['checks'] ?? []) as $index => $check) {
+                if (!empty($check['ok'])) continue;
+                $probeResult['checks'][$index]['deferred'] = true;
+                $probeResult['checks'][$index]['detail'] = admin_t($messages, 'settings_crypto_preview_status_deferred', 'Waiting / API limit');
+            }
+        }
+        $ready = !empty($probeResult['ready']); $ok = !empty($probeResult['ok']);
+        $checkedAt = $forceRefresh ? gmdate('Y-m-d H:i:s') : '';
+        $byKey[$definition['key']] = [
+            'key' => $definition['key'], 'asset_label' => $definition['asset_label'], 'network_label' => $definition['network_label'], 'provider_label' => $definition['provider_label'],
+            'status_code' => $ready ? 'available' : (($ok || $deferred) ? 'warning' : 'danger'),
+            'status_label' => $ready ? admin_t($messages, 'settings_crypto_preview_status_ready', 'Ready') : ($deferred ? admin_t($messages, 'settings_crypto_preview_status_deferred', 'Waiting / API limit') : ($ok ? admin_t($messages, 'settings_crypto_preview_status_partial', 'Partial') : admin_t($messages, 'settings_crypto_preview_status_error', 'Error'))),
+            'ready' => $ready, 'ok' => $ok,
+            'message' => $deferred && !$ready ? admin_t($messages, 'settings_crypto_preview_status_deferred_help', 'Check deferred by the API limit, cooldown or time budget. This does not indicate a blockchain outage.') : trim((string)($probeResult['message'] ?? '')),
+            'checks' => (array)($probeResult['checks'] ?? []), 'latency_ms' => $latencyMs,
+            'checked_at' => $checkedAt, 'checked_at_label' => $checkedAt !== '' ? app_format_utc_datetime_local($checkedAt, 'd.m.Y H:i:s') : '—',
         ];
     }
-
-    admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
+    $rows = []; foreach ($checks as $definition) $rows[] = $byKey[$definition['key']];
+    if ($forceRefresh) admin_crypto_accept_preview_cache_write($cacheKey, ['rows' => $rows]);
     return $rows;
 }
 
@@ -9064,6 +14413,21 @@ function admin_render_crypto_accept_explorer_panel(array $preview): string
 
         <div class="admin-crypto-preview__transactions-title"><?php echo admin_e((string)($preview['transactions_title'] ?? 'Recent transactions')); ?></div>
 
+        <?php if ($transactions && trim((string)($preview['match_summary_title'] ?? '')) !== ''): ?>
+            <?php $matchTone = preg_replace('/[^a-z0-9_-]/i', '', (string)($preview['match_summary_tone'] ?? 'warning')); ?>
+            <div class="admin-crypto-preview__match-alert is-<?php echo admin_e($matchTone !== '' ? $matchTone : 'warning'); ?>" role="status">
+                <div class="admin-crypto-preview__match-percent">
+                    <?php echo admin_e((string)((int)($preview['match_summary_percent'] ?? 0))); ?>%
+                </div>
+                <div class="admin-crypto-preview__match-copy">
+                    <strong><?php echo admin_e((string)$preview['match_summary_title']); ?></strong>
+                    <?php if (trim((string)($preview['match_summary_text'] ?? '')) !== ''): ?>
+                        <span><?php echo admin_e((string)$preview['match_summary_text']); ?></span>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
         <?php if (empty($preview['has_candidate'])): ?>
             <div class="alert admin-crypto-preview__warning" role="alert">
                 <div class="admin-crypto-preview__warning-icon">
@@ -9107,8 +14471,17 @@ function admin_render_crypto_accept_explorer_panel(array $preview): string
                                     <?php if (!empty($row['candidate'])): ?>
                                         <span class="admin-crypto-preview__candidate"><?php echo admin_e((string)($preview['candidate_badge'] ?? 'Best match')); ?></span>
                                     <?php endif; ?>
+                                    <?php if (isset($row['match_percent'])): ?>
+                                        <?php $rowMatchTone = preg_replace('/[^a-z0-9_-]/i', '', (string)($row['match_tone'] ?? 'warning')); ?>
+                                        <span class="admin-crypto-preview__match-badge is-<?php echo admin_e($rowMatchTone !== '' ? $rowMatchTone : 'warning'); ?>">
+                                            <?php echo admin_e((string)($preview['match_badge_prefix'] ?? 'Dopasowanie')); ?> <?php echo admin_e((string)((int)$row['match_percent'])); ?>%
+                                        </span>
+                                    <?php endif; ?>
                                 </div>
                                 <div class="admin-crypto-preview__tx-time"><?php echo admin_e((string)($row['received_at_label'] ?? '')); ?></div>
+                                <?php if (!empty($row['match_text'])): ?>
+                                    <div class="admin-crypto-preview__tx-match-text"><?php echo admin_e((string)$row['match_text']); ?></div>
+                                <?php endif; ?>
                                 <?php if (!empty($row['from_label']) || !empty($row['to_label'])): ?>
                                     <div class="admin-crypto-preview__tx-route">
                                         <?php if (!empty($row['from_label'])): ?>
@@ -9359,7 +14732,7 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
                 $requestedCryptoAmount,
                 $now,
                 $expiresAt,
-                'Renewed from admin payments',
+                admin_localize_payment_request_note('Renewed from admin payments'),
                 'pending',
                 null,
             ],
@@ -9387,8 +14760,8 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
             'created_by_admin_user_id' => $adminUserId > 0 ? $adminUserId : null,
             'requested_at' => $now,
             'expires_at' => $expiresAt,
-            'request_note' => 'Renewed from admin payments',
-        ]);
+            'request_note' => admin_localize_payment_request_note('Renewed from admin payments'),
+        ], true);
         if ($newPaymentId <= 0) {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'Unable to create renewed crypto payment request.'];
@@ -9488,6 +14861,7 @@ function admin_payment_renew_bank_request(Mysql_ks $db, array $payment, int $adm
 
         $updated = $db->update_using_id(
             [
+                'bank_account_id',
                 'bank_account_assignment_id',
                 'requested_amount',
                 'currency_id',
@@ -9504,7 +14878,7 @@ function admin_payment_renew_bank_request(Mysql_ks $db, array $payment, int $adm
                 '',
                 $now,
                 $expiresAt,
-                'Renewed from admin payments',
+                admin_localize_payment_request_note('Renewed from admin payments'),
                 'pending_payment',
             ],
             'bank_transfer_requests',
@@ -9543,7 +14917,7 @@ function admin_payment_renew_bank_request(Mysql_ks $db, array $payment, int $adm
                 $adminUserId > 0 ? $adminUserId : null,
                 $now,
                 $expiresAt,
-                'Renewed from admin payments',
+                admin_localize_payment_request_note('Renewed from admin payments'),
             ],
             'bank_transfer_requests'
         );
@@ -10220,9 +15594,6 @@ function admin_chat_payment_product_presets(Mysql_ks $db, array $currencyContext
            %s
          ORDER BY products.price_amount ASC, products.duration_hours ASC, products.id ASC";
     $rows = $db->select_full_user(sprintf($query, $safeCurrencyFilter));
-    if (!$rows) {
-        $rows = $db->select_full_user(sprintf($query, ''));
-    }
 
     $presets = [];
     foreach ($rows as $row) {
@@ -10574,6 +15945,8 @@ function admin_bank_account_rows(Mysql_ks $db, int $limit = 20, int $offset = 0)
         return [];
     }
 
+    app_ensure_bank_account_runtime_columns($db);
+
     $limit = max(1, min(50, $limit));
     $offset = max(0, $offset);
     return $db->select_full_user(
@@ -10591,9 +15964,11 @@ function admin_bank_account_rows(Mysql_ks $db, int $limit = 20, int $offset = 0)
             bank_accounts.swift_bic,
             bank_accounts.payment_reference_template,
             bank_accounts.transfer_instructions,
+            bank_accounts.monthly_limit_amount,
             bank_accounts.status,
             bank_accounts.notes,
             currencies.code AS currency_code,
+            currencies.symbol AS currency_symbol,
             (
                 SELECT customer_bank_accounts.customer_email
                 FROM customer_bank_accounts
@@ -10624,6 +15999,62 @@ function admin_bank_account_rows(Mysql_ks $db, int $limit = 20, int $offset = 0)
     );
 }
 
+function admin_bank_account_statistics_rows(Mysql_ks $db): array
+{
+    if (!schema_object_exists($db, 'bank_accounts')) {
+        return [];
+    }
+
+    app_ensure_bank_account_runtime_columns($db);
+
+    $now = time();
+    $last30Start = date('Y-m-d H:i:s', $now - 30 * 86400);
+    $last90Start = date('Y-m-d H:i:s', $now - 90 * 86400);
+    $nowSql = date('Y-m-d H:i:s', $now);
+    $currentYearStart = date('Y-01-01 00:00:00', $now);
+    $nextYearStart = date(((int)date('Y', $now) + 1) . '-01-01 00:00:00');
+    $previousYearStart = date(((int)date('Y', $now) - 1) . '-01-01 00:00:00');
+    $previousYearEnd = $currentYearStart;
+    [$monthStart, $monthEnd] = app_bank_account_current_month_bounds();
+
+    $hasRequests = schema_object_exists($db, 'bank_transfer_requests');
+    $amount30Sql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'bank_accounts.id', $last30Start, $nowSql) : '0';
+    $count30Sql = $hasRequests ? app_bank_account_usage_count_sql($db, 'bank_accounts.id', $last30Start, $nowSql) : '0';
+    $amount90Sql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'bank_accounts.id', $last90Start, $nowSql) : '0';
+    $count90Sql = $hasRequests ? app_bank_account_usage_count_sql($db, 'bank_accounts.id', $last90Start, $nowSql) : '0';
+    $amountYearSql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'bank_accounts.id', $currentYearStart, $nextYearStart) : '0';
+    $countYearSql = $hasRequests ? app_bank_account_usage_count_sql($db, 'bank_accounts.id', $currentYearStart, $nextYearStart) : '0';
+    $amountPreviousYearSql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'bank_accounts.id', $previousYearStart, $previousYearEnd) : '0';
+    $countPreviousYearSql = $hasRequests ? app_bank_account_usage_count_sql($db, 'bank_accounts.id', $previousYearStart, $previousYearEnd) : '0';
+    $amountMonthSql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'bank_accounts.id', $monthStart, $monthEnd) : '0';
+
+    return $db->select_full_user(
+        "SELECT
+            bank_accounts.id,
+            bank_accounts.label,
+            bank_accounts.account_holder_name,
+            bank_accounts.bank_name,
+            bank_accounts.iban,
+            bank_accounts.account_number,
+            bank_accounts.status,
+            bank_accounts.monthly_limit_amount,
+            currencies.code AS currency_code,
+            currencies.symbol AS currency_symbol,
+            {$amountMonthSql} AS current_month_amount,
+            {$amount30Sql} AS amount_30_days,
+            {$count30Sql} AS count_30_days,
+            {$amount90Sql} AS amount_90_days,
+            {$count90Sql} AS count_90_days,
+            {$amountYearSql} AS amount_current_year,
+            {$countYearSql} AS count_current_year,
+            {$amountPreviousYearSql} AS amount_previous_year,
+            {$countPreviousYearSql} AS count_previous_year
+         FROM bank_accounts
+         LEFT JOIN currencies ON currencies.id = bank_accounts.currency_id
+         ORDER BY bank_accounts.id DESC"
+    );
+}
+
 function admin_bank_account_currency_rows(Mysql_ks $db): array
 {
     if (!schema_object_exists($db, 'currencies')) {
@@ -10650,19 +16081,24 @@ function admin_crypto_wallet_count(Mysql_ks $db): int
 
 function admin_crypto_wallet_free_count(Mysql_ks $db): int
 {
-    if (!schema_object_exists($db, 'crypto_wallet_addresses')) {
+    if (!schema_object_exists($db, 'crypto_wallet_addresses') || !schema_object_exists($db, 'crypto_assets')) {
         return 0;
     }
 
     app_sync_crypto_wallet_address_statuses($db);
     $settings = admin_app_settings($db);
     $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
+    $paymentAssetFilterSql = admin_crypto_customer_payment_asset_sql_filter($db, 'crypto_assets');
 
     if ($sharedEnabled) {
         $row = $db->select_user(
             "SELECT COUNT(*) AS total
              FROM crypto_wallet_addresses
+             INNER JOIN crypto_assets
+               ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
              WHERE crypto_wallet_addresses.disabled_at IS NULL
+               AND crypto_assets.is_active = 1
+               {$paymentAssetFilterSql}
                AND crypto_wallet_addresses.status IN ('available', 'assigned')"
         );
 
@@ -10672,11 +16108,15 @@ function admin_crypto_wallet_free_count(Mysql_ks $db): int
     $row = $db->select_user(
         "SELECT COUNT(*) AS total
          FROM crypto_wallet_addresses
+         INNER JOIN crypto_assets
+           ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
          LEFT JOIN crypto_wallet_assignments
            ON crypto_wallet_assignments.wallet_address_id = crypto_wallet_addresses.id
           AND crypto_wallet_assignments.status IN ('reserved', 'active')
          WHERE crypto_wallet_addresses.status = 'available'
            AND crypto_wallet_addresses.disabled_at IS NULL
+           AND crypto_assets.is_active = 1
+           {$paymentAssetFilterSql}
            AND crypto_wallet_assignments.id IS NULL"
     );
 
@@ -10845,6 +16285,7 @@ function admin_crypto_wallet_asset_summary_rows(Mysql_ks $db): array
 
     $settings = admin_app_settings($db);
     $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
+    $paymentAssetFilterSql = admin_crypto_customer_payment_asset_sql_filter($db, 'crypto_assets');
     $availableCountSql = $sharedEnabled
         ? "CASE
                 WHEN crypto_wallet_addresses.disabled_at IS NULL
@@ -10873,6 +16314,7 @@ function admin_crypto_wallet_asset_summary_rows(Mysql_ks $db): array
          LEFT JOIN crypto_wallet_addresses
             ON crypto_wallet_addresses.crypto_asset_id = crypto_assets.id
          WHERE crypto_assets.is_active = 1
+           {$paymentAssetFilterSql}
          GROUP BY crypto_assets.id, crypto_assets.code, crypto_assets.name, crypto_assets.logo_url
          ORDER BY crypto_assets.code ASC, crypto_assets.id ASC"
     );
@@ -10911,24 +16353,33 @@ function admin_default_coingecko_id(string $assetCode): string
         'POL' => 'polygon-ecosystem-token',
         'MATIC' => 'matic-network',
         'XRP' => 'ripple',
+        'TRX' => 'tron',
     ];
 
     return $map[$assetCode] ?? '';
 }
 
-function admin_http_json(string $url): ?array
+function admin_http_json(string $url, int $timeoutSeconds = 20, int $connectTimeoutSeconds = 10): ?array
 {
+    if (app_crypto_api_policy($url) !== null) {
+        $raw = app_crypto_api_request($url, null, false, $timeoutSeconds);
+        $decoded = $raw !== null ? json_decode($raw, true) : null;
+        return is_array($decoded) ? $decoded : null;
+    }
     if ($url === '') {
         return null;
     }
+
+    $timeoutSeconds = max(1, min(30, $timeoutSeconds));
+    $connectTimeoutSeconds = max(1, min($timeoutSeconds, $connectTimeoutSeconds));
 
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 20,
+            CURLOPT_CONNECTTIMEOUT => $connectTimeoutSeconds,
+            CURLOPT_TIMEOUT => $timeoutSeconds,
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json',
                 'User-Agent: Reseller-Admin/1.0',
@@ -10950,7 +16401,7 @@ function admin_http_json(string $url): ?array
     $context = stream_context_create([
         'http' => [
             'method' => 'GET',
-            'timeout' => 20,
+            'timeout' => $timeoutSeconds,
             'header' => "Accept: application/json\r\nUser-Agent: Reseller-Admin/1.0\r\n",
         ],
     ]);
@@ -10964,8 +16415,59 @@ function admin_http_json(string $url): ?array
     return is_array($decoded) ? $decoded : null;
 }
 
+function admin_http_text(string $url, int $timeoutSeconds = 20, int $connectTimeoutSeconds = 10): ?string
+{
+    if (app_crypto_api_policy($url) !== null) return app_crypto_api_request($url, null, true, $timeoutSeconds);
+    if ($url === '') {
+        return null;
+    }
+
+    $timeoutSeconds = max(1, min(30, $timeoutSeconds));
+    $connectTimeoutSeconds = max(1, min($timeoutSeconds, $connectTimeoutSeconds));
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => $connectTimeoutSeconds,
+            CURLOPT_TIMEOUT => $timeoutSeconds,
+            CURLOPT_HTTPHEADER => [
+                'Accept: text/plain, application/json',
+                'User-Agent: Reseller-Admin/1.0',
+            ],
+        ]);
+
+        $response = curl_exec($ch);
+        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($response) || $response === '' || $httpCode >= 400) {
+            return null;
+        }
+
+        return $response;
+    }
+
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => $timeoutSeconds,
+            'header' => "Accept: text/plain, application/json\r\nUser-Agent: Reseller-Admin/1.0\r\n",
+        ],
+    ]);
+
+    $response = @file_get_contents($url, false, $context);
+    return is_string($response) && $response !== '' ? $response : null;
+}
+
 function admin_http_post_json(string $url, array $payload): ?array
 {
+    if (app_crypto_api_policy($url) !== null) {
+        $raw = app_crypto_api_request($url, $payload);
+        $decoded = $raw !== null ? json_decode($raw, true) : null;
+        return is_array($decoded) ? $decoded : null;
+    }
     if ($url === '') {
         return null;
     }
@@ -11021,7 +16523,7 @@ function admin_http_post_json(string $url, array $payload): ?array
     return is_array($decoded) ? $decoded : null;
 }
 
-function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'USD', int $cacheTtl = 900): array
+function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'USD', int $cacheTtl = 900, array $assetCodes = [], bool $includeInactive = false, bool $refreshRates = true): array
 {
     if (!schema_object_exists($db, 'crypto_assets')) {
         return [];
@@ -11031,8 +16533,22 @@ function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'US
     if ($vsCurrency === '') {
         $vsCurrency = 'USD';
     }
+    $cacheTtl = max(60, $cacheTtl);
     $vsCurrencyLower = strtolower($vsCurrency);
     $now = time();
+    $assetCodes = array_values(array_unique(array_filter(array_map(
+        static fn($code): string => strtoupper(trim((string)$code)),
+        $assetCodes
+    ))));
+    $whereParts = [];
+    if (!$includeInactive) {
+        $whereParts[] = 'is_active = 1';
+    }
+    if ($assetCodes) {
+        $escapedCodes = array_map(static fn($code): string => "'" . $db->escape($code) . "'", $assetCodes);
+        $whereParts[] = 'UPPER(code) IN (' . implode(', ', $escapedCodes) . ')';
+    }
+    $whereSql = $whereParts ? 'WHERE ' . implode(' AND ', $whereParts) : '';
 
     $rows = $db->select_full_user(
         "SELECT
@@ -11047,7 +16563,7 @@ function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'US
             updated_at,
             is_active
          FROM crypto_assets
-         WHERE is_active = 1
+         {$whereSql}
          ORDER BY name ASC, id ASC"
     );
 
@@ -11074,19 +16590,16 @@ function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'US
             $rate = isset($row['current_rate_fiat']) ? (float)$row['current_rate_fiat'] : 0.0;
             $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
             $rateUpdatedAt = !empty($row['rate_updated_at']) ? app_timestamp_from_utc_datetime((string)$row['rate_updated_at']) : 0;
-            if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
+            if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || $rateUpdatedAt > $now + 60 || ($now - $rateUpdatedAt) >= $cacheTtl) {
                 $needsRefresh = true;
             }
         }
 
-    if ($needsRefresh && $coingeckoIds) {
-        $apiUrl = 'https://api.coingecko.com/api/v3/simple/price?ids='
-            . rawurlencode(implode(',', array_keys($coingeckoIds)))
-            . '&vs_currencies=' . rawurlencode($vsCurrencyLower)
-            . '&include_last_updated_at=true&precision=full';
-        $payload = admin_http_json($apiUrl);
+    if ($refreshRates && $needsRefresh && $coingeckoIds) {
+        $payload = app_crypto_cached_prices(array_keys($coingeckoIds), $vsCurrency, $cacheTtl);
 
         if (is_array($payload)) {
+            $persistRates = app_crypto_rate_should_persist($db, $vsCurrency);
             foreach ($rows as $index => $row) {
                 $assetId = (int)($row['id'] ?? 0);
                 $coingeckoId = (string)($row['coingecko_id'] ?? '');
@@ -11098,9 +16611,12 @@ function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'US
                     $updatedAt = !empty($payload[$coingeckoId]['last_updated_at'])
                         ? app_datetime_utc_from_unix_timestamp((int)$payload[$coingeckoId]['last_updated_at'])
                         : app_datetime_utc_from_unix_timestamp($now);
+                    $newRate = ['current_rate_fiat' => $price, 'rate_currency_code' => $vsCurrency, 'rate_updated_at' => $updatedAt];
+                    if (!app_crypto_rate_is_usable($newRate, $vsCurrency)) continue;
+                    if ($price === (float)($row['current_rate_fiat'] ?? 0) && $vsCurrency === ($row['rate_currency_code'] ?? '') && $updatedAt === ($row['rate_updated_at'] ?? '')) continue;
                     $refreshRecordedAt = app_format_utc_datetime_local(app_datetime_utc_from_unix_timestamp($now));
 
-                    $db->update_using_id(
+                    if ($persistRates) $db->update_using_id(
                         ['coingecko_id', 'current_rate_fiat', 'rate_currency_code', 'rate_updated_at'],
                         [$coingeckoId, $price, $vsCurrency, $updatedAt],
                     'crypto_assets',
@@ -11118,6 +16634,268 @@ function admin_refresh_crypto_asset_rates(Mysql_ks $db, string $vsCurrency = 'US
         }
 
     return $rows;
+}
+
+function admin_topbar_converter_asset_rows(Mysql_ks $db, string $vsCurrency = 'USD', int $cacheTtl = 900, bool $refreshRates = true): array
+{
+    $rowsByCode = [];
+
+    foreach (admin_refresh_crypto_asset_rates($db, $vsCurrency, $cacheTtl, [], false, $refreshRates) as $assetRow) {
+        $assetCode = strtoupper(trim((string)($assetRow['code'] ?? '')));
+        $assetRate = isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0;
+        if ($assetCode === '' || $assetRate <= 0 || !app_crypto_rate_is_usable($assetRow, $vsCurrency) || strtoupper((string)($assetRow['rate_currency_code'] ?? '')) !== strtoupper($vsCurrency) || empty($assetRow['is_active'])) {
+            continue;
+        }
+
+        $rowsByCode[$assetCode] = $assetRow;
+    }
+
+    if (!isset($rowsByCode['USDT'])) {
+        foreach (admin_refresh_crypto_asset_rates($db, $vsCurrency, $cacheTtl, ['USDT'], true, $refreshRates) as $assetRow) {
+            $assetCode = strtoupper(trim((string)($assetRow['code'] ?? '')));
+            $assetRate = isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0;
+            if ($assetCode !== 'USDT' || $assetRate <= 0 || !app_crypto_rate_is_usable($assetRow, $vsCurrency) || strtoupper((string)($assetRow['rate_currency_code'] ?? '')) !== strtoupper($vsCurrency)) {
+                continue;
+            }
+
+            $rowsByCode['USDT'] = $assetRow;
+        }
+    }
+
+    uasort($rowsByCode, static function (array $left, array $right): int {
+        $leftName = trim((string)($left['name'] ?? ''));
+        $rightName = trim((string)($right['name'] ?? ''));
+        $byName = strcasecmp($leftName, $rightName);
+        if ($byName !== 0) {
+            return $byName;
+        }
+
+        return strcasecmp((string)($left['code'] ?? ''), (string)($right['code'] ?? ''));
+    });
+
+    return array_values($rowsByCode);
+}
+
+function admin_topbar_converter_fiat_cache_file(string $baseCurrency): string
+{
+    $safeBaseCurrency = preg_replace('/[^A-Z]/', '', strtoupper($baseCurrency));
+    if ($safeBaseCurrency === '') {
+        $safeBaseCurrency = 'USD';
+    }
+
+    return rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+        . DIRECTORY_SEPARATOR
+        . 'subme_topbar_converter_fiat_'
+        . strtolower($safeBaseCurrency)
+        . '.json';
+}
+
+function admin_topbar_converter_fiat_payload(string $baseCurrency = 'USD', int $cacheTtl = 900, bool $refreshRates = true): array
+{
+    $baseCurrency = strtoupper(trim($baseCurrency));
+    if ($baseCurrency === '') {
+        $baseCurrency = 'USD';
+    }
+
+    $currencyCodes = array_values(array_unique([$baseCurrency, 'PLN', 'GBP']));
+    $currencySymbols = [
+        'USD' => '$',
+        'EUR' => '€',
+        'GBP' => '£',
+        'PLN' => 'zł',
+    ];
+    $currencyNames = [
+        'USD' => 'US Dollar',
+        'EUR' => 'Euro',
+        'GBP' => 'British Pound',
+        'PLN' => 'Polish Zloty',
+    ];
+    $cachePath = admin_topbar_converter_fiat_cache_file($baseCurrency);
+    $cachedPayload = null;
+
+    if (is_file($cachePath)) {
+        $decodedCache = json_decode((string)@file_get_contents($cachePath), true);
+        if (is_array($decodedCache) && !empty($decodedCache['items']) && is_array($decodedCache['items'])) {
+            $cachedPayload = $decodedCache;
+            $cachedCodes = [];
+            foreach ($decodedCache['items'] as $cachedItem) {
+                $cachedCode = strtoupper(trim((string)($cachedItem['code'] ?? '')));
+                if ($cachedCode !== '') {
+                    $cachedCodes[$cachedCode] = true;
+                }
+            }
+            $cacheIsComplete = count(array_intersect($currencyCodes, array_keys($cachedCodes))) === count($currencyCodes);
+            if (
+                $cacheIsComplete
+                && $cacheTtl > 0
+                && (time() - (int)@filemtime($cachePath)) < max(60, $cacheTtl)
+            ) {
+                return array_values($decodedCache['items']);
+            }
+        }
+    }
+
+    if (!$refreshRates) {
+        if ($cachedPayload !== null) {
+            return array_map(static function (array $item): array {
+                $item['is_stale'] = 1;
+                return $item;
+            }, array_values($cachedPayload['items']));
+        }
+        return [[
+            'id' => 'fiat:' . $baseCurrency, 'key' => 'fiat:' . $baseCurrency,
+            'type' => 'fiat', 'code' => $baseCurrency, 'name' => $currencyNames[$baseCurrency] ?? $baseCurrency,
+            'symbol' => $currencySymbols[$baseCurrency] ?? $baseCurrency, 'logo_url' => '',
+            'rate' => 1.0, 'rate_label' => '1.00000000', 'rate_updated_at' => '',
+            'rate_updated_label' => '', 'is_stale' => 1,
+        ]];
+    }
+
+    $vsCurrencies = strtolower(implode(',', $currencyCodes));
+    $coingeckoPayload = admin_http_json(
+        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin'
+        . '&vs_currencies=' . rawurlencode($vsCurrencies)
+        . '&include_last_updated_at=true&precision=full',
+        10,
+        5
+    );
+    $bitcoinRates = is_array($coingeckoPayload['bitcoin'] ?? null)
+        ? $coingeckoPayload['bitcoin']
+        : [];
+    $baseBitcoinRate = isset($bitcoinRates[strtolower($baseCurrency)])
+        ? (float)$bitcoinRates[strtolower($baseCurrency)]
+        : 0.0;
+    $updatedTimestamp = isset($bitcoinRates['last_updated_at'])
+        ? (int)$bitcoinRates['last_updated_at']
+        : time();
+    $ratesInBaseCurrency = [$baseCurrency => 1.0];
+
+    if ($baseBitcoinRate > 0) {
+        foreach ($currencyCodes as $currencyCode) {
+            $bitcoinRate = isset($bitcoinRates[strtolower($currencyCode)])
+                ? (float)$bitcoinRates[strtolower($currencyCode)]
+                : 0.0;
+            if ($bitcoinRate > 0) {
+                $ratesInBaseCurrency[$currencyCode] = $baseBitcoinRate / $bitcoinRate;
+            }
+        }
+    }
+
+    if (count($ratesInBaseCurrency) < count($currencyCodes)) {
+        $fallbackCodes = array_values(array_filter(
+            $currencyCodes,
+            static fn(string $currencyCode): bool => $currencyCode !== $baseCurrency
+        ));
+        $fallbackPayload = $fallbackCodes
+            ? admin_http_json(
+                'https://api.frankfurter.app/latest?from='
+                . rawurlencode($baseCurrency)
+                . '&to='
+                . rawurlencode(implode(',', $fallbackCodes)),
+                10,
+                5
+            )
+            : null;
+        $fallbackRates = is_array($fallbackPayload['rates'] ?? null) ? $fallbackPayload['rates'] : [];
+
+        foreach ($fallbackCodes as $currencyCode) {
+            if (isset($ratesInBaseCurrency[$currencyCode])) {
+                continue;
+            }
+            $targetPerBase = isset($fallbackRates[$currencyCode]) ? (float)$fallbackRates[$currencyCode] : 0.0;
+            if ($targetPerBase > 0) {
+                $ratesInBaseCurrency[$currencyCode] = 1 / $targetPerBase;
+            }
+        }
+    }
+
+    $updatedAt = app_datetime_utc_from_unix_timestamp($updatedTimestamp > 0 ? $updatedTimestamp : time());
+    $updatedLabel = app_format_utc_datetime_local($updatedAt);
+    $items = [];
+
+    foreach ($currencyCodes as $currencyCode) {
+        $rate = isset($ratesInBaseCurrency[$currencyCode])
+            ? (float)$ratesInBaseCurrency[$currencyCode]
+            : 0.0;
+        if ($rate <= 0) {
+            continue;
+        }
+
+        $items[] = [
+            'id' => 'fiat:' . $currencyCode,
+            'key' => 'fiat:' . $currencyCode,
+            'type' => 'fiat',
+            'code' => $currencyCode,
+            'name' => $currencyNames[$currencyCode] ?? $currencyCode,
+            'symbol' => $currencySymbols[$currencyCode] ?? $currencyCode,
+            'logo_url' => '',
+            'rate' => $rate,
+            'rate_label' => number_format($rate, 8, '.', ''),
+            'rate_updated_at' => $updatedAt,
+            'rate_updated_label' => $updatedLabel,
+            'is_stale' => 0,
+        ];
+    }
+
+    if (count($items) < count($currencyCodes) && $cachedPayload !== null) {
+        $itemsByCode = [];
+        foreach ($items as $item) {
+            $itemsByCode[strtoupper((string)($item['code'] ?? ''))] = $item;
+        }
+        foreach ($cachedPayload['items'] as $cachedItem) {
+            $cachedCode = strtoupper(trim((string)($cachedItem['code'] ?? '')));
+            if ($cachedCode !== '' && !isset($itemsByCode[$cachedCode])) {
+                $cachedItem['is_stale'] = 1;
+                $itemsByCode[$cachedCode] = $cachedItem;
+            }
+        }
+        $items = [];
+        foreach ($currencyCodes as $currencyCode) {
+            if (isset($itemsByCode[$currencyCode])) {
+                $items[] = $itemsByCode[$currencyCode];
+            }
+        }
+    }
+
+    if (count($items) === count($currencyCodes)) {
+        @file_put_contents(
+            $cachePath,
+            json_encode(
+                ['base_currency' => $baseCurrency, 'items' => $items],
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            ),
+            LOCK_EX
+        );
+    }
+
+    return $items;
+}
+
+function admin_topbar_converter_asset_payload(Mysql_ks $db, string $vsCurrency = 'USD', int $cacheTtl = 900, bool $refreshRates = true): array
+{
+    $items = [];
+
+    foreach (admin_topbar_converter_asset_rows($db, $vsCurrency, $cacheTtl, $refreshRates) as $assetRow) {
+        $assetUpdatedAt = trim((string)($assetRow['rate_updated_at'] ?? ''));
+        $assetUpdatedTimestamp = $assetUpdatedAt !== '' ? app_timestamp_from_utc_datetime($assetUpdatedAt) : false;
+
+        $items[] = [
+            'id' => (int)($assetRow['id'] ?? 0),
+            'key' => 'crypto:' . (int)($assetRow['id'] ?? 0),
+            'type' => 'crypto',
+            'code' => strtoupper((string)($assetRow['code'] ?? '')),
+            'name' => (string)($assetRow['name'] ?? ''),
+            'symbol' => '',
+            'logo_url' => app_crypto_logo_by_code((string)($assetRow['code'] ?? ''), (string)($assetRow['logo_url'] ?? '')),
+            'rate' => isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0,
+            'rate_label' => app_format_crypto_rate($assetRow['current_rate_fiat'] ?? null),
+            'rate_updated_at' => $assetUpdatedAt,
+            'rate_updated_label' => $assetUpdatedAt !== '' ? app_format_utc_datetime_local($assetUpdatedAt) : '',
+            'is_stale' => !$assetUpdatedTimestamp || (time() - (int)$assetUpdatedTimestamp) >= 900 ? 1 : 0,
+        ];
+    }
+
+    return array_merge(admin_topbar_converter_fiat_payload($vsCurrency, $cacheTtl, $refreshRates), $items);
 }
 
 function admin_crypto_asset_count(Mysql_ks $db): int
@@ -11212,6 +16990,7 @@ function admin_crypto_asset_network_options(string $assetCode): array
         'POL' => ['polygon' => 'Polygon'],
         'MATIC' => ['polygon' => 'Polygon'],
         'XRP' => ['ripple' => 'XRP Ledger'],
+        'TRX' => ['tron' => 'TRON'],
     ];
 
     if (isset($fixed[$assetCode])) {
@@ -11246,7 +17025,7 @@ function admin_crypto_network_label(string $networkCode): string
         'ethereum' => 'Ethereum',
         'polygon' => 'Polygon',
         'bnb' => 'BNB Smart Chain',
-        'tron' => 'Tron (TRC20)',
+        'tron' => 'TRON',
         'cronos' => 'Cronos',
         'solana' => 'Solana',
         'ripple' => 'XRP Ledger',
@@ -11326,6 +17105,292 @@ function admin_normalize_crypto_wallet_network(string $assetCode, string $reques
     return (string)array_key_first($options);
 }
 
+function admin_crypto_wallet_network_is_evm(string $networkCode): bool
+{
+    return in_array(strtolower(trim($networkCode)), ['ethereum', 'bnb', 'polygon', 'cronos'], true);
+}
+
+function admin_crypto_wallet_address_is_evm_format(string $address): bool
+{
+    return preg_match('/^0x[a-fA-F0-9]{40}$/', trim($address)) === 1;
+}
+
+function admin_schema_index_exists(Mysql_ks $db, string $tableName, string $indexName): bool
+{
+    $row = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = '" . $db->escape($tableName) . "'
+           AND INDEX_NAME = '" . $db->escape($indexName) . "'
+         LIMIT 1"
+    );
+
+    return is_array($row) && (int)($row['total'] ?? 0) > 0;
+}
+
+function admin_ensure_crypto_wallet_address_indexes(Mysql_ks $db): void
+{
+    static $done = false;
+    if ($done || !schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return;
+    }
+    $done = true;
+
+    if (admin_schema_index_exists($db, 'crypto_wallet_addresses', 'uniq_crypto_wallet_addresses_address')) {
+        $db->query('ALTER TABLE `crypto_wallet_addresses` DROP INDEX `uniq_crypto_wallet_addresses_address`');
+    }
+
+    if (!admin_schema_index_exists($db, 'crypto_wallet_addresses', 'idx_crypto_wallet_addresses_address')) {
+        $db->query('ALTER TABLE `crypto_wallet_addresses` ADD INDEX `idx_crypto_wallet_addresses_address` (`address`)');
+    }
+
+    if (!admin_schema_index_exists($db, 'crypto_wallet_addresses', 'uniq_crypto_wallet_addresses_asset_network_address')) {
+        $db->query('ALTER TABLE `crypto_wallet_addresses` ADD UNIQUE KEY `uniq_crypto_wallet_addresses_asset_network_address` (`crypto_asset_id`, `network_code`, `address`)');
+    }
+}
+
+function admin_crypto_wallet_existing_address_rows(Mysql_ks $db, string $address, int $excludeWalletId = 0): array
+{
+    $address = trim($address);
+    if ($address === '' || !schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return [];
+    }
+
+    $excludeSql = $excludeWalletId > 0 ? ' AND wallet.id <> ' . $excludeWalletId : '';
+    $rows = $db->select_full_user(
+        "SELECT
+            wallet.id,
+            wallet.crypto_asset_id,
+            wallet.label,
+            wallet.owner_full_name,
+            wallet.address,
+            wallet.network_code,
+            wallet.memo_tag,
+            wallet.wallet_provider,
+            wallet.notes,
+            asset.code AS asset_code,
+            asset.name AS asset_name
+         FROM crypto_wallet_addresses AS wallet
+         LEFT JOIN crypto_assets AS asset ON asset.id = wallet.crypto_asset_id
+         WHERE wallet.address = '" . $db->escape($address) . "'
+           {$excludeSql}
+         ORDER BY wallet.id ASC"
+    );
+
+    return is_array($rows) ? $rows : [];
+}
+
+function admin_crypto_wallet_address_duplicate_context(
+    Mysql_ks $db,
+    string $address,
+    int $cryptoAssetId,
+    string $networkCode,
+    int $excludeWalletId = 0
+): array {
+    $rows = admin_crypto_wallet_existing_address_rows($db, $address, $excludeWalletId);
+    if (!$rows) {
+        return [
+            'has_existing' => false,
+            'can_reuse' => true,
+            'rows' => [],
+            'canonical' => null,
+            'message' => '',
+        ];
+    }
+
+    $networkCode = strtolower(trim($networkCode));
+    $isEvmAddress = admin_crypto_wallet_address_is_evm_format($address);
+    $isRequestedEvm = $isEvmAddress && admin_crypto_wallet_network_is_evm($networkCode);
+    $hasSameAssetNetwork = false;
+    $hasNonEvmExisting = false;
+    foreach ($rows as $row) {
+        $rowNetwork = strtolower(trim((string)($row['network_code'] ?? '')));
+        if ((int)($row['crypto_asset_id'] ?? 0) === $cryptoAssetId && $rowNetwork === $networkCode) {
+            $hasSameAssetNetwork = true;
+            break;
+        }
+        if (!$isEvmAddress || !admin_crypto_wallet_network_is_evm($rowNetwork)) {
+            $hasNonEvmExisting = true;
+        }
+    }
+
+    if ($hasSameAssetNetwork) {
+        return [
+            'has_existing' => true,
+            'can_reuse' => false,
+            'rows' => $rows,
+            'canonical' => $rows[0],
+            'message_key' => 'wallet_address_duplicate_same_asset_network',
+            'message' => 'This wallet address already exists for this asset and network.',
+        ];
+    }
+
+    if (!$isRequestedEvm || $hasNonEvmExisting) {
+        return [
+            'has_existing' => true,
+            'can_reuse' => false,
+            'rows' => $rows,
+            'canonical' => $rows[0],
+            'message_key' => 'wallet_address_duplicate_database',
+            'message' => 'This wallet address already exists in the database.',
+        ];
+    }
+
+    return [
+        'has_existing' => true,
+        'can_reuse' => true,
+        'rows' => $rows,
+        'canonical' => $rows[0],
+        'message_key' => 'wallet_address_evm_reuse_notice',
+        'message' => 'This EVM wallet address already exists. Owner details will be reused for consistency.',
+    ];
+}
+
+function admin_crypto_wallet_existing_address_lookup_payload(Mysql_ks $db, string $address, int $cryptoAssetId = 0, string $networkCode = '', int $excludeWalletId = 0, array $messages = []): array
+{
+    $asset = $cryptoAssetId > 0 ? $db->select_user("SELECT id, code FROM crypto_assets WHERE id = {$cryptoAssetId} LIMIT 1") : null;
+    $assetCode = is_array($asset) ? (string)($asset['code'] ?? '') : '';
+    $networkCode = $assetCode !== ''
+        ? admin_normalize_crypto_wallet_network($assetCode, $networkCode, $address)
+        : strtolower(trim($networkCode));
+    $context = admin_crypto_wallet_address_duplicate_context($db, $address, $cryptoAssetId, $networkCode, $excludeWalletId);
+    $canonical = is_array($context['canonical'] ?? null) ? $context['canonical'] : [];
+    $wallets = [];
+
+    foreach ((array)($context['rows'] ?? []) as $row) {
+        $wallets[] = [
+            'id' => (int)($row['id'] ?? 0),
+            'asset_code' => (string)($row['asset_code'] ?? ''),
+            'asset_name' => (string)($row['asset_name'] ?? ''),
+            'network_code' => (string)($row['network_code'] ?? ''),
+            'network_label' => admin_crypto_network_label((string)($row['network_code'] ?? '')),
+            'label' => (string)($row['label'] ?? ''),
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'found' => !empty($context['has_existing']),
+        'can_reuse' => !empty($context['can_reuse']),
+        'message' => admin_t($messages, (string)($context['message_key'] ?? ''), (string)($context['message'] ?? '')),
+        'message_key' => (string)($context['message_key'] ?? ''),
+        'owner_full_name' => (string)($canonical['owner_full_name'] ?? ''),
+        'wallet_provider' => (string)($canonical['wallet_provider'] ?? ''),
+        'notes' => (string)($canonical['notes'] ?? ''),
+        'memo_tag' => (string)($canonical['memo_tag'] ?? ''),
+        'wallets' => $wallets,
+    ];
+}
+
+function admin_crypto_wallet_companion_target_for_asset(string $assetCode, string $networkCode): array
+{
+    $assetCode = strtoupper(trim($assetCode));
+    $networkCode = strtolower(trim($networkCode));
+    if (!admin_crypto_wallet_network_is_evm($networkCode)) {
+        return [];
+    }
+
+    if (in_array($assetCode, ['ETH', 'BNB', 'POL', 'MATIC'], true)) {
+        $usdtNetworks = admin_crypto_asset_network_options('USDT');
+        return isset($usdtNetworks[$networkCode])
+            ? ['asset_code' => 'USDT', 'network_code' => $networkCode]
+            : [];
+    }
+
+    if ($assetCode === 'USDT') {
+        return ['asset_code' => 'ETH', 'network_code' => 'ethereum'];
+    }
+
+    return [];
+}
+
+function admin_crypto_wallet_active_customer_payment_asset(Mysql_ks $db, string $assetCode): ?array
+{
+    $assetCode = strtoupper(trim($assetCode));
+    if ($assetCode === '' || !schema_object_exists($db, 'crypto_assets') || !admin_crypto_asset_allows_customer_payments($assetCode)) {
+        return null;
+    }
+
+    $asset = $db->select_user("SELECT id, code, is_active FROM crypto_assets WHERE UPPER(code) = '" . $db->escape($assetCode) . "' LIMIT 1");
+    if (!is_array($asset) || (int)($asset['id'] ?? 0) <= 0 || empty($asset['is_active'])) {
+        return null;
+    }
+
+    return $asset;
+}
+
+function admin_crypto_wallet_active_usdt_asset(Mysql_ks $db): ?array
+{
+    return admin_crypto_wallet_active_customer_payment_asset($db, 'USDT');
+}
+
+function admin_crypto_wallet_create_evm_companion(
+    Mysql_ks $db,
+    string $sourceAssetCode,
+    string $sourceNetworkCode,
+    string $label,
+    string $ownerFullName,
+    string $address,
+    string $memoTag,
+    string $walletProvider,
+    string $status,
+    string $notes,
+    $disabledAtValue,
+    int $adminUserId
+): array {
+    $messages = admin_load_messages(admin_current_locale());
+    $target = admin_crypto_wallet_companion_target_for_asset($sourceAssetCode, $sourceNetworkCode);
+    $targetAssetCode = strtoupper((string)($target['asset_code'] ?? ''));
+    $networkCode = strtolower((string)($target['network_code'] ?? ''));
+    $targetAsset = $targetAssetCode !== ''
+        ? admin_crypto_wallet_active_customer_payment_asset($db, $targetAssetCode)
+        : null;
+    if (!is_array($targetAsset) || $networkCode === '' || !admin_crypto_wallet_address_is_evm_format($address)) {
+        return ['ok' => true, 'created' => false, 'wallet_id' => 0];
+    }
+
+    $targetAssetId = (int)$targetAsset['id'];
+    $existing = $db->select_user(
+        "SELECT id
+         FROM crypto_wallet_addresses
+         WHERE crypto_asset_id = {$targetAssetId}
+           AND network_code = '" . $db->escape($networkCode) . "'
+           AND address = '" . $db->escape($address) . "'
+         LIMIT 1"
+    );
+    if (is_array($existing) && (int)($existing['id'] ?? 0) > 0) {
+        return ['ok' => true, 'created' => false, 'wallet_id' => (int)$existing['id']];
+    }
+
+    $duplicateContext = admin_crypto_wallet_address_duplicate_context($db, $address, $targetAssetId, $networkCode, 0);
+    if (!empty($duplicateContext['has_existing']) && empty($duplicateContext['can_reuse'])) {
+        return [
+            'ok' => false,
+            'created' => false,
+            'wallet_id' => 0,
+            'message' => admin_t($messages, (string)($duplicateContext['message_key'] ?? ''), (string)($duplicateContext['message'] ?? 'This wallet address already exists in the database.')),
+        ];
+    }
+
+    $insertOk = $db->insert(
+        ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at', 'created_by_admin_user_id'],
+        [$targetAssetId, $label, $ownerFullName, $address, $networkCode, $memoTag !== '' ? $memoTag : null, $walletProvider !== '' ? $walletProvider : null, $status, $notes !== '' ? $notes : null, $disabledAtValue, $adminUserId],
+        'crypto_wallet_addresses'
+    );
+
+    if (!$insertOk || (int)$db->id() <= 0) {
+        return [
+            'ok' => false,
+            'created' => false,
+            'wallet_id' => 0,
+            'message' => admin_t($messages, 'wallet_error_create_evm_companion_failed', 'Unable to create paired EVM wallet for this address.'),
+        ];
+    }
+
+    return ['ok' => true, 'created' => true, 'wallet_id' => (int)$db->id()];
+}
+
 function admin_toggle_crypto_asset(Mysql_ks $db, int $assetId): array
 {
     $asset = admin_crypto_asset_find($db, $assetId);
@@ -11373,7 +17438,7 @@ function admin_duration_label_from_hours(int $hours): string
 
 function admin_product_duration_options(int $currentHours = 720): array
 {
-    $options = [6, 12, 24, 720, 2160, 4320, 8760];
+    $options = [6, 12, 24, 720, 1440, 2160, 2880, 3600, 4320, 8760];
     $currentHours = max(0, $currentHours);
 
     if ($currentHours > 0 && !in_array($currentHours, $options, true)) {
@@ -11496,7 +17561,7 @@ function admin_product_basic_row(Mysql_ks $db, int $productId): ?array
     return is_array($row) ? $row : null;
 }
 
-function admin_create_order(Mysql_ks $db, array $input): array
+function admin_create_order(Mysql_ks $db, array $input, ?float $quotedAmount = null): array
 {
     $customerId = (int)($input['customer_id'] ?? 0);
     $productId = (int)($input['product_id'] ?? 0);
@@ -11515,6 +17580,10 @@ function admin_create_order(Mysql_ks $db, array $input): array
         return ['ok' => false, 'message' => 'Selected product is not available for this user.'];
     }
 
+    if ($quotedAmount !== null && (!is_finite($quotedAmount) || $quotedAmount <= 0)) {
+        return ['ok' => false, 'message' => 'Invalid quoted order amount.'];
+    }
+
     $note = trim((string)($input['customer_note'] ?? ''));
     $hasDeliveryLink = isset($input['has_delivery_link']) && (string)$input['has_delivery_link'] === '1';
     $deliveryLink = $hasDeliveryLink ? trim((string)($input['delivery_link'] ?? '')) : '';
@@ -11531,7 +17600,7 @@ function admin_create_order(Mysql_ks $db, array $input): array
 
     $durationHours = (int)($product['duration_hours'] ?? 0);
     $expiresAt = admin_product_type_uses_expiry($product['product_type'] ?? 'subscription') && $durationHours > 0
-        ? date('Y-m-d H:i:s', time() + ($durationHours * 3600))
+        ? app_subscription_expiry_from_base_timestamp(time(), $durationHours)
         : null;
     $orderReference = 'ADM-' . date('YmdHis') . '-' . $customerId;
     $insertFields = [
@@ -11555,7 +17624,7 @@ function admin_create_order(Mysql_ks $db, array $input): array
         $orderReference,
         'native',
         null,
-        (string)($product['price_amount'] ?? '0.00'),
+        $quotedAmount !== null ? number_format($quotedAmount, 2, '.', '') : (string)($product['price_amount'] ?? '0.00'),
         (int)($product['currency_id'] ?? 1),
         'pending_payment',
         'unpaid',
@@ -11613,6 +17682,9 @@ function admin_save_order_info(
     $totalAmountRaw = trim((string)($input['total_amount'] ?? ''));
     if ($totalAmountRaw === '' || !is_numeric($totalAmountRaw)) {
         return ['ok' => false, 'message' => 'Amount must be a valid number.'];
+    }
+    if ((float)$totalAmountRaw < 0) {
+        return ['ok' => false, 'message' => 'Amount cannot be negative.'];
     }
 
     $deliveryLink = trim((string)($input['delivery_link'] ?? ''));
@@ -11688,27 +17760,95 @@ function admin_save_order_info(
     $wasActiveBefore = strtolower(trim((string)($order['status'] ?? ''))) === 'active';
     $becomesActiveNow = $status === 'active';
     $balanceActivationContext = admin_order_balance_activation_context($db, $order);
+    $activationBalanceMode = strtolower(trim((string)($input['activation_balance_mode'] ?? 'require_full')));
+    if (!in_array($activationBalanceMode, ['require_full', 'debit_available', 'skip_debit'], true)) {
+        $activationBalanceMode = 'require_full';
+    }
+    $activationBalanceEventNote = '';
+    $activationLocale = admin_current_locale();
     if (!$wasActiveBefore && $becomesActiveNow) {
-        if (empty($balanceActivationContext['can_activate'])) {
-            return ['ok' => false, 'message' => 'Customer balance is too low to activate this order.'];
-        }
-        if (empty($balanceActivationContext['balance_debit_already_applied'])) {
-            $balanceDebitResult = admin_apply_customer_balance_runtime_event(
-                $db,
-                (int)($order['customer_id'] ?? 0),
-                round((float)$totalAmountRaw, 2),
-                'debit',
-                'order_activation',
-                (string)$orderId,
-                'Activated order #' . $orderId,
-                $adminUserId,
-                $ipAddress
-            );
-            if (empty($balanceDebitResult['ok'])) {
-                return $balanceDebitResult;
+        $activationRequiredAmount = round((float)$totalAmountRaw, 2);
+        $activationCurrentBalance = round((float)($balanceActivationContext['current_balance'] ?? 0), 2);
+        $activationExistingDebitAmount = round((float)(
+            !empty($balanceActivationContext['balance_debit_already_applied'])
+                ? ($balanceActivationContext['covered_amount'] ?? 0)
+                : 0
+        ), 2);
+        $activationBudget = $activationExistingDebitAmount > 0 ? $activationExistingDebitAmount : $activationCurrentBalance;
+        $canActivateWithFullBalance = $activationBudget + 0.00001 >= $activationRequiredAmount;
+
+        if ($activationBalanceMode === 'skip_debit') {
+            $activationBalanceEventNote = $activationLocale === 'pl'
+                ? 'Bez pobrania salda.'
+                : 'Activated without balance debit.';
+        } elseif ($canActivateWithFullBalance) {
+            if (empty($balanceActivationContext['balance_debit_already_applied'])) {
+                $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+                    $db,
+                    (int)($order['customer_id'] ?? 0),
+                    $activationRequiredAmount,
+                    'debit',
+                    'order_activation',
+                    (string)$orderId,
+                    $activationLocale === 'pl'
+                        ? 'Aktywowano zamówienie #' . $orderId . '.'
+                        : 'Activated order #' . $orderId . '.',
+                    $adminUserId,
+                    $ipAddress
+                );
+                if (empty($balanceDebitResult['ok'])) {
+                    return $balanceDebitResult;
+                }
             }
+            $activationBalanceEventNote = $activationLocale === 'pl'
+                ? 'Zapłacono z salda.'
+                : 'Customer balance debited.';
+        } elseif ($activationBalanceMode === 'debit_available') {
+            $partialDebitAmount = $activationExistingDebitAmount > 0
+                ? 0.0
+                : min(max(0.0, $activationCurrentBalance), $activationRequiredAmount);
+            if ($activationExistingDebitAmount <= 0 && $partialDebitAmount <= 0.00001) {
+                return ['ok' => false, 'message' => 'No customer balance is available for this order. Activate without charging the balance if the payment was handled outside the balance.'];
+            }
+            $shortfallAmount = max(0.0, round($activationRequiredAmount - ($activationExistingDebitAmount > 0 ? $activationExistingDebitAmount : $partialDebitAmount), 2));
+            $activationCurrencyCode = strtoupper(trim((string)($order['currency_code'] ?? '')));
+            $shortfallNote = ($activationLocale === 'pl' ? 'Za mało -' : 'Low balance -')
+                . number_format($shortfallAmount, 2, '.', '')
+                . ($activationCurrencyCode !== '' ? ' ' . $activationCurrencyCode : '')
+                . '.';
+            if ($partialDebitAmount > 0) {
+                $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+                    $db,
+                    (int)($order['customer_id'] ?? 0),
+                    $partialDebitAmount,
+                    'debit',
+                    'order_activation',
+                    (string)$orderId,
+                    $activationLocale === 'pl'
+                        ? 'Aktywowano zamówienie #' . $orderId . ' z dostępnego salda. ' . $shortfallNote
+                        : 'Activated order #' . $orderId . ' with available balance. ' . $shortfallNote,
+                    $adminUserId,
+                    $ipAddress
+                );
+                if (empty($balanceDebitResult['ok'])) {
+                    return $balanceDebitResult;
+                }
+            }
+            $activationBalanceEventNote = $shortfallNote;
+        } else {
+            return ['ok' => false, 'message' => 'Customer balance is too low to activate this order. Choose whether to deduct the available balance or activate without charging the balance.'];
         }
     }
+
+    if ($activationBalanceEventNote !== '') {
+        $supportNoteInput = admin_localize_order_support_note_text(trim((string)($input['support_note'] ?? '')));
+        if (stripos($supportNoteInput, $activationBalanceEventNote) === false) {
+            $input['support_note'] = trim($supportNoteInput . ($supportNoteInput !== '' ? "\n" : '') . $activationBalanceEventNote);
+        } else {
+            $input['support_note'] = $supportNoteInput;
+        }
+    }
+    $supportNoteValue = admin_localize_order_support_note_text(trim((string)($input['support_note'] ?? '')));
 
     $updateFields = [
         'order_reference',
@@ -11730,7 +17870,7 @@ function admin_save_order_info(
         $paymentMethod !== '' ? $paymentMethod : null,
         number_format((float)$totalAmountRaw, 2, '.', ''),
         trim((string)($input['customer_note'] ?? '')) ?: null,
-        trim((string)($input['support_note'] ?? '')) ?: null,
+        $supportNoteValue !== '' ? $supportNoteValue : null,
         $deliveryLink !== '' ? $deliveryLink : null,
         trim((string)($input['transaction_reference'] ?? '')) ?: null,
         $startedAt,
@@ -11748,9 +17888,18 @@ function admin_save_order_info(
 
     $updated = $db->update_using_id($updateFields, $updateValues, 'orders', $orderId);
 
+    if ($updated && !$wasActiveBefore && $becomesActiveNow) {
+        admin_cancel_open_order_payment_requests(
+            $db,
+            (int)($order['customer_id'] ?? 0),
+            $orderId
+        );
+    }
+
     if ($updated && schema_object_exists($db, 'order_status_events') && $status !== (string)($order['status'] ?? '')) {
         $eventFields = ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'];
-        $eventValues = [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, (string)($order['status'] ?? ''), $status, 'Order updated from admin modal'];
+        $eventNote = $activationBalanceEventNote !== '' ? $activationBalanceEventNote : 'Order updated from admin modal';
+        $eventValues = [$orderId, isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : null, (string)($order['status'] ?? ''), $status, admin_localize_activity_description('order_status_event', $eventNote)];
         if (schema_column_exists($db, 'order_status_events', 'created_at') && function_exists('app_current_datetime_string')) {
             $eventFields[] = 'created_at';
             $eventValues[] = app_current_datetime_string();
@@ -11758,6 +17907,7 @@ function admin_save_order_info(
         $db->insert($eventFields, $eventValues, 'order_status_events');
     }
 
+    $billingDeliveryResult = null;
     if ($updated) {
         $freshOrder = admin_order_find($db, $orderId);
         if (is_array($freshOrder)) {
@@ -11779,19 +17929,37 @@ function admin_save_order_info(
             ? 'order_payment_approved'
             : 'order_updated';
 
+        $activityDescription = 'Order #' . $orderId . ' updated' . ($changes ? ': ' . implode(', ', $changes) . '.' : '.');
+        if ($activationBalanceEventNote !== '') {
+            $activityDescription .= ' ' . rtrim($activationBalanceEventNote, '.') . '.';
+        }
+
         admin_log_customer_and_admin(
             $db,
             (int)($order['customer_id'] ?? 0),
             $adminUserId,
             $actionKey,
-            'Order #' . $orderId . ' updated' . ($changes ? ': ' . implode(', ', $changes) . '.' : '.'),
+            $activityDescription,
             $ipAddress
         );
+
+        if (!$wasActiveBefore && $becomesActiveNow && !empty($input['issue_billing_document_email'])) {
+            $billingDeliveryResult = admin_billing_issue_and_email_for_order($db, $orderId, $adminUserId);
+        }
+    }
+
+    $resultMessage = $updated ? 'Order updated successfully.' : 'Unable to update order.';
+    if ($updated && is_array($billingDeliveryResult)) {
+        $isPolishAdmin = admin_current_locale() === 'pl';
+        $resultMessage .= !empty($billingDeliveryResult['ok'])
+            ? ($isPolishAdmin ? ' Rachunek został wystawiony i wysłany.' : ' Billing document issued and emailed.')
+            : ($isPolishAdmin ? ' Rachunek nie został wysłany: ' : ' Billing document was not sent: ')
+                . (string)($billingDeliveryResult['message'] ?? ($isPolishAdmin ? 'sprawdź ustawienia modułu Rachunki.' : 'check Billing settings.'));
     }
 
     return [
         'ok' => (bool)$updated,
-        'message' => $updated ? 'Order updated successfully.' : 'Unable to update order.',
+        'message' => $resultMessage,
     ];
 }
 
@@ -11812,6 +17980,28 @@ function admin_order_product_can_extend(array $product): bool
     return (int)($product['duration_hours'] ?? 0) > 24;
 }
 
+function admin_order_can_delete(array $order): bool
+{
+    $status = strtolower(trim((string)($order['status'] ?? '')));
+    $paymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
+    $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+
+    if (in_array($status, ['expired', 'cancelled', 'failed', 'inactive', 'pending_payment'], true)) {
+        return true;
+    }
+
+    $usesSubscriptionTiming = admin_product_type_uses_expiry($order['product_type'] ?? 'subscription');
+    if ($usesSubscriptionTiming && (string)(admin_order_progress_data($order)['tone'] ?? '') === 'expired') {
+        return true;
+    }
+
+    $isActiveStatus = in_array($status, ['active', 'approved', 'completed', 'fulfilled'], true);
+    $isPaid = $paymentStatus === 'paid';
+    $isFulfilled = in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true);
+
+    return !($isActiveStatus && $isPaid && $isFulfilled);
+}
+
 function admin_delete_order(
     Mysql_ks $db,
     int $orderId,
@@ -11822,6 +18012,14 @@ function admin_delete_order(
     $order = admin_order_find($db, $orderId);
     if (!$order) {
         return ['ok' => false, 'message' => 'Order not found.'];
+    }
+
+    if (!admin_order_can_delete($order)) {
+        return [
+            'ok' => false,
+            'message' => 'An active and completed order cannot be deleted.',
+            'message_key' => 'order_delete_active_blocked',
+        ];
     }
 
     $customerId = (int)($order['customer_id'] ?? 0);
@@ -11881,7 +18079,13 @@ function admin_delete_order(
     return ['ok' => true, 'message' => 'Order deleted successfully.'];
 }
 
-function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $chargeCustomerBalance = true): array
+function admin_extend_order(
+    Mysql_ks $db,
+    int $orderId,
+    int $productId,
+    bool $chargeCustomerBalance = true,
+    string $overrideExpiresAt = ''
+): array
 {
     $order = admin_order_find($db, $orderId);
     $product = admin_product_basic_row($db, $productId);
@@ -11922,6 +18126,29 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
             return ['ok' => false, 'message' => 'This payment was approved for another package. Select the same package or create a new payment request.'];
         }
 
+        if (trim((string)$overrideExpiresAt) !== '') {
+            $overrideExpiresAtTimestamp = app_timestamp_from_runtime_datetime(str_replace('T', ' ', (string)$overrideExpiresAt));
+            if ($overrideExpiresAtTimestamp <= 0) {
+                return ['ok' => false, 'message' => 'Invalid custom expiry date format.'];
+            }
+            $currentExpiry = !empty($order['expires_at']) && function_exists('app_timestamp_from_runtime_datetime')
+                ? app_timestamp_from_runtime_datetime((string)$order['expires_at'])
+                : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
+            $baseTimestamp = $currentExpiry > time() ? $currentExpiry : time();
+            if ($overrideExpiresAtTimestamp <= $baseTimestamp) {
+                return ['ok' => false, 'message' => 'Custom expiry date must be later than current extension base date.'];
+            }
+
+            if (schema_object_exists($db, 'order_renewals')) {
+                $db->update_using_id(
+                    ['target_expires_at'],
+                    [date('Y-m-d H:i:s', $overrideExpiresAtTimestamp)],
+                    'order_renewals',
+                    (int)($pendingRenewal['id'] ?? 0)
+                );
+            }
+        }
+
         $applyResult = app_apply_pending_order_renewal(
             $db,
             (int)$pendingRenewal['id'],
@@ -11944,8 +18171,24 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
         ? app_timestamp_from_runtime_datetime((string)$order['expires_at'])
         : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
     $baseTimestamp = $currentExpiry > $now ? $currentExpiry : $now;
-    $newExpiry = date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
+    $normalizedOverrideExpiresAt = trim((string)$overrideExpiresAt);
+    if ($normalizedOverrideExpiresAt !== '') {
+        $overrideExpiresAtTimestamp = app_timestamp_from_runtime_datetime(str_replace('T', ' ', $normalizedOverrideExpiresAt));
+        if ($overrideExpiresAtTimestamp <= 0) {
+            return ['ok' => false, 'message' => 'Invalid custom expiry date format.'];
+        }
+        if ($overrideExpiresAtTimestamp <= $baseTimestamp) {
+            return ['ok' => false, 'message' => 'Custom expiry date must be later than current extension base date.'];
+        }
+        $newExpiry = date('Y-m-d H:i:s', $overrideExpiresAtTimestamp);
+    } else {
+        $newExpiry = app_subscription_expiry_from_base_timestamp($baseTimestamp, $durationHours);
+    }
     $extensionAmount = round((float)($product['price_amount'] ?? 0), 2);
+    $previousStatus = strtolower(trim((string)($order['status'] ?? '')));
+    $nextStatus = strtotime($newExpiry) > time() ? 'active' : 'expired';
+
+    app_preserve_initial_order_sale($db, $orderId);
 
     if ($chargeCustomerBalance && $extensionAmount > 0) {
         $balanceDebitResult = admin_apply_customer_balance_runtime_event(
@@ -11965,12 +18208,13 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
     }
 
     $updated = $db->update_using_id(
-        ['product_id', 'total_amount', 'currency_id', 'expires_at'],
+        ['product_id', 'total_amount', 'currency_id', 'expires_at', 'status'],
         [
             $productId,
             number_format((float)($product['price_amount'] ?? 0), 2, '.', ''),
             (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
             $newExpiry,
+            $nextStatus,
         ],
         'orders',
         $orderId
@@ -11979,7 +18223,7 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
     if ($updated && schema_object_exists($db, 'order_renewals')) {
         app_ensure_order_renewal_runtime_columns($db);
         $db->insert(
-            ['order_id', 'customer_id', 'product_id', 'price_amount', 'currency_id', 'duration_hours', 'status', 'requested_at', 'applied_at', 'target_expires_at', 'renewal_note'],
+            ['order_id', 'customer_id', 'product_id', 'price_amount', 'currency_id', 'duration_hours', 'status', 'requested_at', 'applied_at', 'paid_at', 'target_expires_at', 'renewal_note'],
             [
                 $orderId,
                 (int)($order['customer_id'] ?? 0),
@@ -11988,6 +18232,7 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
                 (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
                 $durationHours,
                 'applied',
+                app_current_datetime_string(),
                 app_current_datetime_string(),
                 app_current_datetime_string(),
                 $newExpiry,
@@ -12004,7 +18249,7 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
                 $orderId,
                 $adminUserId > 0 ? $adminUserId : null,
                 (string)($order['status'] ?? ''),
-                (string)($order['status'] ?? ''),
+                $nextStatus,
                 'Order extended by ' . admin_duration_label_from_hours($durationHours) . ($chargeCustomerBalance ? '' : ' without charging customer balance')
             ],
             'order_status_events'
@@ -12037,6 +18282,8 @@ function admin_extend_order(Mysql_ks $db, int $orderId, int $productId, bool $ch
     return [
         'ok' => (bool)$updated,
         'message' => $updated ? 'Subscription extended successfully.' : 'Unable to extend subscription.',
+        'status_changed' => $updated ? ($previousStatus !== $nextStatus) : false,
+        'next_status' => $updated ? $nextStatus : '',
     ];
 }
 
@@ -12337,13 +18584,10 @@ function admin_set_customer_password(
 
     $password = trim((string)($payload['new_password'] ?? ''));
     $repeatPassword = trim((string)($payload['repeat_password'] ?? ''));
+    $sendPasswordEmail = !empty($payload['send_password_email']);
 
     if ($password === '') {
         return ['ok' => false, 'message' => 'Enter a new password.', 'message_key' => 'change_password_error_new_required'];
-    }
-
-    if (strlen($password) < 8) {
-        return ['ok' => false, 'message' => 'New password must be at least 8 characters long.', 'message_key' => 'change_password_error_new_short'];
     }
 
     if (strlen($password) > 72) {
@@ -12367,6 +18611,45 @@ function admin_set_customer_password(
         'Customer password changed by admin.',
         $ipAddress
     );
+
+    if ($sendPasswordEmail) {
+        $email = strtolower(trim((string)($customer['email'] ?? '')));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return [
+                'ok' => false,
+                'password_updated' => true,
+                'alert_type' => 'warning',
+                'message' => 'The password was updated, but the customer email address is invalid.',
+                'message_key' => 'customer_password_resend_invalid_email',
+            ];
+        }
+
+        $emailResult = admin_queue_customer_password_email(
+            $db,
+            $customerId,
+            $email,
+            $password,
+            admin_normalize_locale((string)($customer['locale_code'] ?? 'en'))
+        );
+
+        if (empty($emailResult['ok']) || !empty($emailResult['failed']) || empty($emailResult['queued'])) {
+            return [
+                'ok' => false,
+                'password_updated' => true,
+                'alert_type' => 'warning',
+                'message' => 'The password was updated, but the email could not be sent.',
+                'message_key' => 'customer_password_resend_error',
+                'email_notification' => $emailResult,
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'The password was updated and queued for email delivery.',
+            'message_key' => 'customer_password_resent',
+            'email_notification' => $emailResult,
+        ];
+    }
 
     return ['ok' => true, 'message' => 'Customer password has been updated.', 'message_key' => 'customer_password_saved'];
 }
@@ -12766,6 +19049,8 @@ function admin_customer_active_bank_assignments(Mysql_ks $db, int $customerId): 
         return [];
     }
 
+    app_ensure_bank_account_runtime_columns($db);
+
     return $db->select_full_user(
         "SELECT
             bank_account_assignment_id,
@@ -12778,6 +19063,12 @@ function admin_customer_active_bank_assignments(Mysql_ks $db, int $customerId): 
             bank_name,
             iban,
             account_number,
+            (
+                SELECT bank_accounts.monthly_limit_amount
+                FROM bank_accounts
+                WHERE bank_accounts.id = customer_bank_accounts.bank_account_id
+                LIMIT 1
+            ) AS monthly_limit_amount,
             status,
             assigned_at
          FROM customer_bank_accounts
@@ -12798,7 +19089,7 @@ function admin_customer_has_pending_crypto_payment(Mysql_ks $db, int $customerId
          FROM crypto_deposit_requests
          WHERE customer_id = {$customerId}
            AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
-           AND expires_at > NOW()"
+           AND (expires_at IS NULL OR expires_at > NOW())"
     );
     return (int)($row['total'] ?? 0) > 0;
 }
@@ -12946,7 +19237,8 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
                 customer_crypto_wallets.owner_full_name,
                 customer_crypto_wallets.status,
                 customer_crypto_wallets.assigned_at,
-                crypto_wallet_addresses.notes AS wallet_notes
+                crypto_wallet_addresses.notes AS wallet_notes,
+                crypto_wallet_addresses.memo_tag
              FROM customer_crypto_wallets
              LEFT JOIN crypto_wallet_addresses
                ON crypto_wallet_addresses.id = customer_crypto_wallets.wallet_address_id
@@ -12981,6 +19273,7 @@ function admin_customer_active_crypto_assignments(Mysql_ks $db, int $customerId,
             wallet.label,
             wallet.address,
             wallet.network_code,
+            wallet.memo_tag,
             wallet.wallet_provider,
             wallet.owner_full_name,
             wallet.notes AS wallet_notes,
@@ -13014,16 +19307,12 @@ function admin_chat_payment_amount_options(float $min = 1.0, float $max = 200.0,
 
 function admin_chat_payment_amount_normalize($amount): float
 {
-    $numeric = round((float)$amount, 2);
-    if ($numeric < 1.0) {
-        return 0.0;
-    }
-
-    if ($numeric > 200.0) {
-        $numeric = 200.0;
-    }
-
-    return $numeric;
+    if (!is_scalar($amount) || is_bool($amount)) { return 0.0; }
+    $text = str_replace(',', '.', trim((string)$amount));
+    if (!is_numeric($text)) { return 0.0; }
+    $numeric = (float)$text;
+    if (!is_finite($numeric) || $numeric < 1.0 || $numeric > 200.0) { return 0.0; }
+    return round($numeric, 2);
 }
 
 function admin_chat_payment_currency_context(Mysql_ks $db): array
@@ -13189,57 +19478,9 @@ function admin_chat_crypto_wallet_pool_help_html(array $messages, array $setting
 
 function admin_chat_available_bank_account_rows(Mysql_ks $db, string $currencyCode = ''): array
 {
-    if (!schema_object_exists($db, 'available_bank_account_pool')) {
-        return [];
-    }
-
-    $currencyCode = strtoupper(trim($currencyCode));
-    $currencyFilter = $currencyCode !== ''
-        ? " WHERE currency_code = '" . $db->escape($currencyCode) . "'"
-        : '';
-
-    $rows = $db->select_full_user(
-        "SELECT
-            id,
-            currency_code,
-            currency_name,
-            label,
-            account_holder_name,
-            bank_name,
-            bank_address,
-            country_code,
-            iban,
-            account_number,
-            swift_bic,
-            payment_reference_template,
-            transfer_instructions
-         FROM available_bank_account_pool
-         {$currencyFilter}
-         ORDER BY label ASC, bank_name ASC, id ASC"
-    );
-
-    if ($rows || $currencyCode === '') {
-        return $rows;
-    }
-
-    return $db->select_full_user(
-        "SELECT
-            id,
-            currency_code,
-            currency_name,
-            label,
-            account_holder_name,
-            bank_name,
-            bank_address,
-            country_code,
-            iban,
-            account_number,
-            swift_bic,
-            payment_reference_template,
-            transfer_instructions
-         FROM available_bank_account_pool
-         ORDER BY label ASC, bank_name ASC, id ASC"
-    );
+    return function_exists('app_available_bank_account_rows')
+        ? app_available_bank_account_rows($db, $currencyCode, admin_app_settings($db))
+        : [];
 }
 
 function admin_chat_payment_crypto_assets(Mysql_ks $db, int $customerId, array $currencyContext): array
@@ -13260,9 +19501,12 @@ function admin_chat_payment_crypto_assets(Mysql_ks $db, int $customerId, array $
     foreach ($assets as $asset) {
         $assetId = (int)($asset['id'] ?? 0);
         $assetCode = strtoupper((string)($asset['code'] ?? ''));
+        if (!admin_crypto_asset_allows_customer_payments($assetCode)) {
+            continue;
+        }
         $existingAssignment = $assignmentMap[$assetCode] ?? null;
         $availableWallet = $existingAssignment ? null : admin_chat_available_crypto_wallet_for_asset($db, $assetId, $customerId, $settings);
-        if ((float)($asset['current_rate_fiat'] ?? 0) <= 0 || (!$existingAssignment && !$availableWallet)) {
+        if (!app_crypto_rate_is_usable($asset, (string)($currencyContext['currency_code'] ?? 'USD')) || (!$existingAssignment && !$availableWallet)) {
             continue;
         }
 
@@ -13316,6 +19560,12 @@ function admin_chat_payment_crypto_preview_html(array $preview, array $messages)
             <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_value', 'Transaction value')); ?></span><strong><?php echo $fiatAmount; ?></strong></div>
             <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_amount', 'Amount to send')); ?></span><strong><?php echo $cryptoAmount; ?></strong></div>
             <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_wallet', 'Wallet address')); ?></span><strong class="admin-chat-payment-preview__code"><?php echo $walletAddress; ?></strong></div>
+            <?php if (!empty($preview['network_code'])): ?>
+                <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_network', 'Network')); ?></span><strong><?php echo admin_e(app_crypto_network_label((string)$preview['network_code'])); ?></strong></div>
+            <?php endif; ?>
+            <?php if (trim((string)($preview['memo_tag'] ?? '')) !== ''): ?>
+                <div><span>Memo / Tag</span><strong class="admin-chat-payment-preview__code"><?php echo admin_e((string)$preview['memo_tag']); ?></strong></div>
+            <?php endif; ?>
             <?php if ($walletOwner !== ''): ?>
                 <div><span><?php echo admin_e(admin_t($messages, 'chat_payment_field_full_name', 'Full name')); ?></span><strong><?php echo $walletOwner; ?></strong></div>
             <?php endif; ?>
@@ -13455,6 +19705,8 @@ function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $a
         'wallet_address_id' => (int)($assignment['wallet_address_id'] ?? $availableWallet['wallet_address_id'] ?? 0),
         'wallet_assignment_id' => (int)($assignment['wallet_assignment_id'] ?? 0),
         'wallet_address' => $walletAddress,
+        'network_code' => (string)($assignment['network_code'] ?? $availableWallet['network_code'] ?? ''),
+        'memo_tag' => (string)($assignment['memo_tag'] ?? $availableWallet['memo_tag'] ?? ''),
         'wallet_owner_full_name' => $walletOwner,
         'wallet_owner_location' => $walletOwnerLocation,
         'wallet_notes' => $walletNotes,
@@ -13473,7 +19725,7 @@ function admin_chat_bank_payment_preview(Mysql_ks $db, int $customerId, $amount,
         return ['ok' => false, 'message' => 'Invalid bank payment preview payload.'];
     }
 
-    $assignments = admin_customer_active_bank_assignments($db, $customerId);
+    $assignments = app_filter_bank_account_rows_by_monthly_limit($db, admin_customer_active_bank_assignments($db, $customerId));
     $assignment = $assignments ? $assignments[0] : null;
     $bankAccount = null;
 
@@ -14047,50 +20299,27 @@ function admin_resolve_crypto_wallet_payment_conflict(
     $movedCount = 0;
     $db->start();
 
+    $keeperAssignmentId = 0;
+    $keeperAssignmentNeedsActivation = false;
+    $keeperNeedsInsert = false;
+    $keeperNote = 'Kept as primary wallet during wallet conflict split on wallet ' . $oldWalletCompact;
+
     if ($keeperCustomerId > 0) {
         $keeperAssignmentRow = $db->select_user(
-            "SELECT id
+            "SELECT id, status
              FROM crypto_wallet_assignments
              WHERE wallet_address_id = {$walletId}
                AND customer_id = {$keeperCustomerId}
              ORDER BY id DESC
-             LIMIT 1"
+             LIMIT 1
+             FOR UPDATE"
         );
         $keeperAssignmentId = (int)($keeperAssignmentRow['id'] ?? 0);
-        $keeperNote = 'Kept as primary wallet during wallet conflict split on wallet ' . $oldWalletCompact;
-        $keeperSafeNote = $db->escape($keeperNote);
-
         if ($keeperAssignmentId > 0) {
-            $keeperUpdated = $db->query(
-                "UPDATE crypto_wallet_assignments
-                 SET status = 'active',
-                     released_at = NULL,
-                     released_by_admin_user_id = NULL,
-                     assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$keeperSafeNote}')
-                 WHERE id = {$keeperAssignmentId}"
-            );
-            if ($keeperUpdated === false) {
-                $db->query('ROLLBACK');
-                return ['ok' => false, 'message' => 'Unable to keep the primary customer assigned to the original wallet.'];
-            }
+            $keeperAssignmentNeedsActivation = strtolower(trim((string)($keeperAssignmentRow['status'] ?? ''))) !== 'active';
         } else {
-            $keeperInserted = $db->insert(
-                ['wallet_address_id', 'customer_id', 'assignment_reason', 'status', 'assigned_by_admin_user_id', 'assignment_note'],
-                [$walletId, $keeperCustomerId, 'admin_conflict_primary', 'active', $adminUserId, $keeperNote],
-                'crypto_wallet_assignments'
-            );
-            if (!$keeperInserted || (int)$db->id() <= 0) {
-                $db->query('ROLLBACK');
-                return ['ok' => false, 'message' => 'Unable to restore the primary customer on the original wallet.'];
-            }
+            $keeperNeedsInsert = true;
         }
-
-        $db->update_using_id(
-            ['status', 'last_assigned_at', 'disabled_at'],
-            ['assigned', $db->expr('NOW()'), null],
-            'crypto_wallet_addresses',
-            $walletId
-        );
     }
 
     foreach ($candidates as $candidate) {
@@ -14158,6 +20387,10 @@ function admin_resolve_crypto_wallet_payment_conflict(
         }
 
         if ($newWalletId <= 0) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to find a free wallet for every conflicting customer.'];
+        }
+        if (!app_crypto_wallet_can_be_offered_to_customer($db, $newWalletId, 0, $settings)) {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'Unable to find a free wallet for every conflicting customer.'];
         }
@@ -14321,6 +20554,41 @@ function admin_resolve_crypto_wallet_payment_conflict(
         $movedCount++;
     }
 
+    if ($keeperCustomerId > 0) {
+        $keeperSafeNote = $db->escape($keeperNote);
+        if ($keeperAssignmentId > 0 && $keeperAssignmentNeedsActivation) {
+            $keeperUpdated = $db->query(
+                "UPDATE crypto_wallet_assignments
+                 SET status = 'active',
+                     released_at = NULL,
+                     released_by_admin_user_id = NULL,
+                     assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$keeperSafeNote}')
+                 WHERE id = {$keeperAssignmentId}"
+            );
+            if ($keeperUpdated === false) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to keep the primary customer assigned to the original wallet.'];
+            }
+        } elseif ($keeperNeedsInsert) {
+            $keeperInserted = $db->insert(
+                ['wallet_address_id', 'customer_id', 'assignment_reason', 'status', 'assigned_by_admin_user_id', 'assignment_note'],
+                [$walletId, $keeperCustomerId, 'admin_conflict_primary', 'active', $adminUserId, $keeperNote],
+                'crypto_wallet_assignments'
+            );
+            if (!$keeperInserted || (int)$db->id() <= 0) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to restore the primary customer on the original wallet.'];
+            }
+        }
+
+        $db->update_using_id(
+            ['status', 'last_assigned_at', 'disabled_at'],
+            ['assigned', $db->expr('NOW()'), null],
+            'crypto_wallet_addresses',
+            $walletId
+        );
+    }
+
     $db->commit();
 
     if ($movedCount <= 0) {
@@ -14405,54 +20673,42 @@ function admin_wallet_owner_location_by_name(string $fullName): string
 
 function admin_random_wallet_owner_profile(): array
 {
-    $fullNames = [
-        'Adam Kowalski',
-        'Adrian Nowak',
-        'Alan Wisniewski',
-        'Aleksander Wozniak',
-        'Amelia Kowalczyk',
-        'Anna Zielinska',
-        'Antoni Lewandowski',
-        'Barbara Szymanska',
-        'Bartosz Kaminski',
-        'Celina Dombrowska',
-        'Damian Kaczmarek',
-        'Daniel Piotrowski',
-        'Daria Krupa',
-        'Dawid Jankowski',
-        'Dominika Mazur',
-        'Emilia Wojcik',
-        'Filip Zajac',
-        'Gabriela Krawczyk',
-        'Hubert Pawlak',
-        'Igor Michalski',
-        'Jakub Wrobel',
-        'Jan Malinowski',
-        'Joanna Sikora',
-        'Julia Dudek',
-        'Karol Wieczorek',
-        'Katarzyna Ostrowska',
-        'Klaudia Tomaszewska',
-        'Krzysztof Sobczak',
-        'Laura Baran',
-        'Lena Czerwinska',
-        'Lukasz Adamek',
-        'Magdalena Gorska',
-        'Marcin Walczak',
-        'Maria Zalewska',
-        'Mateusz Rutkowski',
-        'Michal Sokolowski',
-        'Natalia Jaworska',
-        'Nikodem Witkowski',
-        'Oliwia Wlodarczyk',
-        'Patryk Kozlowski',
-        'Paulina Marciniak',
-        'Piotr Grabowski',
-        'Sandra Zawadzka',
-        'Sebastian Lis',
-        'Tomasz Kubiak',
-        'Wiktoria Chmielewska',
-        'Zuzanna Kucharska',
+    static $polishMaleFirstNames = [
+        'Adam', 'Adrian', 'Aleksander', 'Antoni', 'Bartosz', 'Błażej', 'Damian', 'Daniel',
+        'Dawid', 'Dominik', 'Filip', 'Grzegorz', 'Hubert', 'Igor', 'Jakub', 'Jan', 'Kacper',
+        'Karol', 'Krzysztof', 'Łukasz', 'Maciej', 'Marcin', 'Mateusz', 'Michał', 'Mikołaj',
+        'Nikodem', 'Paweł', 'Patryk', 'Piotr', 'Przemysław', 'Rafał', 'Sebastian', 'Szymon',
+        'Tomasz', 'Wiktor', 'Wojciech',
+    ];
+    static $polishFemaleFirstNames = [
+        'Aleksandra', 'Alicja', 'Amelia', 'Anna', 'Barbara', 'Beata', 'Celina', 'Daria',
+        'Dominika', 'Emilia', 'Ewa', 'Gabriela', 'Hanna', 'Iga', 'Joanna', 'Julia', 'Karolina',
+        'Katarzyna', 'Klaudia', 'Laura', 'Lena', 'Magdalena', 'Maja', 'Maria', 'Marta', 'Monika',
+        'Natalia', 'Nikola', 'Oliwia', 'Paulina', 'Sandra', 'Sylwia', 'Wiktoria', 'Zofia', 'Zuzanna',
+    ];
+    static $polishSurnames = [
+        ['Kowalski', 'Kowalska'], ['Nowak', 'Nowak'], ['Wiśniewski', 'Wiśniewska'],
+        ['Wójcik', 'Wójcik'], ['Kowalczyk', 'Kowalczyk'], ['Kamiński', 'Kamińska'],
+        ['Lewandowski', 'Lewandowska'], ['Zieliński', 'Zielińska'], ['Szymański', 'Szymańska'],
+        ['Woźniak', 'Woźniak'], ['Dąbrowski', 'Dąbrowska'], ['Kozłowski', 'Kozłowska'],
+        ['Jankowski', 'Jankowska'], ['Mazur', 'Mazur'], ['Wojciechowski', 'Wojciechowska'],
+        ['Kwiatkowski', 'Kwiatkowska'], ['Krawczyk', 'Krawczyk'], ['Kaczmarek', 'Kaczmarek'],
+        ['Piotrowski', 'Piotrowska'], ['Grabowski', 'Grabowska'], ['Pawłowski', 'Pawłowska'],
+        ['Michalski', 'Michalska'], ['Nowakowski', 'Nowakowska'], ['Adamczyk', 'Adamczyk'],
+        ['Dudek', 'Dudek'], ['Zając', 'Zając'], ['Wieczorek', 'Wieczorek'],
+        ['Jabłoński', 'Jabłońska'], ['Król', 'Król'], ['Majewski', 'Majewska'],
+        ['Olszewski', 'Olszewska'], ['Jaworski', 'Jaworska'], ['Wróbel', 'Wróbel'],
+        ['Malinowski', 'Malinowska'], ['Pawlak', 'Pawlak'], ['Witkowski', 'Witkowska'],
+        ['Walczak', 'Walczak'], ['Stępień', 'Stępień'], ['Górski', 'Górska'],
+        ['Rutkowski', 'Rutkowska'], ['Michalak', 'Michalak'], ['Sikora', 'Sikora'],
+        ['Ostrowski', 'Ostrowska'], ['Baran', 'Baran'], ['Duda', 'Duda'],
+        ['Szewczyk', 'Szewczyk'], ['Tomaszewski', 'Tomaszewska'], ['Pietrzak', 'Pietrzak'],
+        ['Marciniak', 'Marciniak'], ['Zawadzki', 'Zawadzka'], ['Kubiak', 'Kubiak'],
+        ['Kucharski', 'Kucharska'], ['Lis', 'Lis'], ['Czerwiński', 'Czerwińska'],
+        ['Sobczak', 'Sobczak'], ['Włodarczyk', 'Włodarczyk'], ['Borkowski', 'Borkowska'],
+        ['Chmielewski', 'Chmielewska'], ['Gajewski', 'Gajewska'], ['Sadowski', 'Sadowska'],
+    ];
+    static $internationalFullNames = [
         'Ava Bennett',
         'Benjamin Foster',
         'Charlotte Brooks',
@@ -14494,7 +20750,15 @@ function admin_random_wallet_owner_profile(): array
         'Luna Fischer',
     ];
 
-    $fullName = (string)$fullNames[array_rand($fullNames)];
+    if (random_int(1, 100) <= 90) {
+        $female = random_int(0, 1) === 1;
+        $firstNames = $female ? $polishFemaleFirstNames : $polishMaleFirstNames;
+        $surnamePair = $polishSurnames[array_rand($polishSurnames)];
+        $fullName = (string)$firstNames[array_rand($firstNames)] . ' ' . (string)$surnamePair[$female ? 1 : 0];
+    } else {
+        $fullName = (string)$internationalFullNames[array_rand($internationalFullNames)];
+    }
+
     return [
         'full_name' => $fullName,
         'location' => admin_wallet_owner_location_by_name($fullName),
@@ -14627,10 +20891,14 @@ function admin_crypto_transaction_explorer_url(?string $assetCode, ?string $netw
 
 function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, int $adminUserId, string $ipAddress = ''): array
 {
+    admin_ensure_crypto_wallet_address_indexes($db);
+    $messages = admin_load_messages(admin_current_locale());
+    $t = static fn(string $key, string $default): string => admin_t($messages, $key, $default);
+
     $isCreate = $walletId <= 0;
     $wallet = $isCreate ? null : admin_crypto_wallet_find($db, $walletId);
     if (!$isCreate && (!is_array($wallet) || empty($wallet['id']))) {
-        return ['ok' => false, 'message' => 'Wallet not found.'];
+        return ['ok' => false, 'message' => $t('wallet_error_not_found', 'Wallet not found.')];
     }
 
     $cryptoAssetId = (int)($payload['crypto_asset_id'] ?? 0);
@@ -14645,34 +20913,58 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
 
     $asset = $cryptoAssetId > 0 ? $db->select_user("SELECT id, code, is_active FROM crypto_assets WHERE id = {$cryptoAssetId} LIMIT 1") : null;
     if ($cryptoAssetId <= 0 || !is_array($asset)) {
-        return ['ok' => false, 'message' => 'Invalid crypto asset.'];
+        return ['ok' => false, 'message' => $t('wallet_error_invalid_asset', 'Invalid crypto asset.')];
     }
     if ($isCreate && empty($asset['is_active'])) {
-        return ['ok' => false, 'message' => 'Choose an active cryptocurrency first.'];
+        return ['ok' => false, 'message' => $t('wallet_error_choose_active_asset', 'Choose an active cryptocurrency first.')];
+    }
+    if ($isCreate && !admin_crypto_asset_allows_customer_payments((string)($asset['code'] ?? ''))) {
+        return ['ok' => false, 'message' => $t('wallet_error_asset_disabled_for_payments', 'This cryptocurrency is disabled for customer payments.')];
     }
 
     if ($address === '') {
-        return ['ok' => false, 'message' => 'Wallet address is required.'];
+        return ['ok' => false, 'message' => $t('wallet_error_address_required', 'Wallet address is required.')];
     }
 
     if ($label === '') {
-        return ['ok' => false, 'message' => 'Wallet name / info is required.'];
-    }
-
-    $existingAddress = $db->select_user(
-        "SELECT id
-         FROM crypto_wallet_addresses
-         WHERE address = '" . $db->escape($address) . "'
-           AND id <> {$walletId}
-         LIMIT 1"
-    );
-    if (is_array($existingAddress) && !empty($existingAddress['id'])) {
-        return ['ok' => false, 'message' => 'This wallet address already exists in the database.'];
+        return ['ok' => false, 'message' => $t('wallet_error_label_required', 'Wallet name / info is required.')];
     }
 
     $networkCode = admin_normalize_crypto_wallet_network((string)($asset['code'] ?? ''), $networkCode, $address);
     if ($networkCode === '') {
-        return ['ok' => false, 'message' => 'Network is required for this wallet.'];
+        return ['ok' => false, 'message' => $t('wallet_error_network_required', 'Network is required for this wallet.')];
+    }
+    if (strtoupper(trim((string)($asset['code'] ?? ''))) === 'TRX' && preg_match('/^T[1-9A-HJ-NP-Za-km-z]{33}$/', $address) !== 1) {
+        return ['ok' => false, 'message' => $t('wallet_error_invalid_tron_address', 'Enter a valid TRON address beginning with T.')];
+    }
+
+    $duplicateContext = admin_crypto_wallet_address_duplicate_context($db, $address, $cryptoAssetId, $networkCode, $walletId);
+    if (!empty($duplicateContext['has_existing'])) {
+        if (empty($duplicateContext['can_reuse'])) {
+            return [
+                'ok' => false,
+                'message' => admin_t($messages, (string)($duplicateContext['message_key'] ?? ''), (string)($duplicateContext['message'] ?? 'This wallet address already exists in the database.')),
+            ];
+        }
+
+        $canonicalWallet = is_array($duplicateContext['canonical'] ?? null) ? $duplicateContext['canonical'] : [];
+        $canonicalOwnerFullName = trim((string)($canonicalWallet['owner_full_name'] ?? ''));
+        $canonicalWalletProvider = trim((string)($canonicalWallet['wallet_provider'] ?? ''));
+        $canonicalNotes = trim((string)($canonicalWallet['notes'] ?? ''));
+        $canonicalMemoTag = trim((string)($canonicalWallet['memo_tag'] ?? ''));
+
+        if ($canonicalOwnerFullName !== '') {
+            $ownerFullName = $canonicalOwnerFullName;
+        }
+        if ($canonicalWalletProvider !== '') {
+            $walletProvider = $canonicalWalletProvider;
+        }
+        if ($canonicalNotes !== '') {
+            $notes = $canonicalNotes;
+        }
+        if ($canonicalMemoTag !== '' && $memoTag === '') {
+            $memoTag = $canonicalMemoTag;
+        }
     }
 
     $generatedOwnerProfile = null;
@@ -14698,6 +20990,7 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
     $activeAssignmentCount = $isCreate ? 0 : count(admin_crypto_wallet_active_assignments($db, $walletId));
     $finalWalletStatus = $activeAssignmentCount > 0 ? 'assigned' : ($statusChoice === 'disabled' ? 'disabled' : 'available');
     $disabledAtValue = $finalWalletStatus === 'disabled' ? $db->expr('NOW()') : null;
+    $createdEvmCompanionWalletId = 0;
 
     $db->start();
 
@@ -14710,10 +21003,36 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
 
         if (!$insertOk || (int)$db->id() <= 0) {
             $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to create wallet.'];
+            return ['ok' => false, 'message' => $t('wallet_error_create_failed', 'Unable to create wallet.')];
         }
 
         $walletId = (int)$db->id();
+        if (!empty($payload['create_usdt_companion_wallet'])) {
+            $companionResult = admin_crypto_wallet_create_evm_companion(
+                $db,
+                (string)($asset['code'] ?? ''),
+                $networkCode,
+                $label,
+                $ownerFullName,
+                $address,
+                $memoTag,
+                $walletProvider,
+                $finalWalletStatus,
+                $notes,
+                $disabledAtValue,
+                $adminUserId
+            );
+            if (empty($companionResult['ok'])) {
+                $db->query('ROLLBACK');
+                return [
+                    'ok' => false,
+                    'message' => (string)($companionResult['message'] ?? $t('wallet_error_create_evm_companion_failed', 'Unable to create paired EVM wallet for this address.')),
+                ];
+            }
+            if (!empty($companionResult['created'])) {
+                $createdEvmCompanionWalletId = (int)($companionResult['wallet_id'] ?? 0);
+            }
+        }
     } else {
         $updateOk = $db->update_using_id(
             ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'notes', 'disabled_at'],
@@ -14724,7 +21043,7 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
 
         if (!$updateOk) {
             $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to update wallet.'];
+            return ['ok' => false, 'message' => $t('wallet_error_update_failed', 'Unable to update wallet.')];
         }
     }
 
@@ -14739,10 +21058,28 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
         $ipAddress
     );
 
-    return ['ok' => true, 'message' => $isCreate ? 'Wallet created successfully.' : 'Wallet saved successfully.', 'wallet_id' => $walletId];
+    if ($createdEvmCompanionWalletId > 0) {
+        admin_activity_log(
+            $db,
+            0,
+            $adminUserId,
+            'crypto_wallet_created',
+            'EVM companion wallet #' . $createdEvmCompanionWalletId . ' created for EVM wallet #' . $walletId . '.',
+            $ipAddress
+        );
+    }
+
+    return [
+        'ok' => true,
+        'message' => $createdEvmCompanionWalletId > 0
+            ? $t('wallet_created_with_evm_companion', 'Wallet and paired EVM wallet created successfully.')
+            : ($isCreate ? $t('wallet_created_success', 'Wallet created successfully.') : $t('wallet_saved_success', 'Wallet saved successfully.')),
+        'wallet_id' => $walletId,
+        'evm_companion_wallet_id' => $createdEvmCompanionWalletId,
+    ];
 }
 
-function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $customerId, int $adminUserId, array $settings, string $ipAddress = ''): array
+function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $customerId, int $adminUserId, array $settings, string $ipAddress = '', bool $manageTransaction = true): array
 {
     $wallet = admin_crypto_wallet_find($db, $walletId);
     if (!is_array($wallet) || empty($wallet['id'])) {
@@ -14817,7 +21154,7 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         ];
     }
 
-    $db->start();
+    if ($manageTransaction) { $db->start(); }
     $lockedWallet = $db->select_user(
         "SELECT id, status, disabled_at
          FROM crypto_wallet_addresses
@@ -14873,6 +21210,7 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
 
                 if (!$hasReplacementWallet) {
                     $otherCustomerEmail = trim((string)($assignment['customer_email'] ?? ''));
+                    $db->query('ROLLBACK');
                     return ['ok' => false, 'message' => 'This wallet already has payment history for ' . ($otherCustomerEmail !== '' ? $otherCustomerEmail : 'another customer') . ' and cannot be reassigned.'];
                 }
 
@@ -14962,7 +21300,7 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         'Released duplicate crypto wallet assignment from admin wallet editor'
     );
 
-    $db->commit();
+    if ($manageTransaction) { $db->commit(); }
 
     admin_log_customer_and_admin(
         $db,
@@ -15310,6 +21648,8 @@ function admin_bank_account_find(Mysql_ks $db, int $accountId): ?array
         return null;
     }
 
+    app_ensure_bank_account_runtime_columns($db);
+
     $row = $db->select_user(
         "SELECT
             bank_accounts.*,
@@ -15347,6 +21687,8 @@ function admin_bank_account_active_assignments(Mysql_ks $db, int $accountId): ar
 
 function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, int $adminUserId, string $ipAddress = ''): array
 {
+    app_ensure_bank_account_runtime_columns($db);
+
     $isCreate = $accountId <= 0;
     $account = $isCreate ? null : admin_bank_account_find($db, $accountId);
     if (!$isCreate && (!is_array($account) || empty($account['id']))) {
@@ -15365,6 +21707,17 @@ function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, i
     $swiftBic = strtoupper(trim((string)($payload['swift_bic'] ?? '')));
     $transferInstructions = trim((string)($payload['transfer_instructions'] ?? ''));
     $paymentReferenceTemplate = trim((string)($payload['payment_reference_template'] ?? ''));
+    $monthlyLimitRaw = str_replace(',', '.', trim((string)($payload['monthly_limit_amount'] ?? '')));
+    $monthlyLimitAmount = null;
+    if ($monthlyLimitRaw !== '') {
+        if (!is_numeric($monthlyLimitRaw) || (float)$monthlyLimitRaw < 0) {
+            return ['ok' => false, 'message' => 'Monthly limit must be a valid amount or empty for no limit.'];
+        }
+        $monthlyLimitAmount = round((float)$monthlyLimitRaw, 2);
+        if ($monthlyLimitAmount <= 0) {
+            $monthlyLimitAmount = null;
+        }
+    }
     $notes = trim((string)($payload['notes'] ?? ''));
     $statusChoice = strtolower(trim((string)($payload['bank_account_status'] ?? 'available')));
 
@@ -15412,6 +21765,7 @@ function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, i
                 'swift_bic',
                 'payment_reference_template',
                 'transfer_instructions',
+                'monthly_limit_amount',
                 'status',
                 'notes',
                 'disabled_at',
@@ -15430,6 +21784,7 @@ function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, i
                 $swiftBic !== '' ? $swiftBic : null,
                 $paymentReferenceTemplate !== '' ? $paymentReferenceTemplate : null,
                 $transferInstructions !== '' ? $transferInstructions : null,
+                $monthlyLimitAmount,
                 $finalStatus,
                 $notes !== '' ? $notes : null,
                 $disabledAtValue,
@@ -15468,6 +21823,7 @@ function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, i
             'swift_bic',
             'payment_reference_template',
             'transfer_instructions',
+            'monthly_limit_amount',
             'status',
             'notes',
             'disabled_at',
@@ -15484,6 +21840,7 @@ function admin_save_bank_account(Mysql_ks $db, int $accountId, array $payload, i
             $swiftBic !== '' ? $swiftBic : null,
             $paymentReferenceTemplate !== '' ? $paymentReferenceTemplate : null,
             $transferInstructions !== '' ? $transferInstructions : null,
+            $monthlyLimitAmount,
             $finalStatus,
             $notes !== '' ? $notes : null,
             $disabledAtValue,
@@ -16053,11 +22410,11 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
 
     chat_ensure_message_interactions_runtime($db);
     app_ensure_customer_runtime_columns($db);
-    if ($adminUserId > 0 && function_exists('app_fetch_settings') && function_exists('chat_sync_global_group_members')) {
-        $settings = app_fetch_settings($db);
-        if (admin_demo_messenger_showcase_enabled(is_array($settings) ? $settings : []) || !empty($settings['customer_global_group_enabled'])) {
-            chat_sync_global_group_members($db, is_array($settings) ? $settings : []);
-        }
+    $settings = function_exists('app_fetch_settings') ? app_fetch_settings($db) : [];
+    $settings = is_array($settings) ? $settings : [];
+    $globalGroupEnabled = admin_customer_global_group_enabled($settings);
+    if ($adminUserId > 0 && $globalGroupEnabled && function_exists('chat_sync_global_group_members')) {
+        chat_sync_global_group_members($db, $settings);
     }
 
     $limit = max(1, min(20, $limit));
@@ -16126,6 +22483,11 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
 
     if ($adminUserId > 0) {
         $groupRows = chat_admin_group_conversation_rows($db, $adminUserId);
+        if (!$globalGroupEnabled) {
+            $groupRows = array_values(array_filter($groupRows, static function (array $groupRow): bool {
+                return trim((string)($groupRow['conversation_type'] ?? '')) !== 'global_group';
+            }));
+        }
         foreach ($groupRows as &$groupRow) {
             $summary = chat_group_conversation_summary(
                 $db,
@@ -17304,7 +23666,7 @@ function admin_chat_payment_modal_data(Mysql_ks $db, string $type, int $customer
             return ['ok' => false, 'message' => 'Bank transfers are disabled.'];
         }
 
-        $assignedAccounts = admin_customer_active_bank_assignments($db, $customerId);
+        $assignedAccounts = app_filter_bank_account_rows_by_monthly_limit($db, admin_customer_active_bank_assignments($db, $customerId));
         $availableAccounts = $assignedAccounts ? [] : admin_chat_available_bank_account_rows($db, (string)($currencyContext['currency_code'] ?? ''));
 
         $payload['assigned_accounts'] = array_map(static function (array $row): array {
@@ -17360,6 +23722,8 @@ function admin_queue_crypto_payment_request_live_chat_card(
         'wallet_owner_full_name' => (string)($preview['wallet_owner_full_name'] ?? ''),
         'wallet_owner_location' => (string)($preview['wallet_owner_location'] ?? ''),
         'wallet_notes' => (string)($preview['wallet_notes'] ?? ''),
+        'network_code' => (string)($preview['network_code'] ?? ''),
+        'memo_tag' => (string)($preview['memo_tag'] ?? ''),
         'payment_url' => $paymentUrl,
     ], $localeCode);
 
@@ -17385,6 +23749,21 @@ function admin_chat_create_crypto_payment_request(
         return ['ok' => false, 'message' => 'Crypto payments are disabled.'];
     }
 
+    $conversation = $db->select_user("SELECT id FROM support_conversations WHERE id = {$conversationId} AND customer_id = {$customerId} AND conversation_type = 'live_chat' LIMIT 1");
+    $customer = admin_customer_basic_row($db, $customerId);
+    if (!$conversation || !$customer || (string)($customer['status'] ?? '') !== 'active') {
+        return ['ok' => false, 'message' => 'Customer or conversation is unavailable.'];
+    }
+    if ($productId > 0) {
+        $product = admin_product_basic_row($db, $productId);
+        $currency = admin_chat_payment_currency_context($db);
+        if (!$product || empty($product['is_active'])
+            || (int)$product['currency_id'] !== (int)$currency['currency_id']
+            || !app_customer_provider_is_visible($db, $customerId, (int)($product['provider_id'] ?? 0))) {
+            return ['ok' => false, 'message' => 'Selected product is unavailable or uses another currency.'];
+        }
+    }
+
     if (admin_customer_has_pending_crypto_payment($db, $customerId)) {
         return ['ok' => false, 'message' => 'pending_crypto_payment'];
     }
@@ -17400,189 +23779,198 @@ function admin_chat_create_crypto_payment_request(
     }
 
     $db->start();
-
-    $walletAssignmentId = (int)($preview['wallet_assignment_id'] ?? 0);
-    if ($walletAssignmentId <= 0) {
-        $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings);
-        if (empty($assignResult['ok'])) {
+    try {
+        $lockedCustomer = $db->select_user("SELECT id FROM customers WHERE id = {$customerId} AND status = 'active' FOR UPDATE");
+        if (!$lockedCustomer || admin_customer_has_pending_crypto_payment($db, $customerId)) {
             $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign wallet.')];
+            return ['ok' => false, 'message' => 'pending_crypto_payment'];
+        }
+        $lockedWallet = $db->select_user("SELECT id FROM crypto_wallet_addresses WHERE id = {$walletAddressId} AND disabled_at IS NULL AND status <> 'disabled' FOR UPDATE");
+        if (!$lockedWallet) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Wallet is no longer available.'];
         }
 
-        $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+        $walletAssignmentId = (int)($preview['wallet_assignment_id'] ?? 0);
         if ($walletAssignmentId <= 0) {
-            $assignments = admin_customer_active_crypto_assignments($db, $customerId, (string)($preview['asset_code'] ?? ''));
-            foreach ($assignments as $assignment) {
-                if ((int)($assignment['wallet_address_id'] ?? 0) !== $walletAddressId) {
-                    continue;
+            $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings, '', false);
+            if (empty($assignResult['ok'])) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign wallet.')];
+            }
+
+            $walletAssignmentId = (int)($assignResult['wallet_assignment_id'] ?? 0);
+            if ($walletAssignmentId <= 0) {
+                $assignments = admin_customer_active_crypto_assignments($db, $customerId, (string)($preview['asset_code'] ?? ''));
+                foreach ($assignments as $assignment) {
+                    if ((int)($assignment['wallet_address_id'] ?? 0) !== $walletAddressId) {
+                        continue;
+                    }
+
+                    $walletAssignmentId = (int)($assignment['wallet_assignment_id'] ?? 0);
+                    break;
                 }
+            }
 
-                $walletAssignmentId = (int)($assignment['wallet_assignment_id'] ?? 0);
-                break;
+            if ($walletAssignmentId <= 0) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
             }
         }
 
-        if ($walletAssignmentId <= 0) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
-        }
-    }
-
-    $requestId = 0;
-    $now = date('Y-m-d H:i:s');
-    $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
-    $db->query(
-        "UPDATE crypto_deposit_requests
-         SET status = 'archived'
-         WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
-           AND expires_at IS NOT NULL
-           AND expires_at < '{$now}'"
-    );
-    $openWalletRequest = $db->select_user(
-        "SELECT
-            crypto_deposit_requests.id,
-            crypto_deposit_requests.customer_id,
-            crypto_deposit_requests.order_id
-         FROM crypto_deposit_requests
-         LEFT JOIN crypto_wallet_assignments AS open_assignment
-           ON open_assignment.id = crypto_deposit_requests.wallet_assignment_id
-         WHERE (
-                crypto_deposit_requests.wallet_address_id = {$walletAddressId}
-             OR open_assignment.wallet_address_id = {$walletAddressId}
-         )
-           AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
-         ORDER BY crypto_deposit_requests.id DESC
-         LIMIT 1"
-    );
-
-    if (is_array($openWalletRequest) && !empty($openWalletRequest['id'])) {
-        if ((int)($openWalletRequest['customer_id'] ?? 0) !== $customerId || !empty($openWalletRequest['order_id'])) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
-        }
-
-        if (!app_crypto_deposit_wallet_payload_is_valid($db, $customerId, (int)$preview['asset_id'], $walletAddressId, $walletAssignmentId, $settings)) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
-        }
-
-        $updated = $db->update_using_id(
-            [
-                'crypto_asset_id',
-                'wallet_address_id',
-                'wallet_assignment_id',
-                'requested_fiat_amount',
-                'fiat_currency_id',
-                'exchange_rate',
-                'requested_crypto_amount',
-                'created_by_admin_user_id',
-                'requested_at',
-                'expires_at',
-                'request_note',
-                'status',
-            ],
-            [
-                (int)$preview['asset_id'],
-                $walletAddressId,
-                $walletAssignmentId,
-                (float)$preview['fiat_amount'],
-                (int)$preview['currency_id'],
-                (float)$preview['rate'],
-                (float)$preview['crypto_amount'],
-                $adminUserId,
-                $now,
-                $expiresAt,
-                'Updated from admin live chat crypto request',
-                'pending',
-            ],
-            'crypto_deposit_requests',
-            (int)$openWalletRequest['id']
+        $requestId = 0;
+        $now = date('Y-m-d H:i:s');
+        $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
+        $db->query(
+            "UPDATE crypto_deposit_requests
+             SET status = 'archived'
+             WHERE customer_id = {$customerId}
+               AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+               AND expires_at IS NOT NULL
+               AND expires_at < '{$now}'"
         );
-        if (!$updated) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to update crypto payment request.'];
-        }
-        $requestId = (int)$openWalletRequest['id'];
-    } else {
-        $requestId = app_create_crypto_deposit_request($db, [
-            'customer_id' => $customerId,
-            'order_id' => null,
-            'crypto_asset_id' => (int)$preview['asset_id'],
-            'wallet_address_id' => $walletAddressId,
-            'wallet_assignment_id' => $walletAssignmentId,
-            'requested_fiat_amount' => (float)$preview['fiat_amount'],
-            'fiat_currency_id' => (int)$preview['currency_id'],
-            'exchange_rate' => (float)$preview['rate'],
-            'requested_crypto_amount' => (float)$preview['crypto_amount'],
-            'assignment_mode' => 'manual',
-            'status' => 'pending',
-            'created_by_admin_user_id' => $adminUserId,
-            'requested_at' => $now,
-            'expires_at' => $expiresAt,
-            'request_note' => 'Created from admin live chat crypto request',
-            'settings' => $settings,
-        ]);
+        $openWalletRequest = $db->select_user(
+            "SELECT
+                crypto_deposit_requests.id,
+                crypto_deposit_requests.customer_id,
+                crypto_deposit_requests.order_id
+             FROM crypto_deposit_requests
+             LEFT JOIN crypto_wallet_assignments AS open_assignment
+               ON open_assignment.id = crypto_deposit_requests.wallet_assignment_id
+             WHERE (
+                    crypto_deposit_requests.wallet_address_id = {$walletAddressId}
+                 OR open_assignment.wallet_address_id = {$walletAddressId}
+             )
+               AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+             ORDER BY crypto_deposit_requests.id DESC
+             LIMIT 1"
+        );
 
-        if ($requestId <= 0) {
-            $db->query('ROLLBACK');
-            return ['ok' => false, 'message' => 'Unable to create crypto payment request.'];
-        }
-    }
+        if (is_array($openWalletRequest) && !empty($openWalletRequest['id'])) {
+            if ((int)($openWalletRequest['customer_id'] ?? 0) !== $customerId || !empty($openWalletRequest['order_id'])) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'This wallet already has an active payment request.'];
+            }
 
-    $customer = app_find_customer_by_id($db, $customerId);
-    $localeCode = app_normalize_email_locale((string)($customer['locale_code'] ?? 'en'));
-    $appSettings = app_fetch_settings($db);
-    $siteUrl = rtrim((string)($appSettings['site_url'] ?? ''), '/');
-    $paymentUrl = $siteUrl !== '' ? $siteUrl . '/payments_crypto#tickets' : '/payments_crypto#tickets';
+            if (!app_crypto_deposit_wallet_payload_is_valid($db, $customerId, (int)$preview['asset_id'], $walletAddressId, $walletAssignmentId, $settings)) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Wallet assignment could not be confirmed.'];
+            }
 
-    $messageBody = app_build_crypto_payment_chat_card_message([
-        'asset_name' => (string)$preview['asset_name'],
-        'asset_code' => (string)$preview['asset_code'],
-        'asset_logo_url' => (string)$preview['asset_logo_url'],
-        'requested_crypto_amount' => (string)$preview['crypto_amount'],
-        'requested_fiat_amount' => (float)$preview['fiat_amount'],
-        'currency_symbol' => (string)$preview['currency_symbol'],
-        'currency_code' => (string)$preview['currency_code'],
-        'wallet_address' => (string)$preview['wallet_address'],
-        'wallet_owner_full_name' => (string)$preview['wallet_owner_full_name'],
-        'wallet_owner_location' => (string)($preview['wallet_owner_location'] ?? ''),
-        'wallet_notes' => (string)($preview['wallet_notes'] ?? ''),
-        'payment_url' => $paymentUrl,
-    ], $localeCode);
-
-    if ($messageBody === '' || !admin_chat_insert_message($db, $conversationId, $adminUserId, $messageBody)) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Unable to send crypto payment message to chat.'];
-    }
-
-    $orderId = 0;
-    if ($productId > 0) {
-        $product = admin_product_find($db, $productId);
-        if ($product && !empty($product['is_active'])) {
-            $orderResult = admin_create_order($db, [
+            $updated = $db->update_using_id(
+                [
+                    'crypto_asset_id',
+                    'wallet_address_id',
+                    'wallet_assignment_id',
+                    'requested_fiat_amount',
+                    'fiat_currency_id',
+                    'exchange_rate',
+                    'requested_crypto_amount',
+                    'created_by_admin_user_id',
+                    'requested_at',
+                    'expires_at',
+                    'request_note',
+                    'status',
+                ],
+                [
+                    (int)$preview['asset_id'],
+                    $walletAddressId,
+                    $walletAssignmentId,
+                    (float)$preview['fiat_amount'],
+                    (int)$preview['currency_id'],
+                    (float)$preview['rate'],
+                    (float)$preview['crypto_amount'],
+                    $adminUserId,
+                    $now,
+                    $expiresAt,
+                    admin_localize_payment_request_note('Updated from admin live chat crypto request'),
+                    'pending',
+                ],
+                'crypto_deposit_requests',
+                (int)$openWalletRequest['id']
+            );
+            if (!$updated) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to update crypto payment request.'];
+            }
+            $requestId = (int)$openWalletRequest['id'];
+        } else {
+            $requestId = app_create_crypto_deposit_request($db, [
                 'customer_id' => $customerId,
-                'product_id' => $productId,
-                'customer_note' => 'created from admin',
-                'has_delivery_link' => '0',
-            ]);
-            if (!empty($orderResult['ok']) && !empty($orderResult['order_id'])) {
-                $orderId = (int)$orderResult['order_id'];
-                $updated = $db->update_using_id(
-                    ['order_id'],
-                    [$orderId],
-                    'crypto_deposit_requests',
-                    $requestId
-                );
+                'order_id' => null,
+                'crypto_asset_id' => (int)$preview['asset_id'],
+                'wallet_address_id' => $walletAddressId,
+                'wallet_assignment_id' => $walletAssignmentId,
+                'requested_fiat_amount' => (float)$preview['fiat_amount'],
+                'fiat_currency_id' => (int)$preview['currency_id'],
+                'exchange_rate' => (float)$preview['rate'],
+                'requested_crypto_amount' => (float)$preview['crypto_amount'],
+                'assignment_mode' => 'manual',
+                'status' => 'pending',
+                'created_by_admin_user_id' => $adminUserId,
+                'requested_at' => $now,
+                'expires_at' => $expiresAt,
+                'request_note' => admin_localize_payment_request_note('Created from admin live chat crypto request'),
+                'settings' => $settings,
+            ], true);
+
+            if ($requestId <= 0) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to create crypto payment request.'];
             }
         }
+
+        $customer = app_find_customer_by_id($db, $customerId);
+        $localeCode = app_normalize_email_locale((string)($customer['locale_code'] ?? 'en'));
+        $appSettings = app_fetch_settings($db);
+        $siteUrl = rtrim((string)($appSettings['site_url'] ?? ''), '/');
+        $paymentUrl = $siteUrl !== '' ? $siteUrl . '/payments_crypto#tickets' : '/payments_crypto#tickets';
+
+        $messageBody = app_build_crypto_payment_chat_card_message([
+            'asset_name' => (string)$preview['asset_name'],
+            'asset_code' => (string)$preview['asset_code'],
+            'asset_logo_url' => (string)$preview['asset_logo_url'],
+            'requested_crypto_amount' => (string)$preview['crypto_amount'],
+            'requested_fiat_amount' => (float)$preview['fiat_amount'],
+            'currency_symbol' => (string)$preview['currency_symbol'],
+            'currency_code' => (string)$preview['currency_code'],
+            'wallet_address' => (string)$preview['wallet_address'],
+            'wallet_owner_full_name' => (string)$preview['wallet_owner_full_name'],
+            'wallet_owner_location' => (string)($preview['wallet_owner_location'] ?? ''),
+            'wallet_notes' => (string)($preview['wallet_notes'] ?? ''),
+            'network_code' => (string)($preview['network_code'] ?? ''),
+            'memo_tag' => (string)($preview['memo_tag'] ?? ''),
+            'payment_url' => $paymentUrl,
+        ], $localeCode);
+
+        if ($messageBody === '' || !admin_chat_insert_message($db, $conversationId, $adminUserId, $messageBody)) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Unable to send crypto payment message to chat.'];
+        }
+
+        $orderId = 0;
+        if ($productId > 0) {
+            $orderResult = admin_create_order($db, [
+                'customer_id' => $customerId, 'product_id' => $productId,
+                'customer_note' => 'created from admin', 'has_delivery_link' => '0',
+            ], (float)$preview['fiat_amount']);
+            $orderId = (int)($orderResult['order_id'] ?? 0);
+            if (empty($orderResult['ok']) || $orderId <= 0
+                || !$db->update_using_id(['order_id'], [$orderId], 'crypto_deposit_requests', $requestId)) {
+                $db->query('ROLLBACK');
+                return ['ok' => false, 'message' => 'Unable to link the payment request to an order.'];
+            }
+        }
+
+        app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
+
+        if (!$db->query('COMMIT')) { throw new RuntimeException('Payment commit failed.'); }
+
+        return ['ok' => true, 'request_id' => $requestId, 'order_id' => $orderId];
+    } catch (Throwable $error) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to create crypto payment request.'];
     }
-
-    app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
-
-    $db->commit();
-
-    return ['ok' => true, 'request_id' => $requestId, 'order_id' => $orderId];
 }
 
 function admin_chat_create_bank_payment_request(
@@ -17644,6 +24032,7 @@ function admin_chat_create_bank_payment_request(
     $requestId = 0;
     $now = date('Y-m-d H:i:s');
     $expiresAt = date('Y-m-d H:i:s', strtotime('+72 hours'));
+    $sharedEnabled = admin_bank_account_shared_assignments_enabled($settings);
     $db->query(
         "UPDATE bank_transfer_requests
          SET status = 'archived'
@@ -17652,10 +24041,13 @@ function admin_chat_create_bank_payment_request(
            AND expires_at IS NOT NULL
            AND expires_at < '{$now}'"
     );
+    $openBankRequestWhere = $sharedEnabled
+        ? "customer_id = {$customerId} AND (order_id IS NULL OR order_id = 0)"
+        : "bank_account_id = {$resolvedBankAccountId}";
     $openBankRequest = $db->select_user(
         "SELECT id, customer_id, order_id
          FROM bank_transfer_requests
-         WHERE bank_account_id = {$resolvedBankAccountId}
+         WHERE {$openBankRequestWhere}
            AND status IN ('pending_payment', 'awaiting_review')
          ORDER BY id DESC
          LIMIT 1"
@@ -17679,6 +24071,7 @@ function admin_chat_create_bank_payment_request(
                 'status',
             ],
             [
+                $resolvedBankAccountId,
                 $bankAccountAssignmentId,
                 (float)$preview['amount'],
                 (int)$preview['currency_id'],
@@ -17814,6 +24207,15 @@ function admin_delete_chat_conversation(Mysql_ks $db, int $conversationId): bool
         }
     }
 
+    if (schema_object_exists($db, 'support_message_reactions')) {
+        if ($db->query("DELETE reaction FROM support_message_reactions AS reaction
+            INNER JOIN support_messages AS message_row ON message_row.id = reaction.message_id
+            WHERE message_row.conversation_id = {$conversationId}") === false) {
+            $db->query('ROLLBACK');
+            return false;
+        }
+    }
+
     if (schema_object_exists($db, 'support_messages')) {
         if ($db->query("DELETE FROM support_messages WHERE conversation_id = {$conversationId}") === false) {
             $db->query('ROLLBACK');
@@ -17908,8 +24310,9 @@ function admin_render_chat_conversation_html(array $conversationRow, array $mess
                 </div>
             <?php endif; ?>
             <?php if (!$messageRows): ?>
-                <div class="admin-chat-conversation__empty">
-                    <?php echo admin_e(admin_t($messages, 'chat_conversation_empty', 'No messages in this conversation yet.')); ?>
+                <div class="admin-chat-conversation__empty admin-chat-conversation__empty--conversation">
+                    <span class="admin-chat-conversation__empty-icon" aria-hidden="true"><i class="bi bi-chat-dots"></i></span>
+                    <span><?php echo admin_e(admin_t($messages, 'chat_conversation_empty', 'No messages in this conversation yet.')); ?></span>
                 </div>
             <?php else: ?>
                 <?php foreach ($messageRows as $messageRow): ?>
@@ -18365,6 +24768,15 @@ function admin_chat_store_uploaded_image(array $file, int $adminUserId): ?string
     $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
     $originalName = (string)($file['name'] ?? '');
     $tmpPath = (string)($file['tmp_name'] ?? '');
+    if ($uploadError !== UPLOAD_ERR_OK || $tmpPath === '' || !is_uploaded_file($tmpPath)
+        || (int)filesize($tmpPath) > 8 * 1024 * 1024) {
+        return null;
+    }
+    $dimensions = @getimagesize($tmpPath);
+    if (!is_array($dimensions) || $dimensions[0] <= 0 || $dimensions[1] <= 0
+        || $dimensions[0] > 8192 || $dimensions[1] > 8192 || $dimensions[0] * $dimensions[1] > 16000000) {
+        return null;
+    }
     $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
     $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif'];
     $mimeType = function_exists('mime_content_type') ? (string)mime_content_type($tmpPath) : '';
@@ -18374,7 +24786,7 @@ function admin_chat_store_uploaded_image(array $file, int $adminUserId): ?string
         $uploadError !== UPLOAD_ERR_OK
         || !is_uploaded_file($tmpPath)
         || !in_array($extension, $allowedExtensions, true)
-        || ($mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true))
+        || !in_array($mimeType, $allowedMimeTypes, true)
     ) {
         return null;
     }
@@ -18420,6 +24832,15 @@ function admin_product_provider_logo_upload_directory(): string
     }
 
     return dirname(__DIR__, 2) . '/public_html/uploads/providers';
+}
+
+function admin_editor_gallery_upload_directory(): string
+{
+    if (function_exists('app_public_path')) {
+        return app_public_path('uploads/editor-gallery');
+    }
+
+    return dirname(__DIR__, 2) . '/public_html/uploads/editor-gallery';
 }
 
 function admin_legacy_upload_public_root(): string
@@ -18583,6 +25004,89 @@ function admin_delete_site_logo_file(string $publicPath): bool
 function admin_delete_product_provider_logo_file(string $publicPath): bool
 {
     return admin_delete_managed_upload_file($publicPath, '/uploads/providers/');
+}
+
+function admin_editor_gallery_public_path(array $file, int $adminUserId): ?string
+{
+    $uploadError = (int)($file['error'] ?? UPLOAD_ERR_OK);
+    $originalName = (string)($file['name'] ?? '');
+    $tmpPath = (string)($file['tmp_name'] ?? '');
+    $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    $mimeType = function_exists('mime_content_type') ? (string)mime_content_type($tmpPath) : '';
+    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+    if (
+        $uploadError !== UPLOAD_ERR_OK
+        || !is_uploaded_file($tmpPath)
+        || !in_array($extension, $allowedExtensions, true)
+        || ($mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true))
+        || (int)($file['size'] ?? 0) > 8 * 1024 * 1024
+    ) {
+        return null;
+    }
+
+    $uploadDirectory = admin_editor_gallery_upload_directory();
+    if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0775, true) && !is_dir($uploadDirectory)) {
+        return null;
+    }
+
+    $safeExtension = $extension === 'jpeg' ? 'jpg' : $extension;
+    $fileName = 'editor_gallery_' . max(0, $adminUserId) . '_' . time() . '_' . bin2hex(random_bytes(5)) . '.' . $safeExtension;
+    $destinationPath = $uploadDirectory . '/' . $fileName;
+
+    $saved = false;
+    if ($mimeType !== '' && function_exists('imagecreatetruecolor')) {
+        $saved = admin_chat_resize_image($tmpPath, $destinationPath, $mimeType);
+    }
+
+    if (!$saved) {
+        $saved = move_uploaded_file($tmpPath, $destinationPath);
+    }
+
+    if (!$saved) {
+        return null;
+    }
+
+    return '/uploads/editor-gallery/' . $fileName;
+}
+
+function admin_editor_gallery_rows(): array
+{
+    $directory = admin_editor_gallery_upload_directory();
+    if (!is_dir($directory)) {
+        return [];
+    }
+
+    $rows = [];
+    foreach (glob(rtrim($directory, '/') . '/*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [] as $filePath) {
+        if (!is_file($filePath)) {
+            continue;
+        }
+
+        $fileName = basename($filePath);
+        if (!preg_match('/^[A-Za-z0-9_.-]+$/', $fileName)) {
+            continue;
+        }
+
+        $rows[] = [
+            'url' => '/uploads/editor-gallery/' . $fileName,
+            'name' => $fileName,
+            'size' => filesize($filePath) ?: 0,
+            'updated_at' => date('Y-m-d H:i:s', filemtime($filePath) ?: time()),
+        ];
+    }
+
+    usort($rows, static function (array $left, array $right): int {
+        return strcmp((string)($right['updated_at'] ?? ''), (string)($left['updated_at'] ?? ''));
+    });
+
+    return $rows;
+}
+
+function admin_delete_editor_gallery_file(string $publicPath): bool
+{
+    return admin_delete_managed_upload_file($publicPath, '/uploads/editor-gallery/');
 }
 
 function admin_email_template_rows(Mysql_ks $db, int $limit = 20): array
@@ -19642,671 +26146,6 @@ function admin_delete_page(Mysql_ks $db, int $pageId): array
     ];
 }
 
-function admin_help_topic_audience_options(): array
-{
-    return [
-        'all' => 'All users',
-        'admin' => 'Admin',
-        'client' => 'Client',
-        'reseller' => 'Reseller',
-    ];
-}
-
-function admin_help_topic_normalize_audience(string $audience): string
-{
-    $audience = strtolower(trim($audience));
-    $options = admin_help_topic_audience_options();
-
-    return isset($options[$audience]) ? $audience : 'all';
-}
-
-function admin_help_topic_seed_rows(): array
-{
-    return [
-        [
-            'question' => 'Jak dodać nowego użytkownika?',
-            'audience_code' => 'admin',
-            'keywords' => 'user klient reseller konto rejestracja dodawanie',
-            'sort_order' => 10,
-            'answer_html' => '<p>Wejdź w zakładkę Użytkownicy i użyj formularza dodawania nowego konta.</p><p>Wpisz email, a login i handle mogą uzupełnić się automatycznie.</p><p>Po zapisaniu konto od razu pojawi się na liście i w wyszukiwarce panelu.</p>',
-        ],
-        [
-            'question' => 'Jak dodać środki do salda użytkownika?',
-            'audience_code' => 'admin',
-            'keywords' => 'saldo balance credits doładowanie środki',
-            'sort_order' => 20,
-            'answer_html' => '<p>Otwórz kartę użytkownika i przejdź do sekcji działań na koncie.</p><p>Możesz tam dodać środki ręcznie albo poprowadzić użytkownika przez standardowe doładowanie.</p><ul><li>Ręczne dodanie działa od razu.</li><li>Doładowanie tworzy ślad płatności i jest lepsze do rozliczeń.</li></ul>',
-        ],
-        [
-            'question' => 'Jak utworzyć ticket płatności za zamówienie?',
-            'audience_code' => 'admin',
-            'keywords' => 'płatność crypto bank transfer request zamówienie ticket',
-            'sort_order' => 30,
-            'answer_html' => '<p>Wejdź w zamówienie albo otwórz rozmowę z klientem i użyj akcji generowania płatności.</p><p>Wybierz kryptowalutę lub przelew bankowy, a system przypisze adres albo konto.</p><p>Po utworzeniu ticketu klient zobaczy instrukcję, a Ty dostaniesz ślad w płatnościach.</p>',
-        ],
-        [
-            'question' => 'Jak utworzyć grupę na chacie?',
-            'audience_code' => 'all',
-            'keywords' => 'grupa group chat messenger rozmowa zaproszenie reseller',
-            'sort_order' => 40,
-            'answer_html' => '<p>W messengerze użyj tworzenia nowej rozmowy i dodaj co najmniej jedną osobę.</p><p>Jedno zaproszenie utworzy rozmowę 1 na 1, a kilka osób stworzy grupę.</p><p>Po utworzeniu możesz dalej dopraszać członków i ustawić auto-usuwanie wiadomości.</p>',
-        ],
-        [
-            'question' => 'Jak ukryć providera tylko dla jednego użytkownika?',
-            'audience_code' => 'admin',
-            'keywords' => 'provider widoczność produkty ukrywanie user dostęp',
-            'sort_order' => 50,
-            'answer_html' => '<p>Na karcie użytkownika znajdziesz sekcję widoczności providerów.</p><p>Odznacz providera, którego nie chcesz pokazywać temu kontu.</p><p>Od tej chwili użytkownik nie zobaczy tego providera ani jego produktów w dodawaniu nowej subskrypcji.</p>',
-        ],
-        [
-            'question' => 'Jak klient lub reseller ma zapłacić za zamówienie?',
-            'audience_code' => 'client',
-            'keywords' => 'jak zapłacić krypto bank przelew zamówienie klient reseller',
-            'sort_order' => 60,
-            'answer_html' => '<p>Po wejściu w zamówienie wybierz metodę płatności i przejdź do kolejnego kroku.</p><p>System pokaże dokładną kwotę, dane portfela albo dane przelewu i czas ważności.</p><p>Po opłaceniu wystarczy wysłać potwierdzenie, jeśli dana metoda tego wymaga.</p>',
-        ],
-        [
-            'question' => 'Jak reseller zmienia avatar i własny nick?',
-            'audience_code' => 'reseller',
-            'keywords' => 'avatar nick handle ustawienia reseller profil',
-            'sort_order' => 70,
-            'answer_html' => '<p>W ustawieniach profilu możesz kliknąć avatar, wgrać nowy obrazek i od razu zobaczyć podgląd.</p><p>Nick jest edytowalny z poziomu ustawień i potem pokazuje się w messengerze.</p><p>Jeśli zmieniasz zdjęcie, najlepiej używać prostych grafik JPG, PNG albo WEBP.</p>',
-        ],
-        [
-            'question' => 'Jak znaleźć konkretną osobę lub zamówienie w adminie?',
-            'audience_code' => 'admin',
-            'keywords' => 'wyszukiwarka email handle @nick zamówienie portfel admin',
-            'sort_order' => 80,
-            'answer_html' => '<p>Użyj globalnej wyszukiwarki w górnym pasku panelu.</p><p>Dla użytkowników możesz szukać po emailu albo po nicku zaczynając od znaku @.</p><p>Dla zamówień i portfeli wyniki prowadzą od razu do właściwego widoku szczegółowego.</p>',
-        ],
-        [
-            'question' => 'Ręczne dodanie zamówienia dla klienta',
-            'audience_code' => 'admin',
-            'keywords' => 'zamówienie ręczne create order klient admin',
-            'sort_order' => 90,
-            'answer_html' => '<p>Wejdź w kartę użytkownika albo w sekcję zamówień i użyj opcji dodania nowego zamówienia.</p><p>Wybierz providera, produkt i okres subskrypcji, a potem przejdź do zapisania formularza.</p><p>Po utworzeniu zamówienia możesz od razu wygenerować ticket płatności albo aktywować je ręcznie.</p>',
-        ],
-        [
-            'question' => 'Potwierdzanie płatności krypto',
-            'audience_code' => 'admin',
-            'keywords' => 'krypto płatność potwierdzenie crypto verify',
-            'sort_order' => 100,
-            'answer_html' => '<p>Otwórz sekcję Payments i przejdź do oczekującej płatności krypto.</p><p>Sprawdź kwotę, adres portfela i hash transakcji, a następnie porównaj dane z explorerem blockchain.</p><p>Jeśli wszystko się zgadza, zatwierdź płatność i dopiero potem przejdź do realizacji zamówienia.</p>',
-        ],
-        [
-            'question' => 'Potwierdzanie przelewu bankowego',
-            'audience_code' => 'admin',
-            'keywords' => 'bank przelew płatność potwierdzenie payment',
-            'sort_order' => 110,
-            'answer_html' => '<p>W Payments otwórz oczekujący przelew bankowy i porównaj dane z potwierdzeniem od klienta.</p><p>Zwróć uwagę na kwotę, nazwę płatnika i czas wpływu środków.</p><p>Po zatwierdzeniu płatności zamówienie będzie można bezpiecznie aktywować.</p>',
-        ],
-        [
-            'question' => 'Odrzucanie płatności i czyszczenie anulowanych wpisów',
-            'audience_code' => 'admin',
-            'keywords' => 'odrzucenie anulowane failed cleanup payments',
-            'sort_order' => 120,
-            'answer_html' => '<p>Jeśli płatność ma błędne dane albo wygasła, oznacz ją jako odrzuconą lub anulowaną.</p><p>W sekcji Payments możesz potem jednym kliknięciem usunąć anulowane wpisy z bieżącego widoku.</p><p>To porządkuje listę i zostawia tylko realne sprawy do obsługi.</p>',
-        ],
-        [
-            'question' => 'Dodawanie nowego portfela krypto do puli',
-            'audience_code' => 'admin',
-            'keywords' => 'portfel wallet crypto pula adres dodawanie',
-            'sort_order' => 130,
-            'answer_html' => '<p>Przejdź do Crypto Wallets i dodaj nowy adres dla wybranego aktywa.</p><p>Uzupełnij nazwę, właściciela i sam adres portfela, a potem zapisz rekord.</p><p>Nowy portfel od razu trafi do puli dostępnej dla płatności, jeśli ma status aktywny.</p>',
-        ],
-        [
-            'question' => 'Ręczne przypisanie portfela do klienta',
-            'audience_code' => 'admin',
-            'keywords' => 'przypisanie portfela wallet klient ręcznie',
-            'sort_order' => 140,
-            'answer_html' => '<p>Otwórz profil klienta albo listę portfeli i wybierz akcję ręcznego przypisania.</p><p>Po przypisaniu dany adres będzie widoczny przy generowaniu płatności dla tego użytkownika.</p><p>Jeśli współdzielenie portfeli jest wyłączone, jeden adres powinien pozostać przypisany tylko do jednego konta.</p>',
-        ],
-        [
-            'question' => 'Dodawanie konta bankowego do płatności',
-            'audience_code' => 'admin',
-            'keywords' => 'konto bankowe iban swift przelew bank add',
-            'sort_order' => 150,
-            'answer_html' => '<p>Wejdź w Bank Transfers i utwórz nowe konto z kompletem danych do przelewu.</p><p>Najważniejsze pola to właściciel konta, bank, IBAN lub numer rachunku oraz SWIFT.</p><p>Po zapisaniu konto będzie mogło zostać przypisane do nowych ticketów płatności bankowej.</p>',
-        ],
-        [
-            'question' => 'Tworzenie produktu trial 6h, 12h lub 24h',
-            'audience_code' => 'admin',
-            'keywords' => 'trial produkt 6h 12h 24h pakiet',
-            'sort_order' => 160,
-            'answer_html' => '<p>W produktach wybierz krótki okres 6h, 12h albo 24h, a system potraktuje go jako trial.</p><p>Przy tych wariantach pole trial jest pilnowane także po stronie backendu.</p><p>Dzięki temu krótkie pakiety nie będą mylone ze zwykłą sprzedażą miesięczną lub roczną.</p>',
-        ],
-        [
-            'question' => 'Włączanie i wyłączanie sprzedaży w panelu',
-            'audience_code' => 'admin',
-            'keywords' => 'sprzedaż sales settings on off',
-            'sort_order' => 170,
-            'answer_html' => '<p>W Settings możesz osobno sterować sprzedażą subskrypcji, triali, creditsów i płatności.</p><p>Po wyłączeniu danej funkcji użytkownik nie zobaczy odpowiednich akcji w swoim panelu.</p><p>To wygodne rozwiązanie, gdy chcesz zrobić przerwę techniczną bez blokowania całej strony.</p>',
-        ],
-        [
-            'question' => 'Blokowanie konta użytkownika',
-            'audience_code' => 'admin',
-            'keywords' => 'blokada block user status konto',
-            'sort_order' => 180,
-            'answer_html' => '<p>Na karcie użytkownika możesz zmienić status konta, gdy trzeba wstrzymać dostęp.</p><p>Po blokadzie konto nadal pozostaje w bazie, ale użytkownik nie powinien korzystać z panelu jak aktywne konto.</p><p>To lepsze niż kasowanie danych, jeśli sprawa wymaga tylko czasowego zatrzymania dostępu.</p>',
-        ],
-        [
-            'question' => 'Reset hasła użytkownika',
-            'audience_code' => 'admin',
-            'keywords' => 'reset hasła password user klient reseller',
-            'sort_order' => 190,
-            'answer_html' => '<p>Otwórz profil użytkownika i użyj akcji resetu hasła albo wygenerowania nowego dostępu.</p><p>Po zmianie hasła warto od razu poinformować użytkownika, aby zalogował się i ustawił własne dane.</p><p>Jeśli konto jest używane przez resellera, dobrze też sprawdzić czy email powiadomień jest aktualny.</p>',
-        ],
-        [
-            'question' => 'Dodawanie newsa lub komunikatu na stronę',
-            'audience_code' => 'admin',
-            'keywords' => 'news komunikat wpis aktualność strona',
-            'sort_order' => 200,
-            'answer_html' => '<p>W sekcji News dodaj nowy wpis z tytułem, treścią i statusem aktywności.</p><p>Możesz zaplanować publikację albo ukryć wpis bez jego usuwania.</p><p>To dobre miejsce na komunikaty o przerwach technicznych, zmianach cen lub nowych funkcjach.</p>',
-        ],
-        [
-            'question' => 'Edycja szablonów email',
-            'audience_code' => 'admin',
-            'keywords' => 'email templates szablon wiadomość powiadomienie',
-            'sort_order' => 210,
-            'answer_html' => '<p>W Email Templates zmienisz temat i treść wiadomości wysyłanych automatycznie przez system.</p><p>Zachowaj placeholdery typu {site_name} albo {payment_url}, bo są podmieniane dynamicznie.</p><p>Po zapisaniu najlepiej od razu sprawdzić efekt na prostym scenariuszu testowym.</p>',
-        ],
-        [
-            'question' => 'Wykonanie ręcznego backupu SQL',
-            'audience_code' => 'admin',
-            'keywords' => 'backup sql baza export settings',
-            'sort_order' => 220,
-            'answer_html' => '<p>Wejdź do Settings i użyj przycisku pobrania backupu bazy danych.</p><p>Plik zapisze się na Twój dysk jako pełny eksport SQL z tabelami, widokami i danymi.</p><p>Warto robić taki backup regularnie, szczególnie przed większymi zmianami w panelu albo importem danych.</p>',
-        ],
-        [
-            'question' => 'Weryfikacja kończących się subskrypcji',
-            'audience_code' => 'admin',
-            'keywords' => 'subskrypcja wygasa expires soon renewal',
-            'sort_order' => 230,
-            'answer_html' => '<p>W powiadomieniach topbara zobaczysz listę subskrypcji, które kończą się w ciągu najbliższych 24 godzin.</p><p>Możesz z niej przejść do użytkownika, zamówienia albo dashboardu providera.</p><p>To pomaga szybko wychwycić konta wymagające kontaktu, odnowienia lub ręcznej kontroli.</p>',
-        ],
-        [
-            'question' => 'Korzystanie z powiadomień w górnym pasku',
-            'audience_code' => 'admin',
-            'keywords' => 'powiadomienia topbar bell payments orders backup',
-            'sort_order' => 240,
-            'answer_html' => '<p>Ikona powiadomień zbiera najważniejsze rzeczy do obsługi, zaczynając od płatności i zamówień.</p><p>Niżej zobaczysz także nowe konta, wygasające subskrypcje i przypomnienia o backupie.</p><p>Dzięki temu nie musisz ręcznie sprawdzać każdej sekcji panelu po kolei.</p>',
-        ],
-        [
-            'question' => 'Zapraszanie resellera do rozmowy 1 na 1',
-            'audience_code' => 'reseller',
-            'keywords' => 'reseller direct chat zaproszenie 1 na 1 messenger',
-            'sort_order' => 250,
-            'answer_html' => '<p>W messengerze użyj tworzenia nowej rozmowy i wpisz email resellera albo jego @nick.</p><p>Jedna zaakceptowana osoba tworzy od razu prywatną rozmowę 1 na 1.</p><p>Adminów nie da się dodać z tego poziomu, więc lista wyników pokazuje tylko dozwolone konta resellerów.</p>',
-        ],
-        [
-            'question' => 'Zarządzanie powiadomieniami email w rozmowie',
-            'audience_code' => 'reseller',
-            'keywords' => 'email powiadomienia rozmowa mute messenger reseller',
-            'sort_order' => 260,
-            'answer_html' => '<p>W nagłówku rozmowy otwórz menu ustawień i użyj przełącznika powiadomień email dla tej konkretnej rozmowy.</p><p>Wyłączenie działa dla grup i rozmów reseller-reseller, ale nie zastępuje głównego chatu Support.</p><p>To dobre rozwiązanie, gdy chcesz ograniczyć spam bez wyłączania całych maili konta.</p>',
-        ],
-        [
-            'question' => 'Ustawienie auto-usuwania wiadomości w grupie',
-            'audience_code' => 'reseller',
-            'keywords' => 'auto-usuwanie retention grupa chat wiadomości',
-            'sort_order' => 270,
-            'answer_html' => '<p>Twórca grupy może w ustawieniach rozmowy wybrać czas auto-usuwania wiadomości.</p><p>Dostępne są krótkie przedziały, dzięki którym rozmowa sama się porządkuje bez ręcznego kasowania.</p><p>Informacja o aktywnym czasie kasowania pokazuje się też nad historią wiadomości.</p>',
-        ],
-        [
-            'question' => 'Wysyłanie potwierdzenia płatności przez klienta',
-            'audience_code' => 'client',
-            'keywords' => 'klient potwierdzenie płatność support chat bank',
-            'sort_order' => 280,
-            'answer_html' => '<p>Po opłaceniu zamówienia klient powinien otworzyć live chat albo instrukcję płatności i wysłać potwierdzenie, jeśli dana metoda tego wymaga.</p><p>Najważniejsze są czytelny zrzut albo PDF z kwotą oraz czasem wykonania płatności.</p><p>To przyspiesza weryfikację i ogranicza potrzebę dodatkowych pytań od supportu.</p>',
-        ],
-        [
-            'question' => 'Jak uruchomić maintenance runner ręcznie?',
-            'audience_code' => 'admin',
-            'keywords' => 'maintenance runner cron ręcznie cleanup email queue',
-            'sort_order' => 290,
-            'answer_html' => '<p>W Settings znajdziesz sekcję maintenance z przyciskiem ręcznego uruchomienia procesów systemowych.</p><p>Ten runner obsługuje kolejkę maili, wygasanie płatności i reguły automatycznego czyszczenia.</p><p>To przydatne po większych zmianach lub gdy chcesz od razu wymusić wykonanie zadań bez czekania na cron.</p>',
-        ],
-        [
-            'question' => 'Jak sprawdzić, dlaczego użytkownik nie widzi produktu?',
-            'audience_code' => 'admin',
-            'keywords' => 'produkt niewidoczny user provider trial sales',
-            'sort_order' => 300,
-            'answer_html' => '<p>Najpierw sprawdź, czy produkt i provider są aktywne oraz czy globalna sprzedaż nie jest wyłączona.</p><p>Potem zobacz na karcie użytkownika, czy provider nie został dla niego ukryty indywidualnie.</p><p>Jeśli to trial albo credits, upewnij się też, że odpowiedni switch w Settings jest włączony.</p>',
-        ],
-        [
-            'question' => 'Jak działa testowy tryb płatności?',
-            'audience_code' => 'admin',
-            'keywords' => 'test mode płatności warning settings',
-            'sort_order' => 310,
-            'answer_html' => '<p>W Settings możesz włączyć ostrzeżenie testowe dla płatności.</p><p>Użytkownik nadal wygeneruje request krypto albo bankowy, ale na ekranie zobaczy wyraźny komunikat, aby nic nie wpłacać.</p><p>To dobre rozwiązanie przy testach, migracji lub sprawdzaniu nowych danych płatniczych.</p>',
-        ],
-        [
-            'question' => 'Jak zmienić logo, nazwę i adres strony?',
-            'audience_code' => 'admin',
-            'keywords' => 'logo site name title url settings',
-            'sort_order' => 320,
-            'answer_html' => '<p>Wejdź do Settings i edytuj pola nazwy strony, tytułu, adresu URL oraz logo.</p><p>Zmiany wpływają na wygląd panelu, wiadomości email i część linków generowanych przez system.</p><p>Po zapisaniu warto odświeżyć stronę i sprawdzić, czy nowe logo oraz adres pokazują się poprawnie.</p>',
-        ],
-        [
-            'question' => 'Jak zmienić domyślną walutę serwisu?',
-            'audience_code' => 'admin',
-            'keywords' => 'default currency waluta settings usd eur',
-            'sort_order' => 330,
-            'answer_html' => '<p>Domyślną walutę ustawisz w Settings w polu waluty głównej serwisu.</p><p>Wpływa ona na salda, podsumowania, kalkulator krypto i część wyliczeń płatności.</p><p>Po zmianie waluty warto sprawdzić kursy aktywów i kilka przykładowych zamówień, aby upewnić się, że wszystko liczy się zgodnie z oczekiwaniem.</p>',
-        ],
-        [
-            'question' => 'Jak korzystać z kalkulatora wymiany krypto?',
-            'audience_code' => 'admin',
-            'keywords' => 'kalkulator wymiany crypto converter kurs admin',
-            'sort_order' => 340,
-            'answer_html' => '<p>W górnym pasku admina otwórz kalkulator wymiany i wpisz kwotę FIAT.</p><p>Po wyborze aktywa system pokaże, ile powinno wyjść w danej kryptowalucie oraz kiedy kurs był ostatnio aktualizowany.</p><p>Kliknięcie w wynik krypto kopiuje wartość do schowka, co przyspiesza obsługę klienta.</p>',
-        ],
-        [
-            'question' => 'Jak odświeżyć kurs kryptowaluty ręcznie?',
-            'audience_code' => 'admin',
-            'keywords' => 'kurs crypto refresh coingecko rate updated',
-            'sort_order' => 350,
-            'answer_html' => '<p>W kalkulatorze wymiany przy dacie aktualizacji kursu pojawi się ikona odświeżenia, jeśli kurs jest starszy niż 15 minut.</p><p>Po kliknięciu system pobierze świeży kurs dla waluty głównej serwisu z używanego źródła notowań.</p><p>To pozwala uniknąć zbyt częstego odpytywania API, a jednocześnie daje ręczną kontrolę, gdy naprawdę jest potrzebna.</p>',
-        ],
-        [
-            'question' => 'Jak sprawdzić, czy portfel jest naprawdę wolny?',
-            'audience_code' => 'admin',
-            'keywords' => 'portfel wolny assigned request pending wallet',
-            'sort_order' => 360,
-            'answer_html' => '<p>Sama lista portfeli to nie wszystko, bo adres może być blokowany przez aktywne przypisanie albo otwarty request płatności.</p><p>Najlepiej sprawdzić status portfela, historię przypisań i czy nie ma oczekującego ticketu krypto.</p><p>Dopiero wtedy wiadomo, czy dany adres można bezpiecznie użyć dla kolejnego użytkownika.</p>',
-        ],
-        [
-            'question' => 'Jak otworzyć rozmowę z użytkownikiem z poziomu płatności?',
-            'audience_code' => 'admin',
-            'keywords' => 'chat user płatność payments quick action support',
-            'sort_order' => 370,
-            'answer_html' => '<p>W wielu miejscach panelu, szczególnie przy płatnościach i powiadomieniach, masz szybkie akcje otwierające rozmowę z danym użytkownikiem.</p><p>To pozwala od razu poprosić o potwierdzenie lub doprecyzować brakujące dane bez szukania klienta ręcznie.</p><p>Dzięki temu obsługa płatności i zamówień jest dużo szybsza.</p>',
-        ],
-        [
-            'question' => 'Jak usunąć całą rozmowę z chatu?',
-            'audience_code' => 'admin',
-            'keywords' => 'usunąć rozmowę chat delete conversation attachments',
-            'sort_order' => 380,
-            'answer_html' => '<p>W liście rozmów użyj akcji usunięcia tylko wtedy, gdy naprawdę chcesz wyczyścić cały wątek.</p><p>System usuwa wtedy samą rozmowę, wiadomości, członków grupy i załączniki powiązane z tym czatem.</p><p>To jest operacja porządkowa, więc przed kliknięciem warto upewnić się, że nic ważnego nie zostanie utracone.</p>',
-        ],
-        [
-            'question' => 'Jak dodać lub edytować stronę statyczną?',
-            'audience_code' => 'admin',
-            'keywords' => 'strona statyczna pages edycja content',
-            'sort_order' => 390,
-            'answer_html' => '<p>W sekcji Pages możesz tworzyć i edytować zwykłe podstrony informacyjne.</p><p>To dobre miejsce na regulamin, kontakt, politykę prywatności albo własne treści pomocnicze.</p><p>Po zapisaniu strony sprawdź jej aktywność i slug, aby link publiczny był poprawny.</p>',
-        ],
-        [
-            'question' => 'Jak edytować FAQ dla klientów?',
-            'audience_code' => 'admin',
-            'keywords' => 'faq klient pytania odpowiedzi edycja',
-            'sort_order' => 400,
-            'answer_html' => '<p>W zakładce FAQ możesz zmienić krótkie pytania i odpowiedzi widoczne dla użytkowników.</p><p>To dobre miejsce na podstawowe informacje o płatnościach, aktywacji i najczęstszych problemach.</p><p>Jeśli temat dotyczy tylko admina, lepiej dodaj go do modułu Pomoc zamiast do publicznego FAQ.</p>',
-        ],
-        [
-            'question' => 'Jak włączyć lub wyłączyć live chat dla użytkowników?',
-            'audience_code' => 'admin',
-            'keywords' => 'live chat support toggle settings',
-            'sort_order' => 410,
-            'answer_html' => '<p>W Settings znajdziesz przełącznik odpowiedzialny za widoczność live chatu po stronie użytkownika.</p><p>Po wyłączeniu widget, skróty czatu i część akcji powiązanych z supportem znikną z panelu klienta.</p><p>To przydatne, gdy chcesz na chwilę wstrzymać obsługę wiadomości lub zrobić prace techniczne.</p>',
-        ],
-        [
-            'question' => 'Jak sprawdzić ostatnie logowanie klienta?',
-            'audience_code' => 'admin',
-            'keywords' => 'last login ostatnie logowanie user customer',
-            'sort_order' => 420,
-            'answer_html' => '<p>Na karcie użytkownika i w wynikach wyszukiwania zobaczysz informację o ostatnim logowaniu.</p><p>Jeśli logowanie było dzisiaj, panel zwykle pokazuje samą godzinę, co ułatwia szybką ocenę aktywności.</p><p>To dobra wskazówka, gdy chcesz sprawdzić, czy klient faktycznie wraca do panelu po wysłaniu instrukcji.</p>',
-        ],
-        [
-            'question' => 'Jak włączyć codzienny backup płatności krypto?',
-            'audience_code' => 'admin',
-            'keywords' => 'daily backup crypto csv settings email',
-            'sort_order' => 430,
-            'answer_html' => '<p>W Settings włącz dzienny backup płatności krypto i wskaż adres email odbiorcy raportu.</p><p>Po północy system wyśle plik CSV tylko wtedy, gdy poprzedniego dnia były potwierdzone płatności.</p><p>To praktyczne zabezpieczenie na wypadek awarii lub potrzeby późniejszego odtworzenia danych.</p>',
-        ],
-        [
-            'question' => 'Jak odczytać raport CSV z płatności krypto?',
-            'audience_code' => 'admin',
-            'keywords' => 'csv raport płatności crypto backup',
-            'sort_order' => 440,
-            'answer_html' => '<p>W pliku CSV znajdziesz podstawowe dane potrzebne do odtworzenia i audytu opłaconych transakcji krypto.</p><p>Najważniejsze kolumny to użytkownik, email, aktywo, kwota krypto, adres portfela i powiązanie z zamówieniem lub requestem.</p><p>Dzięki temu możesz wrócić do danych nawet wtedy, gdy później trzeba porównać stan z innym systemem.</p>',
-        ],
-        [
-            'question' => 'Jak kontrolować sprzedaż creditsów dla resellerów?',
-            'audience_code' => 'admin',
-            'keywords' => 'credits reseller sprzedaż toggle settings',
-            'sort_order' => 450,
-            'answer_html' => '<p>W Settings możesz osobno włączyć lub wyłączyć sprzedaż produktów typu credits.</p><p>Jeśli przełącznik jest wyłączony, reseller nie zobaczy tych pozycji w swoim panelu zakupowym.</p><p>To pozwala łatwo sterować modelem sprzedaży bez usuwania samych produktów z bazy.</p>',
-        ],
-        [
-            'question' => 'Jak działają instrukcje aplikacji i podpowiedzi stron?',
-            'audience_code' => 'admin',
-            'keywords' => 'instrukcje aplikacji podpowiedzi stron settings',
-            'sort_order' => 460,
-            'answer_html' => '<p>W Settings masz osobne przełączniki dla instrukcji aplikacji oraz dla niebieskich podpowiedzi pod stronami.</p><p>Pierwszy steruje poradnikami typu Smart IPTV i podobnymi, a drugi dodatkowymi opisami interfejsu oraz dużym opisem homepage.</p><p>Dzięki rozdzieleniu tych opcji możesz precyzyjnie decydować, ile treści pomocniczych ma widzieć użytkownik.</p>',
-        ],
-        [
-            'question' => 'Jak używać modułu Pomoc w adminie?',
-            'audience_code' => 'admin',
-            'keywords' => 'pomoc help modal search admin tutorial',
-            'sort_order' => 470,
-            'answer_html' => '<p>Zielony przycisk w lewym dolnym rogu otwiera szybki modal Pomoc z wyszukiwaniem tematów.</p><p>To najszybszy sposób, aby znaleźć instrukcję bez wychodzenia z aktualnej podstrony.</p><p>Jeśli czegoś brakuje, możesz potem dopisać własny wpis w zakładce Pomoc w sidebarze.</p>',
-        ],
-        [
-            'question' => 'Jak dodać własny temat do modułu Pomoc?',
-            'audience_code' => 'admin',
-            'keywords' => 'dodaj help topic pomoc admin wpis',
-            'sort_order' => 480,
-            'answer_html' => '<p>W sidebarze otwórz zakładkę Pomoc i użyj formularza dodania nowego wątku.</p><p>Możesz wskazać odbiorcę, słowa kluczowe, kolejność oraz krótką odpowiedź w HTML.</p><p>Najlepiej pisać zwięźle, tak aby nowa osoba mogła po jednym wpisie od razu wykonać daną czynność.</p>',
-        ],
-        [
-            'question' => 'Jak działają dwa typy użytkowników w systemie?',
-            'audience_code' => 'admin',
-            'keywords' => 'typy użytkowników client reseller role konto',
-            'sort_order' => 490,
-            'answer_html' => '<p>W systemie podstawowo działają dwa typy kont: klient i reseller.</p><p>Klient skupia się na zakupie i obsłudze własnych subskrypcji, a reseller dodatkowo dostaje funkcje salda, creditsów i własnego messengera.</p><p>Przy dodawaniu lub edycji konta warto od razu sprawdzić, jaki typ najlepiej pasuje do sposobu pracy danej osoby.</p>',
-        ],
-        [
-            'question' => 'Jak reseller korzysta z rozmów 1 na 1?',
-            'audience_code' => 'reseller',
-            'keywords' => 'reseller direct chat 1 na 1 messenger',
-            'sort_order' => 500,
-            'answer_html' => '<p>Reseller może rozpocząć prywatną rozmowę 1 na 1 z innym resellerem z poziomu własnego messengera.</p><p>Wystarczy wpisać email drugiej osoby albo jej @nick i wysłać zaproszenie.</p><p>Po zaakceptowaniu rozmowa działa jak osobny, prywatny kanał do szybkich ustaleń.</p>',
-        ],
-        [
-            'question' => 'Jak działają grupy resellerów?',
-            'audience_code' => 'reseller',
-            'keywords' => 'grupy resellerów group chat messenger invite',
-            'sort_order' => 510,
-            'answer_html' => '<p>Reseller może tworzyć grupy, jeśli limit grup w Settings nie jest ustawiony na zero.</p><p>Do grupy można dopraszać innych resellerów, a członkowie akceptują lub odrzucają zaproszenie.</p><p>To wygodne miejsce do pracy zespołowej, przekazywania ustaleń i utrzymywania historii rozmów wewnętrznych.</p>',
-        ],
-        [
-            'question' => 'Jak admin rozmawia z innymi adminami?',
-            'audience_code' => 'admin',
-            'keywords' => 'admin do admina chat rozmowa prywatna',
-            'sort_order' => 520,
-            'answer_html' => '<p>Admin może wyszukać innego admina w panelu chatu i rozpocząć z nim prywatną rozmowę.</p><p>Taki czat przydaje się do przekazywania zadań, notatek i ustaleń operacyjnych bez mieszania tego z rozmowami klientów.</p><p>Wyszukiwanie działa także po @nick, jeśli administrator ma ustawiony publiczny handle.</p>',
-        ],
-        [
-            'question' => 'Jak admin tworzy grupę w panelu chatu?',
-            'audience_code' => 'admin',
-            'keywords' => 'admin group chat create grupa messenger',
-            'sort_order' => 530,
-            'answer_html' => '<p>W rozwiniętym panelu chatu admin może użyć modala tworzenia grupy i dodać do niej wybrane osoby.</p><p>Grupa może służyć zarówno do współpracy między adminami, jak i do ustaleń z resellerami.</p><p>Po utworzeniu grupy można dopraszać kolejne osoby, a twórca grupy ma szersze uprawnienia do zarządzania rozmową.</p>',
-        ],
-        [
-            'question' => 'Kto może usuwać wiadomości w rozmowach grupowych?',
-            'audience_code' => 'all',
-            'keywords' => 'usuwanie wiadomości grupa chat owner creator',
-            'sort_order' => 540,
-            'answer_html' => '<p>W grupach zwykły uczestnik usuwa tylko własne wiadomości.</p><p>Twórca grupy może usuwać pojedynczo wszystkie wiadomości w tej konkretnej rozmowie.</p><p>Dzięki temu da się utrzymać porządek bez odbierania podstawowej kontroli zwykłym użytkownikom.</p>',
-        ],
-        [
-            'question' => 'Jak działa wybór rodzaju płatności przez admina?',
-            'audience_code' => 'admin',
-            'keywords' => 'rodzaj płatności admin crypto bank payment type',
-            'sort_order' => 550,
-            'answer_html' => '<p>Przy tworzeniu ticketu płatności admin wybiera, czy ma to być krypto czy przelew bankowy.</p><p>Od tego wyboru zależy, czy system przypisze portfel, czy konto bankowe oraz jakie instrukcje dostanie użytkownik.</p><p>Warto wybrać metodę zgodną z tym, co klient realnie chce opłacić i jak szybko może przesłać potwierdzenie.</p>',
-        ],
-        [
-            'question' => 'Jak wyłączyć przelewy bankowe albo płatności krypto?',
-            'audience_code' => 'admin',
-            'keywords' => 'wyłączenie przelewy bankowe crypto payments settings',
-            'sort_order' => 560,
-            'answer_html' => '<p>W Settings są osobne przełączniki dla przelewów bankowych i płatności krypto.</p><p>Po wyłączeniu danej metody użytkownik nie zobaczy jej w wyborze płatności, a odpowiednie sekcje panelu mogą zostać ukryte.</p><p>To wygodne przy zmianie dostawcy, aktualizacji danych lub chwilowym wstrzymaniu konkretnego kanału płatności.</p>',
-        ],
-        [
-            'question' => 'Jak działa współdzielenie kont bankowych i adresów krypto?',
-            'audience_code' => 'admin',
-            'keywords' => 'współdzielenie kont bankowych adresów krypto shared assignments',
-            'sort_order' => 570,
-            'answer_html' => '<p>W Settings możesz niezależnie zdecydować, czy konta bankowe i adresy krypto mogą być współdzielone między użytkownikami.</p><p>Gdy współdzielenie jest wyłączone, jeden zasób powinien być przypisany tylko do jednej osoby naraz.</p><p>To zwiększa porządek i bezpieczeństwo, ale wymaga utrzymywania większej puli dostępnych danych płatniczych.</p>',
-        ],
-        [
-            'question' => 'Jak odróżnić czat Support od rozmów wewnętrznych?',
-            'audience_code' => 'all',
-            'keywords' => 'support chat rozmowy wewnętrzne reseller admin różnica',
-            'sort_order' => 580,
-            'answer_html' => '<p>Główny czat Support służy do kontaktu użytkownika z obsługą i jest oddzielony od rozmów reseller-reseller oraz grup wewnętrznych.</p><p>Rozmowy prywatne i grupowe między resellerami lub adminami są przeznaczone do ustaleń operacyjnych i nie zastępują oficjalnego kontaktu z supportem.</p><p>Dzięki temu łatwiej utrzymać porządek i nie mieszać zgłoszeń klientów z komunikacją zespołową.</p>',
-        ],
-    ];
-}
-
-function admin_ensure_help_topics_runtime_table(Mysql_ks $db): void
-{
-    static $ready = false;
-    if ($ready && schema_object_exists($db, 'admin_help_topics')) {
-        return;
-    }
-
-    if (!schema_object_exists($db, 'admin_help_topics')) {
-        $db->query(
-            "CREATE TABLE IF NOT EXISTS admin_help_topics (
-                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-                question VARCHAR(191) NOT NULL,
-                answer_html LONGTEXT NOT NULL,
-                audience_code VARCHAR(20) NOT NULL DEFAULT 'all',
-                keywords VARCHAR(500) DEFAULT NULL,
-                sort_order INT NOT NULL DEFAULT 100,
-                is_active TINYINT(1) NOT NULL DEFAULT 1,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (id),
-                KEY idx_admin_help_topics_active_sort (is_active, sort_order, id),
-                KEY idx_admin_help_topics_audience (audience_code)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-        );
-        unset($GLOBALS['schema_object_exists_cache']['admin_help_topics']);
-    }
-
-    if (!schema_object_exists($db, 'admin_help_topics')) {
-        return;
-    }
-
-    $countRow = $db->select_user("SELECT COUNT(*) AS total FROM admin_help_topics");
-    if ((int)($countRow['total'] ?? 0) === 0) {
-        foreach (admin_help_topic_seed_rows() as $row) {
-            $db->insert(
-                ['question', 'answer_html', 'audience_code', 'keywords', 'sort_order', 'is_active'],
-                [
-                    (string)($row['question'] ?? ''),
-                    (string)($row['answer_html'] ?? ''),
-                    admin_help_topic_normalize_audience((string)($row['audience_code'] ?? 'all')),
-                    (string)($row['keywords'] ?? ''),
-                    (int)($row['sort_order'] ?? 100),
-                    1,
-                ],
-                'admin_help_topics'
-            );
-        }
-    }
-
-    $ready = true;
-}
-
-function admin_help_topic_count(Mysql_ks $db): int
-{
-    admin_ensure_help_topics_runtime_table($db);
-    if (!schema_object_exists($db, 'admin_help_topics')) {
-        return 0;
-    }
-
-    $row = $db->select_user("SELECT COUNT(*) AS total FROM admin_help_topics");
-
-    return (int)($row['total'] ?? 0);
-}
-
-function admin_help_topic_rows(Mysql_ks $db, int $limit = 20, int $offset = 0): array
-{
-    admin_ensure_help_topics_runtime_table($db);
-    if (!schema_object_exists($db, 'admin_help_topics')) {
-        return [];
-    }
-
-    $limit = max(1, min(200, $limit));
-    $offset = max(0, $offset);
-
-    return $db->select_full_user(
-        "SELECT id, question, answer_html, audience_code, keywords, sort_order, is_active, created_at, updated_at
-         FROM admin_help_topics
-         ORDER BY sort_order ASC, id ASC
-         LIMIT {$offset}, {$limit}"
-    );
-}
-
-function admin_active_help_topic_rows(Mysql_ks $db): array
-{
-    admin_ensure_help_topics_runtime_table($db);
-    if (!schema_object_exists($db, 'admin_help_topics')) {
-        return [];
-    }
-
-    return $db->select_full_user(
-        "SELECT id, question, answer_html, audience_code, keywords, sort_order
-         FROM admin_help_topics
-         WHERE is_active = 1
-         ORDER BY sort_order ASC, id ASC"
-    );
-}
-
-function admin_help_topic_find(Mysql_ks $db, int $topicId): ?array
-{
-    admin_ensure_help_topics_runtime_table($db);
-    if ($topicId <= 0 || !schema_object_exists($db, 'admin_help_topics')) {
-        return null;
-    }
-
-    $row = $db->select_user(
-        "SELECT id, question, answer_html, audience_code, keywords, sort_order, is_active, created_at, updated_at
-         FROM admin_help_topics
-         WHERE id = {$topicId}
-         LIMIT 1"
-    );
-
-    return is_array($row) && !empty($row['id']) ? $row : null;
-}
-
-function admin_create_help_topic(Mysql_ks $db, array $input): array
-{
-    admin_ensure_help_topics_runtime_table($db);
-    if (!schema_object_exists($db, 'admin_help_topics')) {
-        return ['ok' => false, 'message' => 'Help storage is not available.'];
-    }
-
-    $question = trim((string)($input['question'] ?? ''));
-    $answerHtml = trim((string)($input['answer_html'] ?? ''));
-    $audienceCode = admin_help_topic_normalize_audience((string)($input['audience_code'] ?? 'all'));
-    $keywords = trim((string)($input['keywords'] ?? ''));
-    $sortOrder = (int)($input['sort_order'] ?? 100);
-    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
-
-    if ($question === '') {
-        return ['ok' => false, 'message' => 'Help question is required.'];
-    }
-
-    if ($answerHtml === '') {
-        return ['ok' => false, 'message' => 'Help answer is required.'];
-    }
-
-    $inserted = $db->insert(
-        ['question', 'answer_html', 'audience_code', 'keywords', 'sort_order', 'is_active'],
-        [$question, $answerHtml, $audienceCode, $keywords, $sortOrder, $isActive],
-        'admin_help_topics'
-    );
-
-    if (!$inserted) {
-        return ['ok' => false, 'message' => 'Unable to create help topic.'];
-    }
-
-    return [
-        'ok' => true,
-        'message' => 'Help topic created successfully.',
-        'help_topic_id' => (int)$db->id(),
-    ];
-}
-
-function admin_save_help_topic(Mysql_ks $db, int $topicId, array $input): array
-{
-    $topic = admin_help_topic_find($db, $topicId);
-    if (!is_array($topic) || empty($topic['id'])) {
-        return ['ok' => false, 'message' => 'Help topic not found.'];
-    }
-
-    $question = trim((string)($input['question'] ?? ''));
-    $answerHtml = trim((string)($input['answer_html'] ?? ''));
-    $audienceCode = admin_help_topic_normalize_audience((string)($input['audience_code'] ?? 'all'));
-    $keywords = trim((string)($input['keywords'] ?? ''));
-    $sortOrder = (int)($input['sort_order'] ?? 100);
-    $isActive = isset($input['is_active']) && (string)$input['is_active'] === '1' ? 1 : 0;
-
-    if ($question === '') {
-        return ['ok' => false, 'message' => 'Help question is required.'];
-    }
-
-    if ($answerHtml === '') {
-        return ['ok' => false, 'message' => 'Help answer is required.'];
-    }
-
-    $updated = $db->update_using_id(
-        ['question', 'answer_html', 'audience_code', 'keywords', 'sort_order', 'is_active'],
-        [$question, $answerHtml, $audienceCode, $keywords, $sortOrder, $isActive],
-        'admin_help_topics',
-        $topicId
-    );
-
-    return [
-        'ok' => (bool)$updated,
-        'message' => $updated ? 'Help topic saved successfully.' : 'Unable to save help topic.',
-    ];
-}
-
-function admin_update_help_topic_answer(Mysql_ks $db, int $topicId, string $answerHtml): array
-{
-    $topic = admin_help_topic_find($db, $topicId);
-    if (!is_array($topic) || empty($topic['id'])) {
-        return ['ok' => false, 'message' => 'Help topic not found.'];
-    }
-
-    $answerHtml = trim($answerHtml);
-    if ($answerHtml === '') {
-        return ['ok' => false, 'message' => 'Help answer is required.'];
-    }
-
-    $updated = $db->update_using_id(
-        ['answer_html'],
-        [$answerHtml],
-        'admin_help_topics',
-        $topicId
-    );
-
-    if (!$updated) {
-        return ['ok' => false, 'message' => 'Unable to save help topic.'];
-    }
-
-    $freshTopic = admin_help_topic_find($db, $topicId);
-
-    return [
-        'ok' => true,
-        'message' => 'Help topic saved successfully.',
-        'topic' => is_array($freshTopic) ? $freshTopic : $topic,
-    ];
-}
-
-function admin_delete_help_topic(Mysql_ks $db, int $topicId): array
-{
-    $topic = admin_help_topic_find($db, $topicId);
-    if (!is_array($topic) || empty($topic['id'])) {
-        return ['ok' => false, 'message' => 'Help topic not found.'];
-    }
-
-    $deleted = $db->delete_using_id('admin_help_topics', $topicId);
-
-    return [
-        'ok' => (bool)$deleted,
-        'message' => $deleted ? 'Help topic deleted successfully.' : 'Unable to delete help topic.',
-    ];
-}
-
 function admin_ensure_help_videos_runtime_table(Mysql_ks $db): void
 {
     static $ready = false;
@@ -20367,6 +26206,36 @@ function admin_help_video_rows(Mysql_ks $db, bool $activeOnly = false): array
          FROM admin_help_videos
          {$whereSql}
          ORDER BY sort_order ASC, id ASC"
+    );
+}
+
+function admin_help_video_rows_by_ids(Mysql_ks $db, array $videoIds, bool $activeOnly = true): array
+{
+    admin_ensure_help_videos_runtime_table($db);
+    if (!schema_object_exists($db, 'admin_help_videos')) {
+        return [];
+    }
+
+    $safeIds = [];
+    foreach ($videoIds as $videoId) {
+        $videoId = (int)$videoId;
+        if ($videoId > 0) {
+            $safeIds[$videoId] = $videoId;
+        }
+    }
+    $safeIds = array_values($safeIds);
+    if (!$safeIds) {
+        return [];
+    }
+
+    $idList = implode(',', $safeIds);
+    $activeSql = $activeOnly ? ' AND is_active = 1' : '';
+
+    return $db->select_full_user(
+        "SELECT id, title, video_url, description_html, sort_order, is_active, created_at, updated_at
+         FROM admin_help_videos
+         WHERE id IN ({$idList}){$activeSql}
+         ORDER BY FIELD(id, {$idList})"
     );
 }
 
@@ -20904,10 +26773,23 @@ function admin_search_order_rows(Mysql_ks $db, string $query, int $limit = 20): 
     $deliveryLinkVisibleSelect = schema_column_exists($db, 'orders', 'delivery_link_visible')
         ? 'orders.delivery_link_visible'
         : '0';
+    $supportsDeliveryLinksSelect = schema_column_exists($db, 'product_providers', 'supports_delivery_links')
+        ? 'product_providers.supports_delivery_links'
+        : '1';
+    $customerPublicHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
+        ? 'customers.public_handle'
+        : "''";
+    $progressStartedAtSelect = admin_order_progress_started_at_sql($db);
+    $progressDurationHoursSelect = admin_order_progress_duration_hours_sql($db);
 
     $whereParts = [
         "customers.email LIKE '{$safeLike}'",
     ];
+
+    if (schema_column_exists($db, 'customers', 'public_handle')) {
+        $safeHandle = $db->escape('%' . ltrim($query, '@') . '%');
+        if (ltrim($query, '@') !== '') $whereParts[] = "customers.public_handle LIKE '{$safeHandle}'";
+    }
 
     if (ctype_digit($query)) {
         $whereParts[] = 'orders.id = ' . (int)$query;
@@ -21027,13 +26909,21 @@ function admin_search_order_rows(Mysql_ks $db, string $query, int $limit = 20): 
             orders.fulfillment_status,
             orders.total_amount,
             orders.delivery_link,
+            orders.support_note,
             orders.created_at,
+            orders.started_at,
             orders.expires_at,
+            {$progressStartedAtSelect} AS progress_started_at,
+            {$progressDurationHoursSelect} AS progress_duration_hours,
             customers.email AS customer_email,
+            {$customerPublicHandleSelect} AS public_handle,
             products.name AS product_name,
             products.duration_hours,
+            products.product_type,
             product_providers.name AS provider_name,
+            product_providers.dashboard_url,
             {$deliveryLinkVisibleSelect} AS delivery_link_visible,
+            {$supportsDeliveryLinksSelect} AS supports_delivery_links,
             {$currencySelect},
             {$walletAddressSelect} AS wallet_address,
             {$walletAssetSelect} AS wallet_asset_code
@@ -21081,6 +26971,61 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
     }
 
     $rankExpression = implode(' + ', $rankParts);
+    $subscriptionCountSelect = '0';
+    $deliveryUrlCountSelect = '0';
+    $deliveryCredentialsCountSelect = '0';
+
+    if (
+        schema_object_exists($db, 'orders')
+        && schema_column_exists($db, 'orders', 'delivery_link')
+    ) {
+        $deliveryLinkExistsSql = "TRIM(COALESCE(customer_delivery_orders.delivery_link, '')) <> ''";
+        $subscriptionProductJoin = '';
+        $subscriptionProductWhere = '';
+        if (
+            schema_object_exists($db, 'products')
+            && schema_column_exists($db, 'products', 'product_type')
+        ) {
+            $subscriptionProductJoin = 'LEFT JOIN products AS customer_delivery_products ON customer_delivery_products.id = customer_delivery_orders.product_id';
+            $subscriptionProductWhere = "AND (customer_delivery_products.id IS NULL OR customer_delivery_products.product_type = 'subscription')";
+        }
+        $subscriptionCountSelect = "(
+            SELECT COUNT(*)
+            FROM orders AS customer_delivery_orders
+            {$subscriptionProductJoin}
+            WHERE customer_delivery_orders.customer_id = customers.id
+              {$subscriptionProductWhere}
+        )";
+        if (schema_column_exists($db, 'orders', 'delivery_link_visible')) {
+            $deliveryUrlCountSelect = "(
+                SELECT COUNT(*)
+                FROM orders AS customer_delivery_orders
+                {$subscriptionProductJoin}
+                WHERE customer_delivery_orders.customer_id = customers.id
+                  AND {$deliveryLinkExistsSql}
+                  AND customer_delivery_orders.delivery_link_visible = 1
+                  {$subscriptionProductWhere}
+            )";
+            $deliveryCredentialsCountSelect = "(
+                SELECT COUNT(*)
+                FROM orders AS customer_delivery_orders
+                {$subscriptionProductJoin}
+                WHERE customer_delivery_orders.customer_id = customers.id
+                  AND {$deliveryLinkExistsSql}
+                  AND COALESCE(customer_delivery_orders.delivery_link_visible, 0) = 0
+                  {$subscriptionProductWhere}
+            )";
+        } else {
+            $deliveryCredentialsCountSelect = "(
+                SELECT COUNT(*)
+                FROM orders AS customer_delivery_orders
+                {$subscriptionProductJoin}
+                WHERE customer_delivery_orders.customer_id = customers.id
+                  AND {$deliveryLinkExistsSql}
+                  {$subscriptionProductWhere}
+            )";
+        }
+    }
 
     return $db->select_full_user(
         "SELECT
@@ -21093,6 +27038,9 @@ function admin_search_customer_rows(Mysql_ks $db, string $query, int $limit = 20
             customers.avatar_url,
             customers.registered_at,
             customers.last_login_at,
+            {$subscriptionCountSelect} AS subscription_count,
+            {$deliveryUrlCountSelect} AS delivery_url_count,
+            {$deliveryCredentialsCountSelect} AS delivery_credentials_count,
             ({$rankExpression}) AS search_rank
          FROM customers
          WHERE (" . implode(' OR ', $whereParts) . ")
@@ -21179,6 +27127,7 @@ function admin_crypto_asset_logo_url(string $assetCode): string
             'pol' => 'matic.png',
             'matic' => 'matic.png',
             'xrp' => 'xrp.png',
+            'trx' => 'trx.png',
         ];
 
         if (isset($directMap[$assetCode])) {
@@ -21188,7 +27137,7 @@ function admin_crypto_asset_logo_url(string $assetCode): string
 
     $map = [
         'usdt' => 'tether.png',
-        'usdc' => 'tether.png',
+        'usdc' => 'usdc.png',
     ];
 
     if ($assetCode !== '' && isset($map[$assetCode])) {
@@ -21285,11 +27234,18 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
     ?>
     <article class="admin-panel-card admin-search-card">
         <div class="admin-search-card__title">
-            <h2><?php echo $title; ?></h2>
+            <div class="admin-search-card__heading">
+                <span class="admin-search-card__icon" aria-hidden="true"><i class="bi bi-search"></i></span>
+                <div><h2><?php echo $title; ?></h2><p><?php echo admin_e(admin_t($messages, 'search_results_hint', 'Customers, orders and wallets in one place.')); ?></p></div>
+            </div>
+            <div class="admin-search-card__summary">
+                <span class="admin-search-card__query" title="<?php echo admin_e($query); ?>"><?php echo admin_e($query); ?></span>
+                <span class="admin-search-card__count" role="status"><?php echo admin_e(admin_t($messages, 'search_results_count', 'Results: {count}', ['count' => count($customers) + count($orders) + count($wallets)])); ?></span>
+            </div>
         </div>
 
         <?php if (!$hasResults): ?>
-            <div class="admin-search-empty">
+            <div class="admin-search-empty"><span class="admin-search-empty__icon" aria-hidden="true"><i class="bi bi-search"></i></span>
                 <strong><?php echo $emptyTitle; ?></strong>
                 <p><?php echo $emptyText; ?></p>
                 <?php if ($canQuickCreateCustomer): ?>
@@ -21303,7 +27259,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
         <?php else: ?>
             <?php if ($customers): ?>
                 <section class="admin-search-section">
-                    <div class="admin-search-section__label"><?php echo admin_e(admin_t($messages, 'search_section_users', 'Users')); ?></div>
+                    <h3 class="admin-search-section__label"><i class="bi bi-people" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'search_section_users', 'Users')); ?></span><span class="admin-search-section__count"><?php echo count($customers); ?></span></h3>
                     <div class="admin-search-user-list">
                         <?php foreach ($customers as $row): ?>
                             <?php
@@ -21324,6 +27280,22 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                             $localeFlagUrl = admin_locale_flag_url((string)($row['locale_code'] ?? 'en'));
                             $localeFlagAlt = strtoupper(trim((string)($row['locale_code'] ?? 'en')));
                             $publicHandle = trim((string)($row['public_handle'] ?? ''));
+                            $subscriptionCount = max(0, (int)($row['subscription_count'] ?? 0));
+                            $deliveryUrlCount = max(0, (int)($row['delivery_url_count'] ?? 0));
+                            $deliveryCredentialsCount = max(0, (int)($row['delivery_credentials_count'] ?? 0));
+                            $showDeliveryCounts = $subscriptionCount > 1;
+                            $deliveryUrlLabel = admin_t(
+                                $messages,
+                                'search_user_delivery_url_count',
+                                'Full URL: {linked} of {total} subscriptions.',
+                                ['linked' => $deliveryUrlCount, 'total' => $subscriptionCount]
+                            );
+                            $deliveryCredentialsLabel = admin_t(
+                                $messages,
+                                'search_user_delivery_credentials_count',
+                                'Login and password only: {linked} of {total} subscriptions.',
+                                ['linked' => $deliveryCredentialsCount, 'total' => $subscriptionCount]
+                            );
                             ?>
                             <article class="admin-search-user-card">
                                 <div class="admin-search-user-card__avatar-wrap">
@@ -21339,25 +27311,42 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     <?php echo admin_chat_presence_dot_html($presence); ?>
                                 </div>
                                 <div class="admin-search-user-card__body">
-                                    <a class="admin-search-user-card__primary" href="<?php echo admin_e($profileUrl); ?>">
-                                        <?php echo admin_e($publicHandle !== '' ? '@' . $publicHandle : (string)($row['email'] ?? '')); ?>
-                                    </a>
+                                    <div class="admin-search-user-card__primary-row">
+                                        <a class="admin-search-user-card__primary" href="<?php echo admin_e($profileUrl); ?>">
+                                            <?php echo admin_e($publicHandle !== '' ? '@' . ltrim($publicHandle, '@') : (string)($row['email'] ?? '')); ?>
+                                        </a>
+                                        <?php if ($deliveryUrlCount > 0): ?>
+                                            <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--url admin-search-user-card__delivery-indicator" title="<?php echo admin_e($deliveryUrlLabel); ?>" aria-label="<?php echo admin_e($deliveryUrlLabel); ?>">
+                                                <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                                                <?php if ($showDeliveryCounts): ?><span aria-hidden="true"><?php echo admin_e($deliveryUrlCount . '/' . $subscriptionCount); ?></span><?php endif; ?>
+                                            </span>
+                                        <?php endif; ?>
+                                        <?php if ($deliveryCredentialsCount > 0): ?>
+                                            <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--credentials admin-search-user-card__delivery-indicator" title="<?php echo admin_e($deliveryCredentialsLabel); ?>" aria-label="<?php echo admin_e($deliveryCredentialsLabel); ?>">
+                                                <i class="bi bi-key" aria-hidden="true"></i>
+                                                <?php if ($showDeliveryCounts): ?><span aria-hidden="true"><?php echo admin_e($deliveryCredentialsCount . '/' . $subscriptionCount); ?></span><?php endif; ?>
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
                                     <?php if (trim((string)($row['email'] ?? '')) !== '' && $publicHandle !== ''): ?>
                                         <div class="admin-search-user-card__secondary-email"><?php echo admin_e((string)($row['email'] ?? '')); ?></div>
                                     <?php endif; ?>
-                                    <div class="admin-search-user-card__meta">
-                                        <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
+                                </div>
+                                <div class="admin-search-user-card__meta">
                                         <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($statusClass); ?>">
                                             <?php echo admin_e($statusLabel); ?>
                                         </span>
                                         <span class="admin-status-pill admin-status-pill--xs admin-status-pill--info">
                                             <?php echo admin_e($customerTypeLabel); ?>
                                         </span>
-                                        <span class="admin-search-user-card__last-login">
-                                            <?php echo admin_e($lastLoginLabel !== '' ? $lastLoginLabel : '—'); ?>
-                                        </span>
-                                    </div>
                                 </div>
+                                <span class="admin-search-user-card__last-login" title="<?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?>">
+                                    <i class="bi bi-clock" aria-hidden="true"></i>
+                                    <?php echo admin_e($lastLoginLabel !== '' ? $lastLoginLabel : '—'); ?>
+                                </span>
+                                <span class="admin-search-user-card__locale" title="<?php echo admin_e(admin_t($messages, 'col_locale', 'Language') . ': ' . $localeFlagAlt); ?>">
+                                    <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
+                                </span>
                             </article>
                         <?php endforeach; ?>
                     </div>
@@ -21366,15 +27355,16 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
 
             <?php if ($orders): ?>
                 <section class="admin-search-section">
-                    <div class="admin-search-section__label"><?php echo admin_e(admin_t($messages, 'search_section_orders', 'Orders')); ?></div>
+                    <h3 class="admin-search-section__label"><i class="bi bi-bag-check" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'search_section_orders', 'Orders')); ?></span><span class="admin-search-section__count"><?php echo count($orders); ?></span></h3>
                     <div class="table-responsive">
-                        <table class="table admin-table admin-orders-table align-middle">
+                        <table class="table admin-table admin-orders-table admin-orders-simple-table align-middle">
                             <thead>
                             <tr>
-                                <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
+                                <th class="admin-orders-simple-table__id-col">id</th>
                                 <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
-                                <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
-                                <th class="admin-orders-table__date-col d-none d-xl-table-cell"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                <th><?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?></th>
+                                <th class="admin-orders-table__amount-col"><?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Amount')); ?></th>
+                                <th><?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?></th>
                                 <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
                             </tr>
                             </thead>
@@ -21389,89 +27379,137 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
                                 $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                 $isAwaitingActivationOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--awaiting-activation';
+                                $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
+                                $orderFulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
+                                $orderRowStatus = strtolower(trim((string)($row['status'] ?? '')));
+                                $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
+                                    && in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
+                                    && in_array($orderRowStatus, ['active', 'approved', 'completed', 'fulfilled', 'expired'], true);
+                                $isAmountPending = !in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true);
+                                $isOrderExpired = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired'
+                                    || (string)($orderProgress['tone'] ?? '') === 'expired';
+                                $isAmountHighlighted = $isAmountPending || $isOrderExpired;
+                                $orderAmountClass = $isAmountHighlighted
+                                    ? 'admin-orders-simple-table__amount admin-orders-simple-table__amount--red'
+                                    : 'admin-orders-simple-table__amount';
+                                $orderProductClass = $isOrderExpired ? 'admin-orders-simple-table__product-name--red' : '';
                                 $orderUrl = '/admin/?page=orders&order_id=' . $orderId;
-                                $orderCreatedAtRaw = trim((string)($row['created_at'] ?? ''));
-                                $orderCreatedAtLabel = admin_format_last_login_date($orderCreatedAtRaw);
-                                $orderCreatedAtIsToday = admin_is_current_day_datetime($orderCreatedAtRaw);
                                 $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+                                $orderCustomerEmailShort = $orderCustomerEmail !== ''
+                                    ? admin_string_truncate($orderCustomerEmail, 20)
+                                    : '';
                                 $orderCustomerHandle = trim((string)($row['public_handle'] ?? ''));
-                                $orderCustomerProfileUrl = '/admin/?page=users&customer_id=' . (int)($row['customer_id'] ?? 0);
+                                $orderCustomerId = (int)($row['customer_id'] ?? 0);
+                                $orderCustomerProfileUrl = '/admin/?page=users&customer_id=' . $orderCustomerId;
+                                $orderCustomerOrdersUrl = '/admin/?page=orders&customer_id=' . $orderCustomerId;
+                                $orderProviderDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+                                $showProviderQuickButton = $orderPaymentStatusRaw === 'paid' && !$isCompletedPaidOrder && $orderProviderDashboardUrl !== '';
+                                $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? ''));
+                                $orderDetailsButtonClass = $isOrderExpired
+                                    ? 'btn-danger'
+                                    : ($orderPaymentStatusRaw === 'paid' ? 'btn-success admin-orders-simple-table__icon-btn--paid' : 'btn-dark');
+                                $orderDeliveryLinkMode = admin_order_delivery_link_mode($row);
+                                $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password');
                                 ?>
                                 <tr>
-                                    <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
-                                        <strong>#<?php echo admin_e((string)$orderId); ?></strong>
+                                    <td class="admin-orders-simple-table__id-col" data-label="id">
+                                        <a href="<?php echo admin_e($orderUrl); ?>" class="admin-orders-simple-table__id-link"><?php echo admin_e((string)$orderId); ?></a>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
                                         <div class="admin-order-summary">
                                             <div class="admin-order-summary__title-row">
-                                                <strong><?php echo admin_e($orderTitle); ?></strong>
+                                                <strong class="<?php echo admin_e($orderProductClass); ?>"><?php echo admin_e($orderTitle); ?></strong>
+                                                <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                    <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                        <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                    </span>
+                                                <?php endif; ?>
                                                 <?php if ($isAwaitingActivationOrder): ?>
                                                     <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
                                                 <?php elseif ($isPendingOrder): ?>
                                                     <span class="admin-order-new-badge">NEW</span>
                                                 <?php endif; ?>
                                             </div>
-                                            <?php if ((string)($row['status'] ?? '') === 'expired'): ?>
-                                                <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
-                                            <?php endif; ?>
-                                            <a class="admin-inline-link admin-order-summary__customer admin-search-table__primary-link" href="<?php echo admin_e($orderCustomerProfileUrl); ?>">
-                                                <?php echo admin_e($orderCustomerHandle !== '' ? '@' . ltrim($orderCustomerHandle, '@') : ($orderCustomerEmail !== '' ? $orderCustomerEmail : '—')); ?>
-                                            </a>
-                                            <?php if ($orderCustomerEmail !== '' && $orderCustomerHandle !== ''): ?>
-                                                <div class="admin-search-table__email"><?php echo admin_e($orderCustomerEmail); ?></div>
-                                            <?php endif; ?>
-                                            <div class="admin-search-table__muted<?php echo $orderCreatedAtIsToday ? ' text-danger fw-bold' : ''; ?>">
-                                                <?php echo admin_e($orderCreatedAtLabel !== '' ? $orderCreatedAtLabel : '—'); ?>
+                                            <div class="admin-order-summary__customer-row">
+                                                <a class="admin-inline-link admin-order-summary__customer admin-search-table__primary-link" href="<?php echo admin_e($orderCustomerProfileUrl); ?>">
+                                                    <?php echo admin_e($orderCustomerHandle !== '' ? '@' . ltrim($orderCustomerHandle, '@') : ($orderCustomerEmail !== '' ? $orderCustomerEmail : '—')); ?>
+                                                </a>
+                                                <?php if ($orderCustomerEmail !== '' && $orderCustomerHandle !== ''): ?>
+                                                    <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
+                                                        <?php echo admin_e($orderCustomerEmailShort); ?>
+                                                    </span>
+                                                <?php endif; ?>
                                             </div>
                                             <?php if ($isAwaitingActivationOrder): ?>
-                                                <div class="admin-order-summary__note admin-order-summary__note--success">
+                                                <div class="admin-order-summary__note admin-order-summary__note--success admin-orders-simple-table__payment-note">
                                                     <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
-                                                </div>
-                                            <?php elseif ((string)($row['status'] ?? '') === 'active' && $usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
-                                                <div class="admin-order-progress">
-                                                    <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
-                                                        <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
-                                                    </div>
-                                                    <div class="admin-order-progress__track">
-                                                        <div class="admin-order-progress__meta">
-                                                            <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
-                                                            <?php if (!empty($row['expires_at'])): ?>
-                                                                <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
-                                                            <?php else: ?>
-                                                                <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
-                                                            <?php endif; ?>
-                                                        </div>
-                                                        <div class="admin-order-progress__bar">
-                                                            <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            <?php endif; ?>
-                                            <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
-                                                <div class="admin-order-summary__note admin-order-summary__note--warning">
-                                                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                    <span><?php echo admin_e(admin_t($messages, 'order_payment_confirmed_short', 'Payment confirmed.')); ?><br><?php echo admin_e(admin_t($messages, 'order_waiting_activation_short_line', 'Waiting for activation.')); ?></span>
                                                 </div>
                                             <?php endif; ?>
                                         </div>
                                     </td>
-                                    <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
-                                        <div class="admin-order-amount">
-                                            <strong class="<?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'text-danger' : ((string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending' ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
-                                            <?php if ((string)($row['delivery_link'] ?? '') !== '' && !empty($row['delivery_link_visible'])): ?>
-                                                <span><?php echo admin_e(admin_t($messages, 'order_delivery_enabled', 'URL enabled')); ?></span>
-                                            <?php endif; ?>
-                                            <i class="<?php echo admin_e((string)($orderStatusVisual['icon'] ?? '')); ?> admin-order-status-icon <?php echo admin_e((string)($orderStatusVisual['class'] ?? '')); ?>" aria-hidden="true" title="<?php echo admin_e((string)($orderStatusVisual['label'] ?? '')); ?>"></i>
-                                        </div>
+                                    <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?>">
+                                        <?php if ($isCompletedPaidOrder && $isOrderExpired && $usesSubscriptionTiming && !empty($row['expires_at'])): ?>
+                                            <span class="btn btn-danger btn-xs admin-orders-simple-table__provider-btn admin-orders-simple-table__expired-btn">
+                                                <i class="bi bi-calendar-x" aria-hidden="true"></i>
+                                                <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
+                                            </span>
+                                        <?php elseif ($isCompletedPaidOrder && $usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
+                                            <div class="admin-order-progress">
+                                                <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
+                                                    <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
+                                                </div>
+                                                <div class="admin-order-progress__track">
+                                                    <div class="admin-order-progress__meta">
+                                                        <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
+                                                        <?php if (!empty($row['expires_at'])): ?>
+                                                            <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
+                                                        <?php else: ?>
+                                                            <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="admin-order-progress__bar">
+                                                        <span style="width: <?php echo admin_e((string)($orderProgress['percent'] ?? 0)); ?>%; background: <?php echo admin_e((string)($orderProgress['color'] ?? '#9ca3af')); ?>;"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        <?php elseif (!$isCompletedPaidOrder && $usesSubscriptionTiming && !empty($row['expires_at'])): ?>
+                                            <span class="admin-orders-simple-table__expire-date"><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
+                                        <?php else: ?>
+                                            <span class="admin-orders-simple-table__empty">-</span>
+                                        <?php endif; ?>
                                     </td>
-                                    <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
-                                        <?php echo !empty($row['created_at']) ? admin_e(app_format_runtime_datetime_local((string)($row['created_at'] ?? ''), 'd.m.Y')) : '—'; ?>
+                                    <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Amount')); ?>">
+                                        <strong class="<?php echo admin_e($orderAmountClass); ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
+                                    </td>
+                                    <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
+                                        <div class="admin-orders-simple-table__notes">
+                                            <?php if ($showProviderQuickButton): ?>
+                                                <a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="btn btn-warning btn-xs admin-orders-simple-table__provider-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
+                                                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                    <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
+                                                </a>
+                                            <?php endif; ?>
+                                            <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : (!$showProviderQuickButton ? '<span class="admin-orders-simple-table__empty">-</span>' : ''); ?></div>
+                                        </div>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                        <a href="<?php echo admin_e($orderUrl); ?>" class="btn <?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'btn-danger' : (in_array((string)($orderStatusVisual['class'] ?? ''), ['admin-order-status-icon--pending', 'admin-order-status-icon--awaiting-activation'], true) ? 'btn-dark' : 'btn-success'); ?>" aria-label="Details" style="width: 50px; height: 50px;">
-                                            <i class="bi bi-search" aria-hidden="true"></i>
-                                        </a>
+                                        <div class="admin-orders-simple-table__actions">
+                                            <a href="<?php echo admin_e($orderUrl); ?>" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>">
+                                                <i class="bi bi-search" aria-hidden="true"></i>
+                                            </a>
+                                            <button type="button" class="btn btn-primary btn-xs admin-orders-simple-table__icon-btn" data-admin-copy-value="<?php echo admin_e($orderCustomerHandle); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandle === '' ? ' disabled' : ''; ?>>
+                                                <i class="bi bi-clipboard" aria-hidden="true"></i>
+                                            </button>
+                                            <a href="<?php echo admin_e($orderCustomerProfileUrl); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
+                                                <i class="bi bi-person" aria-hidden="true"></i>
+                                            </a>
+                                            <a href="<?php echo admin_e($orderCustomerOrdersUrl); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+                                                <i class="bi bi-card-list" aria-hidden="true"></i>
+                                            </a>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -21483,7 +27521,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
 
             <?php if ($wallets): ?>
                 <section class="admin-search-section">
-                    <div class="admin-search-section__label"><?php echo admin_e(admin_t($messages, 'search_section_wallets', 'Crypto wallets')); ?></div>
+                    <h3 class="admin-search-section__label"><i class="bi bi-wallet2" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'search_section_wallets', 'Crypto wallets')); ?></span><span class="admin-search-section__count"><?php echo count($wallets); ?></span></h3>
                     <div class="admin-search-wallet-grid">
                         <?php foreach ($wallets as $row): ?>
                                 <?php
@@ -21512,9 +27550,9 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     </a>
                                     <div class="admin-search-wallet-card__meta">
                                         <div class="admin-search-wallet-card__meta-row">
-                                            <a class="admin-search-wallet-card__handle" href="<?php echo admin_e($walletCustomerUrl); ?>">
+                                            <?php if ($walletCustomerId > 0): ?><a class="admin-search-wallet-card__handle" href="<?php echo admin_e($walletCustomerUrl); ?>">
                                                 <?php echo admin_e($walletCustomerHandle !== '' ? '@' . ltrim($walletCustomerHandle, '@') : ($walletCustomerEmail !== '' ? $walletCustomerEmail : '—')); ?>
-                                            </a>
+                                            </a><?php else: ?><span class="admin-search-wallet-card__unassigned"><?php echo admin_e(admin_t($messages, 'search_wallet_unassigned', 'Unassigned wallet')); ?></span><?php endif; ?>
                                             <?php if ($walletLabel !== ''): ?>
                                                 <a class="admin-search-wallet-card__label" href="<?php echo admin_e($walletPageUrl); ?>">
                                                     <?php echo admin_e($walletLabel); ?>
@@ -21529,6 +27567,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                 </section>
             <?php endif; ?>
         <?php endif; ?>
+        <?php if (max(count($customers), count($orders), count($wallets)) >= 20): ?><p class="admin-search-card__limit"><?php echo admin_e(admin_t($messages, 'search_results_limit', 'Up to 20 results per category. Refine your search to find a specific item.')); ?></p><?php endif; ?>
     </article>
     <?php
 
@@ -21787,7 +27826,7 @@ function admin_quick_create_crypto_payment_request(
                 $adminUserId,
                 $now,
                 $expiresAt,
-                'Updated from admin payments quick create',
+                admin_localize_payment_request_note('Updated from admin payments quick create'),
                 'pending',
             ],
             'crypto_deposit_requests',
@@ -21814,9 +27853,9 @@ function admin_quick_create_crypto_payment_request(
             'created_by_admin_user_id' => $adminUserId,
             'requested_at' => $now,
             'expires_at' => $expiresAt,
-            'request_note' => 'Created from admin payments quick create',
+            'request_note' => admin_localize_payment_request_note('Created from admin payments quick create'),
             'settings' => $settings,
-        ]);
+        ], true);
 
         if ($requestId <= 0) {
             $db->query('ROLLBACK');
@@ -21846,6 +27885,7 @@ function admin_page_cards(string $route, array $messages): array
         'products' => ['title' => admin_t($messages, 'page_products_card_title', 'Products'), 'text' => admin_t($messages, 'page_products_card_text', 'Review active packages and subscription times from the new database.')],
         'users' => ['title' => admin_t($messages, 'page_users_card_title', 'Users'), 'text' => admin_t($messages, 'page_users_card_text', 'Create, edit and secure customer accounts.')],
         'payments' => ['title' => admin_t($messages, 'page_payments_card_title', 'Payments'), 'text' => admin_t($messages, 'page_payments_card_text', 'Manage crypto and bank transfer requests.')],
+        'billing' => ['title' => admin_t($messages, 'page_billing_card_title', 'Billing'), 'text' => admin_t($messages, 'page_billing_card_text', 'Issue bills, manage billing customers and review document statistics.')],
         'bank-accounts' => ['title' => admin_t($messages, 'page_bank_accounts_card_title', 'Bank accounts'), 'text' => admin_t($messages, 'page_bank_accounts_card_text', 'Assign and activate bank accounts manually.')],
         'crypto-wallets' => ['title' => admin_t($messages, 'page_crypto_wallets_card_title', 'Crypto wallets'), 'text' => admin_t($messages, 'page_crypto_wallets_card_text', 'Manage wallet pools and customer assignments.')],
         'cryptocurrencies' => ['title' => admin_t($messages, 'page_cryptocurrencies_card_title', 'Cryptocurrencies'), 'text' => admin_t($messages, 'page_cryptocurrencies_card_text', 'Enable or disable crypto assets and edit their labels, networks and notes.')],

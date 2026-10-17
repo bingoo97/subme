@@ -1,5 +1,8 @@
 <?php
 
+require_once __DIR__ . '/schema.php';
+require_once __DIR__ . '/crypto_runtime.php';
+
 if (!function_exists('app_runtime_timezone_name')) {
     function app_runtime_timezone_name() {
         static $timezone = null;
@@ -1439,13 +1442,14 @@ function app_crypto_logo_by_code(string $assetCode, string $fallbackPath = ''): 
         'BNB' => 'bnb.png',
         'BUSD' => 'busd.png',
         'USDT' => 'tether.png',
-        'USDC' => 'tether.png',
+        'USDC' => 'usdc.png',
         'CRO' => 'cro.png',
         'ATOM' => 'atom.png',
         'SOL' => 'sol.png',
         'POL' => 'matic.png',
         'MATIC' => 'matic.png',
         'XRP' => 'xrp.png',
+        'TRX' => 'trx.png',
     ];
 
     if (isset($fileMap[$code])) {
@@ -1472,13 +1476,34 @@ function app_default_coingecko_id(string $assetCode): string
         'POL' => 'polygon-ecosystem-token',
         'MATIC' => 'matic-network',
         'XRP' => 'ripple',
+        'TRX' => 'tron',
     ];
 
     return $map[$assetCode] ?? '';
 }
 
+function app_crypto_customer_payment_disabled_asset_codes(): array
+{
+    return [
+        'BNB' => true,
+        'POL' => true,
+        'USDC' => true,
+    ];
+}
+
+function app_crypto_asset_allows_customer_payments(string $assetCode): bool
+{
+    $assetCode = strtoupper(trim($assetCode));
+    return $assetCode !== '' && empty(app_crypto_customer_payment_disabled_asset_codes()[$assetCode]);
+}
+
 function app_http_json(string $url): ?array
 {
+    if (app_crypto_api_policy($url) !== null) {
+        $raw = app_crypto_api_request($url);
+        $decoded = $raw !== null ? json_decode($raw, true) : null;
+        return is_array($decoded) ? $decoded : null;
+    }
     if ($url === '') {
         return null;
     }
@@ -1536,6 +1561,7 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
         $vsCurrency = 'USD';
     }
 
+    $cacheTtl = max(60, $cacheTtl);
     $vsCurrencyLower = strtolower($vsCurrency);
     $now = time();
     $assetIds = array_values(array_filter(array_map('intval', $assetIds), static function (int $value): bool {
@@ -1581,7 +1607,7 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
         $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
         $rateUpdatedAt = !empty($row['rate_updated_at']) ? app_timestamp_from_utc_datetime((string)$row['rate_updated_at']) : 0;
 
-        if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
+        if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || $rateUpdatedAt > $now + 60 || ($now - $rateUpdatedAt) >= $cacheTtl) {
             $needsRefresh = true;
             if ($coingeckoId !== '') {
                 $coingeckoIds[$coingeckoId] = true;
@@ -1590,13 +1616,10 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
     }
 
     if ($needsRefresh && $coingeckoIds) {
-        $apiUrl = 'https://api.coingecko.com/api/v3/simple/price?ids='
-            . rawurlencode(implode(',', array_keys($coingeckoIds)))
-            . '&vs_currencies=' . rawurlencode($vsCurrencyLower)
-            . '&include_last_updated_at=true&precision=full';
-        $payload = app_http_json($apiUrl);
+        $payload = app_crypto_cached_prices(array_keys($coingeckoIds), $vsCurrency, $cacheTtl);
 
         if (is_array($payload)) {
+            $persistRates = app_crypto_rate_should_persist($db, $vsCurrency);
             foreach ($rows as $index => $row) {
                 $assetId = (int)($row['id'] ?? 0);
                 $coingeckoId = (string)($row['coingecko_id'] ?? '');
@@ -1609,7 +1632,10 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
                     ? app_datetime_utc_from_unix_timestamp((int)$payload[$coingeckoId]['last_updated_at'])
                     : app_datetime_utc_from_unix_timestamp($now);
 
-                $db->update_using_id(
+                $newRate = ['current_rate_fiat' => $price, 'rate_currency_code' => $vsCurrency, 'rate_updated_at' => $updatedAt];
+                if (!app_crypto_rate_is_usable($newRate, $vsCurrency)) continue;
+                if ($price === (float)($row['current_rate_fiat'] ?? 0) && $vsCurrency === ($row['rate_currency_code'] ?? '') && $updatedAt === ($row['rate_updated_at'] ?? '')) continue;
+                if ($persistRates) $db->update_using_id(
                     ['coingecko_id', 'current_rate_fiat', 'rate_currency_code', 'rate_updated_at'],
                     [$coingeckoId, $price, $vsCurrency, $updatedAt],
                     'crypto_assets',
@@ -1634,6 +1660,10 @@ function app_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl
         }
     }
 
+    foreach ($rows as &$row) {
+        if (!app_crypto_rate_is_usable($row, $vsCurrency)) $row['current_rate_fiat'] = 0;
+    }
+    unset($row);
     return $rows;
 }
 
@@ -1648,7 +1678,7 @@ function app_crypto_network_label(string $networkCode): string
         'ethereum' => 'Ethereum (ERC20)',
         'polygon' => 'Polygon',
         'bnb' => 'BNB Smart Chain',
-        'tron' => 'Tron (TRC20)',
+        'tron' => 'TRON',
         'cronos' => 'Cronos',
         'solana' => 'Solana',
         'ripple' => 'XRP Ledger',
@@ -1681,7 +1711,8 @@ function app_sync_crypto_wallet_address_statuses($db, int $walletId = 0): void
             WHEN COALESCE(active_assignments.active_total, 0) > 0 THEN 'assigned'
             ELSE 'available'
          END
-         WHERE wallet.disabled_at IS NULL{$walletFilter}"
+         WHERE wallet.disabled_at IS NULL{$walletFilter}
+           AND wallet.status <> CASE WHEN COALESCE(active_assignments.active_total, 0) > 0 THEN 'assigned' ELSE 'available' END"
     );
 }
 
@@ -1716,12 +1747,18 @@ function app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, int
         return false;
     }
 
+    $walletIds = app_crypto_wallet_related_wallet_ids($db, $walletId);
+    $walletIdSql = app_sql_int_list($walletIds);
+    if ($walletIdSql === '') {
+        return false;
+    }
+
     $assignmentJoin = '';
     $assignmentWalletCondition = '';
     if (schema_object_exists($db, 'crypto_wallet_assignments')) {
         $assignmentJoin = "LEFT JOIN crypto_wallet_assignments AS payment_assignment
            ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id";
-        $assignmentWalletCondition = " OR payment_assignment.wallet_address_id = {$walletId}";
+        $assignmentWalletCondition = " OR payment_assignment.wallet_address_id IN ({$walletIdSql})";
     }
 
     $row = $db->select_user(
@@ -1730,7 +1767,7 @@ function app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, int
          {$assignmentJoin}
          WHERE crypto_deposit_requests.customer_id <> {$customerId}
            AND (
-                crypto_deposit_requests.wallet_address_id = {$walletId}
+                crypto_deposit_requests.wallet_address_id IN ({$walletIdSql})
                 {$assignmentWalletCondition}
            )
            AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
@@ -1747,10 +1784,16 @@ function app_crypto_wallet_has_active_assignment_for_other_customer($db, int $wa
         return false;
     }
 
+    $walletIds = app_crypto_wallet_related_wallet_ids($db, $walletId);
+    $walletIdSql = app_sql_int_list($walletIds);
+    if ($walletIdSql === '') {
+        return false;
+    }
+
     $row = $db->select_user(
         "SELECT id
          FROM crypto_wallet_assignments
-         WHERE wallet_address_id = {$walletId}
+         WHERE wallet_address_id IN ({$walletIdSql})
            AND customer_id <> {$customerId}
            AND status IN ('reserved', 'active')
          ORDER BY id DESC
@@ -1766,6 +1809,12 @@ function app_crypto_wallet_has_open_request_for_other_customer($db, int $walletI
         return false;
     }
 
+    $walletIds = app_crypto_wallet_related_wallet_ids($db, $walletId);
+    $walletIdSql = app_sql_int_list($walletIds);
+    if ($walletIdSql === '') {
+        return false;
+    }
+
     $row = $db->select_user(
         "SELECT crypto_deposit_requests.id
          FROM crypto_deposit_requests
@@ -1773,8 +1822,8 @@ function app_crypto_wallet_has_open_request_for_other_customer($db, int $walletI
            ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
          WHERE crypto_deposit_requests.customer_id <> {$customerId}
            AND (
-                crypto_deposit_requests.wallet_address_id = {$walletId}
-             OR payment_assignment.wallet_address_id = {$walletId}
+                crypto_deposit_requests.wallet_address_id IN ({$walletIdSql})
+             OR payment_assignment.wallet_address_id IN ({$walletIdSql})
            )
            AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
          ORDER BY crypto_deposit_requests.id DESC
@@ -1784,17 +1833,522 @@ function app_crypto_wallet_has_open_request_for_other_customer($db, int $walletI
     return is_array($row) && !empty($row['id']);
 }
 
+function app_crypto_wallet_can_be_offered_to_customer($db, int $walletId, int $customerId = 0, array $settings = []): bool
+{
+    if ($walletId <= 0 || !schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return false;
+    }
+
+    if (!$settings) {
+        $settings = app_fetch_settings($db);
+    }
+
+    $wallet = $db->select_user(
+        "SELECT id, status, disabled_at
+         FROM crypto_wallet_addresses
+         WHERE id = {$walletId}
+         LIMIT 1"
+    );
+    if (
+        !is_array($wallet)
+        || empty($wallet['id'])
+        || !empty($wallet['disabled_at'])
+        || strtolower(trim((string)($wallet['status'] ?? ''))) === 'disabled'
+    ) {
+        return false;
+    }
+
+    if (!empty($settings['crypto_wallet_shared_assignments_enabled'])) {
+        return true;
+    }
+
+    $walletIdsSql = app_sql_int_list(app_crypto_wallet_related_wallet_ids($db, $walletId));
+    if ($walletIdsSql === '') {
+        return false;
+    }
+
+    if (schema_object_exists($db, 'crypto_wallet_assignments')) {
+        $customerFilterSql = $customerId > 0 ? " AND customer_id <> {$customerId}" : '';
+        $assignment = $db->select_user(
+            "SELECT id
+             FROM crypto_wallet_assignments
+             WHERE wallet_address_id IN ({$walletIdsSql})
+               {$customerFilterSql}
+               AND status IN ('reserved', 'active')
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        if (is_array($assignment) && !empty($assignment['id'])) {
+            return false;
+        }
+    }
+
+    if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $customerFilterSql = $customerId > 0 ? " AND crypto_deposit_requests.customer_id <> {$customerId}" : '';
+        $assignmentJoin = schema_object_exists($db, 'crypto_wallet_assignments')
+            ? "LEFT JOIN crypto_wallet_assignments AS payment_assignment
+                 ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id"
+            : '';
+        $assignmentWalletCondition = schema_object_exists($db, 'crypto_wallet_assignments')
+            ? " OR payment_assignment.wallet_address_id IN ({$walletIdsSql})"
+            : '';
+
+        $openRequest = $db->select_user(
+            "SELECT crypto_deposit_requests.id
+             FROM crypto_deposit_requests
+             {$assignmentJoin}
+             WHERE (
+                    crypto_deposit_requests.wallet_address_id IN ({$walletIdsSql})
+                    {$assignmentWalletCondition}
+             )
+               {$customerFilterSql}
+               AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+             ORDER BY crypto_deposit_requests.id DESC
+             LIMIT 1"
+        );
+        if (is_array($openRequest) && !empty($openRequest['id'])) {
+            return false;
+        }
+
+        $paymentHistory = $db->select_user(
+            "SELECT crypto_deposit_requests.id
+             FROM crypto_deposit_requests
+             {$assignmentJoin}
+             WHERE (
+                    crypto_deposit_requests.wallet_address_id IN ({$walletIdsSql})
+                    {$assignmentWalletCondition}
+             )
+               {$customerFilterSql}
+               AND crypto_deposit_requests.status NOT IN ('pending', 'pending_payment', 'cancelled')
+             ORDER BY crypto_deposit_requests.id DESC
+             LIMIT 1"
+        );
+        if (is_array($paymentHistory) && !empty($paymentHistory['id'])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function app_crypto_wallet_network_is_evm(string $networkCode): bool
+{
+    return in_array(strtolower(trim($networkCode)), ['ethereum', 'bnb', 'polygon', 'cronos'], true);
+}
+
+function app_crypto_wallet_address_is_evm_format(string $address): bool
+{
+    return preg_match('/^0x[a-fA-F0-9]{40}$/', trim($address)) === 1;
+}
+
+function app_schema_index_exists($db, string $tableName, string $indexName): bool
+{
+    $row = $db->select_user(
+        "SELECT COUNT(*) AS total
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = '" . $db->escape($tableName) . "'
+           AND INDEX_NAME = '" . $db->escape($indexName) . "'
+         LIMIT 1"
+    );
+
+    return is_array($row) && (int)($row['total'] ?? 0) > 0;
+}
+
+function app_ensure_crypto_wallet_address_reuse_indexes($db): void
+{
+    static $done = false;
+    if ($done || !schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return;
+    }
+    $done = true;
+
+    if (app_schema_index_exists($db, 'crypto_wallet_addresses', 'uniq_crypto_wallet_addresses_address')) {
+        $db->query('ALTER TABLE `crypto_wallet_addresses` DROP INDEX `uniq_crypto_wallet_addresses_address`');
+    }
+    if (!app_schema_index_exists($db, 'crypto_wallet_addresses', 'idx_crypto_wallet_addresses_address')) {
+        $db->query('ALTER TABLE `crypto_wallet_addresses` ADD INDEX `idx_crypto_wallet_addresses_address` (`address`)');
+    }
+    if (!app_schema_index_exists($db, 'crypto_wallet_addresses', 'uniq_crypto_wallet_addresses_asset_network_address')) {
+        $db->query('ALTER TABLE `crypto_wallet_addresses` ADD UNIQUE KEY `uniq_crypto_wallet_addresses_asset_network_address` (`crypto_asset_id`, `network_code`, `address`)');
+    }
+}
+
+function app_sql_int_list(array $ids): string
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static function (int $id): bool {
+        return $id > 0;
+    })));
+
+    return $ids ? implode(',', $ids) : '';
+}
+
+function app_crypto_wallet_related_wallet_ids($db, int $walletId): array
+{
+    if ($walletId <= 0 || !schema_object_exists($db, 'crypto_wallet_addresses')) {
+        return [];
+    }
+
+    $wallet = $db->select_user(
+        "SELECT id, address, network_code
+         FROM crypto_wallet_addresses
+         WHERE id = {$walletId}
+         LIMIT 1"
+    );
+    if (!is_array($wallet) || empty($wallet['id'])) {
+        return [];
+    }
+
+    $address = trim((string)($wallet['address'] ?? ''));
+    $networkCode = strtolower(trim((string)($wallet['network_code'] ?? '')));
+    if (!app_crypto_wallet_address_is_evm_format($address) || !app_crypto_wallet_network_is_evm($networkCode)) {
+        return [(int)$wallet['id']];
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT id
+         FROM crypto_wallet_addresses
+         WHERE address = '" . $db->escape($address) . "'
+           AND network_code IN ('ethereum', 'bnb', 'polygon', 'cronos')"
+    );
+
+    $ids = [];
+    foreach (is_array($rows) ? $rows : [] as $row) {
+        $ids[] = (int)($row['id'] ?? 0);
+    }
+
+    return $ids ?: [(int)$wallet['id']];
+}
+
+function app_crypto_asset_network_options(string $assetCode): array
+{
+    $assetCode = strtoupper(trim($assetCode));
+    $fixed = [
+        'ETH' => ['ethereum' => 'Ethereum'],
+        'BNB' => ['bnb' => 'BNB Smart Chain'],
+        'POL' => ['polygon' => 'Polygon'],
+        'MATIC' => ['polygon' => 'Polygon'],
+        'TRX' => ['tron' => 'TRON'],
+    ];
+
+    if (isset($fixed[$assetCode])) {
+        return $fixed[$assetCode];
+    }
+    if ($assetCode === 'USDT' || $assetCode === 'USDC') {
+        return [
+            'ethereum' => 'Ethereum (ERC20)',
+            'polygon' => 'Polygon',
+            'bnb' => 'BNB Smart Chain',
+            'tron' => 'Tron (TRC20)',
+            'solana' => 'Solana',
+        ];
+    }
+
+    return [];
+}
+
+function app_crypto_wallet_evm_companion_targets(string $sourceAssetCode, string $sourceNetworkCode): array
+{
+    $sourceAssetCode = strtoupper(trim($sourceAssetCode));
+    $sourceNetworkCode = strtolower(trim($sourceNetworkCode));
+    if (!app_crypto_wallet_network_is_evm($sourceNetworkCode)) {
+        return [];
+    }
+
+    $targets = [];
+    if (in_array($sourceAssetCode, ['ETH', 'BNB', 'POL', 'MATIC'], true)) {
+        $targets[] = ['asset_code' => 'USDT', 'network_code' => $sourceNetworkCode];
+    }
+    if ($sourceAssetCode === 'USDT') {
+        $targets[] = ['asset_code' => 'ETH', 'network_code' => 'ethereum'];
+
+        $nativeByNetwork = [
+            'ethereum' => 'ETH',
+            'bnb' => 'BNB',
+            'polygon' => 'POL',
+        ];
+        if (isset($nativeByNetwork[$sourceNetworkCode]) && $nativeByNetwork[$sourceNetworkCode] !== 'ETH') {
+            $targets[] = ['asset_code' => $nativeByNetwork[$sourceNetworkCode], 'network_code' => $sourceNetworkCode];
+        }
+    }
+
+    $deduped = [];
+    foreach ($targets as $target) {
+        $key = $target['asset_code'] . '|' . $target['network_code'];
+        $deduped[$key] = $target;
+    }
+
+    return array_values($deduped);
+}
+
+function app_active_customer_payment_crypto_asset_by_code($db, string $assetCode): ?array
+{
+    $assetCode = strtoupper(trim($assetCode));
+    if ($assetCode === '' || !app_crypto_asset_allows_customer_payments($assetCode) || !schema_object_exists($db, 'crypto_assets')) {
+        return null;
+    }
+
+    $asset = $db->select_user(
+        "SELECT id, code, name, is_active
+         FROM crypto_assets
+         WHERE UPPER(code) = '" . $db->escape($assetCode) . "'
+         LIMIT 1"
+    );
+    if (!is_array($asset) || (int)($asset['id'] ?? 0) <= 0 || empty($asset['is_active'])) {
+        return null;
+    }
+
+    return $asset;
+}
+
+function app_ensure_customer_evm_companion_wallets($db, int $customerId, array $settings = []): void
+{
+    if (
+        $customerId <= 0
+        || !schema_object_exists($db, 'crypto_wallet_addresses')
+        || !schema_object_exists($db, 'crypto_assets')
+    ) {
+        return;
+    }
+
+    app_ensure_crypto_wallet_address_reuse_indexes($db);
+
+    $assignmentJoin = schema_object_exists($db, 'crypto_wallet_assignments')
+        ? "LEFT JOIN crypto_wallet_assignments AS assignment
+              ON assignment.wallet_address_id = wallet.id
+             AND assignment.customer_id = {$customerId}
+             AND assignment.status IN ('reserved', 'active', 'released')"
+        : '';
+    $requestJoin = schema_object_exists($db, 'crypto_deposit_requests')
+        ? "LEFT JOIN crypto_deposit_requests AS request
+              ON request.customer_id = {$customerId}
+             AND request.status NOT IN ('pending', 'pending_payment', 'cancelled')
+             AND (
+                    request.wallet_address_id = wallet.id
+                 " . (schema_object_exists($db, 'crypto_wallet_assignments') ? 'OR request.wallet_assignment_id = assignment.id' : '') . "
+             )"
+        : '';
+    $ownershipCondition = [];
+    if ($assignmentJoin !== '') {
+        $ownershipCondition[] = 'assignment.id IS NOT NULL';
+    }
+    if ($requestJoin !== '') {
+        $ownershipCondition[] = 'request.id IS NOT NULL';
+    }
+    if (!$ownershipCondition) {
+        return;
+    }
+
+    $rows = $db->select_full_user(
+        "SELECT DISTINCT
+            wallet.id AS wallet_address_id,
+            wallet.crypto_asset_id,
+            wallet.label,
+            wallet.owner_full_name,
+            wallet.address,
+            wallet.network_code,
+            wallet.memo_tag,
+            wallet.wallet_provider,
+            wallet.is_reusable,
+            wallet.notes,
+            asset.code AS asset_code
+         FROM crypto_wallet_addresses AS wallet
+         INNER JOIN crypto_assets AS asset ON asset.id = wallet.crypto_asset_id
+         {$assignmentJoin}
+         {$requestJoin}
+         WHERE wallet.disabled_at IS NULL
+           AND wallet.status IN ('available', 'assigned')
+           AND wallet.address REGEXP '^0x[0-9A-Fa-f]{40}$'
+           AND wallet.network_code IN ('ethereum', 'bnb', 'polygon', 'cronos')
+           AND (" . implode(' OR ', $ownershipCondition) . ")
+         ORDER BY wallet.id ASC"
+    );
+
+    foreach (is_array($rows) ? $rows : [] as $sourceWallet) {
+        $sourceWalletId = (int)($sourceWallet['wallet_address_id'] ?? 0);
+        $sourceAddress = trim((string)($sourceWallet['address'] ?? ''));
+        $sourceNetwork = strtolower(trim((string)($sourceWallet['network_code'] ?? '')));
+        $sourceAssetCode = strtoupper(trim((string)($sourceWallet['asset_code'] ?? '')));
+        if (
+            $sourceWalletId <= 0
+            || !app_crypto_wallet_address_is_evm_format($sourceAddress)
+            || !app_crypto_wallet_network_is_evm($sourceNetwork)
+        ) {
+            continue;
+        }
+
+        if (
+            empty($settings['crypto_wallet_shared_assignments_enabled'])
+            && (
+                app_crypto_wallet_has_active_assignment_for_other_customer($db, $sourceWalletId, $customerId)
+                || app_crypto_wallet_has_open_request_for_other_customer($db, $sourceWalletId, $customerId)
+                || app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $sourceWalletId, $customerId)
+            )
+        ) {
+            continue;
+        }
+
+        foreach (app_crypto_wallet_evm_companion_targets($sourceAssetCode, $sourceNetwork) as $target) {
+            $targetAssetCode = strtoupper((string)($target['asset_code'] ?? ''));
+            $targetNetwork = strtolower((string)($target['network_code'] ?? ''));
+            $targetAsset = app_active_customer_payment_crypto_asset_by_code($db, $targetAssetCode);
+            $targetNetworkOptions = app_crypto_asset_network_options($targetAssetCode);
+            if (!is_array($targetAsset) || !isset($targetNetworkOptions[$targetNetwork])) {
+                continue;
+            }
+
+            $targetAssetId = (int)$targetAsset['id'];
+            $existing = $db->select_user(
+                "SELECT id
+                 FROM crypto_wallet_addresses
+                 WHERE crypto_asset_id = {$targetAssetId}
+                   AND network_code = '" . $db->escape($targetNetwork) . "'
+                   AND address = '" . $db->escape($sourceAddress) . "'
+                 LIMIT 1"
+            );
+            if (is_array($existing) && (int)($existing['id'] ?? 0) > 0) {
+                continue;
+            }
+
+            $db->insert(
+                ['crypto_asset_id', 'label', 'owner_full_name', 'address', 'network_code', 'memo_tag', 'wallet_provider', 'status', 'is_reusable', 'notes', 'created_by_admin_user_id'],
+                [
+                    $targetAssetId,
+                    trim((string)($sourceWallet['label'] ?? '')) !== '' ? (string)$sourceWallet['label'] : null,
+                    trim((string)($sourceWallet['owner_full_name'] ?? '')) !== '' ? (string)$sourceWallet['owner_full_name'] : null,
+                    $sourceAddress,
+                    $targetNetwork,
+                    trim((string)($sourceWallet['memo_tag'] ?? '')) !== '' ? (string)$sourceWallet['memo_tag'] : null,
+                    trim((string)($sourceWallet['wallet_provider'] ?? '')) !== '' ? (string)$sourceWallet['wallet_provider'] : null,
+                    'available',
+                    !empty($sourceWallet['is_reusable']) ? 1 : 0,
+                    trim((string)($sourceWallet['notes'] ?? '')) !== '' ? (string)$sourceWallet['notes'] : null,
+                    null,
+                ],
+                'crypto_wallet_addresses'
+            );
+        }
+    }
+
+    app_sync_crypto_wallet_address_statuses($db);
+}
+
 function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $customerId = 0, array $settings = []): ?array
 {
     if ($assetId <= 0 || !schema_object_exists($db, 'crypto_wallet_addresses')) {
         return null;
     }
 
-    app_release_stale_auto_crypto_wallet_assignments($db);
-    app_sync_crypto_wallet_address_statuses($db);
-    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
+    if (!$settings) {
+        $settings = app_fetch_settings($db);
+    }
 
-    $row = $db->select_user(
+    app_crypto_wallet_read_maintenance($db);
+    $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
+    $evmNetworksSql = "'ethereum', 'bnb', 'polygon', 'cronos'";
+
+    if (!$sharedEnabled && $customerId > 0) {
+        $preferredRow = $db->select_user(
+            "SELECT
+                candidate_wallet.id AS wallet_address_id,
+                candidate_wallet.crypto_asset_id,
+                candidate_wallet.label,
+                candidate_wallet.owner_full_name,
+                candidate_wallet.notes,
+                candidate_wallet.address,
+                candidate_wallet.network_code,
+                candidate_wallet.memo_tag,
+                candidate_wallet.wallet_provider,
+                crypto_assets.code AS crypto_asset_code,
+                crypto_assets.name AS crypto_asset_name
+             FROM crypto_wallet_addresses AS candidate_wallet
+             INNER JOIN crypto_assets ON crypto_assets.id = candidate_wallet.crypto_asset_id
+             WHERE candidate_wallet.crypto_asset_id = {$assetId}
+               AND candidate_wallet.disabled_at IS NULL
+               AND candidate_wallet.status IN ('available', 'assigned')
+               AND candidate_wallet.network_code IN ({$evmNetworksSql})
+               AND candidate_wallet.address REGEXP '^0x[0-9A-Fa-f]{40}$'
+               AND EXISTS (
+                    SELECT 1
+                    FROM crypto_wallet_addresses AS customer_wallet
+                    LEFT JOIN crypto_wallet_assignments AS customer_assignment
+                      ON customer_assignment.wallet_address_id = customer_wallet.id
+                     AND customer_assignment.customer_id = {$customerId}
+                     AND customer_assignment.status IN ('reserved', 'active', 'released')
+                    LEFT JOIN crypto_deposit_requests AS customer_request
+                      ON customer_request.customer_id = {$customerId}
+                     AND customer_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
+                     AND (
+                            customer_request.wallet_address_id = customer_wallet.id
+                         OR customer_request.wallet_assignment_id = customer_assignment.id
+                     )
+                    WHERE customer_wallet.address = candidate_wallet.address
+                      AND customer_wallet.network_code IN ({$evmNetworksSql})
+                      AND customer_wallet.address REGEXP '^0x[0-9A-Fa-f]{40}$'
+                      AND (
+                            customer_assignment.id IS NOT NULL
+                         OR customer_request.id IS NOT NULL
+                      )
+                    LIMIT 1
+               )
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM crypto_wallet_addresses AS group_wallet
+                    INNER JOIN crypto_wallet_assignments AS group_assignment
+                       ON group_assignment.wallet_address_id = group_wallet.id
+                    WHERE group_wallet.address = candidate_wallet.address
+                      AND group_wallet.network_code IN ({$evmNetworksSql})
+                      AND group_assignment.customer_id <> {$customerId}
+                      AND group_assignment.status IN ('reserved', 'active')
+                    LIMIT 1
+               )
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM crypto_deposit_requests AS group_request
+                    LEFT JOIN crypto_wallet_assignments AS group_payment_assignment
+                      ON group_payment_assignment.id = group_request.wallet_assignment_id
+                    LEFT JOIN crypto_wallet_addresses AS direct_wallet
+                      ON direct_wallet.id = group_request.wallet_address_id
+                    LEFT JOIN crypto_wallet_addresses AS assigned_wallet
+                      ON assigned_wallet.id = group_payment_assignment.wallet_address_id
+                    WHERE group_request.customer_id <> {$customerId}
+                      AND COALESCE(direct_wallet.address, assigned_wallet.address) = candidate_wallet.address
+                      AND COALESCE(direct_wallet.network_code, assigned_wallet.network_code) IN ({$evmNetworksSql})
+                      AND group_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+                    LIMIT 1
+               )
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM crypto_deposit_requests AS group_history
+                    LEFT JOIN crypto_wallet_assignments AS group_history_assignment
+                      ON group_history_assignment.id = group_history.wallet_assignment_id
+                    LEFT JOIN crypto_wallet_addresses AS direct_history_wallet
+                      ON direct_history_wallet.id = group_history.wallet_address_id
+                    LEFT JOIN crypto_wallet_addresses AS assigned_history_wallet
+                      ON assigned_history_wallet.id = group_history_assignment.wallet_address_id
+                    WHERE group_history.customer_id <> {$customerId}
+                      AND COALESCE(direct_history_wallet.address, assigned_history_wallet.address) = candidate_wallet.address
+                      AND COALESCE(direct_history_wallet.network_code, assigned_history_wallet.network_code) IN ({$evmNetworksSql})
+                      AND group_history.status NOT IN ('pending', 'pending_payment', 'cancelled')
+                    LIMIT 1
+               )
+             ORDER BY
+                CASE WHEN candidate_wallet.status = 'assigned' THEN 0 ELSE 1 END ASC,
+                candidate_wallet.last_assigned_at DESC,
+                candidate_wallet.id ASC
+             LIMIT 1"
+        );
+
+        if (
+            is_array($preferredRow)
+            && !empty($preferredRow['wallet_address_id'])
+            && app_crypto_wallet_can_be_offered_to_customer($db, (int)$preferredRow['wallet_address_id'], $customerId, $settings)
+        ) {
+            return $preferredRow;
+        }
+    }
+
+    $rows = $db->select_full_user(
         "SELECT
             crypto_wallet_addresses.id AS wallet_address_id,
             crypto_wallet_addresses.crypto_asset_id,
@@ -1818,13 +2372,37 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
            AND (" . ($sharedEnabled ? '1=1' : 'blocking_assignment.id IS NULL') . ")
            AND (" . ($sharedEnabled ? '1=1' : "NOT EXISTS (
                 SELECT 1
+                FROM crypto_wallet_addresses AS group_wallet
+                INNER JOIN crypto_wallet_assignments AS group_assignment
+                  ON group_assignment.wallet_address_id = group_wallet.id
+                WHERE crypto_wallet_addresses.address REGEXP '^0x[0-9A-Fa-f]{40}$'
+                  AND crypto_wallet_addresses.network_code IN ({$evmNetworksSql})
+                  AND group_wallet.address = crypto_wallet_addresses.address
+                  AND group_wallet.network_code IN ({$evmNetworksSql})
+                  " . ($customerId > 0 ? "AND group_assignment.customer_id <> {$customerId}" : '') . "
+                  AND group_assignment.status IN ('reserved', 'active')
+                LIMIT 1
+           )") . ")
+           AND (" . ($sharedEnabled ? '1=1' : "NOT EXISTS (
+                SELECT 1
                 FROM crypto_deposit_requests AS open_request
                 LEFT JOIN crypto_wallet_assignments AS open_assignment
                   ON open_assignment.id = open_request.wallet_assignment_id
+                LEFT JOIN crypto_wallet_addresses AS open_direct_wallet
+                  ON open_direct_wallet.id = open_request.wallet_address_id
+                LEFT JOIN crypto_wallet_addresses AS open_assigned_wallet
+                  ON open_assigned_wallet.id = open_assignment.wallet_address_id
                 WHERE (
                         open_request.wallet_address_id = crypto_wallet_addresses.id
                      OR open_assignment.wallet_address_id = crypto_wallet_addresses.id
+                     OR (
+                            crypto_wallet_addresses.address REGEXP '^0x[0-9A-Fa-f]{40}$'
+                        AND crypto_wallet_addresses.network_code IN ({$evmNetworksSql})
+                        AND COALESCE(open_direct_wallet.address, open_assigned_wallet.address) = crypto_wallet_addresses.address
+                        AND COALESCE(open_direct_wallet.network_code, open_assigned_wallet.network_code) IN ({$evmNetworksSql})
+                     )
                 )
+                  " . ($customerId > 0 ? "AND open_request.customer_id <> {$customerId}" : '') . "
                   AND open_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
                 LIMIT 1
            )") . ")
@@ -1833,10 +2411,21 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
                 FROM crypto_deposit_requests AS historical_request
                 LEFT JOIN crypto_wallet_assignments AS historical_assignment
                   ON historical_assignment.id = historical_request.wallet_assignment_id
+                LEFT JOIN crypto_wallet_addresses AS historical_direct_wallet
+                  ON historical_direct_wallet.id = historical_request.wallet_address_id
+                LEFT JOIN crypto_wallet_addresses AS historical_assigned_wallet
+                  ON historical_assigned_wallet.id = historical_assignment.wallet_address_id
                 WHERE (
                         historical_request.wallet_address_id = crypto_wallet_addresses.id
                      OR historical_assignment.wallet_address_id = crypto_wallet_addresses.id
+                     OR (
+                            crypto_wallet_addresses.address REGEXP '^0x[0-9A-Fa-f]{40}$'
+                        AND crypto_wallet_addresses.network_code IN ({$evmNetworksSql})
+                        AND COALESCE(historical_direct_wallet.address, historical_assigned_wallet.address) = crypto_wallet_addresses.address
+                        AND COALESCE(historical_direct_wallet.network_code, historical_assigned_wallet.network_code) IN ({$evmNetworksSql})
+                     )
                 )
+                  " . ($customerId > 0 ? "AND historical_request.customer_id <> {$customerId}" : '') . "
                   AND historical_request.status NOT IN ('pending', 'pending_payment', 'cancelled')
                 LIMIT 1
            )") . ")
@@ -1845,10 +2434,20 @@ function app_find_available_crypto_wallet_for_asset($db, int $assetId, int $cust
             crypto_wallet_addresses.is_reusable DESC,
             crypto_wallet_addresses.last_assigned_at ASC,
             crypto_wallet_addresses.id ASC
-         LIMIT 1"
+         LIMIT 25"
     );
 
-    return is_array($row) && !empty($row['wallet_address_id']) ? $row : null;
+    foreach (is_array($rows) ? $rows : [] as $row) {
+        if (
+            is_array($row)
+            && !empty($row['wallet_address_id'])
+            && app_crypto_wallet_can_be_offered_to_customer($db, (int)$row['wallet_address_id'], $customerId, $settings)
+        ) {
+            return $row;
+        }
+    }
+
+    return null;
 }
 
 function app_assign_customer_crypto_wallet(
@@ -1887,10 +2486,16 @@ function app_assign_customer_crypto_wallet(
     }
 
     if (!$sharedEnabled) {
+        $relatedWalletIdSql = app_sql_int_list(app_crypto_wallet_related_wallet_ids($db, $walletId));
+        if ($relatedWalletIdSql === '') {
+            $db->query('ROLLBACK');
+            return 0;
+        }
+
         $conflictingAssignment = $db->select_user(
             "SELECT id, customer_id
              FROM crypto_wallet_assignments
-             WHERE wallet_address_id = {$walletId}
+             WHERE wallet_address_id IN ({$relatedWalletIdSql})
                AND customer_id <> {$customerId}
                AND status IN ('reserved', 'active')
              ORDER BY id DESC
@@ -1909,8 +2514,8 @@ function app_assign_customer_crypto_wallet(
                ON payment_assignment.id = crypto_deposit_requests.wallet_assignment_id
              WHERE crypto_deposit_requests.customer_id <> {$customerId}
                AND (
-                    crypto_deposit_requests.wallet_address_id = {$walletId}
-                 OR payment_assignment.wallet_address_id = {$walletId}
+                    crypto_deposit_requests.wallet_address_id IN ({$relatedWalletIdSql})
+                 OR payment_assignment.wallet_address_id IN ({$relatedWalletIdSql})
                )
                AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
              ORDER BY crypto_deposit_requests.id DESC
@@ -2219,7 +2824,8 @@ function app_enforce_single_customer_crypto_wallet_per_asset(
              released_at = NULL,
              released_by_admin_user_id = NULL,
              assignment_note = CONCAT(COALESCE(assignment_note, ''), '\n{$safeNote}')
-         WHERE id = {$keepAssignmentId}"
+         WHERE id = {$keepAssignmentId}
+           AND (status <> 'active' OR released_at IS NOT NULL OR released_by_admin_user_id IS NOT NULL)"
     );
 
     $duplicateRows = $db->select_full_user(
@@ -2229,7 +2835,7 @@ function app_enforce_single_customer_crypto_wallet_per_asset(
            ON crypto_wallet_addresses.id = crypto_wallet_assignments.wallet_address_id
          WHERE crypto_wallet_assignments.customer_id = {$customerId}
            AND crypto_wallet_addresses.crypto_asset_id = {$assetId}
-           AND crypto_wallet_assignments.status IN ('reserved', 'active', 'released')
+           AND crypto_wallet_assignments.status IN ('reserved', 'active')
            AND crypto_wallet_assignments.id <> {$keepAssignmentId}"
     );
 
@@ -2462,6 +3068,18 @@ function app_order_has_generated_payment_request(Mysql_ks $db, int $orderId, int
 
 function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
 {
+    static $done = false;
+    if ($done) {
+        return;
+    }
+
+    $done = true;
+
+    if (schema_object_exists($db, 'crypto_deposit_requests') && !schema_column_exists($db, 'crypto_deposit_requests', 'blockchain_checked_at')) {
+        $db->query("ALTER TABLE crypto_deposit_requests ADD COLUMN blockchain_checked_at DATETIME DEFAULT NULL, ADD INDEX idx_crypto_scan_queue (status, blockchain_checked_at, requested_at, id)");
+        schema_forget_column_cache('crypto_deposit_requests', 'blockchain_checked_at');
+    }
+
     if (schema_object_exists($db, 'crypto_deposit_requests') && !schema_column_exists($db, 'crypto_deposit_requests', 'received_crypto_amount')) {
         $db->query(
             "ALTER TABLE crypto_deposit_requests
@@ -2479,6 +3097,10 @@ function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('crypto_deposit_requests', 'received_fiat_amount');
     }
+    if (schema_object_exists($db, 'crypto_deposit_requests') && !schema_column_exists($db, 'crypto_deposit_requests', 'received_fiat_actual_amount')) {
+        $db->query("ALTER TABLE crypto_deposit_requests ADD COLUMN received_fiat_actual_amount DECIMAL(10,2) DEFAULT NULL AFTER received_fiat_amount");
+        schema_forget_column_cache('crypto_deposit_requests', 'received_fiat_actual_amount');
+    }
 
     if (schema_object_exists($db, 'bank_transfer_requests') && !schema_column_exists($db, 'bank_transfer_requests', 'cancelled_at')) {
         $db->query(
@@ -2487,6 +3109,35 @@ function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
              AFTER rejected_at"
         );
         schema_forget_column_cache('bank_transfer_requests', 'cancelled_at');
+    }
+
+    if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $uniqueBankOpenLock = $db->select_user(
+            "SELECT NON_UNIQUE
+             FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'bank_transfer_requests'
+               AND INDEX_NAME = 'uniq_bank_transfer_requests_account_open_lock'
+             LIMIT 1"
+        );
+        if (is_array($uniqueBankOpenLock) && array_key_exists('NON_UNIQUE', $uniqueBankOpenLock)) {
+            $db->query("ALTER TABLE bank_transfer_requests DROP INDEX uniq_bank_transfer_requests_account_open_lock");
+        }
+
+        $bankOpenStatusIndex = $db->select_user(
+            "SELECT INDEX_NAME
+             FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'bank_transfer_requests'
+               AND INDEX_NAME = 'idx_bank_transfer_requests_account_open_status'
+             LIMIT 1"
+        );
+        if (!is_array($bankOpenStatusIndex) || empty($bankOpenStatusIndex['INDEX_NAME'])) {
+            $db->query(
+                "ALTER TABLE bank_transfer_requests
+                 ADD INDEX idx_bank_transfer_requests_account_open_status (bank_account_id, status, requested_at)"
+            );
+        }
     }
 }
 
@@ -2834,7 +3485,8 @@ function app_release_expired_crypto_wallet_holds($db, ?string $now = null): int
            AND crypto_wallet_assignments.assignment_reason IN ('topup_hold', 'order_payment_hold')
            AND crypto_wallet_assignments.assigned_at <= DATE_SUB('{$safeNowSql}', INTERVAL 1 HOUR)
            AND open_request.id IS NULL
-         ORDER BY crypto_wallet_assignments.id ASC"
+         ORDER BY crypto_wallet_assignments.id ASC
+         LIMIT 100"
     );
 
     $releasedTotal = 0;
@@ -3116,7 +3768,37 @@ function app_cancel_invalid_open_crypto_deposit_requests($db, string $whereSql, 
     );
 }
 
-function app_create_crypto_deposit_request($db, array $payload): int
+function app_create_crypto_deposit_request($db, array $payload, bool $joinTransaction = false): int
+{
+    $customerId = (int)($payload['customer_id'] ?? 0);
+    $walletId = (int)($payload['wallet_address_id'] ?? 0);
+    if ($customerId <= 0 || $walletId <= 0 || !schema_object_exists($db, 'crypto_deposit_requests')) return 0;
+    // Admin callers explicitly join their surrounding atomic request/message transaction.
+    $ownsTransaction = !$joinTransaction;
+    if ($ownsTransaction && !$db->query('START TRANSACTION')) return 0;
+    try {
+        $customer = $db->select_user("SELECT id FROM customers WHERE id = {$customerId} AND status = 'active' FOR UPDATE");
+        $wallet = $db->select_user("SELECT id FROM crypto_wallet_addresses WHERE id = {$walletId} AND disabled_at IS NULL AND status <> 'disabled' FOR UPDATE");
+        if (!$customer || !$wallet) return 0;
+        $now = $db->escape(date('Y-m-d H:i:s'));
+        // Current reads see requests committed while a parallel submit waited for the customer lock.
+        $open = $db->select_user("SELECT id FROM crypto_deposit_requests
+            WHERE (customer_id = {$customerId} OR wallet_address_id = {$walletId})
+              AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+              AND (expires_at IS NULL OR expires_at > '{$now}') LIMIT 1 FOR UPDATE");
+        if ($open) return 0;
+        $id = app_create_crypto_deposit_request_locked($db, $payload);
+        if ($id > 0 && $ownsTransaction) {
+            if (!$db->query('COMMIT')) return 0;
+            $ownsTransaction = false;
+        }
+        return $id;
+    } finally {
+        if ($ownsTransaction) $db->query('ROLLBACK');
+    }
+}
+
+function app_create_crypto_deposit_request_locked($db, array $payload): int
 {
     if (!schema_object_exists($db, 'crypto_deposit_requests')) {
         return 0;
@@ -3150,9 +3832,9 @@ function app_create_crypto_deposit_request($db, array $payload): int
         || (int)$values[2] <= 0
         || (int)$values[3] <= 0
         || (int)$values[6] <= 0
-        || (float)$values[5] <= 0
-        || (float)$values[7] <= 0
-        || (float)$values[8] <= 0
+        || !is_finite((float)$values[5]) || (float)$values[5] <= 0
+        || !is_finite((float)$values[7]) || (float)$values[7] <= 0
+        || !is_finite((float)$values[8]) || (float)$values[8] <= 0
     ) {
         return 0;
     }
@@ -3227,6 +3909,219 @@ function app_effective_currency_id(array $settings, ...$candidates): int
     return 0;
 }
 
+function app_ensure_bank_account_runtime_columns(Mysql_ks $db): void
+{
+    static $done = false;
+
+    if ($done || !schema_object_exists($db, 'bank_accounts')) {
+        return;
+    }
+
+    $done = true;
+
+    if (!schema_column_exists($db, 'bank_accounts', 'monthly_limit_amount')) {
+        @$db->query(
+            "ALTER TABLE bank_accounts
+             ADD COLUMN monthly_limit_amount DECIMAL(12,2) DEFAULT NULL
+             AFTER transfer_instructions"
+        );
+        schema_forget_column_cache('bank_accounts', 'monthly_limit_amount');
+    }
+}
+
+function app_bank_transfer_success_statuses(): array
+{
+    return ['confirmed', 'approved', 'paid', 'completed'];
+}
+
+function app_bank_transfer_success_status_sql(Mysql_ks $db): string
+{
+    return implode(', ', array_map(
+        static fn(string $status): string => "'" . $db->escape($status) . "'",
+        app_bank_transfer_success_statuses()
+    ));
+}
+
+function app_bank_account_current_month_bounds(): array
+{
+    return [
+        date('Y-m-01 00:00:00'),
+        date('Y-m-d H:i:s', strtotime('first day of next month 00:00:00')),
+    ];
+}
+
+function app_bank_account_current_year_bounds(): array
+{
+    return [
+        date('Y-01-01 00:00:00'),
+        date(((int)date('Y') + 1) . '-01-01 00:00:00'),
+    ];
+}
+
+function app_bank_account_usage_amount_sql(Mysql_ks $db, string $accountIdSql, string $startAt, string $endAt): string
+{
+    $statusSql = app_bank_transfer_success_status_sql($db);
+    $startSql = $db->escape($startAt);
+    $endSql = $db->escape($endAt);
+
+    return "(SELECT COALESCE(SUM(requested_amount), 0)
+             FROM bank_transfer_requests AS usage_request
+             WHERE usage_request.bank_account_id = {$accountIdSql}
+               AND usage_request.status IN ({$statusSql})
+               AND COALESCE(usage_request.approved_at, usage_request.submitted_at, usage_request.requested_at) >= '{$startSql}'
+               AND COALESCE(usage_request.approved_at, usage_request.submitted_at, usage_request.requested_at) < '{$endSql}')";
+}
+
+function app_bank_account_usage_count_sql(Mysql_ks $db, string $accountIdSql, string $startAt, string $endAt): string
+{
+    $statusSql = app_bank_transfer_success_status_sql($db);
+    $startSql = $db->escape($startAt);
+    $endSql = $db->escape($endAt);
+
+    return "(SELECT COUNT(*)
+             FROM bank_transfer_requests AS usage_request_count
+             WHERE usage_request_count.bank_account_id = {$accountIdSql}
+               AND usage_request_count.status IN ({$statusSql})
+               AND COALESCE(usage_request_count.approved_at, usage_request_count.submitted_at, usage_request_count.requested_at) >= '{$startSql}'
+               AND COALESCE(usage_request_count.approved_at, usage_request_count.submitted_at, usage_request_count.requested_at) < '{$endSql}')";
+}
+
+function app_bank_account_month_usage_amount(Mysql_ks $db, int $bankAccountId): float
+{
+    if ($bankAccountId <= 0 || !schema_object_exists($db, 'bank_transfer_requests')) {
+        return 0.0;
+    }
+
+    [$monthStart, $monthEnd] = app_bank_account_current_month_bounds();
+    $amountSql = app_bank_account_usage_amount_sql($db, (string)$bankAccountId, $monthStart, $monthEnd);
+    $row = $db->select_user("SELECT {$amountSql} AS amount_value");
+
+    return round((float)($row['amount_value'] ?? 0), 2);
+}
+
+function app_bank_account_monthly_limit_amount(array $accountRow): float
+{
+    $limit = isset($accountRow['monthly_limit_amount']) ? (float)$accountRow['monthly_limit_amount'] : 0.0;
+    return $limit > 0 ? round($limit, 2) : 0.0;
+}
+
+function app_bank_account_within_monthly_limit(Mysql_ks $db, array $accountRow): bool
+{
+    $limit = app_bank_account_monthly_limit_amount($accountRow);
+    if ($limit <= 0) {
+        return true;
+    }
+
+    $accountId = (int)($accountRow['bank_account_id'] ?? $accountRow['id'] ?? 0);
+    if ($accountId <= 0) {
+        return false;
+    }
+
+    return app_bank_account_month_usage_amount($db, $accountId) + 0.00001 < $limit;
+}
+
+function app_filter_bank_account_rows_by_monthly_limit(Mysql_ks $db, array $rows): array
+{
+    if (!$rows || !schema_object_exists($db, 'bank_accounts')) {
+        return $rows;
+    }
+
+    app_ensure_bank_account_runtime_columns($db);
+
+    return array_values(array_filter($rows, static function (array $row) use ($db): bool {
+        return app_bank_account_within_monthly_limit($db, $row);
+    }));
+}
+
+function app_available_bank_account_rows(Mysql_ks $db, string $currencyCode = '', array $settings = []): array
+{
+    if (!schema_object_exists($db, 'bank_accounts')) {
+        return [];
+    }
+
+    app_ensure_payment_request_runtime_columns($db);
+    app_ensure_bank_account_runtime_columns($db);
+
+    $sharedEnabled = !empty($settings['bank_account_shared_assignments_enabled']);
+    $currencyCode = strtoupper(trim($currencyCode));
+    $currencyFilter = $currencyCode !== ''
+        ? " AND currency.code = '" . $db->escape($currencyCode) . "'"
+        : '';
+
+    [$monthStart, $monthEnd] = app_bank_account_current_month_bounds();
+    [$yearStart, $yearEnd] = app_bank_account_current_year_bounds();
+    $hasRequests = schema_object_exists($db, 'bank_transfer_requests');
+    $monthAmountSql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'account.id', $monthStart, $monthEnd) : '0';
+    $monthCountSql = $hasRequests ? app_bank_account_usage_count_sql($db, 'account.id', $monthStart, $monthEnd) : '0';
+    $yearAmountSql = $hasRequests ? app_bank_account_usage_amount_sql($db, 'account.id', $yearStart, $yearEnd) : '0';
+    $limitWhere = " AND (COALESCE(account.monthly_limit_amount, 0) <= 0 OR {$monthAmountSql} < account.monthly_limit_amount)";
+
+    $baseSelect = "SELECT
+            account.id,
+            account.id AS bank_account_id,
+            currency.code AS currency_code,
+            currency.name AS currency_name,
+            account.label,
+            account.account_holder_name,
+            account.bank_name,
+            account.bank_address,
+            account.country_code,
+            account.iban,
+            account.account_number,
+            account.routing_number,
+            account.swift_bic,
+            account.payment_reference_template,
+            account.transfer_instructions,
+            account.monthly_limit_amount,
+            {$monthAmountSql} AS current_month_amount,
+            {$monthCountSql} AS current_month_count,
+            {$yearAmountSql} AS current_year_amount
+         FROM bank_accounts AS account
+         LEFT JOIN currencies AS currency
+           ON currency.id = account.currency_id";
+
+    $openRequestJoin = ($hasRequests && !$sharedEnabled)
+        ? "LEFT JOIN bank_transfer_requests AS open_request
+             ON open_request.bank_account_id = account.id
+            AND open_request.status IN ('pending_payment', 'awaiting_review')"
+        : "";
+    $openRequestWhere = ($hasRequests && !$sharedEnabled) ? " AND open_request.id IS NULL" : "";
+
+    if ($sharedEnabled) {
+        $query = "{$baseSelect}
+             WHERE account.disabled_at IS NULL
+               AND account.status IN ('available', 'assigned')
+               {$limitWhere}
+               {$currencyFilter}
+             ORDER BY current_month_count ASC, current_month_amount ASC, current_year_amount ASC, account.label ASC, account.bank_name ASC, account.id ASC";
+    } else {
+        $hasAssignments = schema_object_exists($db, 'bank_account_assignments');
+        $assignmentJoin = $hasAssignments
+            ? "LEFT JOIN bank_account_assignments AS assignment
+                 ON assignment.bank_account_id = account.id
+                AND assignment.status IN ('reserved', 'active')"
+            : "";
+        $assignmentWhere = $hasAssignments ? " AND assignment.id IS NULL" : "";
+        $query = "{$baseSelect}
+             {$assignmentJoin}
+             {$openRequestJoin}
+             WHERE account.disabled_at IS NULL
+               AND account.status = 'available'
+               {$assignmentWhere}
+               {$openRequestWhere}
+               {$limitWhere}
+               {$currencyFilter}
+             ORDER BY current_month_count ASC, current_month_amount ASC, current_year_amount ASC, account.label ASC, account.bank_name ASC, account.id ASC";
+    }
+
+    $rows = $db->select_full_user($query);
+    if ((is_array($rows) && $rows) || $currencyCode === '') {
+        return is_array($rows) ? $rows : [];
+    }
+
+    return app_available_bank_account_rows($db, '', $settings);
+}
+
 function app_load_customer_bank_accounts($db, int $customerId, string $currencyCode = '', array $settings = []): array
 {
     $currencyCode = strtoupper(trim($currencyCode));
@@ -3245,6 +4140,8 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
     ) {
         return [];
     }
+
+    app_ensure_bank_account_runtime_columns($db);
 
     if ($hasCustomerBankView) {
         $assignedBankAccounts = $db->select_full_user(
@@ -3265,6 +4162,12 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
                 swift_bic,
                 payment_reference_template,
                 transfer_instructions,
+                (
+                    SELECT bank_accounts.monthly_limit_amount
+                    FROM bank_accounts
+                    WHERE bank_accounts.id = customer_bank_accounts.bank_account_id
+                    LIMIT 1
+                ) AS monthly_limit_amount,
                 status,
                 assigned_at
              FROM customer_bank_accounts
@@ -3290,6 +4193,7 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
                 account.swift_bic,
                 account.payment_reference_template,
                 account.transfer_instructions,
+                account.monthly_limit_amount,
                 assignment.status,
                 assignment.assigned_at
              FROM bank_account_assignments AS assignment
@@ -3307,81 +4211,15 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
         $assignedBankAccounts = [];
     }
 
-    if ($assignedBankAccounts) {
+    if ($assignedBankAccounts && !$sharedEnabled) {
+        $assignedBankAccounts = app_filter_bank_account_rows_by_monthly_limit($db, $assignedBankAccounts);
+    }
+
+    if ($assignedBankAccounts && !$sharedEnabled) {
         return $assignedBankAccounts;
     }
 
-    $currencyFilter = $currencyCode !== ''
-        ? " AND currency.code = '" . $db->escape($currencyCode) . "'"
-        : '';
-
-    $baseQuery = $sharedEnabled
-        ? "SELECT
-                account.id AS bank_account_id,
-                currency.code AS currency_code,
-                account.label,
-                account.account_holder_name,
-                account.bank_name,
-                account.bank_address,
-                account.country_code,
-                account.iban,
-                account.account_number,
-                account.routing_number,
-                account.swift_bic,
-                account.payment_reference_template,
-                account.transfer_instructions
-             FROM bank_accounts AS account
-             LEFT JOIN currencies AS currency
-               ON currency.id = account.currency_id
-             LEFT JOIN bank_transfer_requests AS open_request
-               ON open_request.bank_account_id = account.id
-              AND open_request.status IN ('pending_payment', 'awaiting_review')
-             WHERE account.disabled_at IS NULL
-               AND account.status IN ('available', 'assigned')
-               AND open_request.id IS NULL"
-        : "SELECT
-                account.id AS bank_account_id,
-                currency.code AS currency_code,
-                account.label,
-                account.account_holder_name,
-                account.bank_name,
-                account.bank_address,
-                account.country_code,
-                account.iban,
-                account.account_number,
-                account.routing_number,
-                account.swift_bic,
-                account.payment_reference_template,
-                account.transfer_instructions
-             FROM bank_accounts AS account
-             LEFT JOIN currencies AS currency
-               ON currency.id = account.currency_id
-             LEFT JOIN bank_account_assignments AS assignment
-               ON assignment.bank_account_id = account.id
-              AND assignment.status IN ('reserved', 'active')
-             LEFT JOIN bank_transfer_requests AS open_request
-               ON open_request.bank_account_id = account.id
-              AND open_request.status IN ('pending_payment', 'awaiting_review')
-             WHERE account.disabled_at IS NULL
-               AND account.status = 'available'
-               AND assignment.id IS NULL
-               AND open_request.id IS NULL";
-
-    $availableAccounts = $db->select_full_user(
-        $baseQuery . $currencyFilter . "
-         ORDER BY account.label ASC, account.bank_name ASC, account.id ASC"
-    );
-
-    if ((!is_array($availableAccounts) || !$availableAccounts) && $currencyCode !== '') {
-        $availableAccounts = $db->select_full_user(
-            $baseQuery . "
-             ORDER BY account.label ASC, account.bank_name ASC, account.id ASC"
-        );
-    }
-
-    if (!is_array($availableAccounts)) {
-        $availableAccounts = [];
-    }
+    $availableAccounts = app_available_bank_account_rows($db, $currencyCode, $settings);
 
     $rows = [];
     foreach ($availableAccounts as $availableAccount) {
@@ -3410,6 +4248,41 @@ function app_load_customer_bank_accounts($db, int $customerId, string $currencyC
     return $rows;
 }
 
+/** Read-side recovery is shared and bounded; reservation always validates live DB ownership. */
+function app_crypto_wallet_read_maintenance($db, int $customerId = 0, array $settings = []): void
+{
+    static $scopes = [];
+    $dbKey = spl_object_id($db);
+    if (!isset($scopes[$dbKey])) {
+        $database = $db->select_user('SELECT DATABASE() AS db_name');
+        $scopes[$dbKey] = substr(hash('sha256', (string)($database['db_name'] ?? '')), 0, 16);
+    }
+    $scope = $scopes[$dbKey];
+    foreach ([0, $customerId] as $id) {
+        if ($id === 0 && isset($globalDone)) continue;
+        $globalDone = true;
+        $key = app_crypto_runtime_dir() . '/wallet-maintenance-' . $scope . '-' . $id;
+        $ttl = $id > 0 ? 300 : 60;
+        clearstatcache(true, $key . '.json');
+        $state = app_crypto_runtime_read($key . '.json');
+        if ((int)($state['checked_at'] ?? 0) > time() - $ttl) continue;
+        $lock = app_crypto_runtime_lock(app_crypto_runtime_dir() . '/wallet-maintenance-lock-' . $scope . '-' . substr(hash('sha256', (string)$id), 0, 2) . '.lock');
+        if (!$lock) continue;
+        if (!flock($lock, LOCK_EX | LOCK_NB)) { fclose($lock); continue; }
+        try {
+            $state = app_crypto_runtime_read($key . '.json');
+            if ((int)($state['checked_at'] ?? 0) > time() - $ttl) continue;
+            app_crypto_runtime_write($key . '.json', ['checked_at' => time()]);
+            if ($id > 0) {
+                app_ensure_customer_evm_companion_wallets($db, $id, $settings);
+            } else {
+                app_release_stale_auto_crypto_wallet_assignments($db);
+                app_sync_crypto_wallet_address_statuses($db);
+            }
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+}
+
 function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrency = 'USD', array $settings = []): array
 {
     $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
@@ -3421,27 +4294,7 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
         return [];
     }
 
-    app_release_stale_auto_crypto_wallet_assignments($db);
-    app_sync_crypto_wallet_address_statuses($db);
-    if (!$sharedEnabled) {
-        $activeAssetRows = $db->select_full_user(
-            "SELECT id
-             FROM crypto_assets
-             WHERE is_active = 1
-             ORDER BY id ASC"
-        );
-        foreach ((array)$activeAssetRows as $asset) {
-            $assetId = (int)($asset['id'] ?? 0);
-            if ($assetId > 0) {
-                app_enforce_single_customer_crypto_wallet_per_asset(
-                    $db,
-                    $customerId,
-                    $assetId,
-                    'Normalized single crypto wallet per customer asset before asset load'
-                );
-            }
-        }
-    }
+    app_crypto_wallet_read_maintenance($db, $customerId, $settings);
 
     if ($hasAssignmentsTable && $hasWalletsTable && $hasAssetsTable) {
         $assignedCryptoWallets = $db->select_full_user(
@@ -3471,10 +4324,12 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
                ON asset.id = wallet.crypto_asset_id
              WHERE assignment.customer_id = {$customerId}
                AND assignment.status = 'active'
+               AND asset.is_active = 1
+               AND UPPER(asset.code) NOT IN ('BNB', 'POL', 'USDC')
              ORDER BY assignment.assigned_at DESC"
         );
     } elseif ($hasCustomerWalletView) {
-        if ($hasWalletsTable) {
+        if ($hasWalletsTable && $hasAssetsTable) {
             $assignedCryptoWallets = $db->select_full_user(
                 "SELECT
                     customer_crypto_wallets.*,
@@ -3482,8 +4337,12 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
                  FROM customer_crypto_wallets
                  LEFT JOIN crypto_wallet_addresses
                    ON crypto_wallet_addresses.id = customer_crypto_wallets.wallet_address_id
+                 LEFT JOIN crypto_assets
+                   ON crypto_assets.id = crypto_wallet_addresses.crypto_asset_id
                  WHERE customer_crypto_wallets.customer_id = {$customerId}
                    AND customer_crypto_wallets.status = 'active'
+                   AND crypto_assets.is_active = 1
+                   AND UPPER(crypto_assets.code) NOT IN ('BNB', 'POL', 'USDC')
                  ORDER BY customer_crypto_wallets.assigned_at DESC"
             );
         } else {
@@ -3518,11 +4377,14 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
     // to the customer. This keeps the storefront selection in sync with any
     // free wallets that can still be reserved for other cryptocurrencies.
     $activeAssets = app_refresh_crypto_rates($db, $vsCurrency);
+    $activeAssets = array_values(array_filter($activeAssets, static function (array $asset): bool {
+        return app_crypto_asset_allows_customer_payments((string)($asset['code'] ?? ''));
+    }));
 
     $activeAssetsByCode = [];
     $activeAssetsById = [];
     foreach ($activeAssets as $asset) {
-        $assetCode = (string)($asset['code'] ?? '');
+        $assetCode = strtoupper(trim((string)($asset['code'] ?? '')));
         $assetId = (int)($asset['id'] ?? 0);
         $activeAssetsByCode[$assetCode] = $asset;
         if ($assetId > 0) {
@@ -3559,6 +4421,8 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
             $inferredNetworkCode = 'polygon';
         } elseif ($assetCode === 'XRP') {
             $inferredNetworkCode = 'ripple';
+        } elseif ($assetCode === 'TRX') {
+            $inferredNetworkCode = 'tron';
         } elseif ($assetCode === 'USDT' || $assetCode === 'USDC') {
             if (strpos($walletAddress, 'T') === 0) {
                 $inferredNetworkCode = 'tron';
@@ -3582,8 +4446,11 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
 
     $cryptoAssets = [];
     foreach ($assignedCryptoWallets as $assignedWallet) {
-        $assetCode = (string)($assignedWallet['crypto_asset_code'] ?? '');
+        $assetCode = strtoupper(trim((string)($assignedWallet['crypto_asset_code'] ?? '')));
         $assignedAssetId = (int)($assignedWallet['crypto_asset_id'] ?? 0);
+        if (!app_crypto_asset_allows_customer_payments($assetCode)) {
+            continue;
+        }
         $asset = $activeAssetsByCode[$assetCode] ?? ($assignedAssetId > 0 ? ($activeAssetsById[$assignedAssetId] ?? null) : null);
         if (!is_array($asset) && $assignedAssetId > 0) {
             $asset = $db->select_user(
@@ -3603,6 +4470,10 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
         if (!is_array($asset)) {
             continue;
         }
+        $assetCodeFromRow = strtoupper(trim((string)($asset['code'] ?? $assetCode)));
+        if (empty($asset['is_active']) || !app_crypto_asset_allows_customer_payments($assetCodeFromRow)) {
+            continue;
+        }
 
         $networkCode = (string)($assignedWallet['network_code'] ?? '');
         $cryptoAssets[] = [
@@ -3613,7 +4484,7 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
             'network_code' => $networkCode,
             'network_label' => app_crypto_network_label($networkCode),
             'logo_path' => app_crypto_logo_by_code($assetCode, (string)($asset['logo_url'] ?? '')),
-            'rate' => isset($asset['current_rate_fiat']) ? (float)$asset['current_rate_fiat'] : 0.0,
+            'rate' => app_crypto_rate_is_usable($asset, $vsCurrency) ? (float)$asset['current_rate_fiat'] : 0.0,
             'is_assigned' => true,
             'wallet_assignment_id' => (int)$assignedWallet['wallet_assignment_id'],
             'wallet_address_id' => (int)$assignedWallet['wallet_address_id'],
@@ -3661,7 +4532,7 @@ function app_load_customer_crypto_assets($db, int $customerId, string $vsCurrenc
             'network_code' => $networkCode,
             'network_label' => app_crypto_network_label($networkCode),
             'logo_path' => app_crypto_logo_by_code($assetCode, (string)($asset['logo_url'] ?? '')),
-            'rate' => isset($asset['current_rate_fiat']) ? (float)$asset['current_rate_fiat'] : 0.0,
+            'rate' => app_crypto_rate_is_usable($asset, $vsCurrency) ? (float)$asset['current_rate_fiat'] : 0.0,
             'is_assigned' => false,
             'wallet_assignment_id' => 0,
             'wallet_address_id' => $availableWalletId,
@@ -3946,7 +4817,17 @@ function app_wallet_location_from_owner_name(string $ownerFullName): string
 
     $polishLocations = [
         'Warszawa, Polska',
+        'Kraków, Polska',
+        'Wrocław, Polska',
+        'Gdańsk, Polska',
+        'Poznań, Polska',
+        'Łódź, Polska',
         'Katowice, Polska',
+        'Lublin, Polska',
+        'Szczecin, Polska',
+        'Rzeszów, Polska',
+        'Białystok, Polska',
+        'Toruń, Polska',
     ];
     $germanLocations = [
         'Berlin, Niemcy',
@@ -3958,17 +4839,23 @@ function app_wallet_location_from_owner_name(string $ownerFullName): string
         'Barcelona, Hiszpania',
     ];
 
-    $fullNameLower = strtolower($ownerFullName);
+    $fullNameLower = function_exists('mb_strtolower')
+        ? mb_strtolower($ownerFullName, 'UTF-8')
+        : strtolower($ownerFullName);
     $pool = $internationalLocations;
     if (
-        preg_match('/(ski|ska|wicz|icz|czak|sz|rz|kow|nowak|wozniak|lewand|zielinsk|ostrowsk|witkowsk)/u', $fullNameLower)
-        || preg_match('/\b(adam|adrian|jakub|jan|piotr|mateusz|marcin|lukasz|katarzyna|zuzanna|oliwia|nikodem)\b/u', $fullNameLower)
-    ) {
-        $pool = $polishLocations;
-    } elseif (
         preg_match('/\b(hans|brunner|wagner|fischer|schmidt|muller|bauer|kraus|otto|heinz)\b/u', $fullNameLower)
     ) {
         $pool = $germanLocations;
+    } elseif (
+        preg_match('/\b(bennett|foster|brooks|hayes|abbott|mercer|walker|carter|quinn|coleman|hudson|porter|reed|parker|turner|sullivan|morgan|collins|perry|simmons)\b/u', $fullNameLower)
+    ) {
+        $pool = $internationalLocations;
+    } elseif (
+        preg_match('/(ski|ska|cki|cka|dzki|dzka|wicz|icz|czak|kow|nowak|woźniak|wozniak|lewand|zielińsk|zielinsk|ostrowsk|witkowsk|krawczyk|kaczmarek|mazur|adamczyk|dudek|zając|zajac|król|krol|wróbel|wrobel|pawlak|walczak|stępień|stepien|michalak|sikora|baran|duda|szewczyk|pietrzak|marciniak|kubiak|lis|sobczak)/u', $fullNameLower)
+        || preg_match('/\b(adam|adrian|aleksander|antoni|bartosz|damian|daniel|dawid|dominik|filip|grzegorz|hubert|igor|jakub|jan|kacper|karol|krzysztof|łukasz|lukasz|maciej|marcin|mateusz|michał|michal|mikołaj|nikodem|paweł|pawel|patryk|piotr|przemysław|rafal|rafał|sebastian|szymon|tomasz|wiktor|wojciech|aleksandra|alicja|amelia|anna|barbara|beata|celina|daria|dominika|emilia|ewa|gabriela|hanna|iga|joanna|julia|karolina|katarzyna|klaudia|laura|lena|magdalena|maja|maria|marta|monika|natalia|nikola|oliwia|paulina|sandra|sylwia|wiktoria|zofia|zuzanna)\b/u', $fullNameLower)
+    ) {
+        $pool = $polishLocations;
     }
 
     if (!$pool) {
@@ -4068,7 +4955,7 @@ function app_build_crypto_payment_chat_card_message(array $input, string $locale
         'badges' => $localeCode === 'pl' ? ['Portfel innej osoby', 'TrustWallet'] : ['External wallet', 'TrustWallet'],
         'fields' => [],
         'note' => $localeCode === 'pl'
-            ? 'W przypadku płatności przez Revolut lub z giełdy kryptowalutowej należy podać imię i nazwisko osoby do której jest wykonywany przelew. Do wyliczonej przez nas kwoty pamiętaj aby dodać kwotę prowizji, wyliczona kwota płatności musi w całości trafić na adres naszego portfela.'
+            ? 'W przypadku płatności przez Revolut lub z giełdy kryptowalutowej należy podać imię i nazwisko osoby do której jest wykonywany przelew. Do wyliczonej przez nas kwoty pamiętaj aby dodać kwotę prowizji, wyliczona kwota płatności musi w całości trafić na adres naszego portfela. W przypadku dodatkowych pytań przy zakupie krypto, proszę wskazać ze zakup jest w celu inwestycyjnym - w końcu kazdy ma prawo kupować kryptowaluty.'
             : 'If you pay from Revolut or a crypto exchange, provide the recipient full name exactly as shown. Add exchange or wallet fees on top so the full token amount reaches our wallet.',
     ];
 
@@ -4105,6 +4992,14 @@ function app_build_crypto_payment_chat_card_message(array $input, string $locale
         'value' => $walletAddress !== '' ? $walletAddress : '-',
         'tone' => 'code',
     ];
+
+    if (trim((string)($input['network_code'] ?? '')) !== '') {
+        $payload['fields'][] = ['label' => $localeCode === 'pl' ? 'Sieć' : 'Network',
+            'value' => app_crypto_network_label((string)$input['network_code']), 'tone' => 'muted'];
+    }
+    if (trim((string)($input['memo_tag'] ?? '')) !== '') {
+        $payload['fields'][] = ['label' => 'Memo / Tag', 'value' => (string)$input['memo_tag'], 'tone' => 'code'];
+    }
 
     return app_chat_card_encode($payload);
 }
@@ -4381,10 +5276,10 @@ function app_order_progress_data(array $order): array
         ];
     }
 
+    $progressStartedAt = !empty($order['progress_started_at']) ? strtotime((string)$order['progress_started_at']) : 0;
     $createdAt = !empty($order['date_add']) ? strtotime((string)$order['date_add']) : (!empty($order['created_at']) ? strtotime((string)$order['created_at']) : 0);
     $startedAt = !empty($order['started_at']) ? strtotime((string)$order['started_at']) : (!empty($order['date_start']) ? strtotime((string)$order['date_start']) : 0);
     $expiresAt = !empty($order['date_end']) ? strtotime((string)$order['date_end']) : (!empty($order['expires_at']) ? strtotime((string)$order['expires_at']) : 0);
-    $durationHours = max(0, (int)($order['duration_hours'] ?? 0));
     $now = time();
 
     if ($expiresAt <= 0) {
@@ -4398,11 +5293,19 @@ function app_order_progress_data(array $order): array
         ];
     }
 
-    if ($durationHours > 0) {
-        $totalSeconds = max(1, $durationHours * 3600);
-    } else {
-        $anchorTime = $startedAt > 0 ? $startedAt : ($createdAt > 0 ? $createdAt : $now);
-        $totalSeconds = max(1, $expiresAt - $anchorTime);
+    $anchorTime = $progressStartedAt > 0
+        ? $progressStartedAt
+        : ($startedAt > 0 ? $startedAt : ($createdAt > 0 ? $createdAt : $now));
+    $totalSeconds = max(1, $expiresAt - $anchorTime);
+    $durationHours = (int)($order['progress_duration_hours'] ?? $order['duration_hours'] ?? $order['duration'] ?? 0);
+    if ($progressStartedAt > 0 && $durationHours > 0) {
+        $renewalPeriodEnd = app_subscription_expiry_from_base_timestamp($progressStartedAt, $durationHours);
+        $renewalPeriodEndAt = $renewalPeriodEnd !== null && $renewalPeriodEnd !== ''
+            ? strtotime($renewalPeriodEnd)
+            : 0;
+        if ($renewalPeriodEndAt > $progressStartedAt) {
+            $totalSeconds = $renewalPeriodEndAt - $progressStartedAt;
+        }
     }
     $remainingSeconds = max(0, $expiresAt - $now);
     $percent = (int)round(min(1, $remainingSeconds / $totalSeconds) * 100);
@@ -4533,6 +5436,8 @@ function app_find_customer_paid_pending_activation_order(
     return is_array($row) && !empty($row['id']) ? $row : null;
 }
 
+require_once __DIR__ . '/sales.php';
+
 function app_ensure_order_renewal_runtime_columns(Mysql_ks $db): void
 {
     static $done = false;
@@ -4596,6 +5501,11 @@ function app_ensure_order_renewal_runtime_columns(Mysql_ks $db): void
         );
         schema_forget_column_cache('order_renewals', 'renewal_note');
     }
+    $paymentIndex = $db->select_user("SHOW INDEX FROM order_renewals WHERE Key_name = 'idx_order_renewals_payment_request'");
+    if (!is_array($paymentIndex)) {
+        $db->query("CREATE INDEX idx_order_renewals_payment_request
+            ON order_renewals (payment_request_type, payment_request_id, status, id)");
+    }
 }
 
 function app_order_product_can_extend(array $product): bool
@@ -4613,6 +5523,75 @@ function app_order_product_can_extend(array $product): bool
     }
 
     return (int)($product['duration_hours'] ?? $product['duration'] ?? 0) > 24;
+}
+
+function app_subscription_duration_calendar_months(int $durationHours): int
+{
+    $durationHours = max(0, $durationHours);
+    if ($durationHours <= 24) {
+        return 0;
+    }
+
+    if ($durationHours % 8760 === 0) {
+        return (int)($durationHours / 8760) * 12;
+    }
+
+    if ($durationHours % 720 === 0) {
+        return (int)($durationHours / 720);
+    }
+
+    return 0;
+}
+
+function app_add_calendar_months_to_datetime(string $baseDateTime, int $months): ?string
+{
+    $months = max(0, $months);
+    if ($months <= 0) {
+        return null;
+    }
+
+    $timezone = new DateTimeZone(date_default_timezone_get());
+    $base = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $baseDateTime, $timezone);
+    if (!$base) {
+        $timestamp = strtotime($baseDateTime);
+        if ($timestamp === false || $timestamp <= 0) {
+            return null;
+        }
+        $base = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', date('Y-m-d H:i:s', $timestamp), $timezone);
+        if (!$base) {
+            return null;
+        }
+    }
+
+    $baseDay = (int)$base->format('j');
+    $targetMonth = $base
+        ->modify('first day of this month')
+        ->setTime(0, 0, 0)
+        ->modify('+' . $months . ' months');
+    if (!$targetMonth) {
+        return null;
+    }
+
+    $targetDay = min($baseDay, (int)$targetMonth->format('t'));
+    $target = $targetMonth
+        ->setDate((int)$targetMonth->format('Y'), (int)$targetMonth->format('n'), $targetDay)
+        ->setTime((int)$base->format('H'), (int)$base->format('i'), (int)$base->format('s'));
+
+    return $target->format('Y-m-d H:i:s');
+}
+
+function app_subscription_expiry_from_base_timestamp(int $baseTimestamp, int $durationHours): ?string
+{
+    if ($baseTimestamp <= 0 || $durationHours <= 0) {
+        return null;
+    }
+
+    $calendarMonths = app_subscription_duration_calendar_months($durationHours);
+    if ($calendarMonths > 0) {
+        return app_add_calendar_months_to_datetime(date('Y-m-d H:i:s', $baseTimestamp), $calendarMonths);
+    }
+
+    return date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
 }
 
 function app_order_can_self_extend(array $order): bool
@@ -4693,7 +5672,7 @@ function app_order_extension_target_expiry(array $order, array $product): ?strin
         return null;
     }
 
-    return date('Y-m-d H:i:s', $baseTimestamp + ($durationHours * 3600));
+    return app_subscription_expiry_from_base_timestamp($baseTimestamp, $durationHours);
 }
 
 function app_order_find_pending_renewal(
@@ -4941,6 +5920,10 @@ function app_apply_pending_order_renewal(
         return ['ok' => true, 'already_applied' => true, 'order_id' => (int)($renewal['order_id'] ?? 0)];
     }
 
+    if (!in_array((string)($renewal['status'] ?? ''), ['pending_payment', 'paid_pending_activation'], true)) {
+        return ['ok' => false, 'message' => 'Only a pending or paid renewal can be applied.'];
+    }
+
     $order = $db->select_user(
         "SELECT orders.*, products.provider_id, products.product_type, products.is_trial, products.duration_hours
          FROM orders
@@ -4950,6 +5933,25 @@ function app_apply_pending_order_renewal(
     );
     if (!is_array($order) || empty($order['id'])) {
         return ['ok' => false, 'message' => 'Order not found for this renewal.'];
+    }
+
+    if ((int)$renewal['customer_id'] !== (int)$order['customer_id']) {
+        return ['ok' => false, 'message' => 'Renewal and order must belong to the same customer.'];
+    }
+    if ((string)($order['status'] ?? '') === 'cancelled' || (string)($order['payment_status'] ?? '') === 'refunded') {
+        return ['ok' => false, 'message' => 'A cancelled or refunded order cannot be renewed.'];
+    }
+    if ($skipBalanceDebit && (string)$renewal['status'] !== 'paid_pending_activation') {
+        $debit = schema_object_exists($db, 'customer_balance_runtime_events')
+            ? $db->select_user("SELECT id FROM customer_balance_runtime_events
+                WHERE customer_id = " . (int)$renewal['customer_id'] . "
+                  AND source_type = 'order_extension' AND direction = 'debit'
+                  AND source_key IN ('renewal:{$renewalId}', 'renewal:balance:{$renewalId}')
+                  AND amount >= " . (float)$renewal['price_amount'] . " LIMIT 1")
+            : null;
+        if (empty($debit['id'])) {
+            return ['ok' => false, 'message' => 'Renewal payment or balance debit is required before activation.'];
+        }
     }
 
     $product = $db->select_user(
@@ -4974,6 +5976,8 @@ function app_apply_pending_order_renewal(
         return ['ok' => false, 'message' => 'Renewal expiry date is missing.'];
     }
 
+    app_preserve_initial_order_sale($db, (int)$order['id']);
+
     $renewalAmount = round((float)($renewal['price_amount'] ?? $product['price_amount'] ?? 0), 2);
     if ($renewalAmount <= 0) {
         return ['ok' => false, 'message' => 'Renewal amount is invalid.'];
@@ -4996,6 +6000,29 @@ function app_apply_pending_order_renewal(
             return $balanceDebitResult;
         }
     }
+
+    if (!$db->query('START TRANSACTION')) {
+        return ['ok' => false, 'message' => 'Unable to start renewal activation.'];
+    }
+    $lockedRenewal = $db->select_user("SELECT * FROM order_renewals WHERE id = {$renewalId} FOR UPDATE");
+    if ((string)($lockedRenewal['status'] ?? '') === 'applied') {
+        $db->query('COMMIT');
+        return ['ok' => true, 'already_applied' => true, 'order_id' => (int)$renewal['order_id']];
+    }
+    $lockedOrder = $db->select_user("SELECT * FROM orders WHERE id = " . (int)$renewal['order_id'] . " FOR UPDATE");
+    if (!is_array($lockedOrder) || !in_array((string)($lockedRenewal['status'] ?? ''), ['pending_payment', 'paid_pending_activation'], true)
+        || (string)$lockedOrder['status'] === 'cancelled' || (string)$lockedOrder['payment_status'] === 'refunded') {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Order or renewal changed before activation. Please refresh.'];
+    }
+    foreach (['product_id', 'price_amount', 'currency_id', 'target_expires_at'] as $field) {
+        if ((string)($lockedRenewal[$field] ?? '') !== (string)($renewal[$field] ?? '')) {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'Renewal package changed before activation. Please refresh.'];
+        }
+    }
+    $order = array_replace($order, $lockedOrder);
+    $renewal = $lockedRenewal;
 
     $currentFulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
     $nextFulfillmentStatus = in_array($currentFulfillmentStatus, ['delivered', 'fulfilled', 'completed'], true)
@@ -5021,15 +6048,21 @@ function app_apply_pending_order_renewal(
         (int)$order['id']
     );
     if (!$updated) {
+        $db->query('ROLLBACK');
         return ['ok' => false, 'message' => 'Unable to apply renewal to the order.'];
     }
 
-    $db->update_using_id(
-        ['status', 'applied_at'],
-        ['applied', date('Y-m-d H:i:s')],
+    $renewalUpdated = $db->update_using_id(
+        ['status', 'applied_at', 'paid_at'],
+        ['applied', date('Y-m-d H:i:s'), app_order_renewal_sale_paid_at($db, $renewal)],
         'order_renewals',
         $renewalId
     );
+
+    if (!$renewalUpdated || !$db->query('COMMIT')) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to record renewal activation.'];
+    }
 
     if (schema_object_exists($db, 'order_status_events')) {
         $db->insert(
@@ -5090,6 +6123,7 @@ function app_load_order_renewal_history_map(Mysql_ks $db, array $orderIds, int $
             id,
             order_id,
             status,
+            duration_hours,
             requested_at,
             applied_at,
             target_expires_at
@@ -5116,6 +6150,7 @@ function app_load_order_renewal_history_map(Mysql_ks $db, array $orderIds, int $
         $history[$orderId][] = [
             'id' => (int)($row['id'] ?? 0),
             'date' => $timestamp,
+            'duration_hours' => (int)($row['duration_hours'] ?? 0),
             'target_expires_at' => (string)($row['target_expires_at'] ?? ''),
         ];
     }
@@ -5288,11 +6323,71 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'payment_test_mode_notice_enabled');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'bank_transfers_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN bank_transfers_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER crypto_payments_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'bank_transfers_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'crypto_wallet_shared_assignments_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_wallet_shared_assignments_enabled TINYINT(1) NOT NULL DEFAULT 0
+             AFTER bank_transfers_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_wallet_shared_assignments_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'bank_account_shared_assignments_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN bank_account_shared_assignments_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER crypto_wallet_shared_assignments_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'bank_account_shared_assignments_enabled');
+    }
+
+    @$db->query(
+        "UPDATE app_settings
+         SET bank_account_shared_assignments_enabled = COALESCE(bank_account_shared_assignments_enabled, 1)
+         WHERE id = 1"
+    );
+
+    if (!schema_column_exists($db, 'app_settings', 'crypto_auto_accept_enabled')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_auto_accept_enabled TINYINT(1) NOT NULL DEFAULT 1
+             AFTER payment_test_mode_notice_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_auto_accept_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'crypto_auto_accept_window_minutes')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_auto_accept_window_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 60
+             AFTER crypto_auto_accept_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_auto_accept_window_minutes');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'crypto_auto_accept_min_amount_percent')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN crypto_auto_accept_min_amount_percent TINYINT UNSIGNED NOT NULL DEFAULT 80
+             AFTER crypto_auto_accept_window_minutes"
+        );
+        schema_forget_column_cache('app_settings', 'crypto_auto_accept_min_amount_percent');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'crypto_daily_backup_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN crypto_daily_backup_enabled TINYINT(1) NOT NULL DEFAULT 0
-             AFTER payment_test_mode_notice_enabled"
+             AFTER crypto_auto_accept_min_amount_percent"
         );
         schema_forget_column_cache('app_settings', 'crypto_daily_backup_enabled');
     }
@@ -5322,6 +6417,24 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
              AFTER crypto_daily_backup_last_processed_date"
         );
         schema_forget_column_cache('app_settings', 'manual_database_backup_last_downloaded_at');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'admin_panel_subscription_paid_until')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN admin_panel_subscription_paid_until DATE DEFAULT NULL
+             AFTER manual_database_backup_last_downloaded_at"
+        );
+        schema_forget_column_cache('app_settings', 'admin_panel_subscription_paid_until');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'admin_panel_subscription_renewal_url')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN admin_panel_subscription_renewal_url VARCHAR(500) DEFAULT NULL
+             AFTER admin_panel_subscription_paid_until"
+        );
+        schema_forget_column_cache('app_settings', 'admin_panel_subscription_renewal_url');
     }
 
     if (!schema_column_exists($db, 'app_settings', 'history_cleanup_enabled')) {
@@ -5522,22 +6635,76 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'swap_converter_allowed_chains');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'swap_converter_default_from_asset')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN swap_converter_default_from_asset VARCHAR(40) DEFAULT 'bsc:native'
+             AFTER swap_converter_allowed_chains"
+        );
+        schema_forget_column_cache('app_settings', 'swap_converter_default_from_asset');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'swap_converter_default_to_asset')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN swap_converter_default_to_asset VARCHAR(40) DEFAULT 'bsc:usdt'
+             AFTER swap_converter_default_from_asset"
+        );
+        schema_forget_column_cache('app_settings', 'swap_converter_default_to_asset');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'hinkal_private_send_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN hinkal_private_send_enabled TINYINT(1) NOT NULL DEFAULT 1
-             AFTER swap_converter_allowed_chains"
+             AFTER swap_converter_default_to_asset"
         );
         schema_forget_column_cache('app_settings', 'hinkal_private_send_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'hinkal_private_send_input_asset')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN hinkal_private_send_input_asset VARCHAR(12) NOT NULL DEFAULT 'POL'
+             AFTER hinkal_private_send_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'hinkal_private_send_input_asset');
     }
 
     if (!schema_column_exists($db, 'app_settings', 'hinkal_private_send_fee_wallet')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN hinkal_private_send_fee_wallet VARCHAR(64) DEFAULT NULL
-             AFTER hinkal_private_send_enabled"
+             AFTER hinkal_private_send_input_asset"
         );
         schema_forget_column_cache('app_settings', 'hinkal_private_send_fee_wallet');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'hinkal_private_send_fee_percent')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN hinkal_private_send_fee_percent DECIMAL(5,2) NOT NULL DEFAULT 1.00
+             AFTER hinkal_private_send_fee_wallet"
+        );
+        schema_forget_column_cache('app_settings', 'hinkal_private_send_fee_percent');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'hinkal_private_send_show_fee_details')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN hinkal_private_send_show_fee_details TINYINT(1) NOT NULL DEFAULT 1
+             AFTER hinkal_private_send_fee_percent"
+        );
+        schema_forget_column_cache('app_settings', 'hinkal_private_send_show_fee_details');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'hinkal_private_send_notification_email')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN hinkal_private_send_notification_email VARCHAR(191) DEFAULT NULL
+             AFTER hinkal_private_send_show_fee_details"
+        );
+        schema_forget_column_cache('app_settings', 'hinkal_private_send_notification_email');
     }
 
     if (!schema_column_exists($db, 'app_settings', 'rango_converter_enabled')) {
@@ -5630,11 +6797,29 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'mixer_allowed_output_assets');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'mixer_default_input_asset')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_default_input_asset VARCHAR(20) DEFAULT 'BTC'
+             AFTER mixer_allowed_output_assets"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_default_input_asset');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'mixer_default_output_asset')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_default_output_asset VARCHAR(40) DEFAULT 'POLYGON_POL'
+             AFTER mixer_default_input_asset"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_default_output_asset');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'mixer_allowed_networks')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN mixer_allowed_networks VARCHAR(120) DEFAULT 'polygon'
-             AFTER mixer_allowed_output_assets"
+             AFTER mixer_default_output_asset"
         );
         schema_forget_column_cache('app_settings', 'mixer_allowed_networks');
     }
@@ -5657,6 +6842,15 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'mixer_max_payout_usd');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'mixer_min_order_usd')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_min_order_usd DECIMAL(12,2) NOT NULL DEFAULT 10.00
+             AFTER mixer_fee_percent"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_min_order_usd');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'mixer_daily_payout_limit_usd')) {
         @$db->query(
             "ALTER TABLE app_settings
@@ -5673,6 +6867,15 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
              AFTER mixer_daily_payout_limit_usd"
         );
         schema_forget_column_cache('app_settings', 'mixer_show_pool_liquidity');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'mixer_show_fee_breakdown')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_show_fee_breakdown TINYINT(1) NOT NULL DEFAULT 1
+             AFTER mixer_show_pool_liquidity"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_show_fee_breakdown');
     }
 
     if (!schema_column_exists($db, 'app_settings', 'mixer_btc_confirmations_required')) {
@@ -5693,11 +6896,20 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'mixer_doge_confirmations_required');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'mixer_sol_confirmations_required')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_sol_confirmations_required SMALLINT UNSIGNED NOT NULL DEFAULT 1
+             AFTER mixer_doge_confirmations_required"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_sol_confirmations_required');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'mixer_quote_lifetime_minutes')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN mixer_quote_lifetime_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 15
-             AFTER mixer_doge_confirmations_required"
+             AFTER mixer_sol_confirmations_required"
         );
         schema_forget_column_cache('app_settings', 'mixer_quote_lifetime_minutes');
     }
@@ -5729,11 +6941,20 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'mixer_doge_deposit_address');
     }
 
+    if (!schema_column_exists($db, 'app_settings', 'mixer_sol_deposit_address')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_sol_deposit_address VARCHAR(128) DEFAULT NULL
+             AFTER mixer_doge_deposit_address"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_sol_deposit_address');
+    }
+
     if (!schema_column_exists($db, 'app_settings', 'mixer_polygon_network_mode')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN mixer_polygon_network_mode VARCHAR(20) NOT NULL DEFAULT 'mainnet'
-             AFTER mixer_doge_deposit_address"
+             AFTER mixer_sol_deposit_address"
         );
         schema_forget_column_cache('app_settings', 'mixer_polygon_network_mode');
     }
@@ -5835,6 +7056,24 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
              AFTER mixer_notification_email"
         );
         schema_forget_column_cache('app_settings', 'mixer_auto_payout_enabled');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'mixer_payout_secret_storage_mode')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_payout_secret_storage_mode VARCHAR(32) NOT NULL DEFAULT 'file'
+             AFTER mixer_auto_payout_enabled"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_payout_secret_storage_mode');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'mixer_payout_signer_private_key_encrypted')) {
+        @$db->query(
+            "ALTER TABLE app_settings
+             ADD COLUMN mixer_payout_signer_private_key_encrypted TEXT DEFAULT NULL
+             AFTER mixer_payout_secret_storage_mode"
+        );
+        schema_forget_column_cache('app_settings', 'mixer_payout_signer_private_key_encrypted');
     }
 }
 
@@ -6498,6 +7737,32 @@ function app_customer_order_catalog_mode(array $customer, array $settings = []):
     return $types[0] ?? 'subscription';
 }
 
+function app_panel_subscription_is_expired(array $settings): bool
+{
+    $paidUntil = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
+    if ($paidUntil === '') {
+        return false;
+    }
+
+    $paidUntilTimestamp = strtotime($paidUntil . ' 23:59:59');
+    return $paidUntilTimestamp !== false && $paidUntilTimestamp < time();
+}
+
+function app_enforce_panel_subscription_maintenance(Mysql_ks $db, array $settings): array
+{
+    if (!app_panel_subscription_is_expired($settings) || !empty($settings['maintenance_mode'])) {
+        return $settings;
+    }
+
+    if (schema_object_exists($db, 'app_settings') && schema_column_exists($db, 'app_settings', 'maintenance_mode')) {
+        @$db->update_using_id(['maintenance_mode'], [1], 'app_settings', 1);
+        $settings['maintenance_mode'] = 1;
+        $settings['technical_break'] = 1;
+    }
+
+    return $settings;
+}
+
 function app_fetch_settings(Mysql_ks $db): array
 {
     if (!app_uses_v2_schema($db)) {
@@ -6555,10 +7820,16 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['application_instructions_enabled'] = (int)($settings['application_instructions_enabled'] ?? 1);
     $settings['page_guidance_enabled'] = (int)($settings['page_guidance_enabled'] ?? 1);
     $settings['payment_test_mode_notice_enabled'] = (int)($settings['payment_test_mode_notice_enabled'] ?? 0);
+    $settings['crypto_auto_accept_enabled'] = (int)($settings['crypto_auto_accept_enabled'] ?? 1);
+    $settings['crypto_auto_accept_window_minutes'] = max(5, min(240, (int)($settings['crypto_auto_accept_window_minutes'] ?? 60)));
+    $settings['crypto_auto_accept_min_amount_percent'] = max(50, min(100, (int)($settings['crypto_auto_accept_min_amount_percent'] ?? 80)));
     $settings['crypto_daily_backup_enabled'] = (int)($settings['crypto_daily_backup_enabled'] ?? 0);
     $settings['crypto_daily_backup_email'] = trim((string)($settings['crypto_daily_backup_email'] ?? ''));
     $settings['crypto_daily_backup_last_processed_date'] = trim((string)($settings['crypto_daily_backup_last_processed_date'] ?? ''));
     $settings['manual_database_backup_last_downloaded_at'] = trim((string)($settings['manual_database_backup_last_downloaded_at'] ?? ''));
+    $settings['admin_panel_subscription_paid_until'] = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
+    $settings['admin_panel_subscription_renewal_url'] = trim((string)($settings['admin_panel_subscription_renewal_url'] ?? ''));
+    $settings = app_enforce_panel_subscription_maintenance($db, $settings);
     $settings['history_cleanup_enabled'] = (int)($settings['history_cleanup_enabled'] ?? 0);
     $settings['payments_cleanup_enabled'] = (int)($settings['payments_cleanup_enabled'] ?? 0);
     $settings['expired_orders_cleanup_enabled'] = (int)($settings['expired_orders_cleanup_enabled'] ?? 0);
@@ -6568,21 +7839,32 @@ function app_fetch_settings(Mysql_ks $db): array
     $settings['swap_converter_api_key'] = trim((string)($settings['swap_converter_api_key'] ?? ''));
     $settings['swap_converter_allowed_chains'] = trim((string)($settings['swap_converter_allowed_chains'] ?? ''));
     $settings['hinkal_private_send_enabled'] = (int)($settings['hinkal_private_send_enabled'] ?? 1);
+    $hinkalPrivateSendInputAsset = strtoupper(trim((string)($settings['hinkal_private_send_input_asset'] ?? 'POL')));
+    $settings['hinkal_private_send_input_asset'] = in_array($hinkalPrivateSendInputAsset, ['POL', 'USDT'], true)
+        ? $hinkalPrivateSendInputAsset
+        : 'POL';
     $settings['hinkal_private_send_fee_wallet'] = trim((string)($settings['hinkal_private_send_fee_wallet'] ?? ''));
+    $settings['hinkal_private_send_fee_percent'] = max(0.0, min(10.0, round((float)($settings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
+    $settings['hinkal_private_send_show_fee_details'] = (int)($settings['hinkal_private_send_show_fee_details'] ?? 1);
+    $settings['hinkal_private_send_notification_email'] = strtolower(trim((string)($settings['hinkal_private_send_notification_email'] ?? '')));
     $settings['mixer_enabled'] = (int)($settings['mixer_enabled'] ?? 0);
     $settings['mixer_allowed_input_assets'] = trim((string)($settings['mixer_allowed_input_assets'] ?? 'BTC,DOGE'));
     $settings['mixer_allowed_output_assets'] = trim((string)($settings['mixer_allowed_output_assets'] ?? 'POLYGON_POL'));
     $settings['mixer_allowed_networks'] = trim((string)($settings['mixer_allowed_networks'] ?? 'polygon'));
     $settings['mixer_fee_percent'] = round((float)($settings['mixer_fee_percent'] ?? 1.50), 2);
+    $settings['mixer_min_order_usd'] = round((float)($settings['mixer_min_order_usd'] ?? 10.00), 2);
     $settings['mixer_max_payout_usd'] = round((float)($settings['mixer_max_payout_usd'] ?? 500.00), 2);
     $settings['mixer_daily_payout_limit_usd'] = round((float)($settings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
     $settings['mixer_show_pool_liquidity'] = (int)($settings['mixer_show_pool_liquidity'] ?? 1);
+    $settings['mixer_show_fee_breakdown'] = (int)($settings['mixer_show_fee_breakdown'] ?? 1);
     $settings['mixer_btc_confirmations_required'] = (int)($settings['mixer_btc_confirmations_required'] ?? 3);
     $settings['mixer_doge_confirmations_required'] = (int)($settings['mixer_doge_confirmations_required'] ?? 20);
+    $settings['mixer_sol_confirmations_required'] = (int)($settings['mixer_sol_confirmations_required'] ?? 1);
     $settings['mixer_quote_lifetime_minutes'] = (int)($settings['mixer_quote_lifetime_minutes'] ?? 15);
     $settings['mixer_detection_provider'] = trim((string)($settings['mixer_detection_provider'] ?? 'esplora'));
     $settings['mixer_btc_deposit_address'] = trim((string)($settings['mixer_btc_deposit_address'] ?? ''));
     $settings['mixer_doge_deposit_address'] = trim((string)($settings['mixer_doge_deposit_address'] ?? ''));
+    $settings['mixer_sol_deposit_address'] = trim((string)($settings['mixer_sol_deposit_address'] ?? ''));
     $settings['mixer_polygon_network_mode'] = function_exists('admin_mixer_normalize_network_mode')
         ? admin_mixer_normalize_network_mode($settings['mixer_polygon_network_mode'] ?? 'mainnet')
         : (strtolower(trim((string)($settings['mixer_polygon_network_mode'] ?? 'mainnet'))) === 'testnet' ? 'testnet' : 'mainnet');
@@ -6611,6 +7893,10 @@ function app_fetch_settings(Mysql_ks $db): array
     }
     $settings['mixer_notification_email'] = trim((string)($settings['mixer_notification_email'] ?? ''));
     $settings['mixer_auto_payout_enabled'] = (int)($settings['mixer_auto_payout_enabled'] ?? 0);
+    $settings['mixer_payout_secret_storage_mode'] = function_exists('admin_mixer_secret_storage_mode')
+        ? admin_mixer_secret_storage_mode($settings['mixer_payout_secret_storage_mode'] ?? 'file')
+        : (in_array(strtolower(trim((string)($settings['mixer_payout_secret_storage_mode'] ?? 'file'))), ['database_encrypted', 'db_encrypted'], true) ? 'database_encrypted' : 'file');
+    $settings['mixer_payout_signer_private_key_encrypted'] = trim((string)($settings['mixer_payout_signer_private_key_encrypted'] ?? ''));
     if ($settings['swap_converter_fee_percent'] < 0) {
         $settings['swap_converter_fee_percent'] = 0.0;
     } elseif ($settings['swap_converter_fee_percent'] > 10) {
@@ -6621,6 +7907,11 @@ function app_fetch_settings(Mysql_ks $db): array
     } elseif ($settings['mixer_fee_percent'] > 5) {
         $settings['mixer_fee_percent'] = 5.0;
     }
+    if ($settings['mixer_min_order_usd'] < 0.01) {
+        $settings['mixer_min_order_usd'] = 0.01;
+    } elseif ($settings['mixer_min_order_usd'] > 1000.00) {
+        $settings['mixer_min_order_usd'] = 1000.00;
+    }
     if ($settings['mixer_max_payout_usd'] <= 0) {
         $settings['mixer_max_payout_usd'] = 500.00;
     }
@@ -6629,7 +7920,8 @@ function app_fetch_settings(Mysql_ks $db): array
     }
     $settings['active_referrals'] = (int)($settings['referrals_enabled'] ?? 1);
     $settings['crypto_payments_enabled'] = (int)($settings['crypto_payments_enabled'] ?? 0);
-    $settings['bank_transfers_enabled'] = (int)($settings['bank_transfers_enabled'] ?? 0);
+    $settings['bank_transfers_enabled'] = (int)($settings['bank_transfers_enabled'] ?? 1);
+    $settings['bank_account_shared_assignments_enabled'] = (int)($settings['bank_account_shared_assignments_enabled'] ?? 1);
     $settings['reseller_group_chat_limit'] = (int)($settings['reseller_group_chat_limit'] ?? 10);
     if ($settings['reseller_group_chat_limit'] < 0) {
         $settings['reseller_group_chat_limit'] = 0;
@@ -6932,7 +8224,7 @@ function app_email_builtin_templates(): array
 
 function app_supported_email_locales(): array
 {
-    return ['en', 'pl'];
+    return ['en', 'pl', 'de'];
 }
 
 function app_normalize_email_locale(?string $localeCode): string
@@ -7186,6 +8478,18 @@ function app_secrets_root_path(): string
     $appSlug = basename(dirname($backendRoot));
     if ($homeDir !== '' && $appSlug !== '' && $appSlug !== '.' && $appSlug !== '..') {
         $candidates[] = rtrim($homeDir, '/') . '/.subme-secrets/' . $appSlug;
+    }
+
+    $appRoot = dirname($backendRoot);
+    $managedAppsRoot = dirname($appRoot);
+    if (
+        $appSlug !== ''
+        && $appSlug !== '.'
+        && $appSlug !== '..'
+        && basename($managedAppsRoot) === '.subme-apps'
+    ) {
+        $accountHome = dirname($managedAppsRoot);
+        $candidates[] = rtrim($accountHome, '/') . '/.subme-secrets/' . $appSlug;
     }
 
     foreach ($candidates as $candidate) {
@@ -7442,7 +8746,8 @@ function app_email_send_with_attachment(
     string $htmlBody,
     string $attachmentBody,
     string $attachmentFilename,
-    string $attachmentMime = 'text/csv; charset=UTF-8'
+    string $attachmentMime = 'text/csv; charset=UTF-8',
+    ?string $localeCode = null
 ): array {
     $recipientEmail = strtolower(trim($recipientEmail));
     $subject = trim($subject);
@@ -7468,13 +8773,17 @@ function app_email_send_with_attachment(
         $mail->addAddress($recipientEmail);
         $mail->Subject = $subject;
         $mail->Body = $htmlBody !== ''
-            ? app_email_wrap_html($settings, $htmlBody, (string)($settings['default_locale_code'] ?? 'en'))
+            ? app_email_wrap_html($settings, $htmlBody, $localeCode ?: (string)($settings['default_locale_code'] ?? 'en'))
             : nl2br(app_email_plain_text($subject));
         $mail->AltBody = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $mail->Body)));
         $mail->addStringAttachment($attachmentBody, $attachmentFilename, 'base64', $attachmentMime);
         $mail->send();
 
-        return ['ok' => true, 'message' => 'Attachment email sent.'];
+        return [
+            'ok' => true,
+            'message' => 'Attachment email sent.',
+            'message_id' => trim((string)$mail->getLastMessageID()),
+        ];
     } catch (Throwable $exception) {
         return ['ok' => false, 'message' => $exception->getMessage()];
     }
@@ -10332,21 +11641,72 @@ function app_delete_stale_unpaid_orders(Mysql_ks $db, ?string $now = null): arra
     $safeNowSql = $db->escape($safeNow);
     $extraWhere = '';
     if (schema_object_exists($db, 'crypto_deposit_requests')) {
+        $cryptoEvidenceConditions = [
+            "crypto_deposit_requests.status IN ('awaiting_confirmation', 'awaiting_review', 'approved', 'confirmed', 'paid', 'completed', 'archived')",
+        ];
+        if (schema_column_exists($db, 'crypto_deposit_requests', 'received_crypto_amount')) {
+            $cryptoEvidenceConditions[] = 'COALESCE(crypto_deposit_requests.received_crypto_amount, 0) > 0';
+        }
+        if (schema_column_exists($db, 'crypto_deposit_requests', 'received_fiat_amount')) {
+            $cryptoEvidenceConditions[] = 'COALESCE(crypto_deposit_requests.received_fiat_amount, 0) > 0';
+        }
+        if (schema_column_exists($db, 'crypto_deposit_requests', 'confirmed_at')) {
+            $cryptoEvidenceConditions[] = 'crypto_deposit_requests.confirmed_at IS NOT NULL';
+        }
+        if (schema_object_exists($db, 'crypto_deposit_transactions')) {
+            $transactionEvidenceConditions = [];
+            if (schema_column_exists($db, 'crypto_deposit_transactions', 'amount_crypto')) {
+                $transactionEvidenceConditions[] = 'COALESCE(crypto_deposit_transactions.amount_crypto, 0) > 0';
+            }
+            if (schema_column_exists($db, 'crypto_deposit_transactions', 'transaction_hash')) {
+                $transactionEvidenceConditions[] = "COALESCE(crypto_deposit_transactions.transaction_hash, '') <> ''";
+            }
+            if ($transactionEvidenceConditions) {
+                $transactionEvidenceSql = implode("\n                         OR ", $transactionEvidenceConditions);
+                $cryptoEvidenceConditions[] = "EXISTS (
+                   SELECT 1
+                   FROM crypto_deposit_transactions
+                   WHERE crypto_deposit_transactions.deposit_request_id = crypto_deposit_requests.id
+                     AND (
+                         {$transactionEvidenceSql}
+                     )
+               )";
+            }
+        }
+        $cryptoEvidenceSql = implode("\n                 OR ", $cryptoEvidenceConditions);
         $extraWhere .= "
            AND NOT EXISTS (
                SELECT 1
                FROM crypto_deposit_requests
                WHERE crypto_deposit_requests.order_id = orders.id
-                 AND crypto_deposit_requests.status IN ('approved', 'confirmed', 'paid', 'completed', 'archived')
+                 AND (
+                     {$cryptoEvidenceSql}
+                 )
            )";
     }
     if (schema_object_exists($db, 'bank_transfer_requests')) {
+        $bankEvidenceConditions = [
+            "bank_transfer_requests.status IN ('awaiting_review', 'approved', 'confirmed', 'paid', 'completed', 'archived')",
+        ];
+        foreach (['submitted_at', 'approved_at'] as $bankEvidenceColumn) {
+            if (schema_column_exists($db, 'bank_transfer_requests', $bankEvidenceColumn)) {
+                $bankEvidenceConditions[] = "bank_transfer_requests.{$bankEvidenceColumn} IS NOT NULL";
+            }
+        }
+        foreach (['payer_name', 'payer_bank_name', 'customer_transfer_note'] as $bankEvidenceColumn) {
+            if (schema_column_exists($db, 'bank_transfer_requests', $bankEvidenceColumn)) {
+                $bankEvidenceConditions[] = "COALESCE(bank_transfer_requests.{$bankEvidenceColumn}, '') <> ''";
+            }
+        }
+        $bankEvidenceSql = implode("\n                 OR ", $bankEvidenceConditions);
         $extraWhere .= "
            AND NOT EXISTS (
                SELECT 1
                FROM bank_transfer_requests
                WHERE bank_transfer_requests.order_id = orders.id
-                 AND bank_transfer_requests.status IN ('approved', 'confirmed', 'paid', 'completed', 'archived')
+                 AND (
+                     {$bankEvidenceSql}
+                 )
            )";
     }
 
@@ -10356,7 +11716,7 @@ function app_delete_stale_unpaid_orders(Mysql_ks $db, ?string $now = null): arra
          WHERE orders.created_at IS NOT NULL
            AND orders.created_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)
            AND LOWER(COALESCE(orders.status, '')) IN ('pending', 'pending_payment')
-           AND LOWER(COALESCE(orders.payment_status, '')) IN ('', 'unpaid', 'pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+           AND LOWER(COALESCE(orders.payment_status, '')) IN ('', 'unpaid', 'pending', 'pending_payment')
            AND LOWER(COALESCE(orders.fulfillment_status, '')) IN ('', 'pending')
            {$extraWhere}
          ORDER BY orders.id ASC"
@@ -10904,8 +12264,18 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
 
     $settings = app_fetch_settings($db);
     app_ensure_payment_request_runtime_columns($db);
+    if (!function_exists('admin_mixer_process_auto_payouts') && is_file(dirname(__DIR__) . '/admin/bootstrap.php')) {
+        require_once dirname(__DIR__) . '/admin/bootstrap.php';
+    }
 
     $email = app_email_process_queue($db, $emailLimit);
+    $swapperAutoPayout = function_exists('admin_mixer_process_auto_payouts')
+        ? admin_mixer_process_auto_payouts($db, is_array($settings) ? $settings : [], 3)
+        : ['ok' => true, 'processed' => 0, 'sent' => 0, 'failed' => 0, 'message' => 'Swapper auto payout skipped.'];
+    $cryptoAutoAccept = function_exists('admin_crypto_auto_accept_recent_payments')
+        ? admin_crypto_auto_accept_recent_payments($db, is_array($settings) ? $settings : [], ['limit' => 6, 'now' => $safeNow])
+        : ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'message' => 'Crypto auto-accept skipped.'];
+    app_crypto_runtime_prune();
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
     $expiryReminders = app_queue_upcoming_order_expiry_reminders($db, $safeNow, 5);
     $archive = app_archive_expired_payment_requests($db, $safeNow);
@@ -10928,6 +12298,8 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
 
     $steps = [
         'email_queue' => $email,
+        'swapper_auto_payout' => $swapperAutoPayout,
+        'crypto_auto_accept' => $cryptoAutoAccept,
         'crypto_daily_backup' => $cryptoBackup,
         'order_expiry_reminders' => $expiryReminders,
         'archive_requests' => $archive,
@@ -10959,6 +12331,12 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
             'emails_processed' => (int)($email['processed'] ?? 0),
             'emails_sent' => (int)($email['sent'] ?? 0),
             'emails_failed' => (int)($email['failed'] ?? 0),
+            'swapper_auto_payout_processed' => (int)($swapperAutoPayout['processed'] ?? 0),
+            'swapper_auto_payout_sent' => (int)($swapperAutoPayout['sent'] ?? 0),
+            'swapper_auto_payout_failed' => (int)($swapperAutoPayout['failed'] ?? 0),
+            'crypto_auto_accept_checked' => (int)($cryptoAutoAccept['checked'] ?? 0),
+            'crypto_auto_accept_accepted' => (int)($cryptoAutoAccept['accepted'] ?? 0),
+            'crypto_auto_accept_skipped' => (int)($cryptoAutoAccept['skipped'] ?? 0),
             'crypto_backup_sent' => (int)($cryptoBackup['sent'] ?? 0),
             'crypto_backup_rows' => (int)($cryptoBackup['rows'] ?? 0),
             'order_expiry_reminders_queued' => (int)($expiryReminders['queued'] ?? 0),
@@ -11106,6 +12484,7 @@ function app_ensure_customer_balance_runtime_table(Mysql_ks $db): void
             KEY idx_customer_balance_runtime_customer (customer_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+    unset($GLOBALS['schema_object_exists_cache']['customer_balance_runtime_events']);
 }
 
 function app_apply_customer_balance_runtime_event(
@@ -11121,7 +12500,8 @@ function app_apply_customer_balance_runtime_event(
     string $ipAddress = ''
 ): array
 {
-    if ($customerId <= 0 || $amount <= 0) {
+    $amount = round($amount, 2);
+    if ($customerId <= 0 || !is_finite($amount) || $amount <= 0) {
         return ['ok' => false, 'message' => 'Customer balance event is invalid.'];
     }
 
@@ -11148,13 +12528,25 @@ function app_apply_customer_balance_runtime_event(
 
     $db->query('START TRANSACTION');
 
+    $customerRow = $db->select_user(
+        "SELECT id, balance_amount
+         FROM customers
+         WHERE id = {$customerId}
+         LIMIT 1 FOR UPDATE"
+    );
+
+    if (!is_array($customerRow) || empty($customerRow['id'])) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Customer not found.'];
+    }
+
     $existingEvent = $db->select_user(
         "SELECT id
          FROM customer_balance_runtime_events
          WHERE source_type = '" . $safeSourceType . "'
            AND source_key = '" . $safeSourceKey . "'
            AND direction = '" . $db->escape($direction) . "'
-         LIMIT 1"
+         LIMIT 1 FOR UPDATE"
     );
 
     if (is_array($existingEvent) && !empty($existingEvent['id'])) {
@@ -11164,18 +12556,6 @@ function app_apply_customer_balance_runtime_event(
             'already_applied' => true,
             'message' => 'Customer balance event was already applied.',
         ];
-    }
-
-    $customerRow = $db->select_user(
-        "SELECT id, balance_amount
-         FROM customers
-         WHERE id = {$customerId}
-         LIMIT 1"
-    );
-
-    if (!is_array($customerRow) || empty($customerRow['id'])) {
-        $db->query('ROLLBACK');
-        return ['ok' => false, 'message' => 'Customer not found.'];
     }
 
     $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
@@ -11614,6 +12994,92 @@ function app_restore_customer_password_snapshot(Mysql_ks $db, array $customer): 
     return (bool)$db->update_using_id(['password'], [(string)$customer['password']], 'users', $customerId);
 }
 
+function app_generate_and_send_customer_password(
+    Mysql_ks $db,
+    array $customer,
+    int $rateLimitSeconds = 600,
+    bool $deliverNow = true
+): array {
+    $customerId = (int)($customer['id'] ?? 0);
+    $customerEmail = strtolower(trim((string)($customer['email'] ?? '')));
+    if ($customerId <= 0 || $customerEmail === '' || !filter_var($customerEmail, FILTER_VALIDATE_EMAIL)) {
+        return ['ok' => false, 'code' => 'invalid_customer'];
+    }
+
+    $localeCode = isset($customer['locale_code'])
+        ? (string)$customer['locale_code']
+        : localization_from_legacy_value($customer['lang'] ?? 0);
+    $mailLocale = app_normalize_email_locale($localeCode);
+    $newPassword = app_generate_customer_password(12);
+
+    if (!app_store_customer_password($db, $customerId, $newPassword)) {
+        return ['ok' => false, 'code' => 'save_failed'];
+    }
+
+    try {
+        $emailResult = app_email_queue_template(
+            $db,
+            'password-reset',
+            $customerEmail,
+            [
+                'customer_email' => $customerEmail,
+                'email' => $customerEmail,
+                'password' => $newPassword,
+                'nowehaslo' => $newPassword,
+            ],
+            $customerId,
+            null,
+            max(30, $rateLimitSeconds),
+            $deliverNow,
+            $mailLocale
+        );
+
+        if (!empty($emailResult['skipped_duplicate'])) {
+            app_restore_customer_password_snapshot($db, $customer);
+            return ['ok' => false, 'code' => 'rate_limited'];
+        }
+
+        if (empty($emailResult['ok']) || empty($emailResult['queued'])) {
+            app_restore_customer_password_snapshot($db, $customer);
+            return ['ok' => false, 'code' => 'send_failed', 'email_notification' => $emailResult];
+        }
+
+        $queueId = (int)($emailResult['queue_id'] ?? 0);
+        if ($queueId > 0 && schema_object_exists($db, 'outbound_email_queue')) {
+            $queueRow = $db->select_user(
+                "SELECT status, last_error
+                 FROM outbound_email_queue
+                 WHERE id = {$queueId}
+                 LIMIT 1"
+            );
+            $queueStatus = strtolower(trim((string)($queueRow['status'] ?? 'pending')));
+            if ($queueStatus === 'failed') {
+                app_restore_customer_password_snapshot($db, $customer);
+                return [
+                    'ok' => false,
+                    'code' => 'send_failed',
+                    'email_notification' => array_merge($emailResult, [
+                        'status' => $queueStatus,
+                        'last_error' => trim((string)($queueRow['last_error'] ?? '')),
+                    ]),
+                ];
+            }
+
+            $emailResult['status'] = $queueStatus;
+            $emailResult['sent'] = $queueStatus === 'sent';
+        }
+
+        return [
+            'ok' => true,
+            'code' => !empty($emailResult['sent']) ? 'sent' : 'queued',
+            'email_notification' => $emailResult,
+        ];
+    } catch (Throwable $exception) {
+        app_restore_customer_password_snapshot($db, $customer);
+        return ['ok' => false, 'code' => 'send_failed'];
+    }
+}
+
 function app_activate_customer(Mysql_ks $db, int $customerId): void
 {
     if (app_uses_v2_schema($db)) {
@@ -11678,7 +13144,7 @@ function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $
                 && function_exists('chat_customer_can_use_groups')
             ) {
                 $settings = app_fetch_settings($db);
-                if (app_demo_messenger_showcase_enabled(is_array($settings) ? $settings : []) || !empty($settings['customer_global_group_enabled'])) {
+                if (!empty($settings['customer_global_group_enabled'])) {
                     $customerRow = $db->select_user(
                         "SELECT id, email, public_handle, avatar_url, customer_type, status, last_login_at
                          FROM customers

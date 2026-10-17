@@ -9,7 +9,31 @@ function app_is_https_request()
 
 function app_session_cookie_lifetime(): int
 {
-    return 60 * 60 * 24 * 180;
+    return 60 * 60 * 24 * 30;
+}
+
+function app_refresh_session_cookie(int $lifetime): void
+{
+    if (session_status() !== PHP_SESSION_ACTIVE || headers_sent()) {
+        return;
+    }
+
+    $now = time();
+    if ((int)($_SESSION['_cookie_refreshed_at'] ?? 0) > $now - 3600) {
+        return;
+    }
+
+    $params = session_get_cookie_params();
+    if (setcookie(session_name(), session_id(), [
+        'expires' => $now + $lifetime,
+        'path' => $params['path'],
+        'domain' => $params['domain'],
+        'secure' => (bool)$params['secure'],
+        'httponly' => (bool)$params['httponly'],
+        'samesite' => $params['samesite'] ?? 'Lax',
+    ])) {
+        $_SESSION['_cookie_refreshed_at'] = $now;
+    }
 }
 
 function app_session_storage_directory(): string
@@ -78,4 +102,5 @@ function app_start_session()
     ]);
 
     session_start();
+    app_refresh_session_cookie($cookieLifetime);
 }

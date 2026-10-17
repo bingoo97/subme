@@ -277,13 +277,13 @@ $(function () {
 				<p>Zapłać po aktualnym kursie.</p>
 				<p>Po upływie czasu kurs wymiany zostanie ponownie zaktualizowany.</p>
 				<span class="date_end {if $crypto_payments[i].status == 0}active{/if}">00:00:00</span>
-				<p class="price">Cena zakupu: <span class="disc">{$crypto_payments[i].discount_price} €</span> <span class="package">{$crypto_payments[i].package_price} €</span></p>
+				<p class="price">Cena zakupu: <span class="disc">{$crypto_payments[i].discount_price} {$crypto_payments[i].currency_symbol|default:$crypto_payments[i].currency_code|default:$reseller.currency_symbol|escape:'html'}</span> <span class="package">{$crypto_payments[i].package_price} {$crypto_payments[i].currency_symbol|default:$crypto_payments[i].currency_code|default:$reseller.currency_symbol|escape:'html'}</span></p>
 				<p class="desc">Wyślij płatność w {$crypto_payments[i].crypto_name}:</p>
 				<p class="amount">{$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol}</p>
 				<div id="div_details_{$crypto_payments[i].id}" class="pay_details">
 					<p class="address"><i class="fa fa-qrcode" aria-hidden="true"></i> <strong>{$crypto_payments[i].crypto_name} Address:</strong><br/><span>{$crypto_payments[i].address_code}</span></p>
 					<p class="note">{$crypto_payments[i].note}</p>
-					<p class="rate"><strong>Rate:</strong> {$crypto_payments[i].crypto_rate_formatted} €</p>
+					<p class="rate"><strong>Rate:</strong> {$crypto_payments[i].crypto_rate_formatted} {$crypto_payments[i].currency_symbol|default:$crypto_payments[i].currency_code|default:$reseller.currency_symbol|escape:'html'}</p>
 					<p class="text-left yellow">Skopiuj dane do płatnosci albo zeskanuj QR kod w swoim portfelu kryptowalutowym. Płatność po aktualnym kursie jest ważna tylko przez 30 min.</p>
 				</div>
 			</div>
@@ -305,7 +305,7 @@ $(function () {
 					</button>
 				</form>
 				{/if}
-				<p class="amount"><i class="fa fa-long-arrow-right" aria-hidden="true"></i> {$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol} <span>{$crypto_payments[i].discount_price} €</span></p>
+				<p class="amount"><i class="fa fa-long-arrow-right" aria-hidden="true"></i> {$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol} <span>{$crypto_payments[i].discount_price} {$crypto_payments[i].currency_symbol|default:$crypto_payments[i].currency_code|default:$reseller.currency_symbol|escape:'html'}</span></p>
 				<p class="desc">
 					{$crypto_payments[i].date}
 					{if $crypto_payments[i].order_id|default:0 > 0}
@@ -342,6 +342,12 @@ $(function () {
 		{/if}
 		{/section}
 	</div>
+    {/if}
+    {if $crypto_ticket_before|default:0 > 0 || $crypto_ticket_next|default:0 > 0}
+    <nav class="payment-request-actions" aria-label="{$t.payment_crypto_history_intro_line_1|default:'Payment history'|escape:'html'}">
+        {if $crypto_ticket_before|default:0 > 0}<a href="/cryptocurrency#tickets" class="btn btn-default">{$t.payment_history_latest|default:'Latest payments'}</a>{/if}
+        {if $crypto_ticket_next|default:0 > 0}<a href="/cryptocurrency?ticket_before={$crypto_ticket_next}#tickets" class="btn btn-default">{$t.payment_history_older|default:'Older payments'}</a>{/if}
+    </nav>
     {/if}
 	{include file = 'profil/how_crypto_modal.tpl'}
 	{include file = 'profil/balance_topup_modal.tpl'}

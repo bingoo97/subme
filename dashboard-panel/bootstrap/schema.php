@@ -21,6 +21,7 @@ function schema_column_cache(): array
 function schema_forget_column_cache(string $tableName, string $columnName): void
 {
     $cacheKey = $tableName . '.' . $columnName;
+    unset($GLOBALS['schema_columns_loaded'][$tableName]);
     if (isset($GLOBALS['schema_column_exists_cache'][$cacheKey])) {
         unset($GLOBALS['schema_column_exists_cache'][$cacheKey]);
     }
@@ -29,6 +30,14 @@ function schema_forget_column_cache(string $tableName, string $columnName): void
 function schema_object_exists(Mysql_ks $db, string $objectName): bool
 {
     $cache = schema_object_cache();
+    if (empty($GLOBALS['schema_objects_primed'])) {
+        $tables = $db->select_full_user("SELECT TABLE_NAME AS table_name FROM information_schema.tables WHERE table_schema = DATABASE()");
+        if (!$db->error) {
+            foreach ($tables as $table) $cache[$table['table_name']] = true;
+            $GLOBALS['schema_objects_primed'] = true;
+            $GLOBALS['schema_object_exists_cache'] = $cache;
+        }
+    }
 
     if (array_key_exists($objectName, $cache)) {
         return $cache[$objectName];
@@ -52,23 +61,22 @@ function schema_column_exists(Mysql_ks $db, string $tableName, string $columnNam
 {
     $cache = schema_column_cache();
     $cacheKey = $tableName . '.' . $columnName;
-
     if (array_key_exists($cacheKey, $cache)) {
         return $cache[$cacheKey];
     }
-
-    $safeTableName = $db->escape($tableName);
-    $safeColumnName = $db->escape($columnName);
-    $result = $db->select_user(
-        "SELECT COUNT(*) AS total
-         FROM information_schema.columns
-         WHERE table_schema = DATABASE()
-           AND table_name = '{$safeTableName}'
-           AND column_name = '{$safeColumnName}'
-         LIMIT 1"
-    );
-
-    $cache[$cacheKey] = isset($result['total']) && (int)$result['total'] > 0;
+    if (empty($GLOBALS['schema_columns_loaded'][$tableName])) {
+        $safeTableName = $db->escape($tableName);
+        $rows = $db->select_full_user("SELECT COLUMN_NAME AS column_name FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = '{$safeTableName}'");
+        if ($db->error) {
+            return false;
+        }
+        foreach ($rows as $row) {
+            $cache[$tableName . '.' . $row['column_name']] = true;
+        }
+        $GLOBALS['schema_columns_loaded'][$tableName] = true;
+    }
+    $cache[$cacheKey] = $cache[$cacheKey] ?? false;
     $GLOBALS['schema_column_exists_cache'] = $cache;
     return $cache[$cacheKey];
 }

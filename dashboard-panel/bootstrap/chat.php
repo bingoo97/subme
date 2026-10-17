@@ -908,7 +908,24 @@ if (!function_exists('chat_normalize_preview_url')) {
 if (!function_exists('chat_public_ip_allowed')) {
     function chat_public_ip_allowed(string $ip): bool
     {
-        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+        $ip = trim($ip, '[]');
+        if (stripos($ip, '::ffff:') === 0) {
+            $packed = @inet_pton($ip);
+            if ($packed !== false) {
+                $ip = inet_ntop(substr($packed, -4));
+            }
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return false;
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $number = (int)sprintf('%u', ip2long($ip));
+            // Shared carrier space and multicast addresses are not public web targets.
+            if (($number >= 1681915904 && $number <= 1686110207) || $number >= 3758096384) {
+                return false;
+            }
+        }
+        return true;
     }
 
     function chat_preview_resolve_host_ips(string $host): array
@@ -990,95 +1007,88 @@ if (!function_exists('chat_preview_document_fetch')) {
 
     function chat_preview_document_fetch(string $url): ?array
     {
-        $normalizedUrl = chat_normalize_preview_url($url);
-        if ($normalizedUrl === '') {
+        // Every hop is checked before connection. DNS is pinned to the validated IP.
+        if (!function_exists('curl_init')) {
             return null;
         }
-
-        $parts = parse_url($normalizedUrl);
-        $host = trim((string)($parts['host'] ?? ''));
-        if (!chat_preview_host_allowed($host)) {
-            return null;
-        }
-        $resolvedHostIps = chat_preview_resolve_host_ips($host);
-
-        $html = null;
-        $effectiveUrl = $normalizedUrl;
-        $contentType = '';
-
-        if (function_exists('curl_init')) {
-            $ch = curl_init($normalizedUrl);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_MAXREDIRS => 3,
-                CURLOPT_CONNECTTIMEOUT => 4,
-                CURLOPT_TIMEOUT => 6,
-                CURLOPT_USERAGENT => 'Reseller/1.0',
-                CURLOPT_HTTPHEADER => [
-                    'Accept: text/html,application/xhtml+xml',
-                ],
-            ]);
-
-            $response = curl_exec($ch);
-            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $contentType = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-            $effectiveUrl = (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $normalizedUrl;
-            $primaryIp = trim((string)curl_getinfo($ch, CURLINFO_PRIMARY_IP));
-            curl_close($ch);
-
-            if ($primaryIp !== '' && !chat_public_ip_allowed($primaryIp)) {
+        $url = chat_normalize_preview_url($url);
+        $deadline = microtime(true) + 6;
+        for ($hop = 0; $hop <= 3 && $url !== ''; $hop++) {
+            $parts = parse_url($url);
+            $host = trim((string)($parts['host'] ?? ''), '[]');
+            if (isset($parts['user']) || isset($parts['pass']) || !chat_preview_host_allowed($host)) {
                 return null;
             }
-
-            if (is_string($response) && $response !== '' && $httpCode > 0 && $httpCode < 400) {
-                $html = $response;
+            $ips = chat_preview_resolve_host_ips($host);
+            if (!$ips) {
+                return null;
             }
-        }
-
-        if ((!is_string($html) || $html === '') && $resolvedHostIps) {
-            $context = stream_context_create([
-                'http' => [
-                    'method' => 'GET',
-                    'timeout' => 6,
-                    'follow_location' => 0,
-                    'header' => "Accept: text/html,application/xhtml+xml\r\nUser-Agent: Reseller/1.0\r\n",
-                ],
-            ]);
-            $response = @file_get_contents($normalizedUrl, false, $context);
-            if (is_string($response) && $response !== '') {
-                $html = $response;
+            foreach ($ips as $ip) {
+                if (!chat_public_ip_allowed($ip)) {
+                    return null;
+                }
             }
+            $timeout = (int)(($deadline - microtime(true)) * 1000);
+            if ($timeout <= 0) {
+                return null;
+            }
+            $port = (int)($parts['port'] ?? (strtolower((string)$parts['scheme']) === 'https' ? 443 : 80));
+            $ip = $ips[0];
+            $body = '';
+            $location = '';
+            $truncated = false;
+            $ch = curl_init($url);
+            $options = [
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+                CURLOPT_PROXY => '',
+                CURLOPT_CONNECTTIMEOUT_MS => min(2500, $timeout),
+                CURLOPT_TIMEOUT_MS => $timeout,
+                CURLOPT_USERAGENT => 'Reseller/1.0',
+                CURLOPT_HTTPHEADER => ['Accept: text/html,application/xhtml+xml'],
+                CURLOPT_WRITEFUNCTION => static function ($handle, string $data) use (&$body, &$truncated): int {
+                    $remaining = 262144 - strlen($body);
+                    if (strlen($data) > $remaining) {
+                        $body .= substr($data, 0, $remaining);
+                        $truncated = true;
+                        return 0;
+                    }
+                    $body .= $data;
+                    return strlen($data);
+                },
+                CURLOPT_HEADERFUNCTION => static function ($handle, string $line) use (&$location): int {
+                    if (stripos($line, 'Location:') === 0) {
+                        $location = trim(substr($line, 9));
+                    }
+                    return strlen($line);
+                },
+            ];
+            if (!filter_var($host, FILTER_VALIDATE_IP)) {
+                $options[CURLOPT_RESOLVE] = [$host . ':' . $port . ':' . (strpos($ip, ':') !== false ? '[' . $ip . ']' : $ip)];
+            }
+            curl_setopt_array($ch, $options);
+            curl_exec($ch);
+            $error = curl_errno($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $contentType = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+            curl_close($ch);
+            if ($error !== 0 && !($truncated && $error === CURLE_WRITE_ERROR)) {
+                return null;
+            }
+            if ($code >= 300 && $code < 400) {
+                $url = chat_normalize_preview_url(chat_preview_resolve_url($url, $location));
+                continue;
+            }
+            if ($code < 200 || $code >= 300 || $body === '') {
+                return null;
+            }
+            if ($contentType !== '' && stripos($contentType, 'text/html') === false
+                && stripos($contentType, 'application/xhtml+xml') === false && !chat_preview_looks_like_html($body)) {
+                return null;
+            }
+            return ['url' => $url, 'html' => $body];
         }
-
-        if (!is_string($html) || $html === '') {
-            return null;
-        }
-
-        if (
-            $contentType !== ''
-            && stripos($contentType, 'text/html') === false
-            && stripos($contentType, 'application/xhtml+xml') === false
-            && !chat_preview_looks_like_html($html)
-        ) {
-            return null;
-        }
-
-        $effectiveUrl = chat_normalize_preview_url($effectiveUrl);
-        if ($effectiveUrl === '') {
-            return null;
-        }
-
-        $effectiveParts = parse_url($effectiveUrl);
-        $effectiveHost = trim((string)($effectiveParts['host'] ?? ''));
-        if (!chat_preview_host_allowed($effectiveHost)) {
-            return null;
-        }
-
-        return [
-            'url' => $effectiveUrl,
-            'html' => substr($html, 0, 262144),
-        ];
+        return null;
     }
 }
 
@@ -1488,10 +1498,7 @@ if (!function_exists('chat_format_message_html')) {
         ];
 
         if (!class_exists('DOMDocument')) {
-            return strip_tags(
-                $html,
-                '<p><br><hr><strong><b><em><i><u><h1><h2><h3><h4><h5><h6><ul><ol><li><blockquote><a><img><video><div><span><table><thead><tbody><tr><td><th>'
-            );
+            return nl2br(htmlspecialchars(strip_tags($html), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
         }
 
         $dom = new DOMDocument();
@@ -1504,10 +1511,7 @@ if (!function_exists('chat_format_message_html')) {
         libxml_use_internal_errors($previousState);
 
         if (!$loaded) {
-            return strip_tags(
-                $html,
-                '<p><br><hr><strong><b><em><i><u><h1><h2><h3><h4><h5><h6><ul><ol><li><blockquote><a><img><video><div><span><table><thead><tbody><tr><td><th>'
-            );
+            return nl2br(htmlspecialchars(strip_tags($html), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
         }
 
         $root = $dom->getElementById('chat-rich-root');
@@ -1690,6 +1694,8 @@ if (!function_exists('chat_format_message_html')) {
         $title = htmlspecialchars(trim((string)($payload['title'] ?? 'Payment request')), ENT_QUOTES, 'UTF-8');
         $logoUrl = trim((string)($payload['logo_url'] ?? ''));
         $buttonUrl = trim((string)($payload['button_url'] ?? ''));
+        if ($logoUrl !== '' && !chat_html_url_is_safe($logoUrl)) { $logoUrl = ''; }
+        if ($buttonUrl !== '' && !chat_html_url_is_safe($buttonUrl)) { $buttonUrl = ''; }
         $buttonLabel = htmlspecialchars(trim((string)($payload['button_label'] ?? '')), ENT_QUOTES, 'UTF-8');
         $buttonHint = htmlspecialchars(trim((string)($payload['button_hint'] ?? '')), ENT_QUOTES, 'UTF-8');
         $stepText = htmlspecialchars(trim((string)($payload['step_text'] ?? '')), ENT_QUOTES, 'UTF-8');

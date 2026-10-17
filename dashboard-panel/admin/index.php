@@ -13,7 +13,6 @@ $db = Mysql_ks::get_instance();
 app_ensure_customer_runtime_columns($db);
 app_ensure_product_provider_runtime_columns($db);
 admin_ensure_core_crypto_assets($db);
-admin_ensure_help_topics_runtime_table($db);
 admin_ensure_help_videos_runtime_table($db);
 admin_ensure_mixer_runtime_tables($db);
 $appSettings = admin_app_settings($db);
@@ -45,6 +44,38 @@ $currentLocale = isset($_SESSION['admin_locale']) ? admin_normalize_locale((stri
 $messages = admin_load_messages($currentLocale);
 $csrfToken = admin_csrf_token();
 $requestIp = admin_request_ip();
+
+function admin_render_no_zoom_head_tags(): void
+{
+    ?>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+        <script>
+            (() => {
+                const preventZoom = (event) => {
+                    if (event && typeof event.preventDefault === 'function') {
+                        event.preventDefault();
+                    }
+                };
+                let lastTouchEnd = 0;
+                document.addEventListener('gesturestart', preventZoom, { passive: false });
+                document.addEventListener('gesturechange', preventZoom, { passive: false });
+                document.addEventListener('gestureend', preventZoom, { passive: false });
+                document.addEventListener('touchmove', (event) => {
+                    if (event.touches && event.touches.length > 1) {
+                        preventZoom(event);
+                    }
+                }, { passive: false });
+                document.addEventListener('touchend', (event) => {
+                    const now = Date.now();
+                    if (now - lastTouchEnd <= 300) {
+                        preventZoom(event);
+                    }
+                    lastTouchEnd = now;
+                }, { passive: false });
+            })();
+        </script>
+    <?php
+}
 
 $loginError = '';
 if (isset($_POST['admin_login'])) {
@@ -93,7 +124,7 @@ if ($adminUser === null) {
     <html lang="<?php echo admin_e($currentLocale); ?>">
     <head>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <?php admin_render_no_zoom_head_tags(); ?>
         <title><?php echo admin_e(admin_t($messages, 'login_title', 'Secure admin access')); ?></title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -106,10 +137,10 @@ if ($adminUser === null) {
         <main class="admin-login-shell">
             <section class="admin-login-card">
                 <div class="admin-login-brand">
-                    <div class="admin-login-brand__badge"><i class="bi bi-shield-lock"></i></div>
                     <div>
+                        <p class="admin-login-brand__eyebrow"><?php echo admin_e(admin_t($messages, 'admin_login_heading', 'Panel admina')); ?></p>
                         <h1><?php echo admin_e(admin_t($messages, 'brand', 'Admin Panel')); ?></h1>
-                        <p><?php echo admin_e($siteName); ?></p>
+                        <p class="admin-login-copy"><?php echo admin_e($siteName); ?></p>
                     </div>
                 </div>
 
@@ -144,6 +175,10 @@ if ($adminUser === null) {
 
 app_delete_stale_unpaid_orders($db);
 
+$paymentFilterCustomerId = 0;
+$paymentScope = 'open';
+$paymentTypeFilter = '';
+
 if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -161,28 +196,9 @@ if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
         $refreshCurrencyCode = $adminDefaultCurrencyCode;
     }
 
-    $refreshedAssets = [];
-    foreach (admin_refresh_crypto_asset_rates($db, $refreshCurrencyCode, 0) as $assetRow) {
-        $assetRate = isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0;
-        if (empty($assetRow['is_active']) || $assetRate <= 0) {
-            continue;
-        }
-
-        $updatedAt = trim((string)($assetRow['rate_updated_at'] ?? ''));
-        $updatedTimestamp = $updatedAt !== '' ? app_timestamp_from_utc_datetime($updatedAt) : false;
-        $isStale = !$updatedTimestamp || (time() - (int)$updatedTimestamp) >= 900;
-        $refreshedAssets[] = [
-            'id' => (int)($assetRow['id'] ?? 0),
-            'code' => strtoupper((string)($assetRow['code'] ?? '')),
-            'name' => (string)($assetRow['name'] ?? ''),
-            'logo_url' => app_crypto_logo_by_code((string)($assetRow['code'] ?? ''), (string)($assetRow['logo_url'] ?? '')),
-            'rate' => $assetRate,
-            'rate_label' => app_format_crypto_rate($assetRow['current_rate_fiat'] ?? null),
-            'rate_updated_at' => $updatedAt,
-            'rate_updated_label' => $updatedAt !== '' ? app_format_utc_datetime_local($updatedAt) : '',
-            'is_stale' => $isStale ? 1 : 0,
-        ];
-    }
+    // Do not hold the PHP session lock during slow third-party requests.
+    session_write_close();
+    $refreshedAssets = admin_topbar_converter_asset_payload($db, $refreshCurrencyCode, 900);
 
     echo json_encode([
         'ok' => true,
@@ -191,19 +207,104 @@ if (isset($_POST['admin_refresh_converter_rates_ajax'])) {
     exit;
 }
 
+if (isset($_POST['admin_hinkal_pol_quote'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Invalid session token.']);
+        exit;
+    }
+
+    $quoteAddress = trim((string)($_POST['from_address'] ?? ''));
+    $quoteAmount = trim((string)($_POST['from_amount'] ?? ''));
+    $quoteCacheKey = hash('sha256', strtolower($quoteAddress) . '|' . $quoteAmount);
+    $quoteCache = is_array($_SESSION['admin_hinkal_pol_quote_cache'] ?? null)
+        ? $_SESSION['admin_hinkal_pol_quote_cache']
+        : [];
+    $now = time();
+    foreach ($quoteCache as $cacheKey => $cacheEntry) {
+        if (!is_array($cacheEntry) || (int)($cacheEntry['cache_until'] ?? 0) < $now) {
+            unset($quoteCache[$cacheKey]);
+        }
+    }
+    if (isset($quoteCache[$quoteCacheKey]['payload']) && is_array($quoteCache[$quoteCacheKey]['payload'])) {
+        $_SESSION['admin_hinkal_pol_quote_cache'] = $quoteCache;
+        echo json_encode($quoteCache[$quoteCacheKey]['payload'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $lastQuoteAt = (int)($_SESSION['admin_hinkal_pol_quote_last_at'] ?? 0);
+    if ($lastQuoteAt > 0 && ($now - $lastQuoteAt) < 3) {
+        http_response_code(429);
+        echo json_encode(['ok' => false, 'message' => 'Please wait a moment before refreshing the quote.', 'retry_after' => 3]);
+        exit;
+    }
+    $_SESSION['admin_hinkal_pol_quote_last_at'] = $now;
+
+    $quoteResult = admin_hinkal_lifi_pol_to_usdt_quote($appSettings, $quoteAddress, $quoteAmount);
+    if (!empty($quoteResult['ok'])) {
+        $quoteCache[$quoteCacheKey] = [
+            'cache_until' => $now + 20,
+            'payload' => $quoteResult,
+        ];
+        $_SESSION['admin_hinkal_pol_quote_cache'] = array_slice($quoteCache, -8, null, true);
+    } else {
+        http_response_code(!empty($quoteResult['rate_limited']) ? 429 : 422);
+    }
+    echo json_encode($quoteResult, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (isset($_POST['admin_hinkal_transaction_notification'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Invalid session token.']);
+        exit;
+    }
+
+    $notificationResult = admin_hinkal_send_transaction_notification($db, $appSettings, $adminUser, [
+        'event_type' => $_POST['event_type'] ?? '',
+        'gross_amount' => $_POST['gross_amount'] ?? '',
+        'recipient_wallet' => $_POST['recipient_wallet'] ?? '',
+        'deposit_tx_hash' => $_POST['deposit_tx_hash'] ?? '',
+        'schedule_id' => $_POST['schedule_id'] ?? '',
+        'payout_tx_hashes' => $_POST['payout_tx_hashes'] ?? '[]',
+    ]);
+    if (empty($notificationResult['ok'])) {
+        http_response_code(422);
+    }
+    echo json_encode($notificationResult, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $route = admin_normalize_route($_GET['page'] ?? 'dashboard');
+if (in_array($route, ['billing', 'settings'], true) && admin_user_can_access_route($adminUser, $route)) admin_billing_ensure_runtime_schema($db);
 $settingsAdminMode = strtolower(trim((string)($_GET['admin'] ?? ''))) === 'true';
 $settingsAdminUrlSuffix = $settingsAdminMode ? '&admin=true' : '';
+$billingEnabled = admin_billing_enabled($appSettings);
+$billingSwitchCanManage = strtolower(trim((string)($adminUser['login_name'] ?? ''))) === 'admin';
+$billingAutoIssueEmailEnabled = admin_billing_auto_issue_email_enabled($appSettings);
 $swapConverterEnabled = admin_swap_converter_enabled($appSettings);
-$swapConverterIntegrator = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-Pro'));
+$swapConverterIntegrator = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-PRO'));
 $swapConverterApiKey = trim((string)($appSettings['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
 $swapConverterFeePercent = round((float)($appSettings['swap_converter_fee_percent'] ?? 1.00), 2);
 $swapConverterFeePercent = max(0.0, min(10.0, $swapConverterFeePercent));
 $swapConverterChainOptions = admin_swap_converter_chain_options();
 $swapConverterAllowedChainKeys = admin_swap_converter_allowed_chain_keys($appSettings['swap_converter_allowed_chains'] ?? '');
 $swapConverterAllowedChainIds = admin_swap_converter_chain_ids_for_keys($swapConverterAllowedChainKeys);
+$swapConverterDefaultAssetOptions = admin_swap_converter_default_asset_options();
+$swapConverterDefaultFromAsset = admin_swap_converter_normalize_default_asset_key($appSettings['swap_converter_default_from_asset'] ?? 'bsc:native', 'bsc:native');
+$swapConverterDefaultToAsset = admin_swap_converter_normalize_default_asset_key($appSettings['swap_converter_default_to_asset'] ?? 'bsc:usdt', 'bsc:usdt');
 $hinkalPrivateSendEnabled = admin_hinkal_private_send_enabled($appSettings);
+$hinkalPrivateSendInputAsset = admin_hinkal_private_send_input_asset($appSettings);
 $hinkalPrivateSendFeeWallet = trim((string)($appSettings['hinkal_private_send_fee_wallet'] ?? ''));
+$hinkalPrivateSendFeePercent = max(0.0, min(10.0, round((float)($appSettings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
+$hinkalPrivateSendShowFeeDetails = !array_key_exists('hinkal_private_send_show_fee_details', $appSettings)
+    || !empty($appSettings['hinkal_private_send_show_fee_details']);
+$hinkalPrivateSendNotificationEmail = strtolower(trim((string)($appSettings['hinkal_private_send_notification_email'] ?? '')));
 $rangoConverterEnabled = admin_rango_converter_enabled($appSettings);
 $rangoApiKey = trim((string)($appSettings['rango_api_key'] ?? ''));
 $rangoApiKey = $rangoApiKey !== '' ? $rangoApiKey : ADMIN_RANGO_DEFAULT_API_KEY;
@@ -218,17 +319,22 @@ $mixerInputAssetOptions = admin_mixer_input_asset_options();
 $mixerAllowedInputAssets = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
 $mixerOutputAssetOptions = admin_mixer_output_asset_options();
 $mixerAllowedOutputAssets = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+$mixerDefaultInputAsset = admin_mixer_normalize_input_asset_key($appSettings['mixer_default_input_asset'] ?? 'BTC', $mixerAllowedInputAssets);
+$mixerDefaultOutputAsset = admin_mixer_normalize_output_asset_key($appSettings['mixer_default_output_asset'] ?? 'POLYGON_POL', $mixerAllowedOutputAssets);
 $mixerNetworkOptions = admin_mixer_network_options();
 $mixerNetworkModeOptions = admin_mixer_network_modes();
 $mixerAllowedNetworks = admin_mixer_allowed_networks($appSettings['mixer_allowed_networks'] ?? 'polygon');
 $mixerDetectionProviderOptions = admin_mixer_detection_provider_options();
 $mixerFeePercent = round((float)($appSettings['mixer_fee_percent'] ?? 1.50), 2);
 $mixerFeePercent = max(0.0, min(5.0, $mixerFeePercent));
+$mixerMinOrderUsd = admin_mixer_min_order_usd($appSettings);
 $mixerMaxPayoutUsd = round((float)($appSettings['mixer_max_payout_usd'] ?? 500.00), 2);
 $mixerDailyPayoutLimitUsd = round((float)($appSettings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
 $mixerShowPoolLiquidity = array_key_exists('mixer_show_pool_liquidity', $appSettings) ? !empty($appSettings['mixer_show_pool_liquidity']) : true;
+$mixerShowFeeBreakdown = array_key_exists('mixer_show_fee_breakdown', $appSettings) ? !empty($appSettings['mixer_show_fee_breakdown']) : true;
 $mixerBtcConfirmationsRequired = (int)($appSettings['mixer_btc_confirmations_required'] ?? 3);
 $mixerDogeConfirmationsRequired = (int)($appSettings['mixer_doge_confirmations_required'] ?? 20);
+$mixerSolConfirmationsRequired = (int)($appSettings['mixer_sol_confirmations_required'] ?? 1);
 $mixerQuoteLifetimeMinutes = (int)($appSettings['mixer_quote_lifetime_minutes'] ?? 15);
 $mixerDetectionProvider = trim((string)($appSettings['mixer_detection_provider'] ?? 'esplora'));
 if (!isset($mixerDetectionProviderOptions[$mixerDetectionProvider])) {
@@ -236,6 +342,7 @@ if (!isset($mixerDetectionProviderOptions[$mixerDetectionProvider])) {
 }
 $mixerBtcDepositAddress = trim((string)($appSettings['mixer_btc_deposit_address'] ?? ''));
 $mixerDogeDepositAddress = trim((string)($appSettings['mixer_doge_deposit_address'] ?? ''));
+$mixerSolDepositAddress = trim((string)($appSettings['mixer_sol_deposit_address'] ?? ''));
 $mixerPolygonNetworkMode = admin_mixer_normalize_network_mode($appSettings['mixer_polygon_network_mode'] ?? 'mainnet');
 $mixerPolygonVaultContract = trim((string)($appSettings['mixer_polygon_vault_contract'] ?? ''));
 $mixerPolygonRpcUrl = trim((string)($appSettings['mixer_polygon_rpc_url'] ?? ''));
@@ -252,6 +359,8 @@ $mixerBscTestnetRpcUrl = trim((string)($appSettings['mixer_bsc_testnet_rpc_url']
 $mixerBscTestnetRpcUrl = $mixerBscTestnetRpcUrl !== '' ? $mixerBscTestnetRpcUrl : admin_mixer_default_rpc_url('bsc', 'testnet');
 $mixerNotificationEmail = trim((string)($appSettings['mixer_notification_email'] ?? ''));
 $mixerAutoPayoutEnabled = !empty($appSettings['mixer_auto_payout_enabled']);
+$mixerPayoutSecretStorageMode = admin_mixer_secret_storage_mode($appSettings['mixer_payout_secret_storage_mode'] ?? 'file');
+$mixerPayoutSignerPrivateKeyEncrypted = trim((string)($appSettings['mixer_payout_signer_private_key_encrypted'] ?? ''));
 $mixerNetworkPoolStates = [];
 if ($mixerEnabled && in_array($route, ['settings', 'swap-converter'], true)) {
     foreach ($mixerNetworkOptions as $mixerNetworkKey => $mixerNetworkOption) {
@@ -309,7 +418,6 @@ $adminStatusOptions = admin_admin_status_options();
 $adminRoleOptions = admin_role_rows($db);
 $adminUserRows = admin_user_rows($db);
 $adminActiveFullAdminCount = admin_active_full_admin_count($db);
-$adminHelpModalCanEdit = admin_user_can_access_route($adminUser, 'settings') && admin_sensitive_routes_unlocked();
 $adminCanManageUsers = admin_user_can_access_route($adminUser, 'users');
 $cryptoPreviewStatusRows = [];
 $settingsProtectedFeatureEditEnabled = $settingsAdminMode;
@@ -320,6 +428,41 @@ if ($route === 'swap-converter' && !$swapConverterPageEnabled) {
     $route = 'dashboard';
     $pageAlert = admin_t($messages, 'swap_converter_widget_unavailable', 'Swap Converter is disabled in Settings.');
     $pageAlertType = 'warning';
+}
+
+if ($route === 'billing' && !$billingEnabled) {
+    $route = 'dashboard';
+    $pageAlert = admin_t($messages, 'billing_disabled', 'Billing is disabled in Settings.');
+    $pageAlertType = 'warning';
+}
+
+if ($route === 'billing' && !admin_user_can_access_route($adminUser, 'billing')) {
+    http_response_code(403);
+    exit;
+}
+
+if ($route === 'billing' && $billingEnabled && isset($_GET['billing_pdf'])) {
+    $billingPdfDocument = admin_billing_document_row($db, max(0, (int)$_GET['billing_pdf']));
+    if (!$billingPdfDocument) {
+        http_response_code(404);
+        exit;
+    }
+    $billingPdfDocument = admin_billing_document_with_profile_logo($db, $billingPdfDocument);
+    admin_billing_stream_document_pdf($billingPdfDocument, isset($_GET['download']));
+}
+
+if ($route === 'billing' && $billingEnabled && isset($_GET['billing_search'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    session_write_close();
+    $billingSearchType = strtolower(trim((string)($_GET['type'] ?? '')));
+    $billingSearchQuery = trim((string)($_GET['q'] ?? ''));
+    $billingSearchProfileId = max(0, (int)($_GET['profile_id'] ?? 0));
+    echo json_encode([
+        'ok' => true,
+        'items' => admin_billing_search_rows($db, $billingSearchType, $billingSearchQuery, $billingSearchProfileId),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
 }
 
 if ($route === 'settings' && isset($_GET['download_latest_database_backup'])) {
@@ -388,21 +531,54 @@ if ($route === 'swap-converter' && isset($_POST['admin_mixer_create_order_ajax']
     ]);
 
     if (empty($createResult['ok'])) {
+        $createMessageKey = trim((string)($createResult['message_key'] ?? ''));
+        $createMessageReplacements = is_array($createResult['message_replacements'] ?? null) ? $createResult['message_replacements'] : [];
+        $createMessage = $createMessageKey !== ''
+            ? admin_t($messages, $createMessageKey, (string)($createResult['message'] ?? 'Unable to create Swapper order.'), $createMessageReplacements)
+            : trim((string)($createResult['message'] ?? ''));
+        if ($createMessage === '') {
+            $createMessage = admin_t($messages, 'mixer_order_create_error', 'Unable to create Swapper order.');
+        }
         http_response_code(422);
         echo json_encode([
             'ok' => false,
-            'message' => admin_t($messages, 'mixer_order_create_error', (string)($createResult['message'] ?? 'Unable to create Swapper order.')),
+            'message' => $createMessage,
         ]);
         exit;
     }
 
     $order = is_array($createResult['order'] ?? null) ? $createResult['order'] : [];
-    $order['statusLabel'] = admin_t($messages, 'mixer_order_status_waiting_deposit', 'Waiting deposit');
+    $orderStatus = trim((string)($order['status'] ?? 'waiting_deposit'));
+    $order['statusLabel'] = admin_t($messages, 'mixer_order_status_' . $orderStatus, (string)($order['statusLabel'] ?? 'Waiting deposit'));
 
     echo json_encode([
         'ok' => true,
         'order' => $order,
         'quote' => is_array($createResult['quote'] ?? null) ? $createResult['quote'] : [],
+        'activeExisting' => !empty($createResult['active_existing']),
+        'message' => !empty($createResult['message_key'])
+            ? admin_t($messages, (string)$createResult['message_key'], (string)($createResult['message'] ?? ''))
+            : (string)($createResult['message'] ?? ''),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($route === 'swap-converter' && isset($_POST['admin_mixer_active_order_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $activeOrder = admin_mixer_find_active_order($db, $appSettings);
+    echo json_encode([
+        'ok' => true,
+        'order' => is_array($activeOrder) ? admin_mixer_order_payload($activeOrder, $messages) : null,
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -429,11 +605,98 @@ if ($route === 'swap-converter' && isset($_POST['admin_mixer_order_status_ajax']
         ]);
         exit;
     }
+    $orderRow = admin_mixer_refresh_order_from_chain($db, $appSettings, $orderRow);
+    $autoPayout = admin_mixer_process_auto_payouts($db, $appSettings, 1);
+    $orderRow = admin_mixer_find_order_by_public_id($db, $publicId) ?: $orderRow;
+    $orderRow = admin_mixer_refresh_order_from_chain($db, $appSettings, $orderRow);
 
     echo json_encode([
         'ok' => true,
         'order' => admin_mixer_order_payload($orderRow, $messages),
+        'autoPayout' => $autoPayout,
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($route === 'swap-converter' && isset($_POST['admin_mixer_prepare_payout_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $publicId = trim((string)($_POST['public_id'] ?? ''));
+    $orderRow = admin_mixer_find_order_by_public_id($db, $publicId);
+    if (!is_array($orderRow)) {
+        http_response_code(404);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'mixer_order_not_found', 'Swapper order was not found.'),
+        ]);
+        exit;
+    }
+
+    $payoutResult = admin_mixer_prepare_payout_request($db, $appSettings, $orderRow, $adminUser);
+    if (empty($payoutResult['ok'])) {
+        $messageKey = trim((string)($payoutResult['message_key'] ?? ''));
+        $message = $messageKey !== ''
+            ? admin_t($messages, $messageKey, (string)($payoutResult['message'] ?? 'Unable to prepare payout.'))
+            : (string)($payoutResult['message'] ?? admin_t($messages, 'mixer_payout_prepare_failed', 'Unable to prepare payout.'));
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => $message,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    echo json_encode($payoutResult, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($route === 'swap-converter' && isset($_POST['admin_mixer_record_payout_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $publicId = trim((string)($_POST['public_id'] ?? ''));
+    $orderRow = admin_mixer_find_order_by_public_id($db, $publicId);
+    if (!is_array($orderRow)) {
+        http_response_code(404);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'mixer_order_not_found', 'Swapper order was not found.'),
+        ]);
+        exit;
+    }
+
+    $recordResult = admin_mixer_record_payout_submission($db, $appSettings, $orderRow, trim((string)($_POST['tx_hash'] ?? '')));
+    if (empty($recordResult['ok'])) {
+        $messageKey = trim((string)($recordResult['message_key'] ?? ''));
+        $message = $messageKey !== ''
+            ? admin_t($messages, $messageKey, (string)($recordResult['message'] ?? 'Unable to save payout transaction.'))
+            : (string)($recordResult['message'] ?? admin_t($messages, 'mixer_payout_prepare_failed', 'Unable to prepare payout.'));
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => $message,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    echo json_encode($recordResult, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -460,7 +723,10 @@ if ($route === 'swap-converter' && isset($_POST['admin_mixer_cancel_order_ajax']
         exit;
     }
 
-    if (in_array((string)($orderRow['status'] ?? ''), ['paid', 'paying'], true)) {
+    $orderRow = admin_mixer_refresh_order_from_chain($db, $appSettings, $orderRow);
+    $orderStatus = strtolower(trim((string)($orderRow['status'] ?? '')));
+    $orderConfirmations = (int)($orderRow['confirmations'] ?? 0);
+    if ($orderConfirmations >= 1 || in_array($orderStatus, ['ready_to_pay', 'paying', 'paid'], true)) {
         http_response_code(422);
         echo json_encode([
             'ok' => false,
@@ -508,82 +774,6 @@ if (isset($_POST['admin_sensitive_unlock_ajax'])) {
     echo json_encode([
         'ok' => true,
         'message' => admin_t($messages, 'settings_sensitive_unlock_success', 'Access unlocked until logout.'),
-    ]);
-    exit;
-}
-
-if (isset($_POST['admin_update_help_topic_ajax'])) {
-    header('Content-Type: application/json; charset=utf-8');
-
-    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-        http_response_code(403);
-        echo json_encode([
-            'ok' => false,
-            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
-        ]);
-        exit;
-    }
-
-    if (!$adminHelpModalCanEdit) {
-        http_response_code(403);
-        echo json_encode([
-            'ok' => false,
-            'message' => admin_t($messages, 'help_modal_edit_locked', 'Unlock Settings access first to edit help content.'),
-        ]);
-        exit;
-    }
-
-    $topicId = (int)($_POST['topic_id'] ?? 0);
-    $answerHtml = (string)($_POST['answer_html'] ?? '');
-    $saveResult = admin_update_help_topic_answer($db, $topicId, $answerHtml);
-
-    if (empty($saveResult['ok']) || !is_array($saveResult['topic'] ?? null)) {
-        http_response_code(422);
-        echo json_encode([
-            'ok' => false,
-            'message' => admin_t($messages, 'help_save_error', (string)($saveResult['message'] ?? 'Unable to save help topic.')),
-        ]);
-        exit;
-    }
-
-    $topicRow = (array)$saveResult['topic'];
-    $audienceOptions = admin_help_topic_audience_options();
-    $audienceCode = admin_help_topic_normalize_audience((string)($topicRow['audience_code'] ?? 'all'));
-    $audienceLabel = (string)($audienceOptions[$audienceCode] ?? $audienceCode);
-    $topicAnswerHtml = (string)($topicRow['answer_html'] ?? '');
-    $searchText = trim(implode(' ', [
-        (string)($topicRow['question'] ?? ''),
-        (string)($topicRow['keywords'] ?? ''),
-        trim(strip_tags($topicAnswerHtml)),
-        $audienceLabel,
-    ]));
-    if (function_exists('mb_strtolower')) {
-        $searchText = mb_strtolower($searchText);
-    } else {
-        $searchText = strtolower($searchText);
-    }
-
-    admin_activity_log(
-        $db,
-        0,
-        (int)($adminUser['id'] ?? 0),
-        'help_topic_inline_update',
-        'Updated help modal topic #' . $topicId . ': ' . (string)($topicRow['question'] ?? ''),
-        $requestIp
-    );
-
-    echo json_encode([
-        'ok' => true,
-        'message' => admin_t($messages, 'help_save_success', 'Help topic saved successfully.'),
-        'topic' => [
-            'id' => (int)($topicRow['id'] ?? 0),
-            'question' => (string)($topicRow['question'] ?? ''),
-            'answer_html' => $topicAnswerHtml,
-            'audience_code' => $audienceCode,
-            'audience_label' => $audienceLabel,
-            'keywords' => (string)($topicRow['keywords'] ?? ''),
-            'search_text' => $searchText,
-        ],
     ]);
     exit;
 }
@@ -660,6 +850,7 @@ if (isset($_POST['admin_save_personal_notes_ajax'])) {
 
 if (isset($_POST['admin_crypto_address_preview_ajax'])) {
     header('Content-Type: application/json; charset=utf-8');
+    if (!admin_user_can_access_route($adminUser, 'payments')) { http_response_code(403); echo json_encode(['ok' => false, 'message' => 'Forbidden.']); exit; }
 
     if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         http_response_code(403);
@@ -691,6 +882,7 @@ if (isset($_POST['admin_crypto_address_preview_ajax'])) {
         exit;
     }
 
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
     $previewPayload = admin_crypto_accept_preview_payload($db, $previewPayment, $messages, 24);
     $previewHtml = admin_render_crypto_accept_explorer_panel($previewPayload);
 
@@ -704,8 +896,56 @@ if (isset($_POST['admin_crypto_address_preview_ajax'])) {
             'candidate_crypto_label' => (string)($previewPayload['candidate_crypto_label'] ?? ''),
             'candidate_fiat_amount' => (string)($previewPayload['candidate_fiat_amount'] ?? ''),
             'candidate_fiat_label' => (string)($previewPayload['candidate_fiat_label'] ?? ''),
+            'candidate_match_percent' => (int)($previewPayload['match_summary_percent'] ?? 0),
+            'candidate_match_title' => (string)($previewPayload['match_summary_title'] ?? ''),
+            'candidate_match_text' => (string)($previewPayload['match_summary_text'] ?? ''),
+            'candidate_match_tone' => (string)($previewPayload['match_summary_tone'] ?? ''),
         ],
     ]);
+    exit;
+}
+
+if (isset($_POST['admin_crypto_payment_blockchain_check_ajax'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!admin_user_can_access_route($adminUser, 'payments')) { http_response_code(403); echo json_encode(['ok' => false, 'message' => 'Forbidden.']); exit; }
+
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        http_response_code(403);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'login_error', 'Login failed. Check your credentials.'),
+        ]);
+        exit;
+    }
+
+    $checkPaymentType = strtolower(trim((string)($_POST['payment_type'] ?? '')));
+    if ($checkPaymentType !== 'crypto') {
+        http_response_code(422);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_blockchain_check_unavailable', 'Blockchain check is available only for crypto payment requests.'),
+        ]);
+        exit;
+    }
+
+    $checkPaymentId = (int)($_POST['payment_id'] ?? 0);
+    $checkPayment = admin_payment_find($db, 'crypto', $checkPaymentId);
+    if (!is_array($checkPayment) || empty($checkPayment['id'])) {
+        http_response_code(404);
+        echo json_encode([
+            'ok' => false,
+            'message' => admin_t($messages, 'payment_not_found', 'Payment not found.'),
+        ]);
+        exit;
+    }
+
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+    $checkResult = admin_crypto_manual_blockchain_check($db, $checkPayment, $appSettings, $messages);
+    if (empty($checkResult['ok'])) {
+        http_response_code(422);
+    }
+
+    echo json_encode($checkResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -745,7 +985,7 @@ if ($sensitiveRouteLocked) {
     <html lang="<?php echo admin_e($currentLocale); ?>">
     <head>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <?php admin_render_no_zoom_head_tags(); ?>
         <title><?php echo admin_e($unlockLabel); ?></title>
         <link rel="stylesheet" href="/assets/vendor/bootstrap5/bootstrap.min.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.min.css'); ?>">
         <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
@@ -770,7 +1010,7 @@ if ($sensitiveRouteLocked) {
                 </div>
             </div>
         </div>
-        <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
+	    <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
         <script src="/assets/js/admin.js?v=<?php echo admin_public_asset_version('assets/js/admin.js'); ?>"></script>
     </body>
     </html>
@@ -904,8 +1144,11 @@ if ($route === 'settings' && isset($_POST['admin_change_password'])) {
         if (!admin_verify_password($adminUser, $currentPassword)) {
             $pageAlert = admin_t($messages, 'settings_password_invalid', 'Current password is incorrect.');
             $pageAlertType = 'danger';
-        } elseif (strlen($newPassword) < 8) {
-            $pageAlert = admin_t($messages, 'settings_password_too_short', 'New password must contain at least 8 characters.');
+        } elseif ($newPassword === '') {
+            $pageAlert = admin_t($messages, 'settings_password_required', 'New password cannot be empty.');
+            $pageAlertType = 'danger';
+        } elseif (strlen($newPassword) > 72) {
+            $pageAlert = admin_t($messages, 'settings_password_too_long', 'New password cannot exceed 72 characters.');
             $pageAlertType = 'danger';
         } elseif ($newPassword !== $repeatPassword) {
             $pageAlert = admin_t($messages, 'settings_password_mismatch', 'New passwords do not match.');
@@ -935,6 +1178,12 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $bankTransfersEnabled = isset($_POST['bank_transfers_enabled']) ? 1 : 0;
         $cryptoWalletSharedAssignmentsEnabled = isset($_POST['crypto_wallet_shared_assignments_enabled']) ? 1 : 0;
         $bankAccountSharedAssignmentsEnabled = isset($_POST['bank_account_shared_assignments_enabled']) ? 1 : 0;
+        $billingEnabledInput = $billingSwitchCanManage
+            ? (isset($_POST['billing_enabled']) ? 1 : 0)
+            : (admin_billing_enabled($appSettings) ? 1 : 0);
+        $billingAutoIssueEmailEnabledInput = $billingSwitchCanManage
+            ? (isset($_POST['billing_auto_issue_email_enabled']) ? 1 : 0)
+            : (admin_billing_auto_issue_email_enabled($appSettings) ? 1 : 0);
         $maintenanceMode = isset($_POST['maintenance_mode']) ? 1 : 0;
         $registrationEnabled = isset($_POST['registration_enabled']) ? 1 : 0;
         $salesEnabled = isset($_POST['sales_enabled']) ? 1 : 0;
@@ -970,18 +1219,32 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
         $pageGuidanceEnabled = isset($_POST['page_guidance_enabled']) ? 1 : 0;
         $paymentTestModeNoticeEnabled = isset($_POST['payment_test_mode_notice_enabled']) ? 1 : 0;
+        $cryptoAutoAcceptEnabled = isset($_POST['crypto_auto_accept_enabled']) ? 1 : 0;
+        $cryptoAutoAcceptWindowMinutes = (int)($_POST['crypto_auto_accept_window_minutes'] ?? 60);
+        $cryptoAutoAcceptWindowMinutes = max(5, min(240, $cryptoAutoAcceptWindowMinutes));
+        $cryptoAutoAcceptMinAmountPercent = (int)($_POST['crypto_auto_accept_min_amount_percent'] ?? 80);
+        $cryptoAutoAcceptMinAmountPercent = max(50, min(100, $cryptoAutoAcceptMinAmountPercent));
         $cryptoDailyBackupEnabled = isset($_POST['crypto_daily_backup_enabled']) ? 1 : 0;
         $cryptoDailyBackupEmail = strtolower(trim((string)($_POST['crypto_daily_backup_email'] ?? '')));
         $historyCleanupEnabled = isset($_POST['history_cleanup_enabled']) ? 1 : 0;
         $paymentsCleanupEnabled = isset($_POST['payments_cleanup_enabled']) ? 1 : 0;
         $expiredOrdersCleanupEnabled = isset($_POST['expired_orders_cleanup_enabled']) ? 1 : 0;
         $swapConverterEnabledInput = isset($_POST['swap_converter_enabled']) ? 1 : 0;
-        $swapConverterIntegratorInput = trim((string)($_POST['swap_converter_integrator'] ?? 'Subme-Pro'));
+        $swapConverterIntegratorInput = trim((string)($_POST['swap_converter_integrator'] ?? 'Subme-PRO'));
         $swapConverterApiKeyInput = trim((string)($_POST['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
         $swapConverterFeePercentInput = round((float)($_POST['swap_converter_fee_percent'] ?? 1.0), 2);
         $swapConverterAllowedChainKeysInput = admin_swap_converter_allowed_chain_keys($_POST['swap_converter_allowed_chains'] ?? [], false);
+        $swapConverterDefaultFromAssetInput = admin_swap_converter_normalize_default_asset_key($_POST['swap_converter_default_from_asset'] ?? 'bsc:native', 'bsc:native');
+        $swapConverterDefaultToAssetInput = admin_swap_converter_normalize_default_asset_key($_POST['swap_converter_default_to_asset'] ?? 'bsc:usdt', 'bsc:usdt');
         $hinkalPrivateSendEnabledInput = isset($_POST['hinkal_private_send_enabled']) ? 1 : 0;
+        $hinkalPrivateSendInputAssetInput = strtoupper(trim((string)($_POST['hinkal_private_send_input_asset'] ?? 'POL')));
+        if (!in_array($hinkalPrivateSendInputAssetInput, ['POL', 'USDT'], true)) {
+            $hinkalPrivateSendInputAssetInput = 'POL';
+        }
         $hinkalPrivateSendFeeWalletInput = trim((string)($_POST['hinkal_private_send_fee_wallet'] ?? ''));
+        $hinkalPrivateSendFeePercentInput = round((float)str_replace(',', '.', (string)($_POST['hinkal_private_send_fee_percent'] ?? '1.00')), 2);
+        $hinkalPrivateSendShowFeeDetailsInput = isset($_POST['hinkal_private_send_show_fee_details']) ? 1 : 0;
+        $hinkalPrivateSendNotificationEmailInput = strtolower(trim((string)($_POST['hinkal_private_send_notification_email'] ?? '')));
         $rangoConverterEnabledInput = isset($_POST['rango_converter_enabled']) ? 1 : 0;
         $rangoApiKeyInput = trim((string)($_POST['rango_api_key'] ?? ADMIN_RANGO_DEFAULT_API_KEY));
         if ($rangoApiKeyInput === '' && $rangoConverterEnabledInput === 1) {
@@ -995,13 +1258,18 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $mixerEnabledInput = isset($_POST['mixer_enabled']) ? 1 : 0;
         $mixerAllowedInputAssetsInput = admin_mixer_allowed_input_assets($_POST['mixer_allowed_input_assets'] ?? [], false);
         $mixerAllowedOutputAssetsInput = admin_mixer_allowed_output_assets($_POST['mixer_allowed_output_assets'] ?? [], false);
+        $mixerDefaultInputAssetInput = admin_mixer_normalize_input_asset_key($_POST['mixer_default_input_asset'] ?? 'BTC', $mixerAllowedInputAssetsInput);
+        $mixerDefaultOutputAssetInput = admin_mixer_normalize_output_asset_key($_POST['mixer_default_output_asset'] ?? 'POLYGON_POL', $mixerAllowedOutputAssetsInput);
         $mixerAllowedNetworksInput = admin_mixer_allowed_networks($_POST['mixer_allowed_networks'] ?? [], false);
         $mixerFeePercentInput = round((float)($_POST['mixer_fee_percent'] ?? 1.5), 2);
+        $mixerMinOrderUsdInput = round((float)str_replace(',', '.', (string)($_POST['mixer_min_order_usd'] ?? '10.00')), 2);
         $mixerMaxPayoutUsdInput = round((float)($_POST['mixer_max_payout_usd'] ?? 500.00), 2);
         $mixerDailyPayoutLimitUsdInput = round((float)($_POST['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
         $mixerShowPoolLiquidityInput = isset($_POST['mixer_show_pool_liquidity']) ? 1 : 0;
+        $mixerShowFeeBreakdownInput = isset($_POST['mixer_show_fee_breakdown']) ? 1 : 0;
         $mixerBtcConfirmationsRequiredInput = (int)($_POST['mixer_btc_confirmations_required'] ?? 3);
         $mixerDogeConfirmationsRequiredInput = (int)($_POST['mixer_doge_confirmations_required'] ?? 20);
+        $mixerSolConfirmationsRequiredInput = (int)($_POST['mixer_sol_confirmations_required'] ?? 1);
         $mixerQuoteLifetimeMinutesInput = (int)($_POST['mixer_quote_lifetime_minutes'] ?? 15);
         $mixerDetectionProviderInput = trim((string)($_POST['mixer_detection_provider'] ?? 'esplora'));
         $mixerDetectionProviderOptions = admin_mixer_detection_provider_options();
@@ -1010,6 +1278,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         }
         $mixerBtcDepositAddressInput = trim((string)($_POST['mixer_btc_deposit_address'] ?? ''));
         $mixerDogeDepositAddressInput = trim((string)($_POST['mixer_doge_deposit_address'] ?? ''));
+        $mixerSolDepositAddressInput = trim((string)($_POST['mixer_sol_deposit_address'] ?? ''));
         $mixerPolygonNetworkModeInput = admin_mixer_normalize_network_mode($_POST['mixer_polygon_network_mode'] ?? 'mainnet');
         $mixerPolygonVaultContractInput = trim((string)($_POST['mixer_polygon_vault_contract'] ?? ''));
         $mixerPolygonRpcUrlInput = trim((string)($_POST['mixer_polygon_rpc_url'] ?? ''));
@@ -1026,6 +1295,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $mixerBscTestnetRpcUrlInput = $mixerBscTestnetRpcUrlInput !== '' ? $mixerBscTestnetRpcUrlInput : admin_mixer_default_rpc_url('bsc', 'testnet');
         $mixerNotificationEmailInput = strtolower(trim((string)($_POST['mixer_notification_email'] ?? '')));
         $mixerAutoPayoutEnabledInput = isset($_POST['mixer_auto_payout_enabled']) ? 1 : 0;
+        $mixerPayoutSecretStorageModeInput = admin_mixer_secret_storage_mode($_POST['mixer_payout_secret_storage_mode'] ?? 'file');
+        $mixerPayoutSignerPrivateKeyInput = trim((string)($_POST['mixer_payout_signer_private_key'] ?? ''));
+        $mixerPayoutSignerPrivateKeyEncryptedInput = trim((string)($appSettings['mixer_payout_signer_private_key_encrypted'] ?? ''));
         $selectedCurrencyId = (int)($_POST['default_currency_id'] ?? 0);
         $allowedCurrencyIds = [];
         foreach ($serviceCurrencies as $serviceCurrency) {
@@ -1042,13 +1314,22 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $customerTypeSwitchEnabled = admin_customer_type_switch_enabled($appSettings) ? 1 : 0;
             $pageGuidanceEnabled = admin_page_guidance_enabled($appSettings) ? 1 : 0;
             $paymentTestModeNoticeEnabled = admin_payment_test_mode_notice_enabled($appSettings) ? 1 : 0;
+            $cryptoAutoAcceptEnabled = !empty($appSettings['crypto_auto_accept_enabled']) ? 1 : 0;
+            $cryptoAutoAcceptWindowMinutes = max(5, min(240, (int)($appSettings['crypto_auto_accept_window_minutes'] ?? 60)));
+            $cryptoAutoAcceptMinAmountPercent = max(50, min(100, (int)($appSettings['crypto_auto_accept_min_amount_percent'] ?? 80)));
             $swapConverterEnabledInput = admin_swap_converter_enabled($appSettings) ? 1 : 0;
-            $swapConverterIntegratorInput = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-Pro'));
+            $swapConverterIntegratorInput = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-PRO'));
             $swapConverterApiKeyInput = trim((string)($appSettings['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
             $swapConverterFeePercentInput = round((float)($appSettings['swap_converter_fee_percent'] ?? 1.0), 2);
             $swapConverterAllowedChainKeysInput = admin_swap_converter_allowed_chain_keys($appSettings['swap_converter_allowed_chains'] ?? '');
+            $swapConverterDefaultFromAssetInput = admin_swap_converter_normalize_default_asset_key($appSettings['swap_converter_default_from_asset'] ?? 'bsc:native', 'bsc:native');
+            $swapConverterDefaultToAssetInput = admin_swap_converter_normalize_default_asset_key($appSettings['swap_converter_default_to_asset'] ?? 'bsc:usdt', 'bsc:usdt');
             $hinkalPrivateSendEnabledInput = admin_hinkal_private_send_enabled($appSettings) ? 1 : 0;
+            $hinkalPrivateSendInputAssetInput = admin_hinkal_private_send_input_asset($appSettings);
             $hinkalPrivateSendFeeWalletInput = trim((string)($appSettings['hinkal_private_send_fee_wallet'] ?? ''));
+            $hinkalPrivateSendFeePercentInput = max(0.0, min(10.0, round((float)($appSettings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
+            $hinkalPrivateSendShowFeeDetailsInput = !array_key_exists('hinkal_private_send_show_fee_details', $appSettings) || !empty($appSettings['hinkal_private_send_show_fee_details']) ? 1 : 0;
+            $hinkalPrivateSendNotificationEmailInput = strtolower(trim((string)($appSettings['hinkal_private_send_notification_email'] ?? '')));
             $rangoConverterEnabledInput = admin_rango_converter_enabled($appSettings) ? 1 : 0;
             $rangoApiKeyInput = trim((string)($appSettings['rango_api_key'] ?? ''));
             $rangoApiKeyInput = $rangoApiKeyInput !== '' ? $rangoApiKeyInput : ADMIN_RANGO_DEFAULT_API_KEY;
@@ -1060,17 +1341,23 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $mixerEnabledInput = admin_mixer_enabled($appSettings) ? 1 : 0;
             $mixerAllowedInputAssetsInput = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
             $mixerAllowedOutputAssetsInput = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+            $mixerDefaultInputAssetInput = admin_mixer_normalize_input_asset_key($appSettings['mixer_default_input_asset'] ?? 'BTC', $mixerAllowedInputAssetsInput);
+            $mixerDefaultOutputAssetInput = admin_mixer_normalize_output_asset_key($appSettings['mixer_default_output_asset'] ?? 'POLYGON_POL', $mixerAllowedOutputAssetsInput);
             $mixerAllowedNetworksInput = admin_mixer_allowed_networks($appSettings['mixer_allowed_networks'] ?? 'polygon');
             $mixerFeePercentInput = round((float)($appSettings['mixer_fee_percent'] ?? 1.5), 2);
+            $mixerMinOrderUsdInput = admin_mixer_min_order_usd($appSettings);
             $mixerMaxPayoutUsdInput = round((float)($appSettings['mixer_max_payout_usd'] ?? 500.00), 2);
             $mixerDailyPayoutLimitUsdInput = round((float)($appSettings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
             $mixerShowPoolLiquidityInput = !empty($appSettings['mixer_show_pool_liquidity']) ? 1 : 0;
+            $mixerShowFeeBreakdownInput = array_key_exists('mixer_show_fee_breakdown', $appSettings) ? (!empty($appSettings['mixer_show_fee_breakdown']) ? 1 : 0) : 1;
             $mixerBtcConfirmationsRequiredInput = (int)($appSettings['mixer_btc_confirmations_required'] ?? 3);
             $mixerDogeConfirmationsRequiredInput = (int)($appSettings['mixer_doge_confirmations_required'] ?? 20);
+            $mixerSolConfirmationsRequiredInput = (int)($appSettings['mixer_sol_confirmations_required'] ?? 1);
             $mixerQuoteLifetimeMinutesInput = (int)($appSettings['mixer_quote_lifetime_minutes'] ?? 15);
             $mixerDetectionProviderInput = trim((string)($appSettings['mixer_detection_provider'] ?? 'esplora'));
             $mixerBtcDepositAddressInput = trim((string)($appSettings['mixer_btc_deposit_address'] ?? ''));
             $mixerDogeDepositAddressInput = trim((string)($appSettings['mixer_doge_deposit_address'] ?? ''));
+            $mixerSolDepositAddressInput = trim((string)($appSettings['mixer_sol_deposit_address'] ?? ''));
             $mixerPolygonNetworkModeInput = admin_mixer_normalize_network_mode($appSettings['mixer_polygon_network_mode'] ?? 'mainnet');
             $mixerPolygonVaultContractInput = trim((string)($appSettings['mixer_polygon_vault_contract'] ?? ''));
             $mixerPolygonRpcUrlInput = trim((string)($appSettings['mixer_polygon_rpc_url'] ?? ''));
@@ -1087,6 +1374,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $mixerBscTestnetRpcUrlInput = $mixerBscTestnetRpcUrlInput !== '' ? $mixerBscTestnetRpcUrlInput : admin_mixer_default_rpc_url('bsc', 'testnet');
             $mixerNotificationEmailInput = strtolower(trim((string)($appSettings['mixer_notification_email'] ?? '')));
             $mixerAutoPayoutEnabledInput = !empty($appSettings['mixer_auto_payout_enabled']) ? 1 : 0;
+            $mixerPayoutSecretStorageModeInput = admin_mixer_secret_storage_mode($appSettings['mixer_payout_secret_storage_mode'] ?? 'file');
+            $mixerPayoutSignerPrivateKeyInput = '';
+            $mixerPayoutSignerPrivateKeyEncryptedInput = trim((string)($appSettings['mixer_payout_signer_private_key_encrypted'] ?? ''));
         }
 
         $swapConverterEnabled = $swapConverterEnabledInput === 1;
@@ -1095,8 +1385,13 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $swapConverterFeePercent = max(0.0, min(10.0, $swapConverterFeePercentInput));
         $swapConverterAllowedChainKeys = $swapConverterAllowedChainKeysInput;
         $swapConverterAllowedChainIds = admin_swap_converter_chain_ids_for_keys($swapConverterAllowedChainKeys);
+        $swapConverterDefaultFromAsset = $swapConverterDefaultFromAssetInput;
+        $swapConverterDefaultToAsset = $swapConverterDefaultToAssetInput;
         $hinkalPrivateSendEnabled = $hinkalPrivateSendEnabledInput === 1;
         $hinkalPrivateSendFeeWallet = $hinkalPrivateSendFeeWalletInput;
+        $hinkalPrivateSendFeePercent = max(0.0, min(10.0, $hinkalPrivateSendFeePercentInput));
+        $hinkalPrivateSendShowFeeDetails = $hinkalPrivateSendShowFeeDetailsInput === 1;
+        $hinkalPrivateSendNotificationEmail = $hinkalPrivateSendNotificationEmailInput;
         $rangoConverterEnabled = $rangoConverterEnabledInput === 1;
         $rangoApiKey = $rangoApiKeyInput;
         $rangoWalletConnectProjectId = $rangoWalletConnectProjectIdInput;
@@ -1109,18 +1404,24 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $mixerAllowedInputAssets = $mixerAllowedInputAssetsInput;
         $mixerOutputAssetOptions = admin_mixer_output_asset_options();
         $mixerAllowedOutputAssets = $mixerAllowedOutputAssetsInput;
+        $mixerDefaultInputAsset = $mixerDefaultInputAssetInput;
+        $mixerDefaultOutputAsset = $mixerDefaultOutputAssetInput;
         $mixerNetworkOptions = admin_mixer_network_options();
         $mixerAllowedNetworks = $mixerAllowedNetworksInput;
         $mixerFeePercent = max(0.0, min(5.0, $mixerFeePercentInput));
+        $mixerMinOrderUsd = max(0.01, min(1000.00, $mixerMinOrderUsdInput));
         $mixerMaxPayoutUsd = $mixerMaxPayoutUsdInput > 0 ? $mixerMaxPayoutUsdInput : 500.00;
         $mixerDailyPayoutLimitUsd = $mixerDailyPayoutLimitUsdInput > 0 ? $mixerDailyPayoutLimitUsdInput : 1500.00;
         $mixerShowPoolLiquidity = $mixerShowPoolLiquidityInput === 1;
+        $mixerShowFeeBreakdown = $mixerShowFeeBreakdownInput === 1;
         $mixerBtcConfirmationsRequired = max(1, min(12, $mixerBtcConfirmationsRequiredInput));
         $mixerDogeConfirmationsRequired = max(1, min(120, $mixerDogeConfirmationsRequiredInput));
+        $mixerSolConfirmationsRequired = max(1, min(32, $mixerSolConfirmationsRequiredInput));
         $mixerQuoteLifetimeMinutes = max(1, min(240, $mixerQuoteLifetimeMinutesInput));
         $mixerDetectionProvider = $mixerDetectionProviderInput;
         $mixerBtcDepositAddress = $mixerBtcDepositAddressInput;
         $mixerDogeDepositAddress = $mixerDogeDepositAddressInput;
+        $mixerSolDepositAddress = $mixerSolDepositAddressInput;
         $mixerPolygonNetworkMode = $mixerPolygonNetworkModeInput;
         $mixerPolygonVaultContract = $mixerPolygonVaultContractInput;
         $mixerPolygonRpcUrl = $mixerPolygonRpcUrlInput;
@@ -1133,6 +1434,21 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $mixerBscTestnetRpcUrl = $mixerBscTestnetRpcUrlInput;
         $mixerNotificationEmail = $mixerNotificationEmailInput;
         $mixerAutoPayoutEnabled = $mixerAutoPayoutEnabledInput === 1;
+        $mixerPayoutSecretStorageMode = $mixerPayoutSecretStorageModeInput;
+        $mixerPayoutSignerPrivateKeyEncrypted = $mixerPayoutSignerPrivateKeyEncryptedInput;
+        $mixerPayoutSignerPrivateKeySaveError = false;
+        if ($settingsProtectedFeatureEditEnabled && $mixerPayoutSecretStorageMode === 'database_encrypted' && $mixerPayoutSignerPrivateKeyInput !== '') {
+            $normalizedSignerSecret = strtolower(preg_replace('/^0x/i', '', $mixerPayoutSignerPrivateKeyInput));
+            if (preg_match('/^[a-f0-9]{64}$/', $normalizedSignerSecret) === 1) {
+                $encryptedSignerSecret = admin_mixer_encrypt_secret($normalizedSignerSecret);
+                if ($encryptedSignerSecret !== '') {
+                    $mixerPayoutSignerPrivateKeyEncrypted = $encryptedSignerSecret;
+                    $mixerPayoutSignerPrivateKeyEncryptedInput = $encryptedSignerSecret;
+                } else {
+                    $mixerPayoutSignerPrivateKeySaveError = true;
+                }
+            }
+        }
 
         $rangoAffiliateWalletsDecoded = null;
         if ($rangoAffiliateWalletsInput !== '') {
@@ -1145,6 +1461,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             || preg_match('/^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,39})$/i', $mixerBtcDepositAddressInput) === 1;
         $mixerDogeDepositAddressValid = $mixerDogeDepositAddressInput === ''
             || preg_match('/^[DA9][a-km-zA-HJ-NP-Z1-9]{25,39}$/', $mixerDogeDepositAddressInput) === 1;
+        $mixerSolDepositAddressValid = $mixerSolDepositAddressInput === ''
+            || admin_mixer_is_valid_solana_address($mixerSolDepositAddressInput);
         $mixerPolygonVaultContractValid = $mixerPolygonVaultContractInput === ''
             || preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerPolygonVaultContractInput) === 1;
         $mixerPolygonTestnetVaultContractValid = $mixerPolygonTestnetVaultContractInput === ''
@@ -1165,6 +1483,13 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $mixerBscSelectedRpcInput = $mixerBscNetworkModeInput === 'testnet'
             ? $mixerBscTestnetRpcUrlInput
             : $mixerBscRpcUrlInput;
+        $mixerOutputAssetsWithoutNetwork = [];
+        foreach ($mixerAllowedOutputAssetsInput as $outputAssetInput) {
+            $outputAssetNetworkKey = admin_mixer_network_key_for_output_asset((string)$outputAssetInput);
+            if (!in_array($outputAssetNetworkKey, $mixerAllowedNetworksInput, true)) {
+                $mixerOutputAssetsWithoutNetwork[] = (string)$outputAssetInput;
+            }
+        }
 
         if ($cryptoDailyBackupEmail !== '' && filter_var($cryptoDailyBackupEmail, FILTER_VALIDATE_EMAIL) === false) {
             $pageAlert = admin_t($messages, 'settings_crypto_daily_backup_email_invalid', 'Backup recipient email must be a valid address.');
@@ -1174,14 +1499,26 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         } elseif ($swapConverterFeePercentInput < 0 || $swapConverterFeePercentInput > 10) {
             $pageAlert = admin_t($messages, 'settings_swap_converter_fee_invalid', 'Swap Converter fee must be between 0 and 10.');
             $pageAlertType = 'danger';
+        } elseif ($mixerMinOrderUsdInput < 0.01 || $mixerMinOrderUsdInput > 1000.00) {
+            $pageAlert = admin_t($messages, 'settings_mixer_min_order_usd_invalid', 'Swapper minimum order must be between 0.01 and 1000.00 USD.');
+            $pageAlertType = 'danger';
         } elseif ($swapConverterEnabledInput === 1 && $swapConverterIntegratorInput === '') {
             $pageAlert = admin_t($messages, 'settings_swap_converter_integrator_required', 'Provide the LI.FI integrator name to enable Swap Converter.');
             $pageAlertType = 'danger';
         } elseif ($swapConverterEnabledInput === 1 && $swapConverterAllowedChainIds === []) {
             $pageAlert = admin_t($messages, 'settings_swap_converter_chains_required', 'Select at least one LI.FI chain for Swap Converter.');
             $pageAlertType = 'danger';
+        } elseif ($hinkalPrivateSendFeePercentInput < 0 || $hinkalPrivateSendFeePercentInput > 10) {
+            $pageAlert = admin_t($messages, 'settings_hinkal_private_send_fee_invalid', 'Hinkal fee must be between 0 and 10.');
+            $pageAlertType = 'danger';
         } elseif ($hinkalPrivateSendFeeWalletInput !== '' && !preg_match('/^0x[a-fA-F0-9]{40}$/', $hinkalPrivateSendFeeWalletInput)) {
             $pageAlert = admin_t($messages, 'settings_hinkal_private_send_fee_wallet_invalid', 'Hinkal fee wallet must be a valid Polygon/EVM address.');
+            $pageAlertType = 'danger';
+        } elseif ($hinkalPrivateSendEnabledInput === 1 && $hinkalPrivateSendFeePercentInput > 0 && $hinkalPrivateSendFeeWalletInput === '') {
+            $pageAlert = admin_t($messages, 'settings_hinkal_private_send_fee_wallet_required', 'Provide a Hinkal fee wallet when the configured fee is greater than zero.');
+            $pageAlertType = 'danger';
+        } elseif ($hinkalPrivateSendNotificationEmailInput !== '' && filter_var($hinkalPrivateSendNotificationEmailInput, FILTER_VALIDATE_EMAIL) === false) {
+            $pageAlert = admin_t($messages, 'settings_hinkal_private_send_notification_email_invalid', 'Hinkal notification email must be a valid email address.');
             $pageAlertType = 'danger';
         } elseif ($rangoAffiliateFeePercentInput < 0 || $rangoAffiliateFeePercentInput > 3) {
             $pageAlert = admin_t($messages, 'settings_rango_fee_invalid', 'Rango affiliate fee must be between 0 and 3.');
@@ -1204,7 +1541,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         } elseif ($mixerMaxPayoutUsdInput > $mixerDailyPayoutLimitUsdInput) {
             $pageAlert = admin_t($messages, 'settings_mixer_limits_order', 'Swapper max payout per order cannot be higher than the daily payout limit.');
             $pageAlertType = 'danger';
-        } elseif ($mixerBtcConfirmationsRequiredInput < 1 || $mixerBtcConfirmationsRequiredInput > 12 || $mixerDogeConfirmationsRequiredInput < 1 || $mixerDogeConfirmationsRequiredInput > 120) {
+        } elseif ($mixerBtcConfirmationsRequiredInput < 1 || $mixerBtcConfirmationsRequiredInput > 12 || $mixerDogeConfirmationsRequiredInput < 1 || $mixerDogeConfirmationsRequiredInput > 120 || $mixerSolConfirmationsRequiredInput < 1 || $mixerSolConfirmationsRequiredInput > 32) {
             $pageAlert = admin_t($messages, 'settings_mixer_confirmations_invalid', 'Swapper confirmations are outside the allowed range.');
             $pageAlertType = 'danger';
         } elseif ($mixerQuoteLifetimeMinutesInput < 1 || $mixerQuoteLifetimeMinutesInput > 240) {
@@ -1218,6 +1555,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $pageAlertType = 'danger';
         } elseif ($mixerEnabledInput === 1 && $mixerAllowedNetworksInput === []) {
             $pageAlert = admin_t($messages, 'settings_mixer_networks_required', 'Select at least one Swapper network.');
+            $pageAlertType = 'danger';
+        } elseif ($mixerEnabledInput === 1 && $mixerOutputAssetsWithoutNetwork !== []) {
+            $pageAlert = admin_t($messages, 'settings_mixer_output_network_required', 'Enable the payout network for every selected Swapper output asset.');
             $pageAlertType = 'danger';
         } elseif (!$mixerPolygonVaultContractValid) {
             $pageAlert = admin_t($messages, 'settings_mixer_vault_invalid', 'Swapper vault contract must be a valid Polygon/EVM address.');
@@ -1240,14 +1580,23 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         } elseif (!$mixerDogeDepositAddressValid) {
             $pageAlert = admin_t($messages, 'settings_mixer_doge_deposit_address_invalid', 'DOGE deposit address must be a valid public DOGE address from Trust Wallet.');
             $pageAlertType = 'danger';
+        } elseif (!$mixerSolDepositAddressValid) {
+            $pageAlert = admin_t($messages, 'settings_mixer_sol_deposit_address_invalid', 'SOL deposit address must be a valid public Solana address from Trust Wallet.');
+            $pageAlertType = 'danger';
+        } elseif ($settingsProtectedFeatureEditEnabled && $mixerPayoutSecretStorageModeInput === 'database_encrypted' && $mixerPayoutSignerPrivateKeyInput !== '' && preg_match('/^(?:0x)?[a-fA-F0-9]{64}$/', $mixerPayoutSignerPrivateKeyInput) !== 1) {
+            $pageAlert = admin_t($messages, 'settings_mixer_payout_signer_private_key_invalid', 'Payout signer private key must be a valid 64-character hex key.');
+            $pageAlertType = 'danger';
+        } elseif ($settingsProtectedFeatureEditEnabled && $mixerPayoutSignerPrivateKeySaveError) {
+            $pageAlert = admin_t($messages, 'settings_mixer_payout_signer_private_key_encrypt_error', 'Unable to encrypt the payout signer private key. Check server secret storage permissions.');
+            $pageAlertType = 'danger';
         } elseif ($mixerAutoPayoutEnabledInput === 1 && $mixerNotificationEmailInput === '') {
-            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, Polygon RPC URL and notification email.');
+            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, RPC URL and notification email.');
             $pageAlertType = 'danger';
         } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('polygon', $mixerAllowedNetworksInput, true) && ($mixerPolygonSelectedVaultInput === '' || $mixerPolygonSelectedRpcInput === '')) {
-            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, Polygon RPC URL and notification email.');
+            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, RPC URL and notification email.');
             $pageAlertType = 'danger';
         } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('bsc', $mixerAllowedNetworksInput, true) && ($mixerBscSelectedVaultInput === '' || $mixerBscSelectedRpcInput === '')) {
-            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, Polygon RPC URL and notification email.');
+            $pageAlert = admin_t($messages, 'settings_mixer_auto_payout_requires_config', 'Swapper auto payout requires vault contract, RPC URL and notification email.');
             $pageAlertType = 'danger';
         } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('BTC', $mixerAllowedInputAssetsInput, true) && $mixerBtcDepositAddressInput === '') {
             $pageAlert = admin_t($messages, 'settings_mixer_btc_deposit_address_required', 'Swapper auto payout requires a public BTC deposit address when BTC is enabled.');
@@ -1255,9 +1604,11 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('DOGE', $mixerAllowedInputAssetsInput, true) && $mixerDogeDepositAddressInput === '') {
             $pageAlert = admin_t($messages, 'settings_mixer_doge_deposit_address_required', 'Swapper auto payout requires a public DOGE deposit address when DOGE is enabled.');
             $pageAlertType = 'danger';
+        } elseif ($mixerAutoPayoutEnabledInput === 1 && in_array('SOL', $mixerAllowedInputAssetsInput, true) && $mixerSolDepositAddressInput === '') {
+            $pageAlert = admin_t($messages, 'settings_mixer_sol_deposit_address_required', 'Swapper auto payout requires a public SOL deposit address when SOL is enabled.');
+            $pageAlertType = 'danger';
         } else {
-            $updated = $db->update_using_id(
-                [
+            $settingsUpdateFields = [
                     'default_currency_id',
                     'maintenance_mode',
                     'registration_enabled',
@@ -1282,6 +1633,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'application_instructions_enabled',
                     'page_guidance_enabled',
                     'payment_test_mode_notice_enabled',
+                    'crypto_auto_accept_enabled',
+                    'crypto_auto_accept_window_minutes',
+                    'crypto_auto_accept_min_amount_percent',
                     'crypto_daily_backup_enabled',
                     'crypto_daily_backup_email',
                     'history_cleanup_enabled',
@@ -1290,13 +1644,21 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'bank_transfers_enabled',
                     'crypto_wallet_shared_assignments_enabled',
                     'bank_account_shared_assignments_enabled',
+                    'billing_enabled',
+                    'billing_auto_issue_email_enabled',
                     'swap_converter_enabled',
                     'swap_converter_integrator',
                     'swap_converter_fee_percent',
                     'swap_converter_api_key',
                     'swap_converter_allowed_chains',
+                    'swap_converter_default_from_asset',
+                    'swap_converter_default_to_asset',
                     'hinkal_private_send_enabled',
+                    'hinkal_private_send_input_asset',
                     'hinkal_private_send_fee_wallet',
+                    'hinkal_private_send_fee_percent',
+                    'hinkal_private_send_show_fee_details',
+                    'hinkal_private_send_notification_email',
                     'rango_converter_enabled',
                     'rango_api_key',
                     'rango_walletconnect_project_id',
@@ -1307,17 +1669,23 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'mixer_enabled',
                     'mixer_allowed_input_assets',
                     'mixer_allowed_output_assets',
+                    'mixer_default_input_asset',
+                    'mixer_default_output_asset',
                     'mixer_allowed_networks',
                     'mixer_fee_percent',
+                    'mixer_min_order_usd',
                     'mixer_max_payout_usd',
                     'mixer_daily_payout_limit_usd',
                     'mixer_show_pool_liquidity',
+                    'mixer_show_fee_breakdown',
                     'mixer_btc_confirmations_required',
                     'mixer_doge_confirmations_required',
+                    'mixer_sol_confirmations_required',
                     'mixer_quote_lifetime_minutes',
                     'mixer_detection_provider',
                     'mixer_btc_deposit_address',
                     'mixer_doge_deposit_address',
+                    'mixer_sol_deposit_address',
                     'mixer_polygon_network_mode',
                     'mixer_polygon_vault_contract',
                     'mixer_polygon_rpc_url',
@@ -1330,8 +1698,10 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'mixer_bsc_testnet_rpc_url',
                     'mixer_notification_email',
                     'mixer_auto_payout_enabled',
-                ],
-                [
+                    'mixer_payout_secret_storage_mode',
+                    'mixer_payout_signer_private_key_encrypted',
+                ];
+            $settingsUpdateValues = [
                     $selectedCurrencyId,
                     $maintenanceMode,
                     $registrationEnabled,
@@ -1356,6 +1726,9 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $applicationInstructionsEnabled,
                     $pageGuidanceEnabled,
                     $paymentTestModeNoticeEnabled,
+                    $cryptoAutoAcceptEnabled,
+                    $cryptoAutoAcceptWindowMinutes,
+                    $cryptoAutoAcceptMinAmountPercent,
                     $cryptoDailyBackupEnabled,
                     $cryptoDailyBackupEmail !== '' ? $cryptoDailyBackupEmail : null,
                     $historyCleanupEnabled,
@@ -1364,13 +1737,21 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $bankTransfersEnabled,
                     $cryptoWalletSharedAssignmentsEnabled,
                     $bankAccountSharedAssignmentsEnabled,
+                    $billingEnabledInput,
+                    $billingAutoIssueEmailEnabledInput,
                     $swapConverterEnabledInput,
                     $swapConverterIntegratorInput !== '' ? $swapConverterIntegratorInput : null,
                     $swapConverterFeePercentInput,
                     $swapConverterApiKeyInput !== '' ? $swapConverterApiKeyInput : null,
                     implode(',', $swapConverterAllowedChainKeysInput),
+                    $swapConverterDefaultFromAssetInput,
+                    $swapConverterDefaultToAssetInput,
                     $hinkalPrivateSendEnabledInput,
+                    $hinkalPrivateSendInputAssetInput,
                     $hinkalPrivateSendFeeWalletInput !== '' ? $hinkalPrivateSendFeeWalletInput : null,
+                    $hinkalPrivateSendFeePercentInput,
+                    $hinkalPrivateSendShowFeeDetailsInput,
+                    $hinkalPrivateSendNotificationEmailInput !== '' ? $hinkalPrivateSendNotificationEmailInput : null,
                     $rangoConverterEnabledInput,
                     $rangoApiKeyInput !== '' ? $rangoApiKeyInput : null,
                     $rangoWalletConnectProjectIdInput !== '' ? $rangoWalletConnectProjectIdInput : null,
@@ -1381,17 +1762,23 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $mixerEnabledInput,
                     implode(',', $mixerAllowedInputAssetsInput),
                     implode(',', $mixerAllowedOutputAssetsInput),
+                    $mixerDefaultInputAssetInput,
+                    $mixerDefaultOutputAssetInput,
                     implode(',', $mixerAllowedNetworksInput),
                     $mixerFeePercentInput,
+                    $mixerMinOrderUsd,
                     $mixerMaxPayoutUsdInput,
                     $mixerDailyPayoutLimitUsdInput,
                     $mixerShowPoolLiquidityInput,
+                    $mixerShowFeeBreakdownInput,
                     $mixerBtcConfirmationsRequiredInput,
                     $mixerDogeConfirmationsRequiredInput,
+                    $mixerSolConfirmationsRequiredInput,
                     $mixerQuoteLifetimeMinutesInput,
                     $mixerDetectionProviderInput,
                     $mixerBtcDepositAddressInput !== '' ? $mixerBtcDepositAddressInput : null,
                     $mixerDogeDepositAddressInput !== '' ? $mixerDogeDepositAddressInput : null,
+                    $mixerSolDepositAddressInput !== '' ? $mixerSolDepositAddressInput : null,
                     $mixerPolygonNetworkModeInput,
                     $mixerPolygonVaultContractInput !== '' ? $mixerPolygonVaultContractInput : null,
                     $mixerPolygonRpcUrlInput !== '' ? $mixerPolygonRpcUrlInput : null,
@@ -1404,16 +1791,31 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $mixerBscTestnetRpcUrlInput !== '' ? $mixerBscTestnetRpcUrlInput : null,
                     $mixerNotificationEmailInput !== '' ? $mixerNotificationEmailInput : null,
                     $mixerAutoPayoutEnabledInput,
-                ],
-                'app_settings',
-                1
-            );
+                    $mixerPayoutSecretStorageModeInput,
+                    $mixerPayoutSignerPrivateKeyEncryptedInput !== '' ? $mixerPayoutSignerPrivateKeyEncryptedInput : null,
+                ];
+
+            $settingsExistingFields = [];
+            $settingsFilteredValues = [];
+            foreach ($settingsUpdateFields as $settingsFieldIndex => $settingsFieldName) {
+                if (!schema_column_exists($db, 'app_settings', (string)$settingsFieldName)) {
+                    continue;
+                }
+
+                $settingsExistingFields[] = $settingsFieldName;
+                $settingsFilteredValues[] = $settingsUpdateValues[$settingsFieldIndex] ?? null;
+            }
+
+            $updated = $settingsExistingFields !== []
+                ? $db->update_using_id($settingsExistingFields, $settingsFilteredValues, 'app_settings', 1)
+                : false;
 
             if ($updated) {
                 admin_sync_products_currency($db, $selectedCurrencyId);
                 $pageAlert = admin_t($messages, 'settings_features_saved', 'Feature settings have been updated.');
                 $pageAlertType = 'success';
                 $appSettings = admin_app_settings($db);
+                $billingEnabled = admin_billing_enabled($appSettings);
                 if (function_exists('chat_demo_showcase_sync')) {
                     chat_demo_showcase_sync($db, is_array($appSettings) ? $appSettings : [], ['emit_messages' => false, 'source' => 'settings_save']);
                 }
@@ -1423,14 +1825,20 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $adminDefaultCurrencyLabel = trim($adminDefaultCurrencyCode . ' - ' . (string)($adminDefaultCurrencyRow['name'] ?? $adminDefaultCurrencyCode));
                 $adminDefaultCurrencyId = (int)($adminDefaultCurrencyRow['id'] ?? 0);
                 $swapConverterEnabled = admin_swap_converter_enabled($appSettings);
-                $swapConverterIntegrator = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-Pro'));
+                $swapConverterIntegrator = trim((string)($appSettings['swap_converter_integrator'] ?? 'Subme-PRO'));
                 $swapConverterApiKey = trim((string)($appSettings['swap_converter_api_key'] ?? '6f1c4d39-7a79-4d41-8858-7f8d4fa8b658.27010b40-7a37-4fb2-b72a-86f41d6d563e'));
                 $swapConverterFeePercent = round((float)($appSettings['swap_converter_fee_percent'] ?? 1.00), 2);
                 $swapConverterFeePercent = max(0.0, min(10.0, $swapConverterFeePercent));
                 $swapConverterAllowedChainKeys = admin_swap_converter_allowed_chain_keys($appSettings['swap_converter_allowed_chains'] ?? '');
                 $swapConverterAllowedChainIds = admin_swap_converter_chain_ids_for_keys($swapConverterAllowedChainKeys);
+                $swapConverterDefaultFromAsset = admin_swap_converter_normalize_default_asset_key($appSettings['swap_converter_default_from_asset'] ?? 'bsc:native', 'bsc:native');
+                $swapConverterDefaultToAsset = admin_swap_converter_normalize_default_asset_key($appSettings['swap_converter_default_to_asset'] ?? 'bsc:usdt', 'bsc:usdt');
                 $hinkalPrivateSendEnabled = admin_hinkal_private_send_enabled($appSettings);
+                $hinkalPrivateSendInputAsset = admin_hinkal_private_send_input_asset($appSettings);
                 $hinkalPrivateSendFeeWallet = trim((string)($appSettings['hinkal_private_send_fee_wallet'] ?? ''));
+                $hinkalPrivateSendFeePercent = max(0.0, min(10.0, round((float)($appSettings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
+                $hinkalPrivateSendShowFeeDetails = !array_key_exists('hinkal_private_send_show_fee_details', $appSettings) || !empty($appSettings['hinkal_private_send_show_fee_details']);
+                $hinkalPrivateSendNotificationEmail = strtolower(trim((string)($appSettings['hinkal_private_send_notification_email'] ?? '')));
                 $rangoConverterEnabled = admin_rango_converter_enabled($appSettings);
                 $rangoApiKey = trim((string)($appSettings['rango_api_key'] ?? ''));
                 $rangoApiKey = $rangoApiKey !== '' ? $rangoApiKey : ADMIN_RANGO_DEFAULT_API_KEY;
@@ -1445,17 +1853,22 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $mixerAllowedInputAssets = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
                 $mixerOutputAssetOptions = admin_mixer_output_asset_options();
                 $mixerAllowedOutputAssets = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
+                $mixerDefaultInputAsset = admin_mixer_normalize_input_asset_key($appSettings['mixer_default_input_asset'] ?? 'BTC', $mixerAllowedInputAssets);
+                $mixerDefaultOutputAsset = admin_mixer_normalize_output_asset_key($appSettings['mixer_default_output_asset'] ?? 'POLYGON_POL', $mixerAllowedOutputAssets);
                 $mixerNetworkOptions = admin_mixer_network_options();
                 $mixerNetworkModeOptions = admin_mixer_network_modes();
                 $mixerAllowedNetworks = admin_mixer_allowed_networks($appSettings['mixer_allowed_networks'] ?? 'polygon');
                 $mixerDetectionProviderOptions = admin_mixer_detection_provider_options();
                 $mixerFeePercent = round((float)($appSettings['mixer_fee_percent'] ?? 1.50), 2);
                 $mixerFeePercent = max(0.0, min(5.0, $mixerFeePercent));
+                $mixerMinOrderUsd = admin_mixer_min_order_usd($appSettings);
                 $mixerMaxPayoutUsd = round((float)($appSettings['mixer_max_payout_usd'] ?? 500.00), 2);
                 $mixerDailyPayoutLimitUsd = round((float)($appSettings['mixer_daily_payout_limit_usd'] ?? 1500.00), 2);
                 $mixerShowPoolLiquidity = array_key_exists('mixer_show_pool_liquidity', $appSettings) ? !empty($appSettings['mixer_show_pool_liquidity']) : true;
+                $mixerShowFeeBreakdown = array_key_exists('mixer_show_fee_breakdown', $appSettings) ? !empty($appSettings['mixer_show_fee_breakdown']) : true;
                 $mixerBtcConfirmationsRequired = (int)($appSettings['mixer_btc_confirmations_required'] ?? 3);
                 $mixerDogeConfirmationsRequired = (int)($appSettings['mixer_doge_confirmations_required'] ?? 20);
+                $mixerSolConfirmationsRequired = (int)($appSettings['mixer_sol_confirmations_required'] ?? 1);
                 $mixerQuoteLifetimeMinutes = (int)($appSettings['mixer_quote_lifetime_minutes'] ?? 15);
                 $mixerDetectionProvider = trim((string)($appSettings['mixer_detection_provider'] ?? 'esplora'));
                 if (!isset($mixerDetectionProviderOptions[$mixerDetectionProvider])) {
@@ -1463,6 +1876,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 }
                 $mixerBtcDepositAddress = trim((string)($appSettings['mixer_btc_deposit_address'] ?? ''));
                 $mixerDogeDepositAddress = trim((string)($appSettings['mixer_doge_deposit_address'] ?? ''));
+                $mixerSolDepositAddress = trim((string)($appSettings['mixer_sol_deposit_address'] ?? ''));
                 $mixerPolygonNetworkMode = admin_mixer_normalize_network_mode($appSettings['mixer_polygon_network_mode'] ?? 'mainnet');
                 $mixerPolygonVaultContract = trim((string)($appSettings['mixer_polygon_vault_contract'] ?? ''));
                 $mixerPolygonRpcUrl = trim((string)($appSettings['mixer_polygon_rpc_url'] ?? ''));
@@ -1479,6 +1893,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $mixerBscTestnetRpcUrl = $mixerBscTestnetRpcUrl !== '' ? $mixerBscTestnetRpcUrl : admin_mixer_default_rpc_url('bsc', 'testnet');
                 $mixerNotificationEmail = trim((string)($appSettings['mixer_notification_email'] ?? ''));
                 $mixerAutoPayoutEnabled = !empty($appSettings['mixer_auto_payout_enabled']);
+                $mixerPayoutSecretStorageMode = admin_mixer_secret_storage_mode($appSettings['mixer_payout_secret_storage_mode'] ?? 'file');
+                $mixerPayoutSignerPrivateKeyEncrypted = trim((string)($appSettings['mixer_payout_signer_private_key_encrypted'] ?? ''));
                 $mixerNetworkPoolStates = [];
                 if ($mixerEnabled && in_array($route, ['settings', 'swap-converter'], true)) {
                     foreach ($mixerNetworkOptions as $mixerNetworkKey => $mixerNetworkOption) {
@@ -1512,6 +1928,7 @@ if ($route === 'settings' && isset($_POST['admin_refresh_crypto_preview_status']
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $cryptoPreviewStatusRows = admin_crypto_preview_network_status_rows($messages, true);
         $pageAlert = admin_t($messages, 'settings_crypto_preview_status_refresh_success', 'Crypto preview network status has been refreshed.');
         $pageAlertType = 'success';
@@ -1923,6 +2340,8 @@ if ($route === 'settings' && isset($_POST['admin_run_maintenance_cycle'])) {
             admin_e(admin_t($messages, 'settings_maintenance_runner_emails', 'Emails')) . ': <strong>' . admin_e((string)($summary['emails_processed'] ?? 0)) . '</strong> / ' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_sent', 'sent')) . ': <strong>' . admin_e((string)($summary['emails_sent'] ?? 0)) . '</strong> / ' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_failed', 'failed')) . ': <strong>' . admin_e((string)($summary['emails_failed'] ?? 0)) . '</strong><br>' .
+            admin_e(admin_t($messages, 'settings_crypto_auto_accept_summary', 'Crypto auto-accept')) . ': <strong>' . admin_e((string)($summary['crypto_auto_accept_accepted'] ?? 0)) . '</strong> / ' .
+            admin_e(admin_t($messages, 'settings_crypto_auto_accept_checked', 'checked')) . ': <strong>' . admin_e((string)($summary['crypto_auto_accept_checked'] ?? 0)) . '</strong><br>' .
             admin_e(admin_t($messages, 'settings_crypto_daily_backup_summary', 'Crypto backup CSV')) . ': <strong>' . admin_e((string)($summary['crypto_backup_sent'] ?? 0)) . '</strong> / ' .
             admin_e(admin_t($messages, 'settings_crypto_daily_backup_rows', 'rows')) . ': <strong>' . admin_e((string)($summary['crypto_backup_rows'] ?? 0)) . '</strong><br>' .
             admin_e(admin_t($messages, 'settings_maintenance_runner_archived_requests', 'Archived requests')) . ': <strong>' . admin_e((string)(((int)($summary['archived_crypto_requests'] ?? 0)) + ((int)($summary['archived_bank_requests'] ?? 0)))) . '</strong><br>' .
@@ -1943,19 +2362,7 @@ if ($route === 'settings' && isset($_POST['admin_run_maintenance_cycle'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_download_database_backup'])) {
-    if (!$settingsAdminMode) {
-        if ($isAjaxRequest) {
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode([
-                'ok' => false,
-                'message' => admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.'),
-            ]);
-            exit;
-        }
-
-        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
-        $pageAlertType = 'danger';
-    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+    if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         if ($isAjaxRequest) {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
@@ -2006,6 +2413,68 @@ if ($route === 'settings' && isset($_POST['admin_download_database_backup'])) {
         } else {
             $pageAlert = (string)($backupResult['message'] ?? admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.'));
             $pageAlertType = 'danger';
+        }
+    }
+}
+
+if ($route === 'settings' && isset($_POST['admin_save_panel_subscription_settings'])) {
+    if (!$settingsAdminMode) {
+        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
+        $pageAlertType = 'danger';
+    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
+        $pageAlertType = 'danger';
+    } elseif (!schema_object_exists($db, 'app_settings')) {
+        $pageAlert = admin_t($messages, 'settings_panel_subscription_save_error', 'Unable to save admin panel subscription settings.');
+        $pageAlertType = 'danger';
+    } else {
+        $panelSubscriptionPaidUntil = trim((string)($_POST['admin_panel_subscription_paid_until'] ?? ''));
+        $panelSubscriptionRenewalUrl = trim((string)($_POST['admin_panel_subscription_renewal_url'] ?? ''));
+        $panelSubscriptionDateValid = true;
+        if ($panelSubscriptionPaidUntil !== '') {
+            $panelSubscriptionDate = DateTimeImmutable::createFromFormat('!Y-m-d', $panelSubscriptionPaidUntil);
+            $panelSubscriptionDateErrors = DateTimeImmutable::getLastErrors();
+            if ($panelSubscriptionDateErrors === false) {
+                $panelSubscriptionDateErrors = ['warning_count' => 0, 'error_count' => 0];
+            }
+            $panelSubscriptionDateValid = $panelSubscriptionDate instanceof DateTimeImmutable
+                && $panelSubscriptionDate->format('Y-m-d') === $panelSubscriptionPaidUntil
+                && (int)($panelSubscriptionDateErrors['warning_count'] ?? 0) === 0
+                && (int)($panelSubscriptionDateErrors['error_count'] ?? 0) === 0;
+        }
+        $panelSubscriptionUrlValid = $panelSubscriptionRenewalUrl === ''
+            || filter_var($panelSubscriptionRenewalUrl, FILTER_VALIDATE_URL) !== false;
+
+        if (!$panelSubscriptionDateValid) {
+            $pageAlert = admin_t($messages, 'settings_panel_subscription_date_invalid', 'Admin panel subscription date must be a valid date.');
+            $pageAlertType = 'danger';
+        } elseif (!$panelSubscriptionUrlValid) {
+            $pageAlert = admin_t($messages, 'settings_panel_subscription_url_invalid', 'Payment renewal URL must be a valid URL.');
+            $pageAlertType = 'danger';
+        } else {
+            $panelSubscriptionFields = [];
+            $panelSubscriptionValues = [];
+            if (schema_column_exists($db, 'app_settings', 'admin_panel_subscription_paid_until')) {
+                $panelSubscriptionFields[] = 'admin_panel_subscription_paid_until';
+                $panelSubscriptionValues[] = $panelSubscriptionPaidUntil !== '' ? $panelSubscriptionPaidUntil : null;
+            }
+            if (schema_column_exists($db, 'app_settings', 'admin_panel_subscription_renewal_url')) {
+                $panelSubscriptionFields[] = 'admin_panel_subscription_renewal_url';
+                $panelSubscriptionValues[] = $panelSubscriptionRenewalUrl !== '' ? $panelSubscriptionRenewalUrl : null;
+            }
+
+            $updated = $panelSubscriptionFields !== []
+                ? $db->update_using_id($panelSubscriptionFields, $panelSubscriptionValues, 'app_settings', 1)
+                : false;
+
+            if ($updated) {
+                $pageAlert = admin_t($messages, 'settings_panel_subscription_saved', 'Admin panel subscription settings have been saved.');
+                $pageAlertType = 'success';
+                $appSettings = admin_app_settings($db);
+            } else {
+                $pageAlert = admin_t($messages, 'settings_panel_subscription_save_error', 'Unable to save admin panel subscription settings.');
+                $pageAlertType = 'danger';
+            }
         }
     }
 }
@@ -2174,12 +2643,13 @@ $userListPerPage = 50;
 $userListTotal = 0;
 $userListTotalPages = 1;
 $orderListPage = 1;
-$orderListPerPage = 20;
+$orderListPerPage = 50;
 $orderListTotal = 0;
 $orderListTotalPages = 1;
 $orderFilterCustomerId = 0;
 $orderFilterCustomer = null;
 $orderFilterOrderId = 0;
+$orderExpirySortDirection = 'desc';
 $orderShowCreate = false;
 $orderProviders = [];
 $orderProducts = [];
@@ -2206,7 +2676,7 @@ $userQuickOrderProductsByProvider = [];
 $userQuickOrderVisibleProviderIds = [];
 $userQuickOrderAvailable = false;
 $productListPage = 1;
-$productListPerPage = 20;
+$productListPerPage = 50;
 $productListTotal = 0;
 $productListTotalPages = 1;
 $productProviderEditorId = 0;
@@ -2293,21 +2763,6 @@ $pageFormState = [
     'menu_logo_url' => '',
     'menu_sort_order' => 100,
     'body' => '',
-    'is_active' => 1,
-];
-$helpEditorId = 0;
-$helpEditor = null;
-$helpShowCreate = false;
-$helpListPage = 1;
-$helpListPerPage = 20;
-$helpListTotal = 0;
-$helpListTotalPages = 1;
-$helpFormState = [
-    'question' => '',
-    'answer_html' => '',
-    'audience_code' => 'all',
-    'keywords' => '',
-    'sort_order' => 100,
     'is_active' => 1,
 ];
 $helpVideoEditorId = 0;
@@ -2424,21 +2879,6 @@ if ($route === 'pages' && isset($_GET['deleted_page'])) {
     $pageAlertType = 'success';
 }
 
-if ($route === 'help' && isset($_GET['created_help_topic'])) {
-    $pageAlert = admin_t($messages, 'help_create_success', 'Help topic created successfully.');
-    $pageAlertType = 'success';
-}
-
-if ($route === 'help' && isset($_GET['saved_help_topic'])) {
-    $pageAlert = admin_t($messages, 'help_save_success', 'Help topic saved successfully.');
-    $pageAlertType = 'success';
-}
-
-if ($route === 'help' && isset($_GET['deleted_help_topic'])) {
-    $pageAlert = admin_t($messages, 'help_delete_success', 'Help topic deleted successfully.');
-    $pageAlertType = 'success';
-}
-
 if ($route === 'help' && isset($_GET['created_help_video'])) {
     $pageAlert = admin_t($messages, 'help_video_create_success', 'Video tutorial created successfully.');
     $pageAlertType = 'success';
@@ -2535,6 +2975,25 @@ if ($route === 'live-chat') {
 if ($route === 'orders') {
     $orderFilterCustomerId = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] : 0;
     $orderFilterOrderId = isset($_GET['order_id']) ? (int)$_GET['order_id'] : 0;
+    $orderStatusFilter = strtolower(trim((string)($_GET['order_status'] ?? '')));
+    if (!in_array($orderStatusFilter, ['expired'], true)) {
+        $orderStatusFilter = '';
+    }
+    $orderExpirySortDirection = strtolower(trim((string)($_GET['order_expiry_sort'] ?? '')));
+    if (!in_array($orderExpirySortDirection, ['asc', 'desc'], true)) {
+        $orderExpirySortDirection = '';
+    }
+    $orderIdSortDirection = strtolower(trim((string)($_GET['order_id_sort'] ?? '')));
+    if (!in_array($orderIdSortDirection, ['asc', 'desc'], true)) {
+        $orderIdSortDirection = '';
+    }
+    if ($orderExpirySortDirection !== '') {
+        $orderIdSortDirection = '';
+    } elseif ($orderIdSortDirection !== '') {
+        $orderExpirySortDirection = '';
+    } elseif ($orderStatusFilter === 'expired') {
+        $orderExpirySortDirection = 'desc';
+    }
     if ($orderFilterCustomerId > 0) {
         $orderFilterCustomer = admin_customer_basic_row($db, $orderFilterCustomerId);
         if (!$orderFilterCustomer) {
@@ -2543,7 +3002,7 @@ if ($route === 'orders') {
     }
 
     $orderListPage = max(1, (int)($_GET['order_list_page'] ?? 1));
-    $orderListTotal = admin_order_count_filtered($db, $orderFilterCustomerId, $orderFilterOrderId);
+    $orderListTotal = admin_order_count_filtered($db, $orderFilterCustomerId, $orderFilterOrderId, $orderStatusFilter);
     $orderListTotalPages = max(1, (int)ceil($orderListTotal / $orderListPerPage));
     if ($orderListPage > $orderListTotalPages) {
         $orderListPage = $orderListTotalPages;
@@ -2566,7 +3025,18 @@ if ($route === 'orders') {
         $orderProductsByProvider[$providerId][] = $orderProduct;
     }
 
-    if (isset($_POST['admin_save_order_info'])) {
+    if (isset($_POST['admin_activate_accept_balance_shortfall'])) {
+        $_POST['status'] = 'active';
+        $_POST['activation_balance_mode'] = 'debit_available';
+        if (trim((string)($_POST['payment_method'] ?? '')) === '') {
+            $_POST['payment_method'] = 'balance';
+        }
+    } elseif (isset($_POST['admin_activate_without_balance_charge'])) {
+        $_POST['status'] = 'active';
+        $_POST['activation_balance_mode'] = 'skip_debit';
+    }
+
+    if (isset($_POST['admin_save_order_info']) || isset($_POST['admin_activate_accept_balance_shortfall']) || isset($_POST['admin_activate_without_balance_charge'])) {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
@@ -2615,11 +3085,13 @@ if ($route === 'orders') {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
         } else {
+            $requestedExtendedExpiry = trim((string)($_POST['extend_predicted_expiry'] ?? ''));
             $extendResult = admin_extend_order(
                 $db,
                 (int)($_POST['order_id'] ?? 0),
                 (int)($_POST['extend_product_id'] ?? 0),
-                (string)($_POST['extend_charge_balance'] ?? '1') !== '0'
+                (string)($_POST['extend_charge_balance'] ?? '1') !== '0',
+                $requestedExtendedExpiry
             );
             $pageAlert = (string)($extendResult['message'] ?? admin_t($messages, 'order_extend_error', 'Unable to extend subscription.'));
             $pageAlertType = !empty($extendResult['ok']) ? 'success' : 'danger';
@@ -2632,7 +3104,10 @@ if ($route === 'orders') {
             $pageAlertType = 'danger';
         } else {
             $deleteResult = admin_delete_order($db, (int)($_POST['order_id'] ?? 0), (int)($adminUser['id'] ?? 0), $requestIp);
-            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'order_delete_error', 'Unable to delete order.'));
+            $deleteMessageKey = trim((string)($deleteResult['message_key'] ?? ''));
+            $pageAlert = $deleteMessageKey !== ''
+                ? admin_t($messages, $deleteMessageKey, (string)($deleteResult['message'] ?? admin_t($messages, 'order_delete_error', 'Unable to delete order.')))
+                : (string)($deleteResult['message'] ?? admin_t($messages, 'order_delete_error', 'Unable to delete order.'));
             $pageAlertType = !empty($deleteResult['ok']) ? 'success' : 'danger';
         }
     }
@@ -3340,15 +3815,6 @@ if ($route === 'pages') {
 }
 
 if ($route === 'help') {
-    $helpListPage = max(1, (int)($_GET['help_list_page'] ?? 1));
-    $helpListTotal = admin_help_topic_count($db);
-    $helpListTotalPages = max(1, (int)ceil($helpListTotal / $helpListPerPage));
-    if ($helpListPage > $helpListTotalPages) {
-        $helpListPage = $helpListTotalPages;
-    }
-
-    $helpEditorId = isset($_GET['edit_help']) ? (int)$_GET['edit_help'] : 0;
-    $helpShowCreate = (string)($_GET['view'] ?? '') === 'create';
     $helpVideoEditorId = isset($_GET['edit_help_video']) ? (int)$_GET['edit_help_video'] : 0;
     $helpVideoShowCreate = (string)($_GET['view'] ?? '') === 'create_help_video';
 
@@ -3434,98 +3900,6 @@ if ($route === 'help') {
         }
     }
 
-    if (isset($_POST['admin_create_help_topic'])) {
-        $helpShowCreate = true;
-        $helpListPage = max(1, (int)($_POST['help_list_page'] ?? $helpListPage));
-        $helpFormState = [
-            'question' => trim((string)($_POST['question'] ?? '')),
-            'answer_html' => trim((string)($_POST['answer_html'] ?? '')),
-            'audience_code' => admin_help_topic_normalize_audience((string)($_POST['audience_code'] ?? 'all')),
-            'keywords' => trim((string)($_POST['keywords'] ?? '')),
-            'sort_order' => (int)($_POST['sort_order'] ?? 100),
-            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
-        ];
-
-        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
-            $pageAlertType = 'danger';
-        } else {
-            $createResult = admin_create_help_topic($db, $_POST);
-            if (!empty($createResult['ok']) && !empty($createResult['help_topic_id'])) {
-                header('Location: /admin/?page=help&edit_help=' . (int)$createResult['help_topic_id'] . '&help_list_page=' . $helpListPage . $settingsAdminUrlSuffix . '&created_help_topic=1');
-                exit;
-            }
-
-            $pageAlert = (string)($createResult['message'] ?? admin_t($messages, 'help_create_error', 'Unable to create help topic.'));
-            $pageAlertType = 'danger';
-        }
-    }
-
-    if (isset($_POST['admin_save_help_topic'])) {
-        $helpEditorId = (int)($_POST['help_id'] ?? 0);
-        $helpListPage = max(1, (int)($_POST['help_list_page'] ?? $helpListPage));
-        $helpFormState = [
-            'question' => trim((string)($_POST['question'] ?? '')),
-            'answer_html' => trim((string)($_POST['answer_html'] ?? '')),
-            'audience_code' => admin_help_topic_normalize_audience((string)($_POST['audience_code'] ?? 'all')),
-            'keywords' => trim((string)($_POST['keywords'] ?? '')),
-            'sort_order' => (int)($_POST['sort_order'] ?? 100),
-            'is_active' => isset($_POST['is_active']) && (string)$_POST['is_active'] === '1' ? 1 : 0,
-        ];
-
-        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
-            $pageAlertType = 'danger';
-        } elseif (!$settingsAdminMode) {
-            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
-            $pageAlertType = 'danger';
-        } else {
-            $saveResult = admin_save_help_topic($db, $helpEditorId, $_POST);
-            if (!empty($saveResult['ok'])) {
-                header('Location: /admin/?page=help&edit_help=' . $helpEditorId . '&help_list_page=' . $helpListPage . $settingsAdminUrlSuffix . '&saved_help_topic=1');
-                exit;
-            }
-
-            $pageAlert = (string)($saveResult['message'] ?? admin_t($messages, 'help_save_error', 'Unable to save help topic.'));
-            $pageAlertType = 'danger';
-        }
-    }
-
-    if (isset($_POST['admin_delete_help_topic'])) {
-        $helpEditorId = (int)($_POST['help_id'] ?? 0);
-        $helpListPage = max(1, (int)($_POST['help_list_page'] ?? $helpListPage));
-
-        if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-            $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
-            $pageAlertType = 'danger';
-        } elseif (!$settingsAdminMode) {
-            $pageAlert = admin_t($messages, 'admin_mode_required_query', 'This action is available only in admin mode: add &admin=true to the URL.');
-            $pageAlertType = 'danger';
-        } else {
-            $deleteResult = admin_delete_help_topic($db, $helpEditorId);
-            if (!empty($deleteResult['ok'])) {
-                header('Location: /admin/?page=help&help_list_page=' . $helpListPage . $settingsAdminUrlSuffix . '&deleted_help_topic=1');
-                exit;
-            }
-
-            $pageAlert = (string)($deleteResult['message'] ?? admin_t($messages, 'help_delete_error', 'Unable to delete help topic.'));
-            $pageAlertType = 'danger';
-        }
-    }
-
-    if ($helpEditorId > 0) {
-        if (!$settingsAdminMode) {
-            $helpEditorId = 0;
-        } else {
-            $helpEditor = admin_help_topic_find($db, $helpEditorId);
-            if (!$helpEditor) {
-                $helpEditorId = 0;
-            } elseif (isset($_POST['admin_save_help_topic'])) {
-                $helpEditor = array_merge($helpEditor, $helpFormState);
-            }
-        }
-    }
-
     if ($helpVideoEditorId > 0) {
         if (!$settingsAdminMode) {
             $helpVideoEditorId = 0;
@@ -3555,7 +3929,10 @@ if ($route === 'cryptocurrencies') {
         }
     }
 
-    $cryptoAssetRows = admin_crypto_asset_rows($db, false);
+    $cryptoAssetRows = admin_refresh_crypto_asset_rates($db, $adminDefaultCurrencyCode, 900, [], true);
+    if (!$cryptoAssetRows) {
+        $cryptoAssetRows = admin_crypto_asset_rows($db, false);
+    }
     if ($cryptoAssetEditorId > 0) {
         $cryptoAssetEditor = admin_crypto_asset_find($db, $cryptoAssetEditorId);
         if (!$cryptoAssetEditor) {
@@ -3662,6 +4039,10 @@ if ($route === 'crypto-wallets') {
     $walletEditorId = isset($_GET['edit_wallet']) ? (int)$_GET['edit_wallet'] : 0;
     $walletFilterWalletId = isset($_GET['wallet_id']) ? (int)$_GET['wallet_id'] : 0;
     $walletListPage = max(1, (int)($_GET['wallet_list_page'] ?? 1));
+    $walletGlobalTotal = admin_crypto_wallet_count_filtered($db, 0);
+    $walletOnboardingVideoRows = $walletGlobalTotal <= 0
+        ? admin_help_video_rows_by_ids($db, [15, 8, 6, 7, 10])
+        : [];
     $walletListTotal = admin_crypto_wallet_count_filtered($db, $walletFilterWalletId);
     $walletListTotalPages = max(1, (int)ceil($walletListTotal / $walletListPerPage));
     if ($walletListPage > $walletListTotalPages) {
@@ -3752,6 +4133,11 @@ if ($route === 'crypto-wallets') {
     }
 
     $walletAssetOptions = admin_crypto_asset_rows($db, $walletCreateMode);
+    if ($walletCreateMode) {
+        $walletAssetOptions = array_values(array_filter($walletAssetOptions, static function (array $assetRow): bool {
+            return admin_crypto_asset_allows_customer_payments((string)($assetRow['code'] ?? ''));
+        }));
+    }
     $walletAssetSummaryRows = admin_crypto_wallet_asset_summary_rows($db);
     $walletAssetShortageCodes = [];
     foreach ($walletAssetSummaryRows as $walletAssetSummaryRow) {
@@ -3800,6 +4186,10 @@ if ($route === 'crypto-wallets') {
 if ($route === 'bank-accounts') {
     $bankAccountEditorId = isset($_GET['edit_account']) ? (int)$_GET['edit_account'] : 0;
     $bankAccountCreateMode = isset($_GET['create_account']) && (int)$_GET['create_account'] === 1;
+    $bankAccountTab = strtolower(trim((string)($_GET['bank_tab'] ?? 'accounts')));
+    if (!in_array($bankAccountTab, ['accounts', 'stats'], true)) {
+        $bankAccountTab = 'accounts';
+    }
     $bankAccountListPage = max(1, (int)($_GET['account_list_page'] ?? 1));
     $bankAccountListTotal = admin_bank_account_count($db);
     $bankAccountListTotalPages = max(1, (int)ceil($bankAccountListTotal / $bankAccountListPerPage));
@@ -3889,6 +4279,7 @@ if ($route === 'bank-accounts') {
             'swift_bic' => '',
             'payment_reference_template' => '',
             'transfer_instructions' => '',
+            'monthly_limit_amount' => null,
             'status' => 'available',
             'notes' => '',
         ];
@@ -4047,15 +4438,23 @@ if ($route === 'users') {
         }
     }
 
-    if ($selectedCustomerId > 0 && isset($_POST['admin_set_customer_password'])) {
+    if (
+        $selectedCustomerId > 0
+        && (isset($_POST['admin_set_customer_password']) || isset($_POST['admin_resend_customer_password']))
+    ) {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
         } else {
+            $passwordPayload = $_POST;
+            if (isset($_POST['admin_resend_customer_password'])) {
+                $passwordPayload['send_password_email'] = '1';
+            }
+
             $passwordResult = admin_set_customer_password(
                 $db,
                 $selectedCustomerId,
-                $_POST,
+                $passwordPayload,
                 (int)($adminUser['id'] ?? 0),
                 $requestIp
             );
@@ -4063,7 +4462,7 @@ if ($route === 'users') {
             $pageAlert = $passwordMessageKey !== ''
                 ? admin_t($messages, $passwordMessageKey, (string)($passwordResult['message'] ?? ''))
                 : (string)($passwordResult['message'] ?? '');
-            $pageAlertType = !empty($passwordResult['ok']) ? 'success' : 'danger';
+            $pageAlertType = (string)($passwordResult['alert_type'] ?? (!empty($passwordResult['ok']) ? 'success' : 'danger'));
         }
     }
 
@@ -4641,18 +5040,70 @@ if ($route === 'payments') {
     }
 }
 
+$billingContext = [];
+if ($route === 'billing' && $billingEnabled) {
+    $billingContext = admin_billing_context($db, $adminUser, $messages, $currentLocale, $_POST, $_FILES);
+    if ((string)($billingContext['alert'] ?? '') !== '') {
+        $pageAlert = (string)$billingContext['alert'];
+        $pageAlertType = (string)($billingContext['alert_type'] ?? 'success');
+    }
+}
+
 $navigation = admin_navigation_config($appSettings, $adminUser);
 $assetVersion = admin_public_asset_version('assets/css/admin.css');
 $scriptVersion = admin_public_asset_version('assets/js/admin.js');
-$metrics = admin_dashboard_metrics($db);
-$dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
-$dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
-$dashboardSalesSeriesPath = admin_dashboard_chart_path($dashboardSalesSeries);
-$dashboardSalesSeriesAreaPath = admin_dashboard_chart_area_path($dashboardSalesSeries);
-$dashboardSalesSeriesPoints = admin_dashboard_chart_points($dashboardSalesSeries);
-$dashboardChangeLogGroups = admin_dashboard_change_log_grouped_rows($db, 120);
-$dashboardProviderBreakdowns = admin_dashboard_provider_breakdowns($db, 6, 4);
-$recentOrders = admin_recent_orders($db);
+if ($route === 'dashboard') {
+    // Install compatibility columns and resolve currency before the read snapshot (DDL commits implicitly).
+    app_ensure_sales_runtime_columns($db);
+    app_ensure_order_renewal_runtime_columns($db);
+    admin_dashboard_sales_currency($db);
+    if (!$db->query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+        || !$db->query('START TRANSACTION WITH CONSISTENT SNAPSHOT')) {
+        throw new RuntimeException('Unable to start a consistent sales report.');
+    }
+    AdminDashboardSalesQueryCache::$rows = [];
+    AdminDashboardSalesQueryCache::$enabled = true;
+    try {
+        $activeCustomers = $db->select_user("SELECT COUNT(*) AS total FROM customers WHERE status = 'active'");
+        $metrics = ['active_customers' => (int)($activeCustomers['total'] ?? 0)];
+        $dashboardSubscriptionStatusCounts = admin_dashboard_subscription_status_counts($db);
+        $dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
+        $dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
+        $dashboardMonthlySalesSeries = admin_dashboard_monthly_sales_series($db, 12);
+        $dashboardYearlySalesSeries = admin_dashboard_yearly_sales_series($db, 6);
+        $dashboardSalesYearOptions = admin_dashboard_sales_year_options($db);
+        $dashboardSalesYearFilter = isset($_GET['dashboard_sales_year']) ? (int)$_GET['dashboard_sales_year'] : 0;
+        if ($dashboardSalesYearFilter > 0 && !in_array($dashboardSalesYearFilter, $dashboardSalesYearOptions, true)) {
+            $dashboardSalesYearFilter = 0;
+        }
+        $dashboardSalesView = isset($_GET['dashboard_sales_view']) ? strtolower(trim((string)$_GET['dashboard_sales_view'])) : '';
+        if (!in_array($dashboardSalesView, ['trend', 'monthly', 'summary'], true)) {
+            $dashboardSalesView = $dashboardSalesYearFilter > 0 ? 'summary' : 'trend';
+        }
+        $dashboardProductSalesSummary = admin_dashboard_product_sales_summary($db, 120, $dashboardSalesYearFilter > 0 ? $dashboardSalesYearFilter : null);
+        $dashboardSalesSeriesPath = admin_dashboard_chart_path($dashboardSalesSeries);
+        $dashboardSalesSeriesAreaPath = admin_dashboard_chart_area_path($dashboardSalesSeries);
+        $dashboardSalesSeriesPoints = admin_dashboard_chart_points($dashboardSalesSeries);
+        $dashboardProviderBreakdowns = []; // This legacy widget is hidden; avoid unused aggregate queries.
+        if (!$db->query('COMMIT')) {
+            throw new RuntimeException('Unable to complete the sales report.');
+        }
+    } catch (Throwable $exception) {
+        $db->query('ROLLBACK');
+        throw $exception;
+    } finally {
+        AdminDashboardSalesQueryCache::$enabled = false;
+        AdminDashboardSalesQueryCache::$rows = [];
+    }
+
+    $recentOrders = []; // The recent-orders widget is hidden.
+} else {
+    $activeCustomers = $db->select_user("SELECT COUNT(*) AS total FROM customers WHERE status = 'active'");
+    $metrics = ['active_customers' => (int)($activeCustomers['total'] ?? 0)];
+    $recentOrders = [];
+}
+$dashboardChangeLogGroups = in_array($route, ['dashboard', 'settings'], true)
+    ? admin_dashboard_change_log_grouped_rows($db, 120) : [];
 $chatInboxRows = admin_chat_inbox_rows($db, 12, (int)($adminUser['id'] ?? 0));
 $chatInboxUnreadCount = admin_chat_inbox_unread_count($chatInboxRows);
 $chatPendingGroupInvites = admin_chat_group_pending_invites($db, (int)($adminUser['id'] ?? 0));
@@ -4704,6 +5155,11 @@ if ($route === 'orders' && $orderFilterCustomer && is_array($pageCard)) {
 
 if ($route === 'orders' && $orderFilterOrderId > 0 && is_array($pageCard)) {
     $pageCard['text'] = admin_t($messages, 'orders_filtered_single', 'Showing order') . ': <strong>#' . $orderFilterOrderId . '</strong>';
+}
+
+if ($route === 'orders' && $orderStatusFilter === 'expired' && is_array($pageCard)) {
+    $pageCard['text'] = admin_t($messages, 'orders_filtered_expired', 'Showing expired subscriptions.')
+        . ' <a href="/admin/?page=orders" class="admin-filter-clear-link" title="' . admin_e(admin_t($messages, 'payment_clear_customer_filter', 'Clear filter')) . '" aria-label="' . admin_e(admin_t($messages, 'payment_clear_customer_filter', 'Clear filter')) . '"><i class="bi bi-x-lg" aria-hidden="true"></i></a>';
 }
 
 if ($route === 'crypto-wallets' && $walletFilterWallet && is_array($pageCard)) {
@@ -4762,90 +5218,41 @@ $pageIntroMap = [
     'settings' => admin_t($messages, 'page_settings_intro', ''),
 ];
 
-$adminHelpAudienceOptions = admin_help_topic_audience_options();
-$adminHelpModalTopics = [];
-foreach (admin_active_help_topic_rows($db) as $topicRow) {
-    $audienceCode = admin_help_topic_normalize_audience((string)($topicRow['audience_code'] ?? 'all'));
-    $answerHtml = (string)($topicRow['answer_html'] ?? '');
-    $searchParts = [
-        (string)($topicRow['question'] ?? ''),
-        (string)($topicRow['keywords'] ?? ''),
-        trim(strip_tags($answerHtml)),
-        (string)($adminHelpAudienceOptions[$audienceCode] ?? $audienceCode),
-    ];
-    $searchText = trim(implode(' ', $searchParts));
-    if (function_exists('mb_strtolower')) {
-        $searchText = mb_strtolower($searchText);
-    } else {
-        $searchText = strtolower($searchText);
-    }
-    $adminHelpModalTopics[] = [
-        'id' => (int)($topicRow['id'] ?? 0),
-        'question' => (string)($topicRow['question'] ?? ''),
-        'answer_html' => $answerHtml,
-        'audience_code' => $audienceCode,
-        'audience_label' => (string)($adminHelpAudienceOptions[$audienceCode] ?? $audienceCode),
-        'keywords' => (string)($topicRow['keywords'] ?? ''),
-        'search_text' => $searchText,
-    ];
-}
-if ($adminHelpModalTopics) {
-    usort($adminHelpModalTopics, static function (array $left, array $right): int {
-        $leftId = (int)($left['id'] ?? 0);
-        $rightId = (int)($right['id'] ?? 0);
-        if ($leftId === 1 && $rightId !== 1) {
-            return -1;
-        }
-        if ($rightId === 1 && $leftId !== 1) {
-            return 1;
-        }
-        return 0;
-    });
-}
-$adminHelpModalTopicsJson = json_encode(
-    $adminHelpModalTopics,
-    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP
-);
-if (!is_string($adminHelpModalTopicsJson)) {
-    $adminHelpModalTopicsJson = '[]';
-}
-
 $adminTopbarPayments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($appSettings), 8);
 $adminTopbarOrders = admin_topbar_notification_order_rows($db, 8);
 $adminSidebarPaymentAlertCount = (int)(admin_payment_summary($db, 0, admin_bank_transfers_enabled($appSettings))['open_total'] ?? 0);
 $adminSidebarOrderAlertCount = admin_topbar_notification_order_count($db);
+$adminTopbarAutoAcceptedPayments = admin_topbar_notification_auto_accepted_crypto_payment_rows($db, 5, 24);
 $adminTopbarNewCustomers = admin_topbar_notification_new_customer_rows($db, 5);
 $adminTopbarExpiringSubscriptions = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
+$adminTopbarExpiredSubscriptions = admin_topbar_notification_expired_subscription_data($db, 8, 168);
+$adminTopbarAdminPanelSubscriptionNotice = admin_topbar_admin_panel_subscription_notice($appSettings, 7);
 $adminTopbarBackupNotice = admin_topbar_manual_backup_notice($appSettings, 168);
+$bankAccountPoolUnavailable = false;
+if (admin_bank_transfers_enabled($appSettings)) {
+    $bankAccountPoolUnavailable = !app_available_bank_account_rows($db, $adminDefaultCurrencyCode, $appSettings);
+}
 $adminTopbarNotificationsCount = admin_topbar_notification_count($db, $appSettings);
 if ($cryptoWalletPoolDepleted) {
     $adminTopbarNotificationsCount++;
 }
-$adminTopbarConverterAssets = [];
-foreach (admin_refresh_crypto_asset_rates($db, $adminDefaultCurrencyCode) as $assetRow) {
-    $assetRate = isset($assetRow['current_rate_fiat']) ? (float)$assetRow['current_rate_fiat'] : 0.0;
-    if (empty($assetRow['is_active']) || $assetRate <= 0) {
-        continue;
-    }
-
-    $assetUpdatedAt = trim((string)($assetRow['rate_updated_at'] ?? ''));
-    $assetUpdatedTimestamp = $assetUpdatedAt !== '' ? app_timestamp_from_utc_datetime($assetUpdatedAt) : false;
-
-    $adminTopbarConverterAssets[] = [
-        'id' => (int)($assetRow['id'] ?? 0),
-        'code' => strtoupper((string)($assetRow['code'] ?? '')),
-        'name' => (string)($assetRow['name'] ?? ''),
-        'logo_url' => app_crypto_logo_by_code((string)($assetRow['code'] ?? ''), (string)($assetRow['logo_url'] ?? '')),
-        'rate' => $assetRate,
-        'rate_label' => app_format_crypto_rate($assetRow['current_rate_fiat'] ?? null),
-        'rate_updated_at' => $assetUpdatedAt,
-        'rate_updated_label' => $assetUpdatedAt !== '' ? app_format_utc_datetime_local($assetUpdatedAt) : '',
-        'is_stale' => !$assetUpdatedTimestamp || (time() - (int)$assetUpdatedTimestamp) >= 900 ? 1 : 0,
-    ];
+if ($bankAccountPoolUnavailable) {
+    $adminTopbarNotificationsCount++;
 }
+$adminTopbarConverterAssets = admin_topbar_converter_asset_payload($db, $adminDefaultCurrencyCode, 900, false);
 $adminTopbarConverterAssetsJson = json_encode($adminTopbarConverterAssets, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 if (!is_string($adminTopbarConverterAssetsJson)) {
     $adminTopbarConverterAssetsJson = '[]';
+}
+$adminTopbarConverterFiatIcon = trim((string)$adminDefaultCurrencySymbol);
+if ($adminTopbarConverterFiatIcon === '' || strtoupper($adminTopbarConverterFiatIcon) === strtoupper($adminDefaultCurrencyCode)) {
+    $adminTopbarConverterFiatIconMap = [
+        'USD' => '$',
+        'EUR' => '€',
+        'GBP' => '£',
+        'PLN' => 'zł',
+    ];
+    $adminTopbarConverterFiatIcon = $adminTopbarConverterFiatIconMap[strtoupper($adminDefaultCurrencyCode)] ?? substr($adminDefaultCurrencyCode, 0, 1);
 }
 
 function admin_render_table(array $headers, array $rows, array $messages): void
@@ -4877,7 +5284,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 <html lang="<?php echo admin_e($currentLocale); ?>">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <?php admin_render_no_zoom_head_tags(); ?>
     <title><?php echo admin_e($pageTitleMap[$route] ?? admin_t($messages, 'brand', 'Admin Panel')); ?></title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4886,10 +5293,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     <link rel="stylesheet" href="/assets/vendor/bootstrap-icons/bootstrap-icons.css?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap-icons/bootstrap-icons.css'); ?>">
     <link rel="stylesheet" href="/assets/css/font-awesome.min.css">
     <link rel="stylesheet" href="/assets/css/admin.css?v=<?php echo $assetVersion; ?>">
+    <?php if ($route === 'dashboard'): ?>
+        <link rel="stylesheet" href="/assets/css/admin-dashboard.css?v=<?php echo admin_public_asset_version('assets/css/admin-dashboard.css'); ?>">
+    <?php endif; ?>
 </head>
 <body class="admin-app-page"
     data-admin-sensitive-unlocked="<?php echo admin_sensitive_routes_unlocked() ? '1' : '0'; ?>"
-    data-admin-help-edit-allowed="<?php echo admin_user_can_access_route($adminUser, 'settings') ? '1' : '0'; ?>"
     data-admin-sensitive-prompt="<?php echo admin_e(admin_t($messages, 'settings_sensitive_prompt', 'Enter the password to open this section:')); ?>"
     data-admin-sensitive-error="<?php echo admin_e(admin_t($messages, 'settings_sensitive_unlock_error', 'Incorrect password.')); ?>"
     data-admin-sensitive-cancel="<?php echo admin_e(admin_t($messages, 'settings_sensitive_unlock_cancel', 'Access to this section was cancelled.')); ?>"
@@ -4913,7 +5322,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
             </a>
 
             <?php if ($swapConverterPageEnabled && admin_user_can_access_route($adminUser, 'swap-converter')): ?>
-                <a href="/admin/?page=swap-converter" class="admin-sidebar__preview admin-sidebar__preview--swap<?php echo $route === 'swap-converter' ? ' is-active' : ''; ?>">
+                <a href="/admin/?page=swap-converter" class="admin-sidebar__preview admin-sidebar__preview--swap<?php echo $route === 'swap-converter' ? ' is-active' : ''; ?>"<?php echo $route === 'swap-converter' ? ' aria-current="page"' : ''; ?>>
                     <i class="bi bi-arrow-left-right"></i>
                     <span><?php echo admin_e(admin_t($messages, 'nav_swap_converter', 'Swap Converter')); ?></span>
                 </a>
@@ -4925,7 +5334,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <div class="admin-sidebar__group-label"><?php echo admin_e(admin_t($messages, 'nav_group_' . $groupKey, ucfirst($groupKey))); ?></div>
                         <?php foreach ($items as $item): ?>
                             <?php $itemRequiresSensitiveUnlock = admin_route_requires_sensitive_unlock((string)$item['route']); ?>
-                            <a href="/admin/?page=<?php echo admin_e($item['route']); ?>" class="admin-sidebar__link<?php echo $route === $item['route'] ? ' is-active' : ''; ?>"<?php if ($itemRequiresSensitiveUnlock): ?> data-admin-sensitive-link="1" data-admin-sensitive-label="<?php echo admin_e(admin_route_label($messages, (string)$item['route'])); ?>"<?php endif; ?>>
+                            <a href="/admin/?page=<?php echo admin_e($item['route']); ?>" class="admin-sidebar__link<?php echo $route === $item['route'] ? ' is-active' : ''; ?>"<?php echo $route === $item['route'] ? ' aria-current="page"' : ''; ?><?php if ($itemRequiresSensitiveUnlock): ?> data-admin-sensitive-link="1" data-admin-sensitive-label="<?php echo admin_e(admin_route_label($messages, (string)$item['route'])); ?>"<?php endif; ?>>
                                 <i class="bi <?php echo admin_e($item['icon']); ?>"></i>
                                 <span><?php echo admin_e(admin_t($messages, $item['label_key'], $item['route'])); ?></span>
                                 <?php if ((string)($item['route'] ?? '') === 'users' && (int)($metrics['active_customers'] ?? 0) > 0): ?>
@@ -4958,7 +5367,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         <div class="admin-main">
             <header class="admin-topbar">
                 <div class="admin-topbar__left">
-                    <button type="button" class="btn btn-light admin-mobile-toggle" data-admin-sidebar-toggle>
+                    <button type="button" class="btn btn-light admin-mobile-toggle" data-admin-sidebar-toggle aria-label="<?php echo admin_e(admin_t($messages, 'topbar_menu_label', 'Navigation menu')); ?>">
                         <i class="bi bi-list"></i>
                     </button>
                     <label class="admin-search">
@@ -4968,7 +5377,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             placeholder="<?php echo admin_e(admin_t($messages, 'top_search_placeholder', 'Search order ID, customer email or crypto wallet')); ?>"
                             autocomplete="off"
                             spellcheck="false"
+                            aria-label="<?php echo admin_e(admin_t($messages, 'topbar_search_label', 'Search orders, customers and wallets')); ?>"
                             data-admin-search-input
+                            maxlength="128"
+                            aria-controls="admin-global-search-results"
+                            data-minimum-hint="<?php echo admin_e(admin_t($messages, 'search_minimum_hint', 'Enter at least 2 characters or a complete ID.')); ?>"
                             data-csrf-token="<?php echo admin_e($csrfToken); ?>"
                             data-search-url="/admin/search.php"
                             data-loading-text="<?php echo admin_e(admin_t($messages, 'search_loading', 'Loading results...')); ?>"
@@ -5003,15 +5416,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <p><?php echo admin_e(admin_t($messages, 'topbar_notifications_intro', 'Payments are shown first so they can be confirmed before orders.')); ?></p>
                                 </div>
                                 <div class="admin-topbar-flyout__header-actions">
-                                    <button
-                                        type="button"
-                                        class="btn btn-outline-dark btn-sm admin-topbar-flyout__help-btn"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#adminHowToPayModal"
-                                        aria-label="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_open', 'How to pay?')); ?>">
-                                        <i class="bi bi-question-circle" aria-hidden="true"></i>
-                                        <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_open', 'How to pay?')); ?></span>
-                                    </button>
                                     <button type="button" class="admin-chat-inbox__close" data-admin-topbar-flyout-close aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>">
                                         <i class="bi bi-x-lg" aria-hidden="true"></i>
                                     </button>
@@ -5036,6 +5440,29 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <div class="admin-topbar-notifications__actions">
                                                 <a href="/admin/?page=crypto-wallets" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_open', 'Open crypto wallets')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_wallet_pool_empty_open', 'Open crypto wallets')); ?>">
                                                     <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                </a>
+                                            </div>
+                                        </article>
+                                    </section>
+                                <?php endif; ?>
+
+                                <?php if ($bankAccountPoolUnavailable): ?>
+                                    <section class="admin-topbar-notifications__section">
+                                        <div class="admin-topbar-notifications__section-head">
+                                            <span><?php echo admin_e(admin_t($messages, 'topbar_bank_pool_blocked_title', 'Bank transfers')); ?></span>
+                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'important', 'Important')); ?></span>
+                                        </div>
+
+                                        <article class="admin-topbar-notifications__item admin-topbar-notifications__item--danger">
+                                            <div class="admin-topbar-notifications__item-main">
+                                                <div class="admin-topbar-notifications__item-head">
+                                                    <strong><?php echo admin_e(admin_t($messages, 'topbar_bank_pool_blocked_heading', 'No bank account can accept a new payment right now.')); ?></strong>
+                                                </div>
+                                                <p><?php echo admin_e(admin_t($messages, 'topbar_bank_pool_blocked_text', 'Bank transfers are enabled, but all available accounts are blocked by limits or active assignments. Check monthly limits, free an account or add another bank account.')); ?></p>
+                                            </div>
+                                            <div class="admin-topbar-notifications__actions">
+                                                <a href="/admin/?page=bank-accounts&amp;bank_tab=stats" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_bank_pool_blocked_open', 'Open bank account statistics')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_bank_pool_blocked_open', 'Open bank account statistics')); ?>">
+                                                    <i class="bi bi-bank" aria-hidden="true"></i>
                                                 </a>
                                             </div>
                                         </article>
@@ -5211,9 +5638,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </button>
                                                                     </form>
                                                                 </div>
-                                                            <?php endif; ?>
-                                                        </div>
-                                                    </div>
+				                                                                        <?php endif; ?>
+				                                                                    </div>
+			                                                                </div>
                                                 </article>
                                             <?php endforeach; ?>
                                         </div>
@@ -5296,7 +5723,103 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <?php endforeach; ?>
                                         </div>
                                     <?php endif; ?>
-                                </section>
+	                                </section>
+
+                                <?php if ($adminTopbarAutoAcceptedPayments): ?>
+                                    <section class="admin-topbar-notifications__section">
+                                        <div class="admin-topbar-notifications__section-head">
+                                            <span><?php echo admin_e(admin_t($messages, 'topbar_auto_accepted_payments', 'Automatically approved')); ?></span>
+                                            <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e((string)count($adminTopbarAutoAcceptedPayments)); ?></span>
+                                        </div>
+
+                                        <div class="admin-topbar-notifications__list">
+                                            <?php foreach ($adminTopbarAutoAcceptedPayments as $autoPaymentRow): ?>
+                                                <?php
+                                                $autoPaymentId = (int)($autoPaymentRow['payment_id'] ?? 0);
+                                                $autoOrderId = (int)($autoPaymentRow['order_id'] ?? 0);
+                                                $autoCustomerId = (int)($autoPaymentRow['customer_id'] ?? 0);
+                                                $autoHandle = trim((string)($autoPaymentRow['public_handle'] ?? ''));
+                                                $autoCustomerDisplay = $autoHandle !== ''
+                                                    ? '@' . ltrim($autoHandle, '@')
+                                                    : (string)($autoPaymentRow['customer_email'] ?? '');
+                                                $autoFiatLabel = admin_format_money_value_with_symbol(
+                                                    $autoPaymentRow['amount_fiat'] ?? null,
+                                                    (string)($autoPaymentRow['currency_code'] ?? $adminDefaultCurrencyCode),
+                                                    (string)($autoPaymentRow['currency_symbol'] ?? $adminDefaultCurrencySymbol)
+                                                );
+                                                $autoCryptoAmount = isset($autoPaymentRow['amount_crypto']) && is_numeric((string)$autoPaymentRow['amount_crypto'])
+                                                    ? rtrim(rtrim(number_format((float)$autoPaymentRow['amount_crypto'], 8, '.', ''), '0'), '.')
+                                                    : '';
+                                                $autoAssetCode = strtoupper(trim((string)($autoPaymentRow['asset_code'] ?? '')));
+                                                $autoCryptoLabel = trim($autoCryptoAmount . ' ' . $autoAssetCode);
+                                                $autoAssetLogo = admin_payment_asset_logo_url(
+                                                    $autoAssetCode,
+                                                    (string)($autoPaymentRow['asset_logo_url'] ?? '')
+                                                );
+                                                $autoReceivedAt = trim((string)($autoPaymentRow['received_at'] ?? ''));
+                                                $autoReceivedLabel = $autoReceivedAt !== ''
+                                                    ? app_format_utc_datetime_local($autoReceivedAt, 'd.m.Y H:i')
+                                                    : '';
+                                                $autoPaymentUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $autoPaymentId;
+                                                $autoTxHash = trim((string)($autoPaymentRow['transaction_hash'] ?? ''));
+                                                $autoExplorerUrl = $autoTxHash !== ''
+                                                    ? admin_crypto_transaction_explorer_url(
+                                                        $autoAssetCode,
+                                                        (string)($autoPaymentRow['network_code'] ?? ''),
+                                                        $autoTxHash
+                                                    )
+                                                    : '';
+                                                ?>
+                                                <article class="admin-topbar-notifications__item admin-topbar-notifications__item--success">
+                                                    <div class="admin-topbar-notifications__item-main">
+                                                        <div class="admin-topbar-notifications__item-head">
+                                                            <?php if ($autoAssetLogo !== ''): ?>
+                                                                <img src="<?php echo admin_e($autoAssetLogo); ?>" alt="" class="admin-topbar-notifications__title-logo" loading="lazy">
+                                                            <?php endif; ?>
+                                                            <strong><?php echo admin_e($autoFiatLabel); ?></strong>
+                                                            <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'topbar_auto_accepted_badge', 'Approved')); ?></span>
+                                                            <?php if ($autoOrderId <= 0): ?>
+                                                                <span class="admin-topbar-notifications__topup-badge">
+                                                                    <?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Balance top-up')); ?>
+                                                                </span>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <p>
+                                                            <?php if ($autoCustomerId > 0 && $autoCustomerDisplay !== ''): ?>
+                                                                <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$autoCustomerId); ?>"><?php echo admin_e($autoCustomerDisplay); ?></a>
+                                                            <?php elseif ($autoCustomerDisplay !== ''): ?>
+                                                                <span><?php echo admin_e($autoCustomerDisplay); ?></span>
+                                                            <?php endif; ?>
+                                                            <?php echo admin_e($autoOrderId > 0
+                                                                ? admin_t($messages, 'topbar_auto_accepted_order_message', 'payment was approved automatically.')
+                                                                : admin_t($messages, 'topbar_auto_accepted_topup_message', 'balance top-up was approved automatically.')); ?>
+                                                            <?php if ($autoReceivedLabel !== ''): ?>
+                                                                <span class="admin-topbar-notifications__auto-time"><?php echo admin_e($autoReceivedLabel); ?></span>
+                                                            <?php endif; ?>
+                                                        </p>
+                                                        <?php if ($autoCryptoLabel !== ''): ?>
+                                                            <div class="admin-topbar-notifications__auto-payment-line">
+                                                                <?php echo admin_e($autoCryptoLabel); ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="admin-topbar-notifications__actions">
+                                                        <?php if ($autoExplorerUrl !== ''): ?>
+                                                            <a href="<?php echo admin_e($autoExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-outline-success btn-sm admin-user-row__icon-btn" title="Explorer" aria-label="Explorer">
+                                                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                                            </a>
+                                                        <?php endif; ?>
+                                                        <?php if ($autoPaymentId > 0): ?>
+                                                            <a href="<?php echo admin_e($autoPaymentUrl); ?>" class="btn btn-success btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_open_payment_inline', 'payment')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_open_payment_inline', 'payment')); ?>">
+                                                                <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                            </a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </article>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </section>
+                                <?php endif; ?>
 
                                 <?php if ($adminTopbarNewCustomers): ?>
                                     <section class="admin-topbar-notifications__section">
@@ -5335,7 +5858,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <section class="admin-topbar-notifications__section">
                                         <div class="admin-topbar-notifications__section-head">
                                             <span><?php echo admin_e(admin_t($messages, 'topbar_expiring_subscriptions', 'Expiring subscriptions')); ?></span>
-                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e((string)((int)($adminTopbarExpiringSubscriptions['total'] ?? 0))); ?></span>
+                                            <span class="admin-status-pill admin-status-pill--warning"><?php echo admin_e((string)((int)($adminTopbarExpiringSubscriptions['total'] ?? 0))); ?></span>
                                         </div>
 
                                         <article class="admin-topbar-notifications__item admin-topbar-notifications__item--compact">
@@ -5346,7 +5869,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <p><?php echo admin_e(admin_t($messages, 'topbar_expiring_subscriptions_intro', 'Open the list to review affected users, orders and provider dashboards before the expiry time.')); ?></p>
                                             </div>
                                             <div class="admin-topbar-notifications__actions">
-                                                <button type="button" class="btn btn-outline-dark btn-sm" data-admin-topbar-expand="<?php echo admin_e('topbarExpiringSubscriptions'); ?>" aria-expanded="false"><?php echo admin_e(admin_t($messages, 'read_more', 'Read more')); ?></button>
+                                                <button type="button" class="btn btn-warning btn-sm text-dark" data-admin-topbar-expand="<?php echo admin_e('topbarExpiringSubscriptions'); ?>" aria-expanded="false"><?php echo admin_e(admin_t($messages, 'read_more', 'Read more')); ?></button>
                                             </div>
                                         </article>
 
@@ -5367,7 +5890,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="admin-topbar-notifications__item-main">
                                                         <div class="admin-topbar-notifications__item-head">
                                                             <strong><?php echo admin_e($expiringProductLabel !== '' ? $expiringProductLabel : ('#' . $expiringOrderId)); ?></strong>
-                                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'topbar_expiring_badge', 'Expiring')); ?></span>
+                                                            <span class="admin-status-pill admin-status-pill--warning"><?php echo admin_e(admin_t($messages, 'topbar_expiring_badge', 'Expiring')); ?></span>
                                                         </div>
                                                         <p>
                                                             <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$expiringCustomerId); ?>"><?php echo admin_e($expiringDisplay); ?></a>
@@ -5383,6 +5906,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <i class="bi bi-speedometer2" aria-hidden="true"></i>
                                                             </a>
                                                         <?php endif; ?>
+                                                        <?php if ($expiringCustomerId > 0): ?>
+                                                            <button type="button" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" data-admin-chat-start-customer data-customer-id="<?php echo admin_e((string)$expiringCustomerId); ?>" title="<?php echo admin_e(admin_t($messages, 'topbar_open_chat', 'Open chat')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_open_chat', 'Open chat')); ?>">
+                                                                <i class="bi bi-envelope" aria-hidden="true"></i>
+                                                            </button>
+                                                        <?php endif; ?>
                                                         <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$expiringOrderId); ?>" class="btn btn-success btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_open_order', 'Open order')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_open_order', 'Open order')); ?>">
                                                             <i class="bi bi-receipt" aria-hidden="true"></i>
                                                         </a>
@@ -5393,8 +5921,117 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     </section>
                                 <?php endif; ?>
 
-                                <?php if (!empty($adminTopbarBackupNotice['show'])): ?>
+                                <?php if ((int)($adminTopbarExpiredSubscriptions['total'] ?? 0) > 0): ?>
                                     <section class="admin-topbar-notifications__section">
+                                        <div class="admin-topbar-notifications__section-head">
+                                            <span><?php echo admin_e(admin_t($messages, 'topbar_expired_subscriptions', 'Expired subscriptions')); ?></span>
+                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e((string)((int)($adminTopbarExpiredSubscriptions['total'] ?? 0))); ?></span>
+                                        </div>
+
+                                        <article class="admin-topbar-notifications__item admin-topbar-notifications__item--compact admin-topbar-notifications__item--warning">
+                                            <div class="admin-topbar-notifications__item-main">
+                                                <div class="admin-topbar-notifications__item-head">
+                                                    <strong><?php echo admin_e((string)((int)($adminTopbarExpiredSubscriptions['total'] ?? 0))); ?> <?php echo admin_e(admin_t($messages, 'topbar_expired_subscriptions_summary', 'subscriptions have expired.')); ?></strong>
+                                                </div>
+                                                <p><?php echo admin_e(admin_t($messages, 'topbar_expired_subscriptions_intro', 'These are expired subscriptions, not pending paid orders. Open the list to review users and decide whether renewal is needed.')); ?></p>
+                                            </div>
+                                            <div class="admin-topbar-notifications__actions">
+                                                <button type="button" class="btn btn-danger btn-sm" data-admin-topbar-expand="<?php echo admin_e('topbarExpiredSubscriptions'); ?>" aria-expanded="false"><?php echo admin_e(admin_t($messages, 'read_more', 'Read more')); ?></button>
+                                            </div>
+                                        </article>
+
+                                        <div class="admin-topbar-notifications__list" data-admin-topbar-expand-target="topbarExpiredSubscriptions" hidden>
+                                            <?php foreach ((array)($adminTopbarExpiredSubscriptions['rows'] ?? []) as $expiredRow): ?>
+                                                <?php
+                                                $expiredOrderId = (int)($expiredRow['id'] ?? 0);
+                                                $expiredCustomerId = (int)($expiredRow['customer_id'] ?? 0);
+                                                $expiredHandle = trim((string)($expiredRow['public_handle'] ?? ''));
+                                                $expiredDisplay = $expiredHandle !== '' ? '@' . $expiredHandle : (string)($expiredRow['customer_email'] ?? '');
+                                                $expiredProductLabel = trim((string)($expiredRow['provider_name'] ?? ''));
+                                                if (trim((string)($expiredRow['product_name'] ?? '')) !== '') {
+                                                    $expiredProductLabel = trim($expiredProductLabel . ' · ' . (string)$expiredRow['product_name']);
+                                                }
+                                                $expiredAtLabel = admin_compact_datetime_label((string)($expiredRow['expires_at'] ?? ''));
+                                                ?>
+                                                <article class="admin-topbar-notifications__item">
+                                                    <div class="admin-topbar-notifications__item-main">
+                                                        <div class="admin-topbar-notifications__item-head">
+                                                            <strong><?php echo admin_e($expiredProductLabel !== '' ? $expiredProductLabel : ('#' . $expiredOrderId)); ?></strong>
+                                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'topbar_expired_badge', 'Expired')); ?></span>
+                                                        </div>
+                                                        <p>
+                                                            <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$expiredCustomerId); ?>"><?php echo admin_e($expiredDisplay); ?></a>
+                                                            <?php if ($expiredAtLabel !== ''): ?>
+                                                                ·
+                                                                <span><?php echo admin_e(admin_t($messages, 'topbar_expired_at', 'Expired')); ?>: <?php echo admin_e($expiredAtLabel); ?></span>
+                                                            <?php endif; ?>
+                                                        </p>
+                                                    </div>
+                                                    <div class="admin-topbar-notifications__actions">
+                                                        <?php if (trim((string)($expiredRow['dashboard_url'] ?? '')) !== ''): ?>
+                                                            <a href="<?php echo admin_e((string)$expiredRow['dashboard_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_provider_dashboard', 'Provider dashboard')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_provider_dashboard', 'Provider dashboard')); ?>">
+                                                                <i class="bi bi-speedometer2" aria-hidden="true"></i>
+                                                            </a>
+                                                        <?php endif; ?>
+                                                        <?php if ($expiredCustomerId > 0): ?>
+                                                            <button type="button" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" data-admin-chat-start-customer data-customer-id="<?php echo admin_e((string)$expiredCustomerId); ?>" title="<?php echo admin_e(admin_t($messages, 'topbar_open_chat', 'Open chat')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_open_chat', 'Open chat')); ?>">
+                                                                <i class="bi bi-envelope" aria-hidden="true"></i>
+                                                            </button>
+                                                        <?php endif; ?>
+                                                        <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$expiredOrderId); ?>" class="btn btn-danger btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'topbar_open_order', 'Open order')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_open_order', 'Open order')); ?>">
+                                                            <i class="bi bi-receipt" aria-hidden="true"></i>
+                                                        </a>
+                                                    </div>
+                                                </article>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </section>
+                                <?php endif; ?>
+
+	                                <?php if (!empty($adminTopbarAdminPanelSubscriptionNotice['show'])): ?>
+	                                    <section class="admin-topbar-notifications__section">
+	                                        <div class="admin-topbar-notifications__section-head">
+	                                            <span><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_title', 'Admin panel access')); ?></span>
+	                                            <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'important', 'Important')); ?></span>
+	                                        </div>
+
+	                                        <article class="admin-topbar-notifications__item admin-topbar-notifications__item--warning admin-topbar-panel-subscription">
+	                                            <div class="admin-topbar-notifications__item-main">
+	                                                <div class="admin-topbar-notifications__item-head">
+	                                                    <strong>
+	                                                        <?php if (!empty($adminTopbarAdminPanelSubscriptionNotice['is_expired'])): ?>
+	                                                            <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_expired_heading', 'Admin panel access payment has expired.')); ?>
+	                                                        <?php else: ?>
+	                                                            <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_warning_heading', 'Admin panel access payment expires soon.')); ?>
+	                                                        <?php endif; ?>
+	                                                    </strong>
+	                                                </div>
+	                                                <div class="admin-topbar-panel-subscription__label"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_paid_until', 'Paid until')); ?>:</div>
+	                                                <input type="text" class="admin-topbar-panel-subscription__date" value="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')); ?> ·" readonly>
+	                                                <?php if ($adminTopbarAdminPanelSubscriptionNotice['days_left'] !== null): ?>
+	                                                    <div class="admin-topbar-panel-subscription__days">
+	                                                        <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_days_left', 'Days left')); ?>:
+	                                                        <strong><?php echo admin_e((string)max(0, (int)$adminTopbarAdminPanelSubscriptionNotice['days_left'])); ?></strong>
+	                                                    </div>
+	                                                <?php endif; ?>
+	                                            </div>
+	                                            <div class="admin-topbar-notifications__actions">
+	                                                <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['renewal_url'] ?? '')) !== ''): ?>
+	                                                    <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger btn-md admin-topbar-panel-subscription__pay">
+	                                                        <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?>
+	                                                    </a>
+	                                                <?php else: ?>
+	                                                    <a href="/admin/?page=settings&amp;admin=true" class="btn btn-outline-danger btn-md admin-topbar-panel-subscription__pay">
+	                                                        <?php echo admin_e(admin_t($messages, 'topbar_open_settings', 'Open settings')); ?>
+	                                                    </a>
+	                                                <?php endif; ?>
+	                                            </div>
+	                                        </article>
+	                                    </section>
+	                                <?php endif; ?>
+
+	                                <?php if (!empty($adminTopbarBackupNotice['show'])): ?>
+	                                    <section class="admin-topbar-notifications__section">
                                         <div class="admin-topbar-notifications__section-head">
                                             <span><?php echo admin_e(admin_t($messages, 'topbar_backup_warning_title', 'Backup reminder')); ?></span>
                                             <span class="admin-status-pill admin-status-pill--danger"><?php echo admin_e(admin_t($messages, 'important', 'Important')); ?></span>
@@ -5421,11 +6058,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </article>
                                     </section>
                                 <?php endif; ?>
+                                <div class="admin-topbar-notifications__empty" role="status">
+                                    <span class="admin-topbar-notifications__empty-icon" aria-hidden="true"><i class="bi bi-bell"></i></span>
+                                    <strong><?php echo admin_e(admin_t($messages, 'topbar_notifications_empty_title', 'No notifications')); ?></strong>
+                                    <p><?php echo admin_e(admin_t($messages, 'topbar_notifications_empty_hint', 'New notifications will appear here.')); ?></p>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="admin-topbar-tool" data-admin-converter-root data-currency-code="<?php echo admin_e($adminDefaultCurrencyCode); ?>" data-currency-symbol="<?php echo admin_e($adminDefaultCurrencySymbol); ?>" data-assets="<?php echo admin_e($adminTopbarConverterAssetsJson); ?>" data-empty-text="<?php echo admin_e(admin_t($messages, 'topbar_converter_rate_hint', 'Choose a crypto asset to calculate the amount.')); ?>">
+                    <div class="admin-topbar-tool" data-admin-converter-root data-currency-code="<?php echo admin_e($adminDefaultCurrencyCode); ?>" data-currency-symbol="<?php echo admin_e($adminDefaultCurrencySymbol); ?>" data-currency-icon="<?php echo admin_e($adminTopbarConverterFiatIcon); ?>" data-assets="<?php echo admin_e($adminTopbarConverterAssetsJson); ?>" data-empty-text="<?php echo admin_e(admin_t($messages, 'topbar_converter_rate_hint', 'Choose a crypto asset to calculate the amount.')); ?>">
                         <button
                             type="button"
                             class="admin-chat-inbox__toggle"
@@ -5459,134 +6101,51 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 </div>
 
                                 <div class="admin-topbar-converter__card">
-                                    <div class="admin-topbar-converter__pane">
+                                    <div class="admin-topbar-converter__pane admin-topbar-converter__pane--from">
                                         <div class="admin-topbar-converter__input-wrap">
                                             <input type="number" min="0" step="0.01" value="10.00" class="admin-topbar-converter__input" data-admin-converter-fiat-input>
-                                            <span class="admin-topbar-converter__fiat-label"><?php echo admin_e($adminDefaultCurrencyCode); ?></span>
+                                            <label class="admin-topbar-converter__asset-picker admin-topbar-converter__asset-picker--source">
+                                                <span class="admin-topbar-converter__asset-icon admin-topbar-converter__asset-icon--fiat" data-admin-converter-source-logo><?php echo admin_e($adminTopbarConverterFiatIcon); ?></span>
+                                                <select data-admin-converter-source-select aria-label="<?php echo admin_e(admin_t($messages, 'topbar_converter_source_asset_label', 'Source asset')); ?>"></select>
+                                            </label>
                                         </div>
-                                        <div class="admin-topbar-converter__subline"><?php echo admin_e(admin_t($messages, 'topbar_converter_fiat_hint', 'Enter the FIAT amount you want to receive.')); ?></div>
+                                        <div class="admin-topbar-converter__subline" data-admin-converter-fiat-subline><?php echo admin_e(admin_t($messages, 'topbar_converter_fiat_hint', 'Enter the FIAT amount you want to receive.')); ?></div>
                                     </div>
 
                                     <div class="admin-topbar-converter__swap">
                                         <span><i class="bi bi-arrow-down" aria-hidden="true"></i></span>
                                     </div>
 
-                                    <div class="admin-topbar-converter__pane">
+                                    <div class="admin-topbar-converter__pane admin-topbar-converter__pane--to">
                                         <div class="admin-topbar-converter__result-row">
                                             <div class="admin-topbar-converter__result">
                                                 <strong data-admin-converter-crypto-result tabindex="0" role="button" title="<?php echo admin_e(admin_t($messages, 'topbar_converter_copy_amount', 'Copy crypto amount')); ?>">0.00000000</strong>
                                                 <span class="admin-topbar-converter__copy-feedback" data-admin-converter-copy-feedback hidden><?php echo admin_e(admin_t($messages, 'topbar_converter_copied', 'Copied')); ?></span>
                                                 <span data-admin-converter-rate-hint><?php echo admin_e(admin_t($messages, 'topbar_converter_rate_hint', 'Choose a crypto asset to calculate the amount.')); ?></span>
                                             </div>
-                                            <label class="admin-topbar-converter__asset-picker">
-                                                <span class="admin-topbar-converter__asset-icon" data-admin-converter-asset-logo></span>
-                                                <select data-admin-converter-asset-select aria-label="<?php echo admin_e(admin_t($messages, 'topbar_converter_asset_label', 'Crypto asset')); ?>"></select>
-                                            </label>
-                                        </div>
-                                        <div class="admin-topbar-converter__asset-link-wrap">
-                                            <a href="/admin/?page=crypto-wallets" class="admin-topbar-converter__asset-link">
-                                                <strong><?php echo admin_e(admin_t($messages, 'topbar_converter_wallets_link', 'Przejdź do dodanych adresów portfeli')); ?></strong>
-                                                <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
-                                                <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
-                                            </a>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="admin-topbar-converter__guide">
-                                    <button
-                                        type="button"
-                                        class="admin-topbar-image-lightbox-trigger"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#adminHowToPayImageModal"
-                                        aria-label="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom', 'Open payment preview')); ?>">
-                                        <img
-                                            src="/img/faq/how_to_pay.png"
-                                            alt="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_image_alt', 'Preview showing how to complete the payment')); ?>"
-                                            class="admin-topbar-converter__guide-image"
-                                            loading="lazy">
-                                    </button>
-                                    <p class="admin-topbar-converter__guide-caption"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_converter_caption', 'Preview showing where to choose the payment method, crypto asset and amount.')); ?></p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="modal fade admin-topbar-help-modal" id="adminHowToPayModal" tabindex="-1" aria-hidden="true">
-                        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-                            <div class="modal-content admin-topbar-help-modal__content">
-                                <div class="modal-header admin-topbar-help-modal__header">
-                                    <div class="admin-topbar-help-modal__title-wrap">
-                                        <span class="admin-topbar-help-modal__eyebrow">
-                                            <i class="bi bi-info-circle" aria-hidden="true"></i>
-                                            <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_eyebrow', 'Payment guide')); ?></span>
-                                        </span>
-                                        <h5 class="modal-title mb-1"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_title', 'How to pay')); ?></h5>
-                                        <p class="text-body-secondary mb-0"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_intro', 'Use the calculator to estimate the crypto amount, then complete the payment request with the correct wallet or bank details.')); ?></p>
-                                    </div>
-                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
-                                </div>
-                                <div class="modal-body admin-topbar-help-modal__body">
-                                    <div class="admin-topbar-help-modal__layout">
-                                        <div class="admin-topbar-help-modal__visual">
-                                            <button
-                                                type="button"
-                                                class="admin-topbar-image-lightbox-trigger admin-topbar-image-lightbox-trigger--modal admin-topbar-help-modal__image-button"
-                                                data-bs-toggle="modal"
-                                                data-bs-target="#adminHowToPayImageModal"
-                                                aria-label="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom', 'Open payment preview')); ?>">
-                                                <img
-                                                    src="/img/faq/how_to_pay.png"
-                                                    alt="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_image_alt', 'Preview showing how to complete the payment')); ?>"
-                                                    class="admin-topbar-help-modal__image"
-                                                    loading="lazy">
-                                                <span class="admin-topbar-help-modal__image-hint">
-                                                    <i class="bi bi-zoom-in" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom_hint', 'Click the image to enlarge it')); ?></span>
-                                                </span>
-                                            </button>
-                                        </div>
-                                        <div class="admin-topbar-help-modal__copy">
-                                            <div class="admin-topbar-help-modal__step-card">
-                                                <span class="admin-topbar-help-modal__step-index">1</span>
-                                                <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_1', '1. Open the order or balance top up, choose the payment method and select the crypto asset or bank transfer.')); ?></p>
-                                            </div>
-                                            <div class="admin-topbar-help-modal__step-card">
-                                                <span class="admin-topbar-help-modal__step-index">2</span>
-                                                <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_2', '2. In the calculator, enter the FIAT amount you want to receive and copy the exact crypto amount shown by the selected asset.')); ?></p>
-                                            </div>
-                                            <div class="admin-topbar-help-modal__step-card">
-                                                <span class="admin-topbar-help-modal__step-index">3</span>
-                                                <p><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_step_3', '3. Send exactly that amount to the wallet or bank details shown in the payment request and keep the correct network if crypto is used.')); ?></p>
-                                            </div>
-                                            <div class="admin-topbar-help-modal__note-card">
-                                                <div class="admin-topbar-help-modal__note-title">
-                                                    <i class="bi bi-check2-circle" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_note_title', 'After payment')); ?></span>
-                                                </div>
-                                                <p class="admin-topbar-help-modal__note mb-0"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_note', 'After the funds arrive, the payment moves to verification and can then be approved in the admin panel.')); ?></p>
+                                            <div class="admin-topbar-converter__asset-column">
+                                                <label class="admin-topbar-converter__asset-picker">
+                                                    <span class="admin-topbar-converter__asset-icon" data-admin-converter-asset-logo></span>
+                                                    <select data-admin-converter-asset-select aria-label="<?php echo admin_e(admin_t($messages, 'topbar_converter_asset_label', 'Crypto asset')); ?>"></select>
+                                                </label>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-                    </div>
+                                <div class="admin-topbar-converter__actions">
+                                    <?php if ($swapConverterPageEnabled && admin_user_can_access_route($adminUser, 'swap-converter')): ?>
+                                        <a href="/admin/?page=swap-converter" class="btn btn-lg w-100 admin-topbar-converter__swap-link">
+                                            <?php echo admin_e(admin_t($messages, 'topbar_converter_swap_link', 'Przejdź do Wymiany')); ?>
+                                        </a>
+                                    <?php endif; ?>
+                                    <div class="admin-topbar-converter__asset-link-wrap">
+                                        <a href="/admin/?page=crypto-wallets" class="admin-topbar-converter__asset-link">
+                                            <strong><?php echo admin_e(admin_t($messages, 'topbar_converter_wallets_link', 'Przejdź do dodanych adresów portfeli')); ?></strong>
+                                            <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
+                                        </a>
+                                    </div>
+                                </div>
 
-                    <div class="modal fade admin-topbar-image-lightbox" id="adminHowToPayImageModal" tabindex="-1" aria-hidden="true">
-                        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_zoom_title', 'Payment preview')); ?></h5>
-                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
-                                </div>
-                                <div class="modal-body admin-topbar-image-lightbox__body">
-                                    <img
-                                        src="/img/faq/how_to_pay.png"
-                                        alt="<?php echo admin_e(admin_t($messages, 'topbar_how_to_pay_image_alt', 'Preview showing how to complete the payment')); ?>"
-                                        class="admin-topbar-image-lightbox__image"
-                                        loading="eager">
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -5672,7 +6231,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         data-group-chat-badge="<?php echo admin_e(admin_t($messages, 'chat_group_header_badge', 'Admin group')); ?>"
                         data-group-chat-status-label="<?php echo admin_e(admin_t($messages, 'group_chat_badge', 'Group chat')); ?>"
                         data-chat-payment-create-label="<?php echo admin_e(admin_t($messages, 'chat_payment_send_button', 'Send to chat')); ?>">
-                        <button type="button" class="admin-chat-inbox__toggle" data-admin-chat-toggle aria-expanded="false" aria-controls="adminChatInboxPanel">
+                        <button type="button" class="admin-chat-inbox__toggle" data-admin-chat-toggle aria-expanded="false" aria-controls="adminChatInboxPanel" aria-label="<?php echo admin_e(admin_t($messages, 'chat_inbox_title', 'LIVE CHAT')); ?>" title="<?php echo admin_e(admin_t($messages, 'chat_inbox_title', 'LIVE CHAT')); ?>">
                             <i class="bi bi-envelope" aria-hidden="true"></i>
                             <?php if ($chatInboxUnreadCount > 0): ?>
                                 <span class="admin-chat-inbox__badge"><?php echo admin_e((string)$chatInboxUnreadCount); ?></span>
@@ -5806,7 +6365,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                             <div class="admin-chat-inbox__conversation-view" data-admin-chat-conversation-view hidden>
                                 <div class="admin-chat-inbox__conversation-header">
-                                    <button type="button" class="admin-chat-inbox__back" data-admin-chat-back>
+                                    <button type="button" class="admin-chat-inbox__back" data-admin-chat-back aria-label="<?php echo admin_e(admin_t($messages, 'chat_back_to_inbox', 'Back to conversations')); ?>">
                                         <i class="bi bi-arrow-left"></i>
                                     </button>
                                     <div class="admin-chat-inbox__conversation-title-wrap">
@@ -5821,6 +6380,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <span class="admin-chat-inbox__conversation-retention" data-admin-chat-conversation-retention hidden></span>
                                         </span>
                                     </div>
+                                    <button type="button" class="admin-chat-inbox__header-more" data-admin-chat-header-more aria-expanded="false" aria-controls="adminChatConversationActions" aria-label="<?php echo admin_e(admin_t($messages, 'chat_conversation_actions', 'Conversation options')); ?>" title="<?php echo admin_e(admin_t($messages, 'chat_conversation_actions', 'Conversation options')); ?>">
+                                        <i class="bi bi-three-dots" aria-hidden="true"></i>
+                                    </button>
+                                    <div class="admin-chat-inbox__header-actions" id="adminChatConversationActions" data-admin-chat-header-actions hidden>
                                     <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-group-invite-open title="<?php echo admin_e(admin_t($messages, 'group_chat_invite_members_title', 'Add members')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'group_chat_invite_members_title', 'Add members')); ?>" hidden>
                                         <i class="bi bi-person-plus" aria-hidden="true"></i>
                                     </button>
@@ -5860,6 +6423,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <button type="button" class="admin-chat-inbox__header-action" data-admin-chat-quick-open title="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'chat_quick_reply_header_button', 'Open quick instructions')); ?>" hidden>
                                         <i class="bi bi-lightning-charge" aria-hidden="true"></i>
                                     </button>
+                                    </div>
                                 </div>
                                 <div class="admin-chat-inbox__conversation-meta" data-admin-chat-conversation-meta hidden>
                                     <div class="admin-chat-inbox__conversation-meta-main">
@@ -6234,8 +6798,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 aria-hidden="true"
                 data-admin-crypto-accept-modal
                 data-title="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_title', 'Accept crypto payment')); ?>"
-                data-step1="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_explorer', 'Step 1: Check in explorer whether the customer payment arrived.')); ?>"
-                data-step2="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_confirm', 'Step 2: Confirm the amount you actually received.')); ?>"
+                data-step1="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_explorer', 'Krok 1: Sprawdź dopasowanie wpłaty i transakcję w explorerze.')); ?>"
+                data-step2="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_confirm', 'Krok 2: Zatwierdź tylko kwotę faktycznie otrzymaną na portfelu.')); ?>"
                 data-received-crypto-label="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_crypto_label', 'Received {asset}', ['asset' => '{asset}'])); ?>"
                 data-received-fiat-label="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_fiat_label', 'Amount to credit in FIAT')); ?>"
                 data-fiat-hint="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?>"
@@ -6256,7 +6820,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <div class="modal-header">
                             <div>
                                 <h5 class="modal-title"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_title', 'Accept crypto payment')); ?></h5>
-                                <p class="admin-crypto-accept-modal__intro mb-0"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_intro', 'Quick confirmation for the payment after checking the explorer.')); ?></p>
+                                <p class="admin-crypto-accept-modal__intro mb-0"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_intro', 'System pokazuje ostatnie transakcje i ocenia, czy pasują do tego requestu płatności.')); ?></p>
                             </div>
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
                         </div>
@@ -6289,8 +6853,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
                                             <div class="admin-topbar-notifications__steps-label"><?php echo admin_e(admin_t($messages, 'topbar_payment_steps', 'Steps to verify')); ?></div>
                                             <div class="admin-topbar-notifications__task-list">
-                                                <span data-admin-crypto-accept-step1><?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_explorer', 'Step 1: Check in explorer whether the customer payment arrived.')); ?></span>
-                                                <span data-admin-crypto-accept-step2><?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_confirm', 'Step 2: Confirm the amount you actually received.')); ?></span>
+                                                <span data-admin-crypto-accept-step1><?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_explorer', 'Krok 1: Sprawdź dopasowanie wpłaty i transakcję w explorerze.')); ?></span>
+                                                <span data-admin-crypto-accept-step2><?php echo admin_e(admin_t($messages, 'payment_accept_modal_step_confirm', 'Krok 2: Zatwierdź tylko kwotę faktycznie otrzymaną na portfelu.')); ?></span>
                                             </div>
                                         </div>
                                     </article>
@@ -6334,22 +6898,48 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 </div>
             </div>
 
-            <main class="admin-content">
+            <main class="admin-content<?php echo !in_array($route, ['dashboard', 'products'], true) ? ' admin-content--table-polish' : ''; ?>">
                 <?php if ($pageAlert !== ''): ?>
                     <div class="alert alert-<?php echo admin_e($pageAlertType); ?> admin-page-alert"><?php echo $pageAlertHtml !== '' ? $pageAlertHtml : admin_e($pageAlert); ?></div>
                 <?php endif; ?>
 
-                <section class="admin-search-results" data-admin-search-results hidden></section>
+                <section id="admin-global-search-results" class="admin-search-results" data-admin-search-results hidden></section>
 
                 <div data-admin-default-content>
                     <section class="admin-page-hero d-none d-lg-block d-xl-block">
                         <div>
                             <h1><?php echo admin_e($pageTitleMap[$route] ?? ''); ?></h1>
-                            <p><?php echo admin_e($pageIntroMap[$route] ?? ''); ?></p>
+                            <?php if ($route !== 'products'): ?>
+                                <p><?php echo admin_e($pageIntroMap[$route] ?? ''); ?></p>
+                            <?php endif; ?>
                         </div>
                     </section>
 
                 <?php if ($route === 'dashboard'): ?>
+                    <?php
+                    $dashboardOnboardingVideoRows = admin_order_count($db) <= 0
+                        ? admin_help_video_rows_by_ids($db, [3])
+                        : [];
+                    ?>
+                    <?php if ($dashboardOnboardingVideoRows): ?>
+                        <section class="admin-module-tutorial admin-module-tutorial--wide" aria-labelledby="admin-dashboard-onboarding-title">
+                            <div class="admin-module-tutorial__header">
+                                <h4 id="admin-dashboard-onboarding-title"><?php echo admin_e(admin_t($messages, 'dashboard_onboarding_title', 'Get to know the admin panel')); ?></h4>
+                                <p>
+                                    <?php echo admin_e(admin_t($messages, 'dashboard_onboarding_intro', 'Watch this short introduction before processing your first order.')); ?>
+                                    <a href="/admin/?page=help"><?php echo admin_e(admin_t($messages, 'wallet_onboarding_help_link', 'More tutorials are available in HELP.')); ?></a>
+                                </p>
+                            </div>
+                            <div class="admin-module-tutorial__videos">
+                                <?php foreach ($dashboardOnboardingVideoRows as $dashboardTutorial): ?>
+                                    <article class="admin-module-tutorial__video">
+                                        <h5><?php echo admin_e((string)($dashboardTutorial['title'] ?? '')); ?></h5>
+                                        <video controls preload="metadata" playsinline src="<?php echo admin_e((string)($dashboardTutorial['video_url'] ?? '')); ?>"></video>
+                                    </article>
+                                <?php endforeach; ?>
+                            </div>
+                        </section>
+                    <?php endif; ?>
                     <section class="admin-dashboard-period-grid">
                         <?php
                         $periodCards = [
@@ -6360,11 +6950,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         ];
                         foreach ($periodCards as $card):
                             $periodMetric = $dashboardPeriodMetrics[$card['key']] ?? ['paid_orders' => 0, 'paid_revenue' => 0.0];
-                            $periodRevenueLabel = admin_format_money_value_with_symbol(
-                                $periodMetric['paid_revenue'] ?? 0,
-                                $adminDefaultCurrencyCode,
-                                $adminDefaultCurrencySymbol
-                            );
+                            $periodRevenueLabel = admin_dashboard_revenue_label((array)($periodMetric['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode);
                         ?>
                             <article class="admin-metric-card admin-metric-card--<?php echo admin_e($card['tone']); ?>">
                                 <span class="admin-metric-card__label"><?php echo admin_e($card['label']); ?></span>
@@ -6377,6 +6963,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             </article>
                         <?php endforeach; ?>
                     </section>
+
+                    <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')) !== ''): ?>
+                    <div class="admin-panel-subscription-strip">
+                        <span class="admin-panel-subscription-strip__label">
+                            <?php echo admin_e(admin_t($messages, 'admin_panel_subscription_strip_label', 'Panel Admina opłacony do')); ?>:
+                        </span>
+                        <span class="admin-panel-subscription-strip__date"><?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['paid_until_label']); ?></span>
+                        <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['renewal_url'] ?? '')) !== ''): ?>
+                            <span aria-hidden="true">-</span>
+                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="admin-panel-subscription-strip__link">
+                                <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?>
+                                <span aria-hidden="true">&gt;</span>
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
 
                     <section class="admin-panel-card admin-orders-workflow-card">
                         <div class="admin-orders-workflow">
@@ -6405,183 +7007,595 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         </div>
                     </section>
 
-                    <section class="admin-panel-card admin-panel-card--wide">
+                    <section class="admin-panel-card admin-panel-card--wide admin-dashboard-sales">
                         <div class="admin-panel-card__header">
                             <div>
-                                <h2><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?></h2>
-                                <p><?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_intro', 'Paid orders from the last 30 days.')); ?></p>
+                                <h2><?php echo admin_e(admin_t($messages, 'dashboard_sales_panel_title', 'Sales overview')); ?></h2>
+                                <p><?php echo admin_e(admin_t($messages, 'dashboard_sales_panel_intro', 'Quick access to recent trend, monthly performance and active subscription sales.')); ?></p>
                             </div>
                         </div>
-                        <?php if ($dashboardSalesSeries): ?>
-                            <?php
-                            $chartMaxOrders = 0;
-                            $chartTotalOrders = 0;
-                            $chartRevenueTotal = 0.0;
-                            $chartPeakDayLabel = '';
-                            $chartPeakDayDate = '';
-                            foreach ($dashboardSalesSeries as $chartPoint) {
-                                $pointOrders = (int)($chartPoint['paid_orders'] ?? 0);
-                                if ($pointOrders >= $chartMaxOrders) {
-                                    $chartMaxOrders = $pointOrders;
-                                    $chartPeakDayLabel = (string)($chartPoint['short_label'] ?? '');
-                                    $chartPeakDayDate = (string)($chartPoint['date'] ?? '');
-                                }
-                                $chartTotalOrders += $pointOrders;
-                                $chartRevenueTotal += (float)($chartPoint['paid_revenue'] ?? 0);
-                            }
-                            $chartMaxOrders = max(1, $chartMaxOrders);
-                            $chartAverageOrders = count($dashboardSalesSeries) > 0 ? ($chartTotalOrders / count($dashboardSalesSeries)) : 0;
-                            $chartLatestSeriesRow = $dashboardSalesSeries ? $dashboardSalesSeries[count($dashboardSalesSeries) - 1] : [];
-                            $chartLatestPoint = $dashboardSalesSeriesPoints ? $dashboardSalesSeriesPoints[count($dashboardSalesSeriesPoints) - 1] : null;
-                            $chartLatestOrders = (int)($chartLatestSeriesRow['paid_orders'] ?? 0);
-                            $chartLatestRevenue = (float)($chartLatestSeriesRow['paid_revenue'] ?? 0);
-                            $chartLatestLabel = (string)($chartLatestSeriesRow['short_label'] ?? '');
-                            $chartRecentOrders = 0;
-                            $chartPreviousOrders = 0;
-                            foreach (array_slice($dashboardSalesSeries, -7) as $chartPoint) {
-                                $chartRecentOrders += (int)($chartPoint['paid_orders'] ?? 0);
-                            }
-                            foreach (array_slice($dashboardSalesSeries, -14, 7) as $chartPoint) {
-                                $chartPreviousOrders += (int)($chartPoint['paid_orders'] ?? 0);
-                            }
-                            $chartTrendDelta = $chartRecentOrders - $chartPreviousOrders;
-                            if ($chartPreviousOrders > 0) {
-                                $chartTrendPercent = ($chartTrendDelta / $chartPreviousOrders) * 100;
-                            } elseif ($chartRecentOrders > 0) {
-                                $chartTrendPercent = 100;
-                            } else {
-                                $chartTrendPercent = 0;
-                            }
-                            $chartTrendDirection = $chartTrendDelta > 0 ? 'up' : ($chartTrendDelta < 0 ? 'down' : 'flat');
-                            $chartTrendPrefix = $chartTrendPercent > 0 ? '+' : '';
-                            $chartScaleMaxOrders = max(1, $chartMaxOrders);
-                            if ($chartMaxOrders <= 0) {
-                                $chartPeakDayLabel = '-';
-                                $chartPeakDayDate = '';
-                            }
-                            $chartGridRows = $chartScaleMaxOrders <= 3 ? ($chartScaleMaxOrders + 1) : 4;
-                            $chartTooltipWidth = 144;
-                            $chartTooltipHeight = 52;
-                            $chartTooltipHalfWidth = (float)($chartTooltipWidth / 2);
-                            $chartTooltipMinX = 28.0 + $chartTooltipHalfWidth;
-                            $chartTooltipMaxX = 612.0 - $chartTooltipHalfWidth;
-                            $chartPlotTop = 18.0;
-                            $chartPlotBottom = 222.0;
-                            $chartPlotHeight = $chartPlotBottom - $chartPlotTop;
-                            ?>
-                            <div class="admin-dashboard-chart">
-                                <div class="admin-dashboard-chart__summary">
-                                    <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
-                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
-                                        <strong><?php echo admin_e(admin_format_money_value_with_symbol($chartRevenueTotal, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></strong>
-                                        <small><?php echo admin_e((string)$chartTotalOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
-                                    </div>
-                                    <div class="admin-dashboard-chart__summary-item">
-                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_average_day', 'Avg/day')); ?></span>
-                                        <strong><?php echo admin_e(number_format($chartAverageOrders, 1, '.', '')); ?></strong>
-                                        <small><?php echo admin_e(admin_t($messages, 'dashboard_chart_last_day', 'Latest day') . ': ' . $chartLatestLabel); ?></small>
-                                    </div>
-                                    <div class="admin-dashboard-chart__summary-item">
-                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_max_orders', 'Best day')); ?></span>
-                                        <strong><?php echo admin_e((string)$chartMaxOrders); ?></strong>
-                                        <small><?php echo admin_e($chartPeakDayLabel !== '' ? $chartPeakDayLabel : $chartPeakDayDate); ?></small>
-                                    </div>
-                                    <div class="admin-dashboard-chart__summary-item">
-                                        <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_trend_compare', 'vs previous 7d')); ?></span>
-                                        <strong class="admin-dashboard-chart__trend admin-dashboard-chart__trend--<?php echo admin_e($chartTrendDirection); ?>">
-                                            <?php echo admin_e($chartTrendPrefix . number_format($chartTrendPercent, 0, '.', '') . '%'); ?>
-                                        </strong>
-                                        <small><?php echo admin_e((string)$chartRecentOrders . ' / ' . (string)$chartPreviousOrders . ' ' . admin_t($messages, 'dashboard_chart_orders_short', 'orders')); ?></small>
-                                    </div>
+                        <div class="admin-dashboard-subscription-stats" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_subscription_stats_title', 'Statistics')); ?>">
+                            <div class="admin-dashboard-subscription-stats__metrics">
+                                <div class="admin-dashboard-subscription-stats__item admin-dashboard-subscription-stats__item--active">
+                                    <span>
+                                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                        <?php echo admin_e(admin_t($messages, 'dashboard_subscription_stats_active', 'Active')); ?>
+                                    </span>
+                                    <strong><?php echo admin_e((string)($dashboardSubscriptionStatusCounts['active'] ?? 0)); ?></strong>
                                 </div>
-                                <div class="admin-dashboard-chart__canvas">
-                                    <svg viewBox="0 0 640 252" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>">
-                                        <defs>
-                                            <linearGradient id="adminDashboardChartArea" x1="0%" y1="0%" x2="0%" y2="100%">
-                                                <stop offset="0%" stop-color="#111827" stop-opacity="0.28"></stop>
-                                                <stop offset="70%" stop-color="#6b7280" stop-opacity="0.08"></stop>
-                                                <stop offset="100%" stop-color="#ffffff" stop-opacity="0"></stop>
-                                            </linearGradient>
-                                            <linearGradient id="adminDashboardChartLine" x1="0%" y1="0%" x2="100%" y2="0%">
-                                                <stop offset="0%" stop-color="#111827"></stop>
-                                                <stop offset="55%" stop-color="#334155"></stop>
-                                                <stop offset="100%" stop-color="#9f1239"></stop>
-                                            </linearGradient>
-                                            <filter id="adminDashboardChartGlow" x="-20%" y="-20%" width="140%" height="140%">
-                                                <feGaussianBlur stdDeviation="6" result="blur"></feGaussianBlur>
-                                                <feMerge>
-                                                    <feMergeNode in="blur"></feMergeNode>
-                                                    <feMergeNode in="SourceGraphic"></feMergeNode>
-                                                </feMerge>
-                                            </filter>
-                                        </defs>
-                                        <?php for ($gridIndex = 0; $gridIndex < $chartGridRows; $gridIndex++): ?>
-                                            <?php
-                                            $gridRatio = $chartGridRows > 1 ? ($gridIndex / ($chartGridRows - 1)) : 0;
-                                            $gridY = $chartPlotTop + ($gridRatio * $chartPlotHeight);
-                                            $gridValue = (int)round($chartScaleMaxOrders * (1 - $gridRatio));
-                                            ?>
-                                            <line x1="28" y1="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" x2="612" y2="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" class="admin-dashboard-chart__grid"></line>
-                                            <text x="20" y="<?php echo admin_e(number_format($gridY + 4, 2, '.', '')); ?>" text-anchor="end" class="admin-dashboard-chart__value-label"><?php echo admin_e((string)$gridValue); ?></text>
-                                        <?php endfor; ?>
-                                        <path d="<?php echo admin_e($dashboardSalesSeriesAreaPath); ?>" class="admin-dashboard-chart__area"></path>
-                                        <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line-glow"></path>
-                                        <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line"></path>
-                                        <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
-                                            <?php
-                                            $isLastPoint = $pointIndex === count($dashboardSalesSeriesPoints) - 1;
-                                            $pointSeriesRow = $dashboardSalesSeries[$pointIndex] ?? [];
-                                            $pointRevenue = (float)($pointSeriesRow['paid_revenue'] ?? 0);
-                                            $pointOrders = (int)($chartPoint['value'] ?? 0);
-                                            $pointLabel = (string)($pointSeriesRow['short_label'] ?? ($chartPoint['label'] ?? ''));
-                                            $pointTooltipCenterX = min(
-                                                $chartTooltipMaxX,
-                                                max($chartTooltipMinX, (float)($chartPoint['x'] ?? 0))
-                                            );
-                                            $pointTooltipX = $pointTooltipCenterX - $chartTooltipHalfWidth;
-                                            $pointTooltipY = max(16, (float)($chartPoint['y'] ?? 0) - 62);
-                                            ?>
-                                            <?php if ($isLastPoint): ?>
-                                                <line x1="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y1="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" x2="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y2="<?php echo admin_e(number_format($chartPlotBottom, 2, '.', '')); ?>" class="admin-dashboard-chart__focus-line"></line>
-                                            <?php endif; ?>
-                                            <g class="admin-dashboard-chart__point-group">
-                                                <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="<?php echo $isLastPoint ? '14' : '11'; ?>" class="admin-dashboard-chart__hover-target"></circle>
-                                                <circle cx="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" cy="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>" r="<?php echo $isLastPoint ? '8' : '4'; ?>" class="admin-dashboard-chart__point<?php echo $isLastPoint ? ' is-last' : ''; ?>">
-                                                    <title><?php echo admin_e($pointLabel . ': ' . (string)$pointOrders); ?></title>
-                                                </circle>
-                                                <g class="admin-dashboard-chart__hover-tooltip">
-                                                    <rect x="<?php echo admin_e(number_format($pointTooltipX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY, 2, '.', '')); ?>" width="<?php echo admin_e((string)$chartTooltipWidth); ?>" height="<?php echo admin_e((string)$chartTooltipHeight); ?>" rx="16" class="admin-dashboard-chart__tooltip"></rect>
-                                                    <text x="<?php echo admin_e(number_format($pointTooltipCenterX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY + 21, 2, '.', '')); ?>" text-anchor="middle" class="admin-dashboard-chart__tooltip-meta"><?php echo admin_e($pointLabel); ?></text>
-                                                    <text x="<?php echo admin_e(number_format($pointTooltipCenterX, 2, '.', '')); ?>" y="<?php echo admin_e(number_format($pointTooltipY + 38, 2, '.', '')); ?>" text-anchor="middle" class="admin-dashboard-chart__tooltip-value"><?php echo admin_e((string)$pointOrders . ' ' . admin_t($messages, 'dashboard_chart_orders_short', 'orders') . ' · ' . admin_format_money_value_with_symbol($pointRevenue, $adminDefaultCurrencyCode, $adminDefaultCurrencySymbol)); ?></text>
-                                                </g>
-                                            </g>
-                                        <?php endforeach; ?>
-                                        <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
-                                            <?php
-                                            $chartLastLabelIndex = count($dashboardSalesSeriesPoints) - 1;
-                                            $showChartLabel = $pointIndex === 0
-                                                || $pointIndex === $chartLastLabelIndex
-                                                || ($pointIndex % 4 === 0 && $pointIndex < ($chartLastLabelIndex - 2));
-                                            if ($showChartLabel):
-                                                $chartLabelAnchor = $pointIndex === 0
-                                                    ? 'start'
-                                                    : ($pointIndex === $chartLastLabelIndex ? 'end' : 'middle');
-                                                $chartLabelClass = 'admin-dashboard-chart__label';
-                                                if ($pointIndex === 0) {
-                                                    $chartLabelClass .= ' is-first';
-                                                } elseif ($pointIndex === $chartLastLabelIndex) {
-                                                    $chartLabelClass .= ' is-last';
-                                                }
-                                            ?>
-                                                <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="242" text-anchor="<?php echo admin_e($chartLabelAnchor); ?>" class="<?php echo admin_e($chartLabelClass); ?>"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
-                                            <?php endif; ?>
-                                        <?php endforeach; ?>
-                                    </svg>
+                                <?php $dashboardExpiredSubscriptionCount = (int)($dashboardSubscriptionStatusCounts['expired'] ?? 0); ?>
+                                <?php if ($dashboardExpiredSubscriptionCount > 0): ?>
+                                <a
+                                    href="/admin/?page=orders&amp;order_status=expired"
+                                    class="admin-dashboard-subscription-stats__item admin-dashboard-subscription-stats__item--expired admin-dashboard-subscription-stats__item--link"
+                                    title="<?php echo admin_e(admin_t($messages, 'dashboard_subscription_stats_expired_link_title', 'Show expired orders')); ?>"
+                                >
+                                    <span>
+                                        <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                        <?php echo admin_e(admin_t($messages, 'dashboard_subscription_stats_expired', 'Expired')); ?>
+                                    </span>
+                                    <strong><?php echo admin_e((string)$dashboardExpiredSubscriptionCount); ?></strong>
+                                </a>
+                                <?php else: ?>
+                                <div class="admin-dashboard-subscription-stats__item admin-dashboard-subscription-stats__item--expired">
+                                    <span>
+                                        <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                        <?php echo admin_e(admin_t($messages, 'dashboard_subscription_stats_expired', 'Expired')); ?>
+                                    </span>
+                                    <strong>0</strong>
                                 </div>
+                                <?php endif; ?>
                             </div>
-                        <?php else: ?>
-                            <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
-                        <?php endif; ?>
+                        </div>
+                        <ul class="nav nav-tabs admin-dashboard-tabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link<?php echo $dashboardSalesView === 'trend' ? ' active' : ''; ?>" id="adminDashboardTrendTab" data-bs-toggle="tab" data-bs-target="#adminDashboardTrendPane" type="button" role="tab" aria-controls="adminDashboardTrendPane" aria-selected="<?php echo $dashboardSalesView === 'trend' ? 'true' : 'false'; ?>">
+                                    <?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_trend', 'Trend sprzedaży')); ?>
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link<?php echo $dashboardSalesView === 'monthly' ? ' active' : ''; ?>" id="adminDashboardMonthlyTab" data-bs-toggle="tab" data-bs-target="#adminDashboardMonthlyPane" type="button" role="tab" aria-controls="adminDashboardMonthlyPane" aria-selected="<?php echo $dashboardSalesView === 'monthly' ? 'true' : 'false'; ?>">
+                                    <?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_monthly', 'Statystyki miesięczne')); ?>
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link<?php echo $dashboardSalesView === 'summary' ? ' active' : ''; ?>" id="adminDashboardSummaryTab" data-bs-toggle="tab" data-bs-target="#adminDashboardSummaryPane" type="button" role="tab" aria-controls="adminDashboardSummaryPane" aria-selected="<?php echo $dashboardSalesView === 'summary' ? 'true' : 'false'; ?>">
+                                    <?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_summary', 'Podsumowanie sprzedaży')); ?>
+                                </button>
+                            </li>
+                        </ul>
+                        <div class="tab-content admin-dashboard-tabs__content">
+                            <div class="tab-pane fade<?php echo $dashboardSalesView === 'trend' ? ' show active' : ''; ?>" id="adminDashboardTrendPane" role="tabpanel" aria-labelledby="adminDashboardTrendTab" tabindex="0">
+                                <?php if ($dashboardSalesSeries): ?>
+                                    <?php
+                                    $chartMaxOrders = 0;
+                                    $chartTotalOrders = 0;
+                                    $chartRevenueTotal = 0.0;
+                                    $chartPeakDayLabel = '';
+                                    $chartPeakDayDate = '';
+                                    foreach ($dashboardSalesSeries as $chartPoint) {
+                                        $pointOrders = (int)($chartPoint['paid_orders'] ?? 0);
+                                        if ($pointOrders >= $chartMaxOrders) {
+                                            $chartMaxOrders = $pointOrders;
+                                            $chartPeakDayLabel = (string)($chartPoint['short_label'] ?? '');
+                                            $chartPeakDayDate = (string)($chartPoint['date'] ?? '');
+                                        }
+                                        $chartTotalOrders += $pointOrders;
+                                        $chartRevenueTotal += (float)($chartPoint['paid_revenue'] ?? 0);
+                                    }
+                                    $chartAverageOrders = count($dashboardSalesSeries) > 0 ? ($chartTotalOrders / count($dashboardSalesSeries)) : 0;
+                                    $chartLatestSeriesRow = $dashboardSalesSeries ? $dashboardSalesSeries[count($dashboardSalesSeries) - 1] : [];
+                                    $chartLatestLabel = (string)($chartLatestSeriesRow['short_label'] ?? '');
+                                    $chartRecentOrders = 0;
+                                    $chartPreviousOrders = 0;
+                                    foreach (array_slice($dashboardSalesSeries, -7) as $chartPoint) {
+                                        $chartRecentOrders += (int)($chartPoint['paid_orders'] ?? 0);
+                                    }
+                                    foreach (array_slice($dashboardSalesSeries, -14, 7) as $chartPoint) {
+                                        $chartPreviousOrders += (int)($chartPoint['paid_orders'] ?? 0);
+                                    }
+                                    $chartTrendDelta = $chartRecentOrders - $chartPreviousOrders;
+                                    if ($chartPreviousOrders > 0) {
+                                        $chartTrendPercent = ($chartTrendDelta / $chartPreviousOrders) * 100;
+                                    } elseif ($chartRecentOrders > 0) {
+                                        $chartTrendPercent = 100;
+                                    } else {
+                                        $chartTrendPercent = 0;
+                                    }
+                                    $chartTrendDirection = $chartTrendDelta > 0 ? 'up' : ($chartTrendDelta < 0 ? 'down' : 'flat');
+                                    $chartTrendPrefix = $chartTrendPercent > 0 ? '+' : '';
+                                    $chartScaleMaxOrders = admin_dashboard_chart_scale_max($dashboardSalesSeries);
+                                    if ($chartMaxOrders <= 0) {
+                                        $chartPeakDayLabel = '-';
+                                        $chartPeakDayDate = '';
+                                    }
+                                    $chartGridRows = $chartScaleMaxOrders <= 3 ? ($chartScaleMaxOrders + 1) : 4;
+                                    $chartPlotTop = 18.0;
+                                    $chartPlotBottom = 222.0;
+                                    $chartPlotHeight = $chartPlotBottom - $chartPlotTop;
+                                    ?>
+                                    <div class="admin-dashboard-chart">
+                                        <div class="admin-dashboard-chart__summary">
+                                            <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
+                                                <strong><?php echo admin_e(admin_dashboard_revenue_label(admin_dashboard_revenue_sum($dashboardSalesSeries), $adminDefaultCurrencyCode)); ?></strong>
+                                                <small><?php echo admin_e((string)$chartTotalOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
+                                            </div>
+                                            <div class="admin-dashboard-chart__summary-item">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_average_day', 'Avg/day')); ?></span>
+                                                <strong><?php echo admin_e(number_format($chartAverageOrders, 1, '.', '')); ?></strong>
+                                                <small><?php echo admin_e(admin_t($messages, 'dashboard_chart_last_day', 'Latest day') . ': ' . $chartLatestLabel); ?></small>
+                                            </div>
+                                            <div class="admin-dashboard-chart__summary-item">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_max_orders', 'Best day')); ?></span>
+                                                <strong><?php echo admin_e((string)$chartMaxOrders); ?></strong>
+                                                <small><?php echo admin_e($chartPeakDayLabel !== '' ? $chartPeakDayLabel : $chartPeakDayDate); ?></small>
+                                            </div>
+                                            <div class="admin-dashboard-chart__summary-item">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_trend_compare', 'vs previous 7d')); ?></span>
+                                                <strong class="admin-dashboard-chart__trend admin-dashboard-chart__trend--<?php echo admin_e($chartTrendDirection); ?>">
+                                                    <?php echo admin_e($chartPreviousOrders === 0 && $chartRecentOrders > 0 ? '—' : $chartTrendPrefix . number_format($chartTrendPercent, 0, '.', '') . '%'); ?>
+                                                </strong>
+                                                <small><?php echo admin_e((string)$chartRecentOrders . ' / ' . (string)$chartPreviousOrders . ' ' . admin_t($messages, 'dashboard_chart_orders_short', 'orders')); ?></small>
+                                            </div>
+                                        </div>
+                                        <div class="admin-dashboard-chart__canvas" data-sales-chart data-locale="<?php echo admin_e($currentLocale); ?>">
+                                            <div class="admin-dashboard-chart__heading">
+                                                <div>
+                                                    <span class="admin-dashboard-chart__legend"><span aria-hidden="true"></span><?php echo admin_e(admin_t($messages, 'dashboard_tooltip_sales', 'Sales')); ?></span>
+                                                    <span class="admin-dashboard-chart__range"><?php echo admin_e(date('d.m.Y', strtotime($dashboardSalesSeries[0]['date'])) . ' – ' . date('d.m.Y', strtotime($chartLatestSeriesRow['date']))); ?></span>
+                                                </div>
+                                                <span class="admin-dashboard-chart__interval"><?php echo admin_e(admin_t($messages, 'dashboard_chart_daily_interval', 'Daily')); ?></span>
+                                            </div>
+                                            <svg viewBox="0 0 640 252" role="group" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>" data-sales-plot>
+                                                <defs>
+                                                    <linearGradient id="adminDashboardChartArea" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                        <stop offset="0%" stop-color="#475569" stop-opacity="0.15"></stop>
+                                                        <stop offset="70%" stop-color="#64748b" stop-opacity="0.04"></stop>
+                                                        <stop offset="100%" stop-color="#ffffff" stop-opacity="0"></stop>
+                                                    </linearGradient>
+                                                    <linearGradient id="adminDashboardChartLine" x1="0%" y1="0%" x2="100%" y2="0%">
+                                                        <stop offset="0%" stop-color="#111827"></stop>
+                                                        <stop offset="55%" stop-color="#334155"></stop>
+                                                        <stop offset="100%" stop-color="#9f1239"></stop>
+                                                    </linearGradient>
+                                                    <filter id="adminDashboardChartGlow" x="-20%" y="-20%" width="140%" height="140%">
+                                                        <feGaussianBlur stdDeviation="6" result="blur"></feGaussianBlur>
+                                                        <feMerge>
+                                                            <feMergeNode in="blur"></feMergeNode>
+                                                            <feMergeNode in="SourceGraphic"></feMergeNode>
+                                                        </feMerge>
+                                                    </filter>
+                                                </defs>
+                                                <?php for ($gridIndex = 0; $gridIndex < $chartGridRows; $gridIndex++): ?>
+                                                    <?php
+                                                    $gridRatio = $chartGridRows > 1 ? ($gridIndex / ($chartGridRows - 1)) : 0;
+                                                    $gridY = $chartPlotTop + ($gridRatio * $chartPlotHeight);
+                                                    $gridValue = (int)round($chartScaleMaxOrders * (1 - $gridRatio));
+                                                    ?>
+                                                    <line x1="28" y1="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" x2="612" y2="<?php echo admin_e(number_format($gridY, 2, '.', '')); ?>" class="admin-dashboard-chart__grid" data-sales-grid></line>
+                                                    <text x="20" y="<?php echo admin_e(number_format($gridY + 4, 2, '.', '')); ?>" text-anchor="end" class="admin-dashboard-chart__value-label"><?php echo admin_e((string)$gridValue); ?></text>
+                                                <?php endfor; ?>
+                                                <path d="<?php echo admin_e($dashboardSalesSeriesAreaPath); ?>" class="admin-dashboard-chart__area" data-sales-area></path>
+                                                <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line-glow" data-sales-line></path>
+                                                <path d="<?php echo admin_e($dashboardSalesSeriesPath); ?>" class="admin-dashboard-chart__line" data-sales-line></path>
+                                                <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
+                                                    <?php
+                                                    $isLastPoint = $pointIndex === count($dashboardSalesSeriesPoints) - 1;
+                                                    $pointSeriesRow = $dashboardSalesSeries[$pointIndex] ?? [];
+                                                    $pointRevenue = (float)($pointSeriesRow['paid_revenue'] ?? 0);
+                                                    $pointOrders = (int)($chartPoint['value'] ?? 0);
+                                                    $pointLabel = (string)($pointSeriesRow['short_label'] ?? ($chartPoint['label'] ?? ''));
+                                                    $pointDateLabel = date('d.m.Y', strtotime((string)$pointSeriesRow['date']));
+                                                    $pointRevenueLabel = admin_dashboard_revenue_label((array)($pointSeriesRow['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode);
+                                                    $pointPurchases = (int)($pointSeriesRow['purchases'] ?? 0);
+                                                    $pointRenewals = (int)($pointSeriesRow['renewals'] ?? 0);
+                                                    $pointAriaLabel = $pointDateLabel . ' · ' . admin_t($messages, 'dashboard_tooltip_sales', 'Sales') . ': ' . $pointOrders . ' · ' . $pointRevenueLabel;
+                                                    ?>
+                                                    <g class="admin-dashboard-chart__point-group<?php echo $pointOrders > 0 ? ' has-sales' : ''; ?>"
+                                                       role="button" tabindex="<?php echo $isLastPoint ? '0' : '-1'; ?>"
+                                                       aria-label="<?php echo admin_e($pointAriaLabel); ?>"
+                                                       aria-describedby="dashboardSalesChartHint"
+                                                       data-sales-point data-index="<?php echo $pointIndex; ?>"
+                                                       data-date="<?php echo admin_e((string)$pointSeriesRow['date']); ?>"
+                                                       data-label="<?php echo admin_e($pointDateLabel); ?>"
+                                                       data-revenue="<?php echo admin_e($pointRevenueLabel); ?>"
+                                                       data-sales="<?php echo $pointOrders; ?>"
+                                                       data-purchases="<?php echo $pointPurchases; ?>"
+                                                       data-renewals="<?php echo $pointRenewals; ?>"
+                                                       data-y="<?php echo admin_e(number_format((float)$chartPoint['y'], 2, '.', '')); ?>">
+                                                        <title><?php echo admin_e($pointAriaLabel); ?></title>
+                                                        <line x1="<?php echo admin_e((string)$chartPoint['x']); ?>" x2="<?php echo admin_e((string)$chartPoint['x']); ?>" y1="18" y2="222" class="admin-dashboard-chart__crosshair" data-sales-crosshair></line>
+                                                        <rect x="<?php echo admin_e((string)((float)$chartPoint['x'] - 10)); ?>" y="12" width="20" height="216" class="admin-dashboard-chart__hover-target" data-sales-hit></rect>
+                                                        <circle cx="<?php echo admin_e((string)$chartPoint['x']); ?>" cy="<?php echo admin_e((string)$chartPoint['y']); ?>" r="<?php echo $isLastPoint ? '4.5' : '3'; ?>" class="admin-dashboard-chart__point<?php echo $isLastPoint ? ' is-last' : ''; ?>" data-sales-marker></circle>
+                                                    </g>
+                                                <?php endforeach; ?>
+                                                <?php foreach ($dashboardSalesSeriesPoints as $pointIndex => $chartPoint): ?>
+                                                    <?php
+                                                    $chartLastLabelIndex = count($dashboardSalesSeriesPoints) - 1;
+                                                    $showChartLabel = $pointIndex === 0
+                                                        || $pointIndex === $chartLastLabelIndex
+                                                        || ($pointIndex % 4 === 0 && $pointIndex < ($chartLastLabelIndex - 2));
+                                                        $chartLabelAnchor = $pointIndex === 0
+                                                            ? 'start'
+                                                            : ($pointIndex === $chartLastLabelIndex ? 'end' : 'middle');
+                                                        $chartLabelClass = 'admin-dashboard-chart__label';
+                                                        if ($pointIndex === 0) {
+                                                            $chartLabelClass .= ' is-first';
+                                                        } elseif ($pointIndex === $chartLastLabelIndex) {
+                                                            $chartLabelClass .= ' is-last';
+                                                        }
+                                                    ?>
+                                                        <text x="<?php echo admin_e(number_format((float)$chartPoint['x'], 2, '.', '')); ?>" y="242" text-anchor="<?php echo admin_e($chartLabelAnchor); ?>" class="<?php echo admin_e($chartLabelClass); ?>" data-sales-axis-label data-index="<?php echo $pointIndex; ?>" style="<?php echo $showChartLabel ? '' : 'display:none'; ?>"><?php echo admin_e((string)($chartPoint['label'] ?? '')); ?></text>
+
+                                                <?php endforeach; ?>
+                                            </svg>
+                                            <div class="admin-dashboard-chart__popover" data-sales-tooltip id="dashboardSalesChartTooltip" role="tooltip" hidden>
+                                                <div class="admin-dashboard-chart__popover-date"><span aria-hidden="true"></span><time data-tooltip-date></time></div>
+                                                <div class="admin-dashboard-chart__popover-revenue" data-tooltip-revenue></div>
+                                                <dl class="admin-dashboard-chart__popover-details">
+                                                    <div><dt><?php echo admin_e(admin_t($messages, 'dashboard_tooltip_sales', 'Sales')); ?></dt><dd data-tooltip-sales></dd></div>
+                                                    <div><dt><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_purchases', 'Purchases')); ?></dt><dd data-tooltip-purchases></dd></div>
+                                                    <div><dt><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_renewals', 'Renewals')); ?></dt><dd data-tooltip-renewals></dd></div>
+                                                </dl>
+                                            </div>
+                                            <div class="admin-dashboard-chart__footer">
+                                            <p class="admin-dashboard-chart__hint" id="dashboardSalesChartHint"><i class="bi bi-hand-index" aria-hidden="true"></i><?php echo admin_e(admin_t($messages, 'dashboard_chart_interaction_hint', 'Hover or tap a day for details. Use arrow keys to move between days.')); ?></p>
+                                                <div class="admin-dashboard-chart__navigation">
+                                                    <button type="button" data-sales-prev aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_chart_prev_day', 'Previous day')); ?>"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+                                                    <button type="button" data-sales-next disabled aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_chart_next_day', 'Next day')); ?>"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                <?php endif; ?>
+                            </div>
+
+                            <div class="tab-pane fade<?php echo $dashboardSalesView === 'monthly' ? ' show active' : ''; ?>" id="adminDashboardMonthlyPane" role="tabpanel" aria-labelledby="adminDashboardMonthlyTab" tabindex="0">
+                                <?php if ($dashboardMonthlySalesSeries): ?>
+                                    <?php
+                                    $dashboardMonthlySalesSeriesVisible = $dashboardMonthlySalesSeries;
+                                    $firstMonthlySalesIndex = null;
+                                    foreach ($dashboardMonthlySalesSeries as $monthlyIndex => $monthlyRowCheck) {
+                                        if ((float)($monthlyRowCheck['paid_revenue'] ?? 0) > 0 || (int)($monthlyRowCheck['paid_orders'] ?? 0) > 0) {
+                                            $firstMonthlySalesIndex = $monthlyIndex;
+                                            break;
+                                        }
+                                    }
+                                    if ($firstMonthlySalesIndex === null) {
+                                        $dashboardMonthlySalesSeriesVisible = array_slice($dashboardMonthlySalesSeries, -1);
+                                    } elseif ($firstMonthlySalesIndex > 1) {
+                                        $dashboardMonthlySalesSeriesVisible = array_slice($dashboardMonthlySalesSeries, $firstMonthlySalesIndex - 1);
+                                    }
+
+                                    $monthlyRevenueTotal = 0.0;
+                                    $monthlyOrdersTotal = 0;
+                                    $monthlyMaxRevenue = 0.0;
+                                    $monthlyMaxOrders = 0;
+                                    $monthlyPeakMonthKey = '';
+                                    $monthlyPeakMonthOrders = 0;
+                                    $monthlyActiveMonthRows = [];
+                                    foreach ($dashboardMonthlySalesSeriesVisible as $monthlyRow) {
+                                        $monthlyMonthKey = (string)($monthlyRow['month_key'] ?? '');
+                                        $monthlyRevenue = (float)($monthlyRow['paid_revenue'] ?? 0);
+                                        $monthlyOrders = (int)($monthlyRow['paid_orders'] ?? 0);
+                                        $monthlyRevenueTotal += $monthlyRevenue;
+                                        $monthlyOrdersTotal += $monthlyOrders;
+                                        if ($monthlyRevenue > 0 || $monthlyOrders > 0) {
+                                            $monthlyActiveMonthRows[] = $monthlyRow;
+                                        }
+                                        $monthlyMaxOrders = max($monthlyMaxOrders, $monthlyOrders);
+                                        if ($monthlyRevenue >= $monthlyMaxRevenue) {
+                                            $monthlyMaxRevenue = $monthlyRevenue;
+                                            $monthlyPeakMonthKey = $monthlyMonthKey;
+                                            $monthlyPeakMonthOrders = $monthlyOrders;
+                                        }
+                                    }
+                                    if ($monthlyMaxRevenue <= 0) {
+                                        $monthlyPeakMonthKey = '';
+                                        $monthlyPeakMonthOrders = 0;
+                                    }
+                                    $monthlyActiveMonthsCount = count($dashboardMonthlySalesSeries);
+                                    $monthlyRangeStart = new DateTimeImmutable($dashboardMonthlySalesSeries[0]['month_key'] . '-01 00:00:00');
+                                    $monthlyActiveDaysCount = (int)$monthlyRangeStart->diff(admin_dashboard_sales_now()->setTime(0, 0))->days + 1;
+                                    $monthlyRevenueByCurrency = admin_dashboard_revenue_sum($dashboardMonthlySalesSeries);
+                                    $monthlyAverageDailyRevenue = $monthlyActiveDaysCount > 0
+                                        ? ($monthlyRevenueTotal / $monthlyActiveDaysCount)
+                                        : 0.0;
+                                    $monthlyAverageDailyOrders = $monthlyActiveDaysCount > 0
+                                        ? ($monthlyOrdersTotal / $monthlyActiveDaysCount)
+                                        : 0.0;
+                                    $monthlyActiveWeeksCount = $monthlyActiveDaysCount > 0 ? ($monthlyActiveDaysCount / 7) : 0.0;
+                                    $monthlyAverageWeeklyRevenue = $monthlyActiveWeeksCount > 0
+                                        ? ($monthlyRevenueTotal / $monthlyActiveWeeksCount)
+                                        : 0.0;
+                                    $monthlyAverageWeeklyOrders = $monthlyActiveWeeksCount > 0
+                                        ? ($monthlyOrdersTotal / $monthlyActiveWeeksCount)
+                                        : 0.0;
+                                    $monthlyAverageWeeklyOrdersLabel = abs($monthlyAverageWeeklyOrders - round($monthlyAverageWeeklyOrders)) < 0.05
+                                        ? number_format((float)round($monthlyAverageWeeklyOrders), 0, '.', '')
+                                        : number_format($monthlyAverageWeeklyOrders, 1, '.', '');
+                                    $monthlyAverageDailyOrdersLabel = abs($monthlyAverageDailyOrders - round($monthlyAverageDailyOrders)) < 0.05
+                                        ? number_format((float)round($monthlyAverageDailyOrders), 0, '.', '')
+                                        : number_format($monthlyAverageDailyOrders, 1, '.', '');
+                                    $monthlyAverageRevenue = $monthlyActiveMonthsCount > 0 ? ($monthlyRevenueTotal / $monthlyActiveMonthsCount) : 0.0;
+                                    $monthlyAverageOrders = $monthlyActiveMonthsCount > 0 ? ($monthlyOrdersTotal / $monthlyActiveMonthsCount) : 0.0;
+                                    ?>
+                                    <div class="admin-dashboard-monthly">
+                                        <div class="admin-dashboard-chart__summary admin-dashboard-chart__summary--compact">
+                                            <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_monthly_total_revenue', 'Revenue 12m')); ?></span>
+                                                <strong><?php echo admin_e(admin_dashboard_revenue_label($monthlyRevenueByCurrency, $adminDefaultCurrencyCode, 1)); ?></strong>
+                                                <small><?php echo admin_e((string)$monthlyOrdersTotal . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
+                                            </div>
+                                            <div class="admin-dashboard-chart__summary-item">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_monthly_average_revenue', 'Avg/month')); ?></span>
+                                                <strong><?php echo admin_e(admin_dashboard_revenue_label($monthlyRevenueByCurrency, $adminDefaultCurrencyCode, $monthlyActiveMonthsCount)); ?></strong>
+                                                <small><?php echo admin_e(number_format($monthlyAverageOrders, 1, '.', '') . ' ' . admin_t($messages, 'dashboard_chart_orders_short', 'orders')); ?></small>
+                                            </div>
+                                            <div class="admin-dashboard-chart__summary-item">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_monthly_week_average', 'Średnio / tydz.')); ?></span>
+                                                <strong><?php echo admin_e(admin_dashboard_revenue_label($monthlyRevenueByCurrency, $adminDefaultCurrencyCode, $monthlyActiveWeeksCount)); ?></strong>
+                                                <small><?php echo admin_e($monthlyAverageWeeklyOrdersLabel . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
+                                            </div>
+                                            <div class="admin-dashboard-chart__summary-item">
+                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_monthly_day_average', 'Średnio / dzień')); ?></span>
+                                                <strong><?php echo admin_e(admin_dashboard_revenue_label($monthlyRevenueByCurrency, $adminDefaultCurrencyCode, $monthlyActiveDaysCount)); ?></strong>
+                                                <small><?php echo admin_e($monthlyAverageDailyOrdersLabel . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
+                                            </div>
+                                        </div>
+                                        <div class="admin-dashboard-monthly__legend">
+                                            <span><i class="is-revenue" aria-hidden="true"></i><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_revenue_total', 'Revenue')); ?></span>
+                                            <span><i class="is-sales" aria-hidden="true"></i><?php echo admin_e(admin_t($messages, 'dashboard_tooltip_sales', 'Sales')); ?></span>
+                                        </div>
+                                        <div class="admin-dashboard-monthly__rows" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_monthly_chart_intro', 'Monthly paid sales overview.')); ?>">
+                                            <?php foreach ($dashboardMonthlySalesSeriesVisible as $monthlyRow): ?>
+                                                <?php
+                                                $monthlyMonthKey = (string)($monthlyRow['month_key'] ?? '');
+                                                $monthlyRevenue = (float)($monthlyRow['paid_revenue'] ?? 0);
+                                                $monthlyOrders = (int)($monthlyRow['paid_orders'] ?? 0);
+                                                $monthlyHasSales = $monthlyRevenue > 0 || $monthlyOrders > 0;
+                                                $monthlyRevenueWidth = ($monthlyRevenue > 0 && $monthlyMaxRevenue > 0)
+                                                    ? max(6, ($monthlyRevenue / $monthlyMaxRevenue) * 100)
+                                                    : 0;
+                                                $monthlyOrdersWidth = ($monthlyOrders > 0 && $monthlyMaxOrders > 0)
+                                                    ? max(6, ($monthlyOrders / $monthlyMaxOrders) * 100)
+                                                    : 0;
+                                                $isMonthlyBest = $monthlyPeakMonthKey !== '' && $monthlyMonthKey === $monthlyPeakMonthKey;
+                                                ?>
+                                                <div class="admin-dashboard-monthly__row">
+                                                    <div class="admin-dashboard-monthly__label<?php echo $isMonthlyBest ? ' is-best' : ''; ?>">
+                                                        <strong>
+                                                            <?php if ($isMonthlyBest): ?>
+                                                                <i class="bi bi-star-fill" aria-hidden="true"></i>
+                                                            <?php endif; ?>
+                                                            <span><?php echo admin_e(admin_dashboard_month_label($monthlyMonthKey, $currentLocale)); ?></span>
+                                                        </strong>
+                                                        <?php if ($isMonthlyBest): ?>
+                                                            <small><?php echo admin_e(admin_t($messages, 'dashboard_monthly_best_badge', 'Najlepszy miesiąc')); ?></small>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="admin-dashboard-monthly__bar-wrap">
+                                                        <?php if ($monthlyHasSales): ?>
+                                                            <div class="admin-dashboard-monthly__bar-stack">
+                                                                <?php if ($monthlyRevenue > 0): ?>
+                                                                    <div class="admin-dashboard-monthly__bar admin-dashboard-monthly__bar--revenue" style="width: <?php echo admin_e(number_format($monthlyRevenueWidth, 2, '.', '')); ?>%;"></div>
+                                                                <?php endif; ?>
+                                                                <?php if ($monthlyOrders > 0): ?>
+                                                                    <div class="admin-dashboard-monthly__bar admin-dashboard-monthly__bar--orders" style="width: <?php echo admin_e(number_format($monthlyOrdersWidth, 2, '.', '')); ?>%;"></div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="admin-dashboard-monthly__meta">
+                                                        <strong class="<?php echo $monthlyRevenue > 0 ? 'is-positive' : ''; ?>">
+                                                            <?php echo admin_e(($monthlyRevenue > 0 ? '+' : '') . admin_dashboard_revenue_label((array)($monthlyRow['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode)); ?>
+                                                        </strong>
+                                                        <span><?php echo admin_e((string)$monthlyOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></span>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+
+                                        <?php if ($dashboardYearlySalesSeries): ?>
+                                            <?php
+                                            $yearlyMaxRevenue = 0.0;
+                                            $yearlyBestYear = 0;
+                                            foreach ($dashboardYearlySalesSeries as $yearlyRow) {
+                                                $yearlyRevenue = (float)($yearlyRow['paid_revenue'] ?? 0);
+                                                if ($yearlyRevenue > 0 && $yearlyRevenue >= $yearlyMaxRevenue) {
+                                                    $yearlyMaxRevenue = $yearlyRevenue;
+                                                    $yearlyBestYear = (int)($yearlyRow['year'] ?? 0);
+                                                }
+                                            }
+                                            ?>
+                                            <div class="admin-dashboard-yearly">
+                                                <div class="admin-dashboard-yearly__head">
+                                                    <h3><?php echo admin_e(admin_t($messages, 'dashboard_yearly_chart_title', 'Porównanie roczne')); ?></h3>
+                                                    <p><?php echo admin_e(admin_t($messages, 'dashboard_yearly_chart_intro', 'Zobacz, jak każdy rok wypada na tle poprzednich lat pod względem przychodu i liczby sprzedaży.')); ?></p>
+                                                </div>
+                                                <div class="admin-dashboard-yearly__rows" role="img" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_yearly_chart_title', 'Porównanie roczne')); ?>">
+                                                    <?php foreach ($dashboardYearlySalesSeries as $yearlyRow): ?>
+                                                        <?php
+                                                        $yearlyYear = (int)($yearlyRow['year'] ?? 0);
+                                                        $yearlyRevenue = (float)($yearlyRow['paid_revenue'] ?? 0);
+                                                        $yearlyOrders = (int)($yearlyRow['paid_orders'] ?? 0);
+                                                        $yearlyWidth = $yearlyMaxRevenue > 0 ? max(8, ($yearlyRevenue / $yearlyMaxRevenue) * 100) : 0;
+                                                        $isYearlyBest = $yearlyBestYear > 0 && $yearlyYear === $yearlyBestYear;
+                                                        ?>
+                                                        <div class="admin-dashboard-yearly__row">
+                                                            <div class="admin-dashboard-yearly__label<?php echo $isYearlyBest ? ' is-best' : ''; ?>">
+                                                                <strong>
+                                                                    <?php if ($isYearlyBest): ?>
+                                                                        <i class="bi bi-star-fill" aria-hidden="true"></i>
+                                                                    <?php endif; ?>
+                                                                    <span><?php echo admin_e((string)$yearlyYear); ?></span>
+                                                                </strong>
+                                                                <?php if ($isYearlyBest): ?>
+                                                                    <small><?php echo admin_e(admin_t($messages, 'dashboard_yearly_best_badge', 'Najlepszy rok')); ?></small>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <div class="admin-dashboard-yearly__bar-wrap">
+                                                                <div class="admin-dashboard-yearly__bar" style="width: <?php echo admin_e(number_format($yearlyWidth, 2, '.', '')); ?>%;"></div>
+                                                            </div>
+                                                            <div class="admin-dashboard-yearly__meta">
+                                                                <strong class="<?php echo $yearlyRevenue > 0 ? 'is-positive' : ''; ?>">
+                                                                    <?php echo admin_e(($yearlyRevenue > 0 ? '+' : '') . admin_dashboard_revenue_label((array)($yearlyRow['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode)); ?>
+                                                                </strong>
+                                                                <span><?php echo admin_e((string)$yearlyOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></span>
+                                                            </div>
+                                                        </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                <?php endif; ?>
+                            </div>
+
+                            <div class="tab-pane fade<?php echo $dashboardSalesView === 'summary' ? ' show active' : ''; ?>" id="adminDashboardSummaryPane" role="tabpanel" aria-labelledby="adminDashboardSummaryTab" tabindex="0">
+                                <?php if ($dashboardProductSalesSummary): ?>
+                                    <?php
+                                    $dashboardSummaryActiveTotal = 0;
+                                    $dashboardSummaryPurchasesTotal = 0;
+                                    $dashboardSummaryRenewalsTotal = 0;
+                                    $dashboardSummaryTransactionsTotal = 0;
+                                    $dashboardSummaryRevenueTotal = 0.0;
+                                    $dashboardSummaryBestProductName = '';
+                                    $dashboardSummaryBestProductRevenue = 0.0;
+                                    $dashboardSummaryProductsWithSales = 0;
+                                    foreach ($dashboardProductSalesSummary as $summaryTotalsRow) {
+                                        $dashboardSummaryActiveTotal += (int)($summaryTotalsRow['active_sales_total'] ?? 0);
+                                        $dashboardSummaryPurchasesTotal += (int)($summaryTotalsRow['purchases_total'] ?? 0);
+                                        $dashboardSummaryRenewalsTotal += (int)($summaryTotalsRow['renewals_total'] ?? 0);
+                                        $dashboardSummaryTransactionsTotal += (int)($summaryTotalsRow['transactions_total'] ?? 0);
+                                        $summaryTotalsRevenue = (float)($summaryTotalsRow['revenue_total'] ?? 0);
+                                        $dashboardSummaryRevenueTotal += $summaryTotalsRevenue;
+                                        if ((int)($summaryTotalsRow['transactions_total'] ?? 0) > 0) {
+                                            $dashboardSummaryProductsWithSales++;
+                                        }
+                                        if ($summaryTotalsRevenue >= $dashboardSummaryBestProductRevenue) {
+                                            $dashboardSummaryBestProductRevenue = $summaryTotalsRevenue;
+                                            $dashboardSummaryBestProductName = trim((string)($summaryTotalsRow['name'] ?? ''));
+                                        }
+                                    }
+                                    ?>
+                                    <form method="get" class="admin-dashboard-summary-toolbar">
+                                        <input type="hidden" name="page" value="dashboard">
+                                        <input type="hidden" name="dashboard_sales_view" value="summary">
+                                        <label class="admin-dashboard-summary-toolbar__label" for="dashboard_sales_year_filter"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_filter_label', 'Rok')); ?></label>
+                                        <select class="form-select admin-dashboard-summary-toolbar__select" id="dashboard_sales_year_filter" name="dashboard_sales_year" onchange="this.form.submit()">
+                                            <option value="0"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_filter_all', 'Wszystkie lata')); ?></option>
+                                            <?php foreach ($dashboardSalesYearOptions as $salesYearOption): ?>
+                                                <option value="<?php echo admin_e((string)$salesYearOption); ?>"<?php echo $dashboardSalesYearFilter === (int)$salesYearOption ? ' selected' : ''; ?>><?php echo admin_e((string)$salesYearOption); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </form>
+                                    <div class="admin-dashboard-chart__summary admin-dashboard-chart__summary--compact admin-dashboard-sales-summary-metrics">
+                                        <div class="admin-dashboard-chart__summary-item admin-dashboard-sales-summary-metrics__item">
+                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_active', 'Aktywne teraz')); ?></span>
+                                            <strong><?php echo admin_e((string)$dashboardSummaryActiveTotal); ?></strong>
+                                            <small>
+                                                <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e((string)count($dashboardProductSalesSummary) . ' ' . admin_t($messages, 'dashboard_sales_summary_products_badge', 'produktów')); ?></span>
+                                            </small>
+                                        </div>
+                                        <div class="admin-dashboard-chart__summary-item admin-dashboard-sales-summary-metrics__item">
+                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_purchases', 'Zakupy')); ?></span>
+                                            <strong><?php echo admin_e((string)$dashboardSummaryPurchasesTotal); ?></strong>
+                                            <small>
+                                                <span class="admin-status-pill admin-status-pill--info"><?php echo admin_e((string)$dashboardSummaryTransactionsTotal . ' ' . admin_t($messages, 'dashboard_sales_summary_transactions', 'Łącznie')); ?></span>
+                                            </small>
+                                        </div>
+                                        <div class="admin-dashboard-chart__summary-item admin-dashboard-sales-summary-metrics__item">
+                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_renewals', 'Przedłużenia')); ?></span>
+                                            <strong><?php echo admin_e((string)$dashboardSummaryRenewalsTotal); ?></strong>
+                                            <small>
+                                                <span class="admin-status-pill admin-status-pill--warning"><?php echo admin_e((string)$dashboardSummaryProductsWithSales . ' ' . admin_t($messages, 'dashboard_sales_summary_active_products_badge', 'pozycji ze sprzedażą')); ?></span>
+                                            </small>
+                                        </div>
+                                        <div class="admin-dashboard-chart__summary-item admin-dashboard-sales-summary-metrics__item admin-dashboard-sales-summary-metrics__item--revenue">
+                                            <span><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_revenue_total', 'Przychód łącznie')); ?></span>
+                                            <strong class="admin-dashboard-sales-summary-metrics__value--positive"><?php echo admin_e('+' . admin_dashboard_revenue_label(admin_dashboard_revenue_sum($dashboardProductSalesSummary), $adminDefaultCurrencyCode)); ?></strong>
+                                            <small>
+                                                <?php if ($dashboardSummaryBestProductName !== '' && $dashboardSummaryBestProductRevenue > 0): ?>
+                                                    <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_best_product', 'Top') . ': ' . $dashboardSummaryBestProductName); ?></span>
+                                                <?php else: ?>
+                                                    <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e($dashboardSummaryTransactionsTotal > 0
+                                                        ? admin_t($messages, 'dashboard_sales_summary_no_default_revenue', 'No sales in {currency}', ['currency' => $adminDefaultCurrencyCode])
+                                                        : admin_t($messages, 'dashboard_sales_summary_no_revenue_badge', 'Brak sprzedaży')); ?></span>
+                                                <?php endif; ?>
+                                            </small>
+                                        </div>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table admin-table admin-dashboard-sales-summary-table align-middle">
+                                            <thead>
+                                                <tr>
+                                                    <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+                                                    <th class="text-center"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_active', 'Aktywne teraz')); ?></th>
+                                                    <th class="text-center"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_purchases', 'Zakupy')); ?></th>
+                                                    <th class="text-center"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_renewals', 'Przedłużenia')); ?></th>
+                                                    <th class="text-center"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_transactions', 'Łącznie')); ?></th>
+                                                    <th><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_revenue_total', 'Przychód łącznie')); ?></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($dashboardProductSalesSummary as $summaryRow): ?>
+                                                    <?php
+                                                    $summaryProductId = (int)($summaryRow['id'] ?? 0);
+                                                    $summaryProductUrl = $summaryProductId > 0 ? '/admin/?page=products&edit_product=' . $summaryProductId . '&product_list_page=1' : '';
+                                                    $summaryDurationLabel = trim((string)($summaryRow['duration_label'] ?? ''));
+                                                    $summaryPriceLabel = admin_format_money_value_with_symbol(
+                                                        (float)($summaryRow['price_amount'] ?? 0),
+                                                        (string)($summaryRow['currency_code'] ?? $adminDefaultCurrencyCode),
+                                                        (string)($summaryRow['currency_code'] ?? $adminDefaultCurrencyCode)
+                                                    );
+                                                    $summaryActiveSales = (int)($summaryRow['active_sales_total'] ?? 0);
+                                                    $summaryPurchasesTotal = (int)($summaryRow['purchases_total'] ?? 0);
+                                                    $summaryRenewalsTotal = (int)($summaryRow['renewals_total'] ?? 0);
+                                                    $summaryTransactionsTotal = (int)($summaryRow['transactions_total'] ?? 0);
+                                                    $summaryRevenueTotal = (float)($summaryRow['revenue_total'] ?? 0);
+                                                    ?>
+                                                    <tr>
+                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>">
+                                                            <div class="admin-dashboard-sales-summary-table__product">
+                                                                <?php if ($summaryProductUrl !== ''): ?>
+                                                                    <a href="<?php echo admin_e($summaryProductUrl); ?>" class="admin-inline-link"><?php echo admin_e((string)($summaryRow['name'] ?? 'Product')); ?></a>
+                                                                <?php else: ?>
+                                                                    <strong><?php echo admin_e((string)($summaryRow['name'] ?? 'Product')); ?></strong>
+                                                                <?php endif; ?>
+                                                                <span>
+                                                                    <?php if ($summaryDurationLabel !== '' && $summaryDurationLabel !== '0h'): ?>
+                                                                        <?php echo admin_e($summaryDurationLabel); ?>
+                                                                    <?php endif; ?>
+                                                                    <?php if (trim((string)($summaryRow['provider_name'] ?? '')) !== ''): ?>
+                                                                        · <?php echo admin_e((string)$summaryRow['provider_name']); ?>
+                                                                    <?php endif; ?>
+                                                                    <?php if ($summaryProductId > 0): ?>
+                                                                        · <strong class="admin-dashboard-sales-summary-table__price"><?php echo admin_e($summaryPriceLabel); ?></strong>
+                                                                    <?php endif; ?>
+                                                                </span>
+                                                            </div>
+                                                        </td>
+                                                        <td class="text-center" data-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_active', 'Aktywne teraz')); ?>"><strong class="<?php echo $summaryActiveSales <= 0 ? 'admin-dashboard-sales-summary-table__zero' : ''; ?>"><?php echo admin_e((string)$summaryActiveSales); ?></strong></td>
+                                                        <td class="text-center" data-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_purchases', 'Zakupy')); ?>"><span class="<?php echo $summaryPurchasesTotal <= 0 ? 'admin-dashboard-sales-summary-table__zero' : ''; ?>"><?php echo admin_e((string)$summaryPurchasesTotal); ?></span></td>
+                                                        <td class="text-center" data-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_renewals', 'Przedłużenia')); ?>"><span class="<?php echo $summaryRenewalsTotal <= 0 ? 'admin-dashboard-sales-summary-table__zero' : ''; ?>"><?php echo admin_e((string)$summaryRenewalsTotal); ?></span></td>
+                                                        <td class="text-center" data-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_transactions', 'Łącznie')); ?>"><span class="<?php echo $summaryTransactionsTotal <= 0 ? 'admin-dashboard-sales-summary-table__zero' : ''; ?>"><?php echo admin_e((string)$summaryTransactionsTotal); ?></span></td>
+                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_revenue_total', 'Przychód łącznie')); ?>"><strong class="<?php echo $summaryTransactionsTotal > 0 ? 'admin-dashboard-sales-summary-table__positive' : 'admin-dashboard-sales-summary-table__zero'; ?>"><?php echo admin_e(($summaryTransactionsTotal > 0 ? '+' : '') . admin_dashboard_revenue_label((array)($summaryRow['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode)); ?></strong></td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     </section>
 
                     <section class="admin-grid-2">
@@ -6679,7 +7693,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         </article>
                     </section>
 
-                    <article class="admin-panel-card admin-panel-card--wide admin-dashboard-notes-card">
+                    <article class="admin-panel-card admin-panel-card--wide admin-dashboard-notes-card d-none d-lg-block">
                         <div class="admin-panel-card__header">
                             <div>
                                 <h2><?php echo admin_e(admin_t($messages, 'settings_notes_title', 'Moje notatki')); ?></h2>
@@ -6719,7 +7733,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <?php endif; ?>
                     </article>
 
-                    <article class="admin-panel-card">
+                    <article class="admin-panel-card admin-dashboard-change-log-card d-none d-lg-block">
                         <div class="admin-panel-card__header">
                             <div>
                                 <h2><?php echo admin_e(admin_t($messages, 'dashboard_change_log_title', 'Wprowadzone zmiany')); ?></h2>
@@ -6772,11 +7786,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 <?php foreach ($dashboardProviderBreakdowns as $providerBreakdown): ?>
                                     <?php
                                     $providerDonutSegments = admin_dashboard_donut_segments((array)($providerBreakdown['products'] ?? []));
-                                    $providerRevenueLabel = admin_format_money_value_with_symbol(
-                                        $providerBreakdown['total_revenue'] ?? 0,
-                                        $adminDefaultCurrencyCode,
-                                        $adminDefaultCurrencySymbol
-                                    );
+                                    $providerRevenueLabel = admin_dashboard_revenue_label((array)($providerBreakdown['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode);
                                     ?>
                                     <article class="admin-dashboard-provider-card">
                                         <div class="admin-dashboard-provider-card__head">
@@ -6849,6 +7859,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                             <?php
                             switch ($route) {
+                                case 'billing':
+                                    admin_billing_render_page($billingContext, $messages, $currentLocale, $csrfToken);
+                                    break;
+
                                 case 'swap-converter':
                                     $swapFeeDecimal = round($swapConverterFeePercent / 100, 6);
                                     $swapHelpText = static function (string $text): string {
@@ -6895,7 +7909,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     foreach ($mixerAllowedOutputAssets as $assetKey) {
                                         $mixerOutputAssetLabels[] = (string)($mixerOutputAssetOptions[$assetKey]['label'] ?? $assetKey);
                                     }
-                                    $mixerActiveNetworkKey = (string)($mixerAllowedNetworks[0] ?? 'polygon');
+                                    $mixerRequestedOutputKey = strtoupper(trim((string)($_GET['mixer_output_asset'] ?? '')));
+                                    $mixerPreviewOutputKey = in_array($mixerRequestedOutputKey, $mixerAllowedOutputAssets, true)
+                                        ? $mixerRequestedOutputKey
+                                        : $mixerDefaultOutputAsset;
+                                    $mixerActiveNetworkKey = admin_mixer_network_key_for_output_asset($mixerPreviewOutputKey);
+                                    if (!in_array($mixerActiveNetworkKey, $mixerAllowedNetworks, true)) {
+                                        $mixerActiveNetworkKey = (string)($mixerAllowedNetworks[0] ?? 'polygon');
+                                        foreach ($mixerAllowedOutputAssets as $assetKey) {
+                                            if (admin_mixer_network_key_for_output_asset((string)$assetKey) === $mixerActiveNetworkKey) {
+                                                $mixerPreviewOutputKey = (string)$assetKey;
+                                                break;
+                                            }
+                                        }
+                                    }
                                     $mixerActiveNetworkMode = $mixerActiveNetworkKey === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
                                     $mixerActiveNetworkOption = admin_mixer_effective_network_option($mixerActiveNetworkKey, $mixerActiveNetworkMode);
                                     $mixerActiveVaultContract = $mixerActiveNetworkKey === 'bsc'
@@ -6907,38 +7934,53 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $mixerActiveChainId = (int)($mixerActiveNetworkOption['chain_id'] ?? 137);
                                     $mixerActiveChainHex = '0x' . dechex(max(1, $mixerActiveChainId));
                                     $mixerActiveExplorerTxUrl = (string)($mixerActiveNetworkOption['explorer_tx_url'] ?? 'https://polygonscan.com/tx/');
-                                    $mixerActivePoolState = $mixerNetworkPoolStates[$mixerActiveNetworkKey] ?? [
+                                    $mixerActivePoolState = admin_mixer_pool_state_for_output_asset(
+                                        $mixerActiveRpcUrl,
+                                        $mixerActiveVaultContract,
+                                        $mixerPreviewOutputKey
+                                    );
+                                    if (!is_array($mixerActivePoolState) || $mixerActivePoolState === []) {
+                                        $mixerActivePoolState = [
                                         'ok' => false,
                                         'configured' => false,
                                         'balance' => 0.0,
                                         'label' => '0 ' . (string)($mixerActiveNetworkOption['native_symbol'] ?? ''),
                                         'error' => 'Pool balance is not available.',
+                                        ];
+                                    }
+                                    $mixerInputDepositAddresses = [
+                                        'BTC' => $mixerBtcDepositAddress,
+                                        'DOGE' => $mixerDogeDepositAddress,
+                                        'SOL' => $mixerSolDepositAddress,
                                     ];
-                                    $mixerPreviewInputKey = (string)($mixerAllowedInputAssets[0] ?? 'BTC');
-                                    $mixerPreviewOutputKey = (string)($mixerAllowedOutputAssets[0] ?? 'POLYGON_POL');
+                                    $mixerPreviewInputKey = $mixerDefaultInputAsset;
                                     $mixerPreviewInputOption = $mixerInputAssetOptions[$mixerPreviewInputKey] ?? [];
                                     $mixerPreviewInputSymbol = (string)($mixerPreviewInputOption['symbol'] ?? $mixerPreviewInputKey);
-                                    $mixerPreviewInputNetwork = (string)($mixerPreviewInputOption['network'] ?? ($mixerPreviewInputKey === 'DOGE' ? 'Dogecoin' : 'Bitcoin'));
+                                    $mixerPreviewInputNetwork = (string)($mixerPreviewInputOption['network'] ?? ucfirst(admin_mixer_input_asset_network_code($mixerPreviewInputKey)));
                                     $mixerPreviewInputIcon = (string)($mixerPreviewInputOption['icon'] ?? '');
                                     $mixerPreviewInputNetworkIcon = (string)($mixerPreviewInputOption['network_icon'] ?? $mixerPreviewInputIcon);
-                                    $mixerPreviewDepositAddress = $mixerPreviewInputKey === 'DOGE' ? $mixerDogeDepositAddress : $mixerBtcDepositAddress;
+                                    $mixerPreviewDepositAddress = trim((string)($mixerInputDepositAddresses[$mixerPreviewInputKey] ?? ''));
+                                    $mixerQuotePriceKeys = array_values(array_unique(array_merge($mixerAllowedInputAssets, [$mixerPreviewOutputKey])));
+                                    $mixerQuotePrices = admin_mixer_price_usd_from_crypto_assets($db, $mixerQuotePriceKeys, 300);
                                     $mixerInputAssetUiOptions = [];
                                     foreach ($mixerAllowedInputAssets as $inputAssetKey) {
                                         $inputAssetKeyString = strtoupper((string)$inputAssetKey);
                                         $inputAssetOption = $mixerInputAssetOptions[$inputAssetKeyString] ?? [];
                                         $inputAssetSymbol = (string)($inputAssetOption['symbol'] ?? $inputAssetKeyString);
-                                        $inputAssetNetwork = (string)($inputAssetOption['network'] ?? ($inputAssetKeyString === 'DOGE' ? 'Dogecoin' : 'Bitcoin'));
+                                        $inputAssetNetwork = (string)($inputAssetOption['network'] ?? ucfirst(admin_mixer_input_asset_network_code($inputAssetKeyString)));
                                         $inputAssetIcon = (string)($inputAssetOption['icon'] ?? '');
                                         $inputAssetNetworkIcon = (string)($inputAssetOption['network_icon'] ?? $inputAssetIcon);
-                                        $inputAssetDepositAddress = $inputAssetKeyString === 'DOGE' ? $mixerDogeDepositAddress : $mixerBtcDepositAddress;
+                                        $inputAssetDepositAddress = trim((string)($mixerInputDepositAddresses[$inputAssetKeyString] ?? ''));
                                         $mixerInputAssetUiOptions[] = [
                                             'key' => $inputAssetKeyString,
                                             'symbol' => $inputAssetSymbol,
                                             'network' => $inputAssetNetwork,
                                             'icon' => $inputAssetIcon,
                                             'networkIcon' => $inputAssetNetworkIcon,
-                                            'badge' => $inputAssetKeyString === 'DOGE' ? 'D' : 'B',
+                                            'badge' => substr($inputAssetKeyString, 0, 1),
                                             'depositAddress' => $inputAssetDepositAddress,
+                                            'rateUsd' => (float)($mixerQuotePrices[$inputAssetKeyString]['usd'] ?? 0.0),
+                                            'rateUpdatedAt' => (string)($mixerQuotePrices[$inputAssetKeyString]['updated_at'] ?? ''),
                                         ];
                                     }
                                     $mixerInputAssetUiOptionsJson = json_encode($mixerInputAssetUiOptions, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -6947,7 +7989,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $mixerPreviewOutputNetwork = (string)($mixerActiveNetworkOption['label'] ?? ($mixerPreviewOutputOption['network'] ?? 'Polygon'));
                                     $mixerPreviewOutputIcon = (string)($mixerPreviewOutputOption['icon'] ?? '');
                                     $mixerPreviewOutputNetworkIcon = (string)($mixerPreviewOutputOption['network_icon'] ?? $mixerPreviewOutputIcon);
-                                    $mixerPreviewInputBadge = $mixerPreviewInputKey === 'DOGE' ? 'D' : 'B';
+                                    $mixerPreviewOutputRateUsd = (float)($mixerQuotePrices[$mixerPreviewOutputKey]['usd'] ?? 0.0);
+                                    $mixerPreviewInputBadge = substr($mixerPreviewInputKey, 0, 1);
                                     $mixerPreviewOutputBadge = strtoupper(substr($mixerPreviewOutputNetwork, 0, 1));
                                     $mixerVaultReady = $mixerActiveVaultContract !== '' && preg_match('/^0x[a-fA-F0-9]{40}$/', $mixerActiveVaultContract) === 1;
                                     $mixerRpcReady = $mixerActiveRpcUrl !== '';
@@ -6956,16 +7999,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $mixerEmailReady = $mixerNotificationEmail !== '' && filter_var($mixerNotificationEmail, FILTER_VALIDATE_EMAIL) !== false;
                                     $mixerBtcWatcherReady = !in_array('BTC', $mixerAllowedInputAssets, true) || $mixerBtcDepositAddress !== '';
                                     $mixerDogeWatcherReady = !in_array('DOGE', $mixerAllowedInputAssets, true) || $mixerDogeDepositAddress !== '';
-                                    $mixerWatcherReady = $mixerBtcWatcherReady && $mixerDogeWatcherReady;
+                                    $mixerSolWatcherReady = !in_array('SOL', $mixerAllowedInputAssets, true) || $mixerSolDepositAddress !== '';
+                                    $mixerWatcherReady = $mixerBtcWatcherReady && $mixerDogeWatcherReady && $mixerSolWatcherReady;
                                     $mixerRouteReady = $mixerAllowedInputAssets !== [] && $mixerAllowedOutputAssets !== [] && $mixerAllowedNetworks !== [] && $mixerVaultReady && $mixerRpcReady && $mixerPoolReady && $mixerPoolHasLiquidity && $mixerWatcherReady;
                                     $mixerConfigReady = $mixerRouteReady && $mixerActiveRpcUrl !== '' && $mixerEmailReady;
+                                    $mixerPayoutRuntimeAvailable = admin_mixer_crypto_runtime_available();
+                                    $mixerPayoutExecutorConfigured = $mixerPayoutRuntimeAvailable && admin_mixer_payout_signer_is_configured($appSettings) && admin_mixer_payout_executor_is_configured($appSettings);
+                                    $mixerAutoPayoutReady = $mixerAutoPayoutEnabled && $mixerPayoutExecutorConfigured;
                                     $mixerInputsDisabled = !$mixerVaultReady || !$mixerRpcReady || !$mixerPoolReady || !$mixerPoolHasLiquidity;
                                     if (!$mixerVaultReady) {
                                         $mixerNoticeText = admin_t($messages, 'mixer_widget_temporarily_disabled', 'Unfortunately, Swapper is temporarily disabled. Please try again later.');
                                     } elseif (!$mixerRpcReady || !$mixerPoolReady) {
-                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_rpc_unavailable', 'Swapper cannot read the vault balance. Check RPC URL in Settings.');
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_rpc_unavailable', 'This swap is not possible right now. Please try again later.');
                                     } elseif (!$mixerPoolHasLiquidity) {
-                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_pool_empty', 'No routes available. The Swapper vault has no liquidity right now.');
+                                        $mixerNoticeText = admin_t($messages, 'mixer_widget_pool_empty', 'This swap is not possible right now. Please try again later.');
                                     } elseif ($mixerRouteReady) {
                                         $mixerNoticeText = admin_t($messages, 'mixer_widget_wallet_required', 'The destination wallet address is required to proceed with the transfer.');
                                     } else {
@@ -6973,7 +8020,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     }
                                     $mixerButtonText = $mixerInputsDisabled
                                         ? admin_t($messages, 'mixer_widget_temporarily_disabled_button', 'Swapper temporarily disabled')
-                                        : admin_t($messages, 'mixer_start_swap', 'Start Swap');
+                                        : admin_t($messages, 'mixer_start_swap', 'Rozpocznij wymianę');
                                     ?>
                                     <section class="admin-swap-page">
                                         <?php if ($swapModeCount > 1): ?>
@@ -7008,8 +8055,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div
                                                     class="admin-private-send-widget"
                                                     id="adminHinkalPrivateSendMount"
-                                                    data-fee-percent="<?php echo admin_e(number_format($swapConverterFeePercent, 2, '.', '')); ?>"
+                                                    data-input-asset="<?php echo admin_e($hinkalPrivateSendInputAsset); ?>"
+                                                    data-fee-percent="<?php echo admin_e(number_format($hinkalPrivateSendFeePercent, 2, '.', '')); ?>"
                                                     data-fee-wallet="<?php echo admin_e($hinkalPrivateSendFeeWallet); ?>"
+                                                    data-show-fee-details="<?php echo $hinkalPrivateSendShowFeeDetails ? '1' : '0'; ?>"
+                                                    data-quote-url="/admin/?page=swap-converter"
+                                                    data-notification-url="/admin/?page=swap-converter"
+                                                    data-csrf-token="<?php echo admin_e($csrfToken); ?>"
                                                     data-loading-label="<?php echo admin_e(admin_t($messages, 'hinkal_private_send_loading', 'Ładowanie modułu Hinkal...')); ?>"
                                                     data-error-label="<?php echo admin_e(admin_t($messages, 'hinkal_private_send_error', 'Nie udało się załadować modułu Hinkal.')); ?>"
                                                     data-walletconnect-project-id="5432e3507d41270bee46b7b85bbc2ef8">
@@ -7059,6 +8111,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     data-api-key="<?php echo admin_e($swapConverterApiKey); ?>"
                                                     data-fee="<?php echo admin_e(number_format($swapFeeDecimal, 6, '.', '')); ?>"
                                                     data-allowed-chains="<?php echo admin_e(json_encode(array_values($swapConverterAllowedChainIds), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT)); ?>"
+                                                    data-default-from-asset="<?php echo admin_e($swapConverterDefaultFromAsset); ?>"
+                                                    data-default-to-asset="<?php echo admin_e($swapConverterDefaultToAsset); ?>"
                                                     data-loading-label="<?php echo admin_e(admin_t($messages, 'swap_converter_widget_loading', 'Loading LI.FI widget...')); ?>"
                                                     data-error-label="<?php echo admin_e(admin_t($messages, 'swap_converter_widget_error', 'Unable to load LI.FI widget. Check your connection and configuration.')); ?>">
                                                     <div class="admin-swap-loader" role="status" aria-live="polite">
@@ -7091,18 +8145,45 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     data-payout-explorer-url="<?php echo admin_e($mixerActiveExplorerTxUrl); ?>"
                                                     data-output-asset-key="<?php echo admin_e($mixerPreviewOutputKey); ?>"
                                                     data-output-asset="<?php echo admin_e($mixerPreviewOutputSymbol); ?>"
+                                                    data-output-icon="<?php echo admin_e($mixerPreviewOutputIcon); ?>"
                                                     data-output-network="<?php echo admin_e($mixerPreviewOutputNetwork); ?>"
+                                                    data-output-rate-usd="<?php echo admin_e(number_format($mixerPreviewOutputRateUsd, 12, '.', '')); ?>"
                                                     data-deposit-address="<?php echo admin_e($mixerPreviewDepositAddress); ?>"
                                                     data-quote-lifetime-minutes="<?php echo (int)$mixerQuoteLifetimeMinutes; ?>"
-                                                    data-fee-percent="<?php echo admin_e(number_format($mixerFeePercent, 2, '.', '')); ?>"
+                                                    data-payout-factor="<?php echo admin_e(number_format(max(0.0, 1.0 - ($mixerFeePercent / 100)), 8, '.', '')); ?>"
+                                                    data-auto-payout-enabled="<?php echo $mixerAutoPayoutReady ? '1' : '0'; ?>"
+                                                    data-min-order-usd="<?php echo admin_e(number_format($mixerMinOrderUsd, 2, '.', '')); ?>"
                                                     data-csrf="<?php echo admin_e($csrfToken); ?>"
                                                     data-ajax-url="/admin/?page=swap-converter"
                                                     data-connect-error-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_connect_error', 'Unable to connect wallet. Paste the recipient address manually.')); ?>"
                                                     data-connected-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_wallet_connected', 'Wallet connected')); ?>"
+                                                    data-disconnect-label="<?php echo admin_e(admin_t($messages, 'mixer_disconnect_wallet', 'Disconnect wallet')); ?>"
                                                     data-no-wallet-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_no_wallet', 'No EVM wallet extension detected. Paste the recipient address manually.')); ?>"
                                                     data-fill-required-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_fill_required', 'Enter the amount and a valid recipient address to continue.')); ?>"
                                                     data-backend-pending-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_backend_pending', 'Deposit order generation will be enabled after the watcher and payout executor are connected.')); ?>"
                                                     data-pay-warning-label="<?php echo admin_e(admin_t($messages, 'mixer_payment_do_not_refresh', 'Do not close or refresh this page while the payment is being detected. This order is saved locally and will be restored after refresh.')); ?>"
+                                                    data-quote-unavailable-label="<?php echo admin_e(admin_t($messages, 'mixer_quote_rate_unavailable', 'Price quote is not available right now.')); ?>"
+                                                    data-min-order-label="<?php echo admin_e(admin_t($messages, 'mixer_order_minimum_amount', 'Minimum swap amount is {amount} USD.', ['amount' => number_format($mixerMinOrderUsd, 2, '.', '')])); ?>"
+                                                    data-order-send-label="<?php echo admin_e(admin_t($messages, 'mixer_order_send_label', 'Send')); ?>"
+                                                    data-order-receive-label="<?php echo admin_e(admin_t($messages, 'mixer_order_estimated_receive', 'Estimated receive')); ?>"
+                                                    data-order-sent-label="<?php echo admin_e(admin_t($messages, 'mixer_order_sent_amount', 'Sent')); ?>"
+                                                    data-order-step-asset-template="<?php echo admin_e(admin_t($messages, 'mixer_order_step_1', 'Open Trust Wallet and choose {asset}.')); ?>"
+                                                    data-recipient-label-template="<?php echo admin_e(admin_t($messages, 'mixer_order_recipient', 'Payout address {asset}')); ?>"
+                                                    data-order-detected-title="<?php echo admin_e(admin_t($messages, 'mixer_order_detected_title', 'Transaction detected')); ?>"
+                                                    data-order-detected-message="<?php echo admin_e('Wykryliśmy wpłatę. Oczekiwanie na potwierdzenie.'); ?>"
+                                                    data-order-confirmed-title="<?php echo admin_e(admin_t($messages, 'mixer_order_confirmed_title', 'Transaction confirmed')); ?>"
+                                                    data-order-confirmed-message="<?php echo admin_e(admin_t($messages, 'mixer_order_confirmed_message', 'Required confirmations are complete. Preparing payout.')); ?>"
+                                                    data-order-paid-title="<?php echo admin_e(admin_t($messages, 'mixer_order_paid_title', 'Payout sent')); ?>"
+                                                    data-order-paid-message="<?php echo admin_e('Wypłata została wysłana. Sprawdź transakcję w explorerze.'); ?>"
+                                                    data-payout-button-label="<?php echo admin_e(admin_t($messages, 'mixer_payout_button', 'Withdraw {asset}')); ?>"
+                                                    data-payout-preparing-label="<?php echo admin_e(admin_t($messages, 'mixer_payout_preparing', 'Preparing payout...')); ?>"
+                                                    data-auto-payout-label="<?php echo admin_e(admin_t($messages, 'mixer_auto_payout_waiting', 'Automatic payout is enabled. The system will send the payout shortly.')); ?>"
+                                                    data-output-icon="<?php echo admin_e($mixerPreviewOutputIcon); ?>"
+                                                    data-active-order-label="<?php echo admin_e(admin_t($messages, 'mixer_active_order_loaded', 'You have an active Swapper transaction. Finish it before creating a new one.')); ?>"
+                                                    data-history-open-label="<?php echo admin_e(admin_t($messages, 'mixer_history_open_order', 'Return to transaction')); ?>"
+                                                    data-history-delete-label="<?php echo admin_e(admin_t($messages, 'mixer_history_delete_cancelled', 'Usuń')); ?>"
+                                                    data-history-paid-label="<?php echo admin_e(admin_t($messages, 'mixer_order_status_paid', 'Paid out')); ?>"
+                                                    data-history-pending-label="<?php echo admin_e(admin_t($messages, 'mixer_history_pending', 'Pending...')); ?>"
                                                     data-copied-label="<?php echo admin_e(admin_t($messages, 'copied', 'Copied')); ?>">
                                                     <div data-admin-mixer-form>
                                                     <div class="admin-mixer-widget__heading">
@@ -7144,12 +8225,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                                     <?php if ($mixerShowPoolLiquidity): ?>
                                                         <div class="admin-mixer-pool<?php echo $mixerPoolReady && $mixerPoolHasLiquidity ? ' is-ready' : ' is-warning'; ?>">
-                                                            <span>
-                                                                <i class="bi bi-bank" aria-hidden="true"></i>
-                                                                <?php echo admin_e(admin_t($messages, 'mixer_widget_pool_available', 'Pool available')); ?>
-                                                            </span>
-                                                            <strong><?php echo admin_e((string)($mixerActivePoolState['label'] ?? '0 ' . $mixerPreviewOutputSymbol)); ?></strong>
-                                                        </div>
+                                                        <span>
+                                                            <i class="bi bi-bank" aria-hidden="true"></i>
+                                                            <?php echo admin_e(admin_t($messages, 'mixer_widget_pool_available', 'Pool available')); ?>
+                                                        </span>
+                                                        <strong><?php echo admin_e((string)($mixerActivePoolState['label'] ?? ($mixerPoolReady && $mixerPoolHasLiquidity ? admin_t($messages, 'mixer_pool_status_available', 'Available') : admin_t($messages, 'mixer_pool_status_unavailable', 'Unavailable')))); ?></strong>
+                                                    </div>
                                                     <?php endif; ?>
 
                                                     <div class="admin-mixer-widget__route">
@@ -7195,7 +8276,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <i class="bi bi-arrow-right"></i>
                                                         </span>
                                                         <div class="admin-mixer-widget__asset-card">
-                                                            <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_to', 'To')); ?></span>
+                                                            <div class="admin-mixer-widget__label-row">
+                                                                <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_to', 'To')); ?></span>
+                                                                <?php if (count($mixerAllowedOutputAssets) > 1): ?>
+                                                                    <select class="admin-mixer-widget__asset-select" data-admin-mixer-output-select aria-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_output_asset', 'Output asset')); ?>">
+                                                                        <?php foreach ($mixerAllowedOutputAssets as $outputAssetKey): ?>
+                                                                            <?php
+                                                                            $outputAssetKeyString = strtoupper((string)$outputAssetKey);
+                                                                            $outputAssetOption = $mixerOutputAssetOptions[$outputAssetKeyString] ?? [];
+                                                                            ?>
+                                                                            <option value="<?php echo admin_e($outputAssetKeyString); ?>"<?php echo $outputAssetKeyString === $mixerPreviewOutputKey ? ' selected' : ''; ?>>
+                                                                                <?php echo admin_e(trim((string)($outputAssetOption['symbol'] ?? $outputAssetKeyString) . ' ' . (string)($outputAssetOption['network'] ?? ''))); ?>
+                                                                            </option>
+                                                                        <?php endforeach; ?>
+                                                                    </select>
+                                                                <?php endif; ?>
+                                                            </div>
                                                             <div class="admin-mixer-widget__asset-row">
                                                                 <span class="admin-mixer-widget__token admin-mixer-widget__token--<?php echo admin_e(strtolower($mixerPreviewOutputSymbol)); ?>">
                                                                     <?php if ($mixerPreviewOutputIcon !== ''): ?>
@@ -7256,8 +8352,42 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                     </div>
 
+                                                    <div class="admin-mixer-widget__field-card admin-mixer-quote" data-admin-mixer-quote hidden>
+                                                        <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_quote_title', 'Estimated result')); ?></span>
+                                                        <div class="admin-mixer-quote__rows">
+                                                            <?php if ($mixerShowFeeBreakdown): ?>
+                                                                <div data-admin-mixer-fee-detail>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'mixer_quote_input_value', 'Input value')); ?></span>
+                                                                    <strong data-admin-mixer-quote-input-usd>-</strong>
+                                                                </div>
+                                                                <div data-admin-mixer-fee-detail>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'mixer_quote_fee', 'Fee')); ?></span>
+                                                                    <strong data-admin-mixer-quote-fee>-</strong>
+                                                                </div>
+                                                                <div data-admin-mixer-fee-detail>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'mixer_quote_after_fee', 'After fee')); ?></span>
+                                                                    <strong data-admin-mixer-quote-payout-usd>-</strong>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <div class="admin-mixer-quote__receive">
+                                                                <span><?php echo admin_e(admin_t($messages, 'mixer_quote_receive', 'Estimated receive')); ?></span>
+                                                                <span class="admin-mixer-quote__receive-values">
+                                                                    <strong data-admin-mixer-quote-receive>-</strong>
+                                                                    <small data-admin-mixer-quote-receive-usd>-</small>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <small data-admin-mixer-quote-note><?php echo admin_e(admin_t($messages, 'mixer_quote_rate_source', 'Quote uses backend CoinGecko cache. Final amount is recalculated when you start the swap.')); ?></small>
+                                                    </div>
+
                                                     <div class="admin-mixer-widget__field-card">
-                                                        <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_send_to_wallet', 'Send to wallet')); ?> <b>*</b></span>
+                                                        <div class="admin-mixer-widget__label-row admin-mixer-widget__label-row--wallet">
+                                                            <span class="admin-mixer-widget__label"><?php echo admin_e(admin_t($messages, 'mixer_widget_send_to_wallet', 'Send to wallet')); ?> <b>*</b></span>
+                                                            <button type="button" class="admin-mixer-widget__connect admin-mixer-widget__connect--inline" data-admin-mixer-connect<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
+                                                                <span><?php echo admin_e(admin_t($messages, 'mixer_connect_wallet', 'Connect wallet')); ?></span>
+                                                                <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                            </button>
+                                                        </div>
                                                         <div class="admin-mixer-widget__recipient-row">
                                                             <span class="admin-mixer-widget__recipient-icon">
                                                                 <small>
@@ -7276,10 +8406,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 placeholder="<?php echo admin_e(admin_t($messages, 'mixer_widget_wallet_placeholder', 'Enter wallet address')); ?>"
                                                                 aria-label="<?php echo admin_e(admin_t($messages, 'mixer_widget_wallet_placeholder', 'Enter wallet address')); ?>"<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
                                                         </div>
-                                                        <button type="button" class="admin-mixer-widget__connect admin-mixer-widget__connect--inline" data-admin-mixer-connect<?php echo $mixerInputsDisabled ? ' disabled' : ''; ?>>
-                                                            <span><?php echo admin_e(admin_t($messages, 'mixer_connect_wallet', 'Connect wallet')); ?></span>
-                                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
-                                                        </button>
                                                     </div>
 
                                                     <div class="admin-mixer-widget__notice<?php echo $mixerRouteReady ? '' : ' is-warning'; ?>" role="status" data-admin-mixer-notice>
@@ -7316,83 +8442,111 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
 
                                                         <div class="admin-mixer-order__layout">
-                                                            <div class="admin-mixer-order__qr">
+                                                            <div class="admin-mixer-order__qr" data-admin-mixer-qr-box>
                                                                 <img src="" alt="QR code" data-admin-mixer-qr>
+                                                                <div class="admin-mixer-order__detected-visual" data-admin-mixer-detected-visual hidden>
+                                                                    <span>
+                                                                        <i class="bi bi-search" aria-hidden="true" data-admin-mixer-detected-icon></i>
+                                                                    </span>
+                                                                </div>
                                                             </div>
 
                                                             <div class="admin-mixer-order__main">
                                                                 <div class="admin-mixer-order__title">
                                                                     <img src="<?php echo admin_e($mixerPreviewInputIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputSymbol); ?>" data-admin-mixer-order-input-icon>
                                                                     <div>
-                                                                        <strong><?php echo admin_e(admin_t($messages, 'mixer_order_title', 'Send exact payment')); ?></strong>
-                                                                        <span data-admin-mixer-order-pair><?php echo admin_e($mixerPreviewInputSymbol . ' -> ' . $mixerPreviewOutputSymbol . ' ' . $mixerPreviewOutputNetwork); ?></span>
+                                                                        <strong data-admin-mixer-order-title><?php echo admin_e(admin_t($messages, 'mixer_order_title', 'Send payment')); ?></strong>
+                                                                        <span data-admin-mixer-order-pair><?php echo admin_e($mixerPreviewInputSymbol); ?></span>
                                                                     </div>
+                                                                    <img class="admin-mixer-order__output-title-icon" src="<?php echo admin_e($mixerPreviewOutputIcon); ?>" alt="<?php echo admin_e($mixerPreviewOutputSymbol); ?>" data-admin-mixer-order-title-output-icon hidden>
+                                                                    <strong class="admin-mixer-order__timer" data-admin-mixer-countdown>--:--</strong>
                                                                 </div>
 
-                                                                <div class="admin-mixer-order__grid">
+                                                                <ol class="admin-mixer-order__steps" data-admin-mixer-order-steps>
+                                                                    <li data-admin-mixer-order-step-asset><?php echo admin_e(str_replace('{asset}', $mixerPreviewInputNetwork !== '' ? $mixerPreviewInputNetwork : $mixerPreviewInputSymbol, admin_t($messages, 'mixer_order_step_1', 'Open Trust Wallet and choose {asset}.'))); ?></li>
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_2', 'Copy the payment amount and wallet address.')); ?></li>
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_3', 'Send the payment to the displayed details.')); ?></li>
+                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_4', 'Wait for confirmation.')); ?></li>
+                                                                </ol>
+
+                                                                <div class="admin-mixer-order__detected-status" data-admin-mixer-detected-status hidden>
+                                                                    <span class="admin-mixer-order__detected-spinner" aria-hidden="true"></span>
                                                                     <div>
+                                                                        <strong data-admin-mixer-detected-title><?php echo admin_e(admin_t($messages, 'mixer_order_detected_title', 'Transaction detected')); ?></strong>
+                                                                        <span data-admin-mixer-detected-message><?php echo admin_e('Wykryliśmy wpłatę. Oczekiwanie na potwierdzenie.'); ?></span>
+                                                                        <span class="admin-mixer-order__typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                                                                    </div>
+                                                                </div>
+                                                                <button type="button" class="btn btn-success btn-lg w-100 admin-mixer-order__payout" data-admin-mixer-payout hidden>
+                                                                    <?php echo admin_e(str_replace('{asset}', $mixerPreviewOutputSymbol, admin_t($messages, 'mixer_payout_button', 'Withdraw {asset}'))); ?>
+                                                                </button>
+                                                                <button type="button" class="btn btn-success btn-lg w-100 admin-mixer-order__finish" data-admin-mixer-finish hidden>
+                                                                    <?php echo admin_e(admin_t($messages, 'mixer_finish_transaction', 'Zakończ transakcję')); ?>
+                                                                </button>
+                                                                <div class="admin-mixer-order__payout-notice" data-admin-mixer-payout-notice hidden></div>
+
+                                                                <div class="admin-mixer-order__grid">
+                                                                    <div data-admin-mixer-payment-detail>
                                                                         <span><?php echo admin_e(admin_t($messages, 'mixer_order_amount', 'Amount')); ?></span>
-                                                                        <button type="button" class="admin-mixer-order__copy" data-admin-mixer-copy="amount">
-                                                                            <strong data-admin-mixer-order-amount>0</strong>
-                                                                            <small data-admin-mixer-order-input-symbol><?php echo admin_e($mixerPreviewInputSymbol); ?></small>
+                                                                        <button type="button" class="admin-mixer-order__copy admin-mixer-order__asset-value" data-admin-mixer-copy="amount">
+                                                                            <?php if ($mixerPreviewInputIcon !== ''): ?>
+                                                                                <img src="<?php echo admin_e($mixerPreviewInputIcon); ?>" alt="<?php echo admin_e($mixerPreviewInputSymbol); ?>" data-admin-mixer-order-amount-icon>
+                                                                            <?php else: ?>
+                                                                                <img src="" alt="" data-admin-mixer-order-amount-icon hidden>
+                                                                            <?php endif; ?>
+                                                                            <span class="admin-mixer-order__asset-copy">
+                                                                                <strong data-admin-mixer-order-amount>0</strong>
+                                                                                <small data-admin-mixer-order-input-symbol><?php echo admin_e($mixerPreviewInputSymbol); ?></small>
+                                                                            </span>
                                                                         </button>
                                                                     </div>
-                                                                    <div>
+                                                                    <div data-admin-mixer-payment-detail>
                                                                         <span><?php echo admin_e(admin_t($messages, 'mixer_order_deposit_address', 'Deposit address')); ?></span>
                                                                         <button type="button" class="admin-mixer-order__copy admin-mixer-order__copy--break" data-admin-mixer-copy="address">
                                                                             <strong data-admin-mixer-order-address><?php echo admin_e($mixerPreviewDepositAddress !== '' ? $mixerPreviewDepositAddress : '-'); ?></strong>
                                                                         </button>
                                                                     </div>
                                                                     <div>
-                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_recipient', 'Recipient')); ?></span>
+                                                                        <span data-admin-mixer-order-estimated-label><?php echo admin_e(admin_t($messages, 'mixer_order_estimated_receive', 'Estimated receive')); ?></span>
+                                                                        <strong class="admin-mixer-order__receive admin-mixer-order__asset-value">
+                                                                            <?php if ($mixerPreviewOutputIcon !== ''): ?>
+                                                                                <img src="<?php echo admin_e($mixerPreviewOutputIcon); ?>" alt="<?php echo admin_e($mixerPreviewOutputSymbol); ?>" data-admin-mixer-order-output-icon>
+                                                                            <?php else: ?>
+                                                                                <img src="" alt="" data-admin-mixer-order-output-icon hidden>
+                                                                            <?php endif; ?>
+                                                                            <span data-admin-mixer-order-estimated>-</span>
+                                                                        </strong>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span data-admin-mixer-order-recipient-label><?php echo admin_e(str_replace('{asset}', $mixerPreviewOutputSymbol, admin_t($messages, 'mixer_order_recipient', 'Payout address {asset}'))); ?></span>
                                                                         <strong data-admin-mixer-order-recipient>-</strong>
                                                                     </div>
-                                                                    <div>
-                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_estimated_receive', 'Estimated receive')); ?></span>
-                                                                        <strong data-admin-mixer-order-estimated>-</strong>
-                                                                    </div>
-                                                                    <div>
-                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_quote', 'Quote source')); ?></span>
-                                                                        <strong><?php echo admin_e(admin_t($messages, 'mixer_order_quote_source', 'Backend CoinGecko cache')); ?></strong>
-                                                                    </div>
                                                                 </div>
 
-                                                                <div class="admin-mixer-order__warning">
-                                                                    <i class="bi bi-info-circle" aria-hidden="true"></i>
-                                                                    <span data-admin-mixer-order-warning><?php echo admin_e(admin_t($messages, 'mixer_payment_do_not_refresh', 'Do not close or refresh this page while the payment is being detected. This order is saved locally and will be restored after refresh.')); ?></span>
-                                                                </div>
-
-                                                                <div class="admin-mixer-order__meta">
-                                                                    <div>
-                                                                        <span><?php echo admin_e(admin_t($messages, 'mixer_order_time_left', 'Time left')); ?></span>
-                                                                        <strong data-admin-mixer-countdown>--:--</strong>
-                                                                    </div>
-                                                                    <div>
+                                                                <div class="admin-mixer-order__meta" data-admin-mixer-order-meta hidden>
+                                                                    <div data-admin-mixer-confirmations-row hidden>
                                                                         <span><?php echo admin_e(admin_t($messages, 'mixer_order_confirmations', 'Confirmations')); ?></span>
                                                                         <strong data-admin-mixer-confirmations>0/3</strong>
                                                                     </div>
-                                                                    <div>
+                                                                    <div data-admin-mixer-deposit-row hidden>
                                                                         <span><?php echo admin_e(admin_t($messages, 'mixer_order_deposit_hash', 'Deposit tx')); ?></span>
                                                                         <a href="#" target="_blank" rel="noopener noreferrer" data-admin-mixer-deposit-link hidden>Explorer</a>
                                                                         <strong data-admin-mixer-deposit-empty>-</strong>
                                                                     </div>
-                                                                    <div>
+                                                                    <div data-admin-mixer-payout-row hidden>
                                                                         <span><?php echo admin_e(admin_t($messages, 'mixer_order_payout_hash', 'Payout tx')); ?></span>
                                                                         <a href="#" target="_blank" rel="noopener noreferrer" data-admin-mixer-payout-link hidden>Explorer</a>
                                                                         <strong data-admin-mixer-payout-empty>-</strong>
                                                                     </div>
                                                                 </div>
 
-                                                                <ol class="admin-mixer-order__steps">
-                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_1', 'Open Trust Wallet and choose the selected input asset.')); ?></li>
-                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_2', 'Copy the amount and deposit address from this screen.')); ?></li>
-                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_3', 'Send the payment from your wallet and wait for confirmations.')); ?></li>
-                                                                    <li><?php echo admin_e(admin_t($messages, 'mixer_order_step_4', 'After detection, the backend calculates the real paid amount and sends the payout.')); ?></li>
-                                                                </ol>
-
                                                                 <div class="admin-mixer-order__actions">
-                                                                    <button type="button" class="btn btn-outline-dark btn-md" data-admin-mixer-order-cancel>
-                                                                        <?php echo admin_e(admin_t($messages, 'mixer_order_cancel', 'Cancel order')); ?>
+                                                                    <div class="admin-mixer-order__warning">
+                                                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                                                        <span data-admin-mixer-order-warning><?php echo admin_e(admin_t($messages, 'mixer_payment_do_not_refresh', 'Do not close or refresh this page while the payment is being detected. This order is saved locally and will be restored after refresh.')); ?></span>
+                                                                    </div>
+                                                                    <button type="button" class="btn btn-danger btn-lg w-100" data-admin-mixer-order-cancel>
+                                                                        <?php echo admin_e(admin_t($messages, 'mixer_order_cancel', 'Cancel swap')); ?>
                                                                     </button>
                                                                     <span class="admin-mixer-order__copy-feedback" data-admin-mixer-copy-feedback><?php echo admin_e(admin_t($messages, 'copied', 'Copied')); ?></span>
                                                                 </div>
@@ -7406,7 +8560,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <strong><?php echo admin_e(admin_t($messages, 'mixer_history_title', 'Local Swapper history')); ?></strong>
                                                                 <span data-admin-mixer-history-wallet>-</span>
                                                             </div>
-                                                            <small><?php echo admin_e(admin_t($messages, 'mixer_history_local_only', 'Saved only in this browser')); ?></small>
                                                         </div>
                                                         <p class="admin-mixer-history__state" data-admin-mixer-history-state>
                                                             <?php echo admin_e(admin_t($messages, 'mixer_history_empty', 'No local history for this wallet yet.')); ?>
@@ -7564,7 +8717,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         break;
                                     endif;
 
-                                    $orderRows = admin_order_rows_filtered($db, $orderListPerPage, ($orderListPage - 1) * $orderListPerPage, $orderFilterCustomerId, $orderFilterOrderId);
+                                    $orderRows = admin_order_rows_filtered(
+                                        $db,
+                                        $orderListPerPage,
+                                        ($orderListPage - 1) * $orderListPerPage,
+                                        $orderFilterCustomerId,
+                                        $orderFilterOrderId,
+                                        $orderStatusFilter,
+                                        $orderExpirySortDirection,
+                                        $orderIdSortDirection
+                                    );
                                     foreach ($orderRows as $orderRowIndex => $orderRowData) {
                                         $pendingRenewalContext = admin_order_pending_renewal_context($db, (array)$orderRowData);
                                         $orderRows[$orderRowIndex]['pending_renewal_id'] = (int)($pendingRenewalContext['renewal_id'] ?? 0);
@@ -7590,33 +8752,89 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $orderRowHasPaidPendingRenewal = !empty($orderRowPreview['has_paid_pending_renewal']);
                                         $isCompletedOrderPreview = $orderRowPreviewPaymentStatus === 'paid'
                                             && in_array($orderRowPreviewFulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                            && in_array($orderRowPreviewStatus, ['active', 'approved', 'completed', 'fulfilled'], true)
+                                            && in_array($orderRowPreviewStatus, ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
                                             && !$orderRowHasPaidPendingRenewal;
                                         if ($isCompletedOrderPreview) {
                                             $completedOrderCount++;
                                         } else {
                                             $openOrderCount++;
                                         }
-                                    }
-                                    ?>
-                                    <div class="admin-section-actions">
-                                        <a href="/admin/?page=payments" class="btn btn-primary">
-                                            <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
-                                            <span><?php echo admin_e(admin_t($messages, 'order_go_to_payments', 'Go to payments')); ?></span>
-                                        </a>
-                                        <a href="/admin/?page=crypto-wallets" class="btn btn-danger">
-                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
-                                            <span><?php echo admin_e(admin_t($messages, 'order_add_wallet', 'Add wallet')); ?></span>
-                                        </a>
-                                        <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark">
-                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
-                                            <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
-                                        </a>
-                                    </div>
-                                    <section class="admin-panel-card admin-orders-workflow-card">
-                                        <div class="admin-orders-workflow">
-                                            <div class="admin-orders-workflow__intro">
-                                                <strong><?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?></strong>
+	                                    }
+	                                    $orderIsCustomerFiltered = $orderFilterCustomerId > 0;
+	                                    $orderIsExpiredFiltered = $orderStatusFilter === 'expired';
+	                                    $orderHasFocusedFilter = $orderIsCustomerFiltered || $orderFilterOrderId > 0 || $orderIsExpiredFiltered;
+                                        $orderExpirySortNextDirection = $orderExpirySortDirection === 'desc' ? 'asc' : 'desc';
+                                        $orderExpirySortParams = [
+                                            'page' => 'orders',
+                                            'order_expiry_sort' => $orderExpirySortNextDirection,
+                                        ];
+                                        if ($orderFilterCustomerId > 0) {
+                                            $orderExpirySortParams['customer_id'] = $orderFilterCustomerId;
+                                        }
+                                        if ($orderFilterOrderId > 0) {
+                                            $orderExpirySortParams['order_id'] = $orderFilterOrderId;
+                                        }
+                                        if ($orderStatusFilter !== '') {
+                                            $orderExpirySortParams['order_status'] = $orderStatusFilter;
+                                        }
+                                        $orderExpirySortUrl = '/admin/?' . http_build_query($orderExpirySortParams);
+                                        $orderIdEffectiveSortDirection = $orderIdSortDirection;
+                                        if ($orderIdEffectiveSortDirection === '' && $orderExpirySortDirection === '') {
+                                            $orderIdEffectiveSortDirection = 'desc';
+                                        }
+                                        $orderIdSortNextDirection = $orderIdEffectiveSortDirection === 'desc' ? 'asc' : 'desc';
+                                        $orderIdSortParams = [
+                                            'page' => 'orders',
+                                            'order_id_sort' => $orderIdSortNextDirection,
+                                        ];
+                                        if ($orderFilterCustomerId > 0) {
+                                            $orderIdSortParams['customer_id'] = $orderFilterCustomerId;
+                                        }
+                                        if ($orderFilterOrderId > 0) {
+                                            $orderIdSortParams['order_id'] = $orderFilterOrderId;
+                                        }
+                                        if ($orderStatusFilter !== '') {
+                                            $orderIdSortParams['order_status'] = $orderStatusFilter;
+                                        }
+                                        $orderIdSortUrl = '/admin/?' . http_build_query($orderIdSortParams);
+	                                    ?>
+		                                    <div class="admin-section-actions admin-orders-actions">
+		                                        <div class="admin-orders-actions__buttons">
+		                                            <a href="/admin/?page=payments" class="btn btn-outline-default">
+		                                                <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
+		                                                <span><?php echo admin_e(admin_t($messages, 'order_go_to_payments', 'Go to payments')); ?></span>
+		                                            </a>
+		                                            <a href="/admin/?page=crypto-wallets" class="btn btn-outline-default">
+		                                                <i class="bi bi-wallet2" aria-hidden="true"></i>
+		                                                <span><?php echo admin_e(admin_t($messages, 'order_add_wallet', 'Add wallet')); ?></span>
+		                                            </a>
+		                                            <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark">
+		                                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
+		                                                <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
+		                                            </a>
+		                                        </div>
+			                                        <?php if (!$orderHasFocusedFilter): ?>
+			                                        <label class="admin-orders-guidance-toggle" for="adminOrdersGuidanceToggle">
+			                                            <span class="admin-orders-guidance-toggle__label"><?php echo admin_e(admin_t($messages, 'orders_guidance_toggle', 'Pokaż wskazówki')); ?></span>
+			                                            <span class="admin-orders-guidance-toggle__switch">
+				                                                <input type="checkbox" id="adminOrdersGuidanceToggle" data-admin-orders-guidance-toggle role="switch" aria-checked="false" aria-controls="adminOrdersWorkflowCard">
+			                                                <span aria-hidden="true"></span>
+			                                            </span>
+			                                        </label>
+			                                        <?php endif; ?>
+			                                        <label class="admin-orders-guidance-toggle" for="adminOrdersSimpleTableToggle">
+			                                            <span class="admin-orders-guidance-toggle__label"><?php echo admin_e(admin_t($messages, 'orders_simple_table_toggle', 'Prosta tabela')); ?></span>
+			                                            <span class="admin-orders-guidance-toggle__switch">
+				                                                <input type="checkbox" id="adminOrdersSimpleTableToggle" data-admin-orders-table-view-toggle role="switch" aria-checked="true" aria-controls="adminOrdersOpenTableDefault adminOrdersOpenTableSimple adminOrdersCompletedTableDefault adminOrdersCompletedTableSimple" checked>
+			                                                <span aria-hidden="true"></span>
+			                                            </span>
+			                                        </label>
+			                                    </div>
+		                                    <?php if (!$orderHasFocusedFilter): ?>
+		                                    <section class="admin-panel-card admin-orders-workflow-card" id="adminOrdersWorkflowCard">
+	                                        <div class="admin-orders-workflow">
+	                                            <div class="admin-orders-workflow__intro">
+	                                                <strong><?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?></strong>
                                                 <span><?php echo admin_e(admin_t($messages, 'orders_workflow_subtitle', 'Follow these steps to complete the order.')); ?></span>
                                             </div>
                                             <div class="admin-orders-workflow__steps" aria-label="<?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?>">
@@ -7640,16 +8858,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </div>
                                     </section>
                                     <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mb-4" role="alert">
-                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
-                                        <div><?php echo admin_e(admin_t($messages, 'orders_open_help_alert', 'Jeśli klient dodał poniżej zamówienie, a nie widzisz płatności, kliknij w tabeli poniżej w @handle, aby sprawdzić jego profil. Zobaczysz tam, czy wygenerował już płatność, oraz czy jego przypisane portfele są puste i czy wpłynęła tam dzisiaj jakaś wpłata.')); ?></div>
-                                    </div>
-                                    <div class="d-flex align-items-center justify-content-between gap-3 mt-4 mb-3">
-                                        <h3 class="mb-0"><?php echo admin_e(admin_t($messages, 'orders_open_table_title', 'Otwarte zamówienia')); ?></h3>
-                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$openOrderCount); ?></span>
-                                    </div>
-                                    <?php if ($openOrderCount > 0): ?>
-                                        <div class="table-responsive">
-                                            <table class="table admin-table admin-orders-table align-middle">
+	                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
+	                                        <div><?php echo admin_e(admin_t($messages, 'orders_open_help_alert', 'Jeśli klient dodał poniżej zamówienie, a nie widzisz płatności, kliknij w tabeli poniżej w @handle, aby sprawdzić jego profil. Zobaczysz tam, czy wygenerował już płatność, oraz czy jego przypisane portfele są puste i czy wpłynęła tam dzisiaj jakaś wpłata.')); ?></div>
+	                                    </div>
+	                                    <?php endif; ?>
+	                                    <?php if (!$orderHasFocusedFilter || $openOrderCount > 0): ?>
+	                                    <div class="admin-orders-header-row d-flex align-items-center justify-content-between gap-3 mt-4 mb-1">
+	                                        <h3 class="mb-0 admin-orders-table-title"><?php echo admin_e(admin_t($messages, 'orders_open_table_title', 'Otwarte zamówienia')); ?></h3>
+	                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$openOrderCount); ?></span>
+	                                    </div>
+	                                    <?php endif; ?>
+	                                    <?php if ($openOrderCount > 0): ?>
+	                                        <div class="table-responsive" id="adminOrdersOpenTableDefault" data-admin-orders-view="default">
+	                                            <table class="table admin-table admin-orders-table align-middle">
                                                 <thead>
                                                     <tr>
                                                         <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
@@ -7700,7 +8921,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                                         $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
                                                             && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true)
+                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
                                                             && !$isPendingRenewalAwaitingExtension;
                                                         $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
                                                             && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
@@ -7719,16 +8940,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         } else {
                                                             $orderDetailsButtonClass = 'btn-dark';
                                                         }
+                                                        $orderDetailsHintLabel = admin_t($messages, 'order_details_toggle', 'Show details');
+                                                        $showOrderDetailsEditHint = false;
                                                         if ($isCompletedPaidOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
+                                                            $orderDetailsButtonIcon = 'bi bi-check-circle-fill';
                                                         } elseif ($isPendingRenewalAwaitingExtension) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_extend', 'Click to extend');
+                                                            $orderDetailsButtonIcon = 'bi bi-arrow-repeat';
                                                         } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_approve', 'Click to approve');
+                                                            $orderDetailsButtonIcon = 'bi bi-check2-circle';
                                                         } elseif ($isFreshUnpaidOrder) {
                                                             $orderDetailsButtonLabel = admin_t($messages, 'enum_pending_payment', 'Awaiting payment');
+                                                            $orderDetailsButtonIcon = 'bi bi-hourglass-split';
                                                         } else {
-                                                            $orderDetailsButtonLabel = admin_t($messages, 'details', 'Details');
+                                                            $orderDetailsButtonLabel = $orderDetailsHintLabel;
+                                                            $orderDetailsButtonIcon = 'bi bi-search';
+                                                            $showOrderDetailsEditHint = true;
                                                         }
                                                         if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isPendingRenewalAwaitingExtension) {
                                                             $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
@@ -7739,9 +8968,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         }
                                                         $showOrderAmountStatusIcon = !$isFreshUnpaidOrder;
                                                         $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
+                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+                                                        $orderCustomerEmailShort = $orderCustomerEmail !== ''
+                                                            ? admin_string_truncate($orderCustomerEmail, 20)
+                                                            : '';
                                                         $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
                                                             ? '@' . $orderCustomerHandleLabel
-                                                            : (string)($row['customer_email'] ?? '');
+                                                            : $orderCustomerEmail;
                                                         $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
                                                         $modalId = 'adminOrderModal' . $orderId;
                                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
@@ -7756,9 +8989,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
                                                                 <div class="admin-order-summary">
-                                                                    <div class="admin-order-summary__title-row">
-                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
-                                                                        <?php if ($isAwaitingActivationOrder): ?>
+	                                                                    <div class="admin-order-summary__title-row">
+	                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
+                                                                            <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
+                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                                                <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                                                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                                                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password'); ?>
+                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                                                </span>
+                                                                            <?php endif; ?>
+	                                                                        <?php if ($isAwaitingActivationOrder): ?>
                                                                             <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
                                                                         <?php elseif ($hasRecentBalanceTopupForOrder): ?>
                                                                             <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_balance_paid_badge', 'BALANCE TOPPED UP')); ?></span>
@@ -7769,14 +9011,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php if ((string)($row['status'] ?? '') === 'expired'): ?>
                                                                         <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
                                                                     <?php endif; ?>
-                                                                    <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
-                                                                        <?php echo admin_e($orderCustomerPrimaryLabel); ?>
-                                                                    </a>
-                                                                    <?php if (trim((string)($row['customer_email'] ?? '')) !== ''): ?>
-                                                                        <div class="admin-order-summary__customer-email">
-                                                                            <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
-                                                                        </div>
-                                                                    <?php endif; ?>
+                                                                    <div class="admin-order-summary__customer-row">
+                                                                        <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
+                                                                            <?php echo admin_e($orderCustomerPrimaryLabel); ?>
+                                                                        </a>
+                                                                        <?php if ($orderCustomerEmail !== ''): ?>
+                                                                            <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
+                                                                                <?php echo admin_e($orderCustomerEmailShort); ?>
+                                                                            </span>
+                                                                        <?php endif; ?>
+                                                                    </div>
                                                                     <div class="admin-order-summary__created d-xl-none<?php echo $orderCreatedIsToday ? ' admin-order-summary__created--today' : ''; ?>">
                                                                         <span><?php echo admin_e($orderCreatedLabel); ?></span>
                                                                         <?php if ($orderWalletEditUrl !== ''): ?>
@@ -7820,10 +9064,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             </div>
                                                                         </div>
                                                                     <?php endif; ?>
-                                                                    <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                                    <?php $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? '')); ?>
+                                                                    <?php if ($orderVisibleSupportNote !== ''): ?>
                                                                         <div class="admin-order-summary__note admin-order-summary__note--warning">
                                                                             <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                                            <span><?php echo nl2br(admin_e($orderVisibleSupportNote)); ?></span>
                                                                         </div>
                                                                     <?php endif; ?>
                                                                 </div>
@@ -7851,19 +9096,23 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-order-row__actions">
-                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
+                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="<?php echo admin_e($orderDetailsButtonLabel); ?>">
+                                                                        <i class="bi bi-search admin-order-row__mobile-icon" aria-hidden="true"></i>
                                                                         <?php if (!($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isFreshUnpaidOrder)): ?>
-                                                                            <i class="bi bi-search me-1" aria-hidden="true"></i>
+                                                                            <i class="bi bi-search me-1 admin-order-row__desktop-icon" aria-hidden="true"></i>
                                                                         <?php endif; ?>
                                                                         <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
                                                                     </button>
+                                                                    <?php if ($showOrderDetailsEditHint || $orderDetailsButtonLabel === $orderDetailsHintLabel): ?>
+                                                                        <p class="admin-order-row__details-hint"><?php echo admin_e(admin_t($messages, 'order_click_edit_order_hint', 'Click to edit order details.')); ?></p>
+                                                                    <?php endif; ?>
                                                                     <?php if ($orderHasOpenPaymentRequest && $orderOpenPaymentDetailsUrl !== ''): ?>
-                                                                        <a href="<?php echo admin_e($orderOpenPaymentDetailsUrl); ?>" class="btn btn-primary btn-sm w-100">
+                                                                        <a href="<?php echo admin_e($orderOpenPaymentDetailsUrl); ?>" class="btn btn-primary btn-sm w-100" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?>">
                                                                             <i class="bi bi-receipt me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
                                                                         </a>
                                                                     <?php elseif (!$isCompletedPaidOrder && !$isFreshUnpaidOrder && trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
-                                                                        <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer">
+                                                                        <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer" aria-label="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
                                                                             <i class="bi bi-play-btn me-1" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
                                                                         </a>
@@ -7874,24 +9123,178 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <?php endif; ?>
                                                     <?php endforeach; ?>
                                                 </tbody>
-                                            </table>
-                                        </div>
-                                    <?php else: ?>
-                                        <div class="alert alert-warning" role="alert">
-                                            <?php echo admin_e(admin_t($messages, 'orders_open_empty', 'Brak otwartych zamówień.')); ?>
-                                        </div>
-                                    <?php endif; ?>
-                                    <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mt-4 mb-3" role="alert">
-                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
-                                        <div><?php echo admin_e(admin_t($messages, 'orders_completed_help_alert', 'Poniżej w tabeli znajdują się zamówienia, które zatwierdziłeś. Użytkownicy dokonali wpłaty, a Ty ją zatwierdziłeś w systemie. Jeśli masz wątpliwości, czy wpłata na pewno przyszła, kliknij w zamówieniu poniżej w @handle, aby przejść do profilu klienta i sprawdzić jego przypisane portfele, czy są puste, oraz kiedy wpłynęła tam wymagana płatność.')); ?></div>
-                                    </div>
-                                    <div class="d-flex align-items-center justify-content-between gap-3 mt-4 mb-3">
-                                        <h3 class="mb-0"><?php echo admin_e(admin_t($messages, 'orders_completed_table_title', 'Zrealizowane zamówienia')); ?></h3>
-                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$completedOrderCount); ?></span>
-                                    </div>
+		                                            </table>
+		                                        </div>
+		                                        <div class="table-responsive" id="adminOrdersOpenTableSimple" data-admin-orders-view="simple" hidden>
+		                                            <table class="table admin-table admin-orders-table admin-orders-simple-table align-middle">
+		                                                <thead>
+		                                                    <tr>
+		                                                        <th class="admin-orders-simple-table__id-col">id</th>
+		                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+		                                                        <th><?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?></th>
+		                                                        <th class="admin-orders-table__amount-col"><?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Kwota')); ?></th>
+		                                                        <th><?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?></th>
+		                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+		                                                    </tr>
+		                                                </thead>
+		                                                <tbody>
+		                                                    <?php foreach ($orderRows as $row): ?>
+		                                                        <?php
+		                                                        $orderId = (int)$row['id'];
+		                                                        $orderTitle = admin_order_product_title($row, $messages);
+		                                                        $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
+			                                                        $orderProgress = admin_order_progress_data($row);
+			                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
+			                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
+			                                                        $orderRowStatus = strtolower(trim((string)($row['status'] ?? '')));
+			                                                        $orderFulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
+			                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
+			                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
+			                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
+	                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
+	                                                            && in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
+	                                                            && in_array($orderRowStatus, ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
+	                                                            && !$isPendingRenewalAwaitingExtension;
+	                                                        if ($isCompletedPaidOrder) {
+	                                                            continue;
+	                                                        }
+	                                                        $isAmountPending = !in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true);
+			                                                        $orderStatusVisual = admin_order_status_visual($row);
+			                                                        $isOrderExpired = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired'
+			                                                            || (string)($orderProgress['tone'] ?? '') === 'expired';
+			                                                        $isAmountHighlighted = $isAmountPending || $isOrderExpired;
+			                                                        $orderAmountClass = $isAmountHighlighted
+		                                                            ? 'admin-orders-simple-table__amount admin-orders-simple-table__amount--red'
+		                                                            : 'admin-orders-simple-table__amount';
+			                                                        $orderProductClass = $isOrderExpired ? 'admin-orders-simple-table__product-name--red' : '';
+	                                                        $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
+	                                                            && !in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)
+	                                                            && !in_array($orderRowStatus, ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
+	                                                        $isOrderPaymentApproved = $orderPaymentStatusRaw === 'paid';
+	                                                        $orderProviderDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+			                                                        $showProviderQuickButton = $isOrderPaymentApproved && !$isCompletedPaidOrder && $orderProviderDashboardUrl !== '';
+			                                                        $orderDetailsButtonClass = ($isOrderPaymentApproved && !$isCompletedPaidOrder) ? 'btn-success admin-orders-simple-table__icon-btn--paid' : 'btn-dark';
+			                                                        $orderCustomerId = (int)($row['customer_id'] ?? 0);
+		                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
+		                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+		                                                        $orderCustomerEmailShort = $orderCustomerEmail !== ''
+		                                                            ? admin_string_truncate($orderCustomerEmail, 20)
+		                                                            : '';
+		                                                        $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
+		                                                            ? '@' . $orderCustomerHandleLabel
+		                                                            : ($orderCustomerEmail !== '' ? $orderCustomerEmail : ('#' . $orderCustomerId));
+		                                                        $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? ''));
+		                                                        $modalId = 'adminOrderModal' . $orderId;
+		                                                        ?>
+		                                                        <tr>
+		                                                            <td class="admin-orders-simple-table__id-col" data-label="id">
+		                                                                <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$orderId); ?>" class="admin-orders-simple-table__id-link"><?php echo admin_e((string)$orderId); ?></a>
+		                                                            </td>
+		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>">
+		                                                                <div class="admin-order-summary">
+	                                                                        <div class="admin-order-summary__title-row">
+	                                                                        <strong class="<?php echo admin_e($orderProductClass); ?>"><?php echo admin_e($orderTitle); ?></strong>
+                                                                            <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
+                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                                                <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                                                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                                                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password'); ?>
+                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                                                </span>
+                                                                            <?php endif; ?>
+	                                                                        </div>
+	                                                                    <div class="admin-order-summary__customer-row">
+	                                                                        <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>">
+	                                                                            <?php echo admin_e($orderCustomerPrimaryLabel); ?>
+	                                                                        </a>
+	                                                                        <?php if ($orderCustomerEmail !== ''): ?>
+	                                                                            <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
+	                                                                                <?php echo admin_e($orderCustomerEmailShort); ?>
+	                                                                            </span>
+	                                                                        <?php endif; ?>
+	                                                                </div>
+	                                                                    <?php if ($isAwaitingActivationOrder): ?>
+	                                                                        <div class="admin-order-summary__note admin-order-summary__note--success admin-orders-simple-table__payment-note">
+	                                                                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+	                                                                            <span><?php echo admin_e(admin_t($messages, 'order_payment_confirmed_short', 'Płatność potwierdzona.')); ?><br><?php echo admin_e(admin_t($messages, 'order_waiting_activation_short_line', 'Oczekuje na aktywację.')); ?></span>
+	                                                                        </div>
+	                                                                    <?php endif; ?>
+	                                                                </div>
+			                                                            </td>
+			                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?>">
+			                                                                <?php if ($usesSubscriptionTiming && !empty($row['expires_at'])): ?>
+			                                                                    <span class="admin-orders-simple-table__expire-date"><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
+			                                                                <?php else: ?>
+			                                                                    <span class="admin-orders-simple-table__empty">-</span>
+			                                                                <?php endif; ?>
+			                                                            </td>
+	                                                            <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Kwota')); ?>">
+	                                                                <strong class="<?php echo $orderAmountClass; ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
+	                                                            </td>
+		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
+			                                                                <div class="admin-orders-simple-table__notes">
+				                                                                    <?php if ($showProviderQuickButton): ?>
+			                                                                        <a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="btn btn-warning btn-xs admin-orders-simple-table__provider-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
+			                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+			                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
+			                                                                        </a>
+			                                                                    <?php endif; ?>
+				                                                                    <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : (!$showProviderQuickButton ? '<span class="admin-orders-simple-table__empty">-</span>' : ''); ?></div>
+			                                                                </div>
+			                                                            </td>
+		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+		                                                                <div class="admin-orders-simple-table__actions">
+			                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-xs admin-orders-simple-table__icon-btn" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>">
+			                                                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+			                                                                    </button>
+		                                                                    <button type="button" class="btn btn-primary btn-xs admin-orders-simple-table__icon-btn" data-admin-copy-value="<?php echo admin_e($orderCustomerHandleLabel); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandleLabel === '' ? ' disabled' : ''; ?>>
+		                                                                        <i class="bi bi-clipboard" aria-hidden="true"></i>
+		                                                                    </button>
+		                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
+		                                                                        <i class="bi bi-person" aria-hidden="true"></i>
+		                                                                    </a>
+			                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+			                                                                        <i class="bi bi-card-list" aria-hidden="true"></i>
+			                                                                    </a>
+			                                                                    <form method="post" class="admin-orders-simple-table__delete-form">
+			                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+			                                                                        <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
+			                                                                        <button type="submit" class="btn btn-danger btn-xs admin-orders-simple-table__icon-btn" name="admin_delete_order" title="<?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');">
+			                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+			                                                                        </button>
+			                                                                    </form>
+			                                                                </div>
+			                                                            </td>
+		                                                        </tr>
+		                                                    <?php endforeach; ?>
+		                                                </tbody>
+		                                            </table>
+		                                        </div>
+		                                    <?php else: ?>
+	                                        <?php if (!$orderHasFocusedFilter): ?>
+	                                        <div class="alert alert-warning" role="alert">
+	                                            <?php echo admin_e(admin_t($messages, 'orders_open_empty', 'Brak otwartych zamówień.')); ?>
+	                                        </div>
+	                                        <?php endif; ?>
+	                                    <?php endif; ?>
+	                                    <?php if (!$orderHasFocusedFilter): ?>
+	                                    <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mt-4 mb-3" role="alert">
+	                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
+	                                        <div><?php echo admin_e(admin_t($messages, 'orders_completed_help_alert', 'Poniżej w tabeli znajdują się zamówienia, które zatwierdziłeś. Użytkownicy dokonali wpłaty, a Ty ją zatwierdziłeś w systemie. Jeśli masz wątpliwości, czy wpłata na pewno przyszła, kliknij w zamówieniu poniżej w @handle, aby przejść do profilu klienta i sprawdzić jego przypisane portfele, czy są puste, oraz kiedy wpłynęła tam wymagana płatność.')); ?></div>
+	                                    </div>
+	                                    <?php endif; ?>
+	                                    <div class="admin-orders-header-row d-flex align-items-center justify-content-between gap-3 mt-4 mb-1">
+	                                        <h3 class="mb-0 admin-orders-table-title">
+                                                <?php echo admin_e($orderIsExpiredFiltered
+                                                    ? admin_t($messages, 'orders_expired_table_title', 'Expired orders')
+                                                    : admin_t($messages, 'orders_completed_table_title', 'Completed orders')); ?>
+                                            </h3>
+	                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$completedOrderCount); ?></span>
+	                                    </div>
                                     <?php if ($completedOrderCount > 0): ?>
-                                        <div class="table-responsive">
-                                            <table class="table admin-table admin-orders-table align-middle">
+	                                        <div class="table-responsive" id="adminOrdersCompletedTableDefault" data-admin-orders-view="default">
+	                                            <table class="table admin-table admin-orders-table align-middle">
                                                 <thead>
                                                     <tr>
                                                         <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
@@ -7901,7 +9304,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
                                                     </tr>
                                                 </thead>
-                                                <tbody>
+	                                                <tbody data-admin-completed-orders-body data-sort-direction="<?php echo admin_e($orderExpirySortDirection); ?>">
                                                     <?php foreach ($orderRows as $row): ?>
                                                         <?php
                                                         $orderId = (int)$row['id'];
@@ -7942,7 +9345,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
                                                         $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
                                                             && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled'], true)
+                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
                                                             && !$isPendingRenewalAwaitingExtension;
                                                         $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
                                                             && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
@@ -7957,15 +9360,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         }
                                                         $orderDetailsButtonClass = 'btn-success';
                                                         $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
+                                                        $orderDetailsButtonIcon = 'bi bi-check-circle-fill';
                                                         $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
-                                                        $showOrderAmountStatusIcon = true;
+                                                        $showOrderAmountStatusIcon = false;
                                                         $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
+                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+                                                        $orderCustomerEmailShort = $orderCustomerEmail !== ''
+                                                            ? admin_string_truncate($orderCustomerEmail, 20)
+                                                            : '';
                                                         $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
                                                             ? '@' . $orderCustomerHandleLabel
-                                                            : (string)($row['customer_email'] ?? '');
+                                                            : $orderCustomerEmail;
                                                         $modalId = 'adminOrderModal' . $orderId;
                                                         ?>
-                                                        <tr>
+	                                                        <tr data-admin-completed-order-row data-order-expires-at="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>">
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
                                                                 <span class="d-inline-flex align-items-center justify-content-center w-100" title="#<?php echo admin_e((string)$row['id']); ?>">
                                                                     <i class="<?php echo admin_e($orderLeadingIcon); ?> fs-3" aria-hidden="true"></i>
@@ -7973,17 +9381,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
                                                                 <div class="admin-order-summary">
-                                                                    <div class="admin-order-summary__title-row">
-                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
+	                                                                    <div class="admin-order-summary__title-row">
+	                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
+                                                                            <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
+                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                                                <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                                                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                                                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password'); ?>
+                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                                                </span>
+                                                                            <?php endif; ?>
+	                                                                    </div>
+                                                                    <div class="admin-order-summary__customer-row">
+                                                                        <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
+                                                                            <?php echo admin_e($orderCustomerPrimaryLabel); ?>
+                                                                        </a>
+                                                                        <?php if ($orderCustomerEmail !== ''): ?>
+                                                                            <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
+                                                                                <?php echo admin_e($orderCustomerEmailShort); ?>
+                                                                            </span>
+                                                                        <?php endif; ?>
                                                                     </div>
-                                                                    <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
-                                                                        <?php echo admin_e($orderCustomerPrimaryLabel); ?>
-                                                                    </a>
-                                                                    <?php if (trim((string)($row['customer_email'] ?? '')) !== ''): ?>
-                                                                        <div class="admin-order-summary__customer-email">
-                                                                            <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
-                                                                        </div>
-                                                                    <?php endif; ?>
                                                                     <?php if ($usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
                                                                     <div class="admin-order-progress">
                                                                         <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
@@ -8004,10 +9423,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </div>
                                                                     </div>
                                                                     <?php endif; ?>
-                                                                    <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                                    <?php $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? '')); ?>
+                                                                    <?php if ($orderVisibleSupportNote !== ''): ?>
                                                                         <div class="admin-order-summary__note admin-order-summary__note--warning">
                                                                             <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                                            <span><?php echo nl2br(admin_e($orderVisibleSupportNote)); ?></span>
                                                                         </div>
                                                                     <?php endif; ?>
                                                                 </div>
@@ -8032,7 +9452,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-order-row__actions">
-                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="Details">
+                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="<?php echo admin_e($orderDetailsButtonLabel); ?>">
+                                                                        <i class="bi bi-search admin-order-row__mobile-icon" aria-hidden="true"></i>
                                                                         <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
                                                                     </button>
                                                                 </div>
@@ -8040,9 +9461,188 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </tr>
                                                     <?php endforeach; ?>
                                                 </tbody>
-                                            </table>
-                                        </div>
-                                    <?php else: ?>
+	                                            </table>
+	                                        </div>
+	                                        <div class="table-responsive" id="adminOrdersCompletedTableSimple" data-admin-orders-view="simple" hidden>
+	                                            <table class="table admin-table admin-orders-table admin-orders-simple-table align-middle">
+	                                                <thead>
+	                                                    <tr>
+	                                                        <th
+                                                                class="admin-orders-simple-table__id-col"
+                                                                aria-sort="<?php echo $orderIdEffectiveSortDirection === 'desc' ? 'descending' : ($orderIdEffectiveSortDirection === 'asc' ? 'ascending' : 'none'); ?>"
+                                                            >
+                                                                <a
+                                                                    href="<?php echo admin_e($orderIdSortUrl); ?>"
+                                                                    class="admin-orders-expiry-sort"
+                                                                    title="<?php echo admin_e($orderIdEffectiveSortDirection === 'desc'
+                                                                        ? admin_t($messages, 'orders_id_sort_ascending', 'Show the oldest order IDs first')
+                                                                        : admin_t($messages, 'orders_id_sort_descending', 'Show the latest order IDs first')); ?>"
+                                                                >
+                                                                    <span>ID</span>
+                                                                    <i class="bi <?php echo $orderIdEffectiveSortDirection === 'desc' ? 'bi-sort-down' : ($orderIdEffectiveSortDirection === 'asc' ? 'bi-sort-up' : 'bi-arrow-down-up'); ?>" aria-hidden="true"></i>
+                                                                </a>
+                                                            </th>
+	                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
+                                                            <th aria-sort="<?php echo $orderExpirySortDirection === 'desc' ? 'descending' : ($orderExpirySortDirection === 'asc' ? 'ascending' : 'none'); ?>">
+                                                                <a
+                                                                    href="<?php echo admin_e($orderExpirySortUrl); ?>"
+                                                                    class="admin-orders-expiry-sort"
+                                                                    title="<?php echo admin_e($orderExpirySortDirection === 'desc'
+                                                                        ? admin_t($messages, 'orders_expiry_sort_ascending', 'Show the oldest expiry dates first')
+                                                                        : admin_t($messages, 'orders_expiry_sort_descending', 'Show the latest expiry dates first')); ?>"
+                                                                >
+                                                                    <span><?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?></span>
+                                                                    <i class="bi <?php echo $orderExpirySortDirection === 'desc' ? 'bi-sort-down' : ($orderExpirySortDirection === 'asc' ? 'bi-sort-up' : 'bi-arrow-down-up'); ?>" aria-hidden="true"></i>
+                                                                </a>
+                                                            </th>
+	                                                        <th class="admin-orders-table__amount-col"><?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Kwota')); ?></th>
+	                                                        <th><?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?></th>
+	                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+	                                                    </tr>
+	                                                </thead>
+	                                                <tbody data-admin-completed-orders-body data-sort-direction="<?php echo admin_e($orderExpirySortDirection); ?>">
+	                                                    <?php foreach ($orderRows as $row): ?>
+	                                                        <?php
+	                                                        $orderId = (int)$row['id'];
+	                                                        $orderTitle = admin_order_product_title($row, $messages);
+	                                                        $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
+		                                                        $orderProgress = admin_order_progress_data($row);
+		                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
+		                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
+		                                                        $orderRowStatus = strtolower(trim((string)($row['status'] ?? '')));
+		                                                        $orderFulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
+		                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
+		                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
+		                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
+		                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
+		                                                            && in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
+			                                                            && in_array($orderRowStatus, ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
+		                                                            && !$isPendingRenewalAwaitingExtension;
+		                                                        if (!$isCompletedPaidOrder) {
+		                                                            continue;
+		                                                        }
+	                                                        $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
+	                                                            && !in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)
+	                                                            && !in_array($orderRowStatus, ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
+	                                                        $isOrderPaymentApproved = $orderPaymentStatusRaw === 'paid';
+			                                                        $orderStatusVisual = admin_order_status_visual($row);
+			                                                        $isOrderExpired = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired'
+			                                                            || (string)($orderProgress['tone'] ?? '') === 'expired';
+			                                                        $orderAmountClass = $isOrderExpired
+		                                                            ? 'admin-orders-simple-table__amount admin-orders-simple-table__amount--red'
+		                                                            : 'admin-orders-simple-table__amount';
+			                                                        $orderProductClass = $isOrderExpired ? 'admin-orders-simple-table__product-name--red' : '';
+	                                                        $orderProviderDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
+		                                                        $showProviderQuickButton = $isOrderPaymentApproved && !$isCompletedPaidOrder && $orderProviderDashboardUrl !== '';
+		                                                        $orderDetailsButtonClass = ($isOrderPaymentApproved && !$isCompletedPaidOrder) ? 'btn-success admin-orders-simple-table__icon-btn--paid' : 'btn-dark';
+		                                                        $orderCustomerId = (int)($row['customer_id'] ?? 0);
+	                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
+	                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
+	                                                        $orderCustomerEmailShort = $orderCustomerEmail !== ''
+	                                                            ? admin_string_truncate($orderCustomerEmail, 20)
+	                                                            : '';
+	                                                        $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
+	                                                            ? '@' . $orderCustomerHandleLabel
+	                                                            : ($orderCustomerEmail !== '' ? $orderCustomerEmail : ('#' . $orderCustomerId));
+	                                                        $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? ''));
+	                                                        $modalId = 'adminOrderModal' . $orderId;
+	                                                        ?>
+	                                                        <tr data-admin-completed-order-row data-order-expires-at="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>">
+	                                                            <td class="admin-orders-simple-table__id-col" data-label="id">
+	                                                                <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$orderId); ?>" class="admin-orders-simple-table__id-link"><?php echo admin_e((string)$orderId); ?></a>
+	                                                            </td>
+	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>">
+	                                                                <div class="admin-order-summary">
+	                                                                    <div class="admin-order-summary__title-row">
+	                                                                        <strong class="<?php echo admin_e($orderProductClass); ?>"><?php echo admin_e($orderTitle); ?></strong>
+                                                                            <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
+                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                                                <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                                                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                                                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password'); ?>
+                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                                                </span>
+                                                                            <?php endif; ?>
+	                                                                    </div>
+	                                                                    <div class="admin-order-summary__customer-row">
+	                                                                        <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>">
+	                                                                            <?php echo admin_e($orderCustomerPrimaryLabel); ?>
+	                                                                        </a>
+	                                                                        <?php if ($orderCustomerEmail !== ''): ?>
+	                                                                            <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
+	                                                                                <?php echo admin_e($orderCustomerEmailShort); ?>
+	                                                                            </span>
+		                                                                        <?php endif; ?>
+		                                                                    </div>
+
+	                                                                </div>
+		                                                            </td>
+		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?>">
+		                                                                <?php if ($isOrderExpired && $usesSubscriptionTiming && !empty($row['expires_at'])): ?>
+		                                                                    <span class="btn btn-danger btn-xs admin-orders-simple-table__provider-btn admin-orders-simple-table__expired-btn">
+		                                                                        <i class="bi bi-calendar-x" aria-hidden="true"></i>
+		                                                                        <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
+		                                                                    </span>
+		                                                                <?php elseif ($usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
+		                                                                    <div class="admin-order-progress">
+	                                                                        <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
+	                                                                            <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
+	                                                                        </div>
+	                                                                        <div class="admin-order-progress__track">
+	                                                                            <div class="admin-order-progress__meta">
+	                                                                                <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
+	                                                                                <?php if (!empty($row['expires_at'])): ?>
+	                                                                                    <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
+	                                                                                <?php else: ?>
+	                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
+	                                                                                <?php endif; ?>
+	                                                                            </div>
+	                                                                            <div class="admin-order-progress__bar">
+	                                                                                <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
+	                                                                            </div>
+	                                                                        </div>
+	                                                                    </div>
+	                                                                <?php else: ?>
+	                                                                    <span class="admin-orders-simple-table__empty">-</span>
+	                                                                <?php endif; ?>
+	                                                            </td>
+	                                                            <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Kwota')); ?>">
+	                                                                <strong class="<?php echo $orderAmountClass; ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
+	                                                            </td>
+	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
+		                                                                <div class="admin-orders-simple-table__notes">
+		                                                                    <?php if ($showProviderQuickButton): ?>
+		                                                                        <a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="btn btn-warning btn-xs admin-orders-simple-table__provider-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
+		                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+		                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
+		                                                                        </a>
+		                                                                    <?php endif; ?>
+		                                                                    <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : (!$showProviderQuickButton ? '<span class="admin-orders-simple-table__empty">-</span>' : ''); ?></div>
+		                                                                </div>
+		                                                            </td>
+	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+	                                                                <div class="admin-orders-simple-table__actions">
+		                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-xs admin-orders-simple-table__icon-btn" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>">
+		                                                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+		                                                                    </button>
+	                                                                    <button type="button" class="btn btn-primary btn-xs admin-orders-simple-table__icon-btn" data-admin-copy-value="<?php echo admin_e($orderCustomerHandleLabel); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandleLabel === '' ? ' disabled' : ''; ?>>
+	                                                                        <i class="bi bi-clipboard" aria-hidden="true"></i>
+	                                                                    </button>
+	                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
+	                                                                        <i class="bi bi-person" aria-hidden="true"></i>
+	                                                                    </a>
+	                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+	                                                                        <i class="bi bi-card-list" aria-hidden="true"></i>
+	                                                                    </a>
+	                                                                </div>
+	                                                            </td>
+	                                                        </tr>
+	                                                    <?php endforeach; ?>
+	                                                </tbody>
+	                                            </table>
+	                                        </div>
+	                                    <?php else: ?>
                                         <div class="alert alert-warning" role="alert">
                                             <?php echo admin_e(admin_t($messages, 'orders_completed_empty', 'Brak zrealizowanych zamówień.')); ?>
                                         </div>
@@ -8164,28 +9764,52 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             ? admin_compact_wallet_address($orderWalletAddress, 8, 5)
                                                             : '';
                                                         $orderCustomerHandle = trim((string)($row['public_handle'] ?? ''));
+                                                        $orderDeliveryLinkMode = admin_order_delivery_link_mode($row);
+                                                        $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                                            ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                                            : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password');
                                                         $modalId = 'adminOrderModal' . $orderId;
                                         $tabInfoId = 'adminOrderInfoTab' . $orderId;
                                         $tabExtendId = 'adminOrderExtendTab' . $orderId;
                                         $canExtendOrderFromModal = $usesSubscriptionTiming && !$isPendingOrder && in_array($orderStatusRaw, ['active', 'expired'], true) && $paymentStatusRaw === 'paid';
-                                        $openExtendTabByDefault = $canExtendOrderFromModal && $isPendingRenewalAwaitingExtension;
+                                                        $canDeleteOrderFromModal = admin_order_can_delete($row);
+                                                        $openExtendTabByDefault = $canExtendOrderFromModal && $isPendingRenewalAwaitingExtension;
+                                                        $orderBillingDeliveryContext = $billingAutoIssueEmailEnabled
+                                                            ? admin_billing_customer_auto_delivery_context($db, (int)($row['customer_id'] ?? 0))
+                                                            : ['ready' => false, 'billing_customer' => null, 'message' => ''];
+                                                        $orderBillingCustomer = (array)($orderBillingDeliveryContext['billing_customer'] ?? []);
+                                                        $orderBillingCustomerId = (int)($orderBillingCustomer['id'] ?? 0);
+                                                        $orderBillingCustomerUrl = $orderBillingCustomerId > 0
+                                                            ? '/admin/?page=billing&billing_tab=customers&edit_billing_customer=' . $orderBillingCustomerId
+                                                            : '/admin/?page=billing&billing_tab=customers&billing_link_customer_id=' . (int)($row['customer_id'] ?? 0);
                                         ?>
                                         <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>" tabindex="-1" aria-hidden="true">
                                             <div class="modal-dialog modal-dialog-centered modal-xl">
                                                 <div class="modal-content">
                                                     <div class="modal-header">
                                                         <div>
-                                                            <h5 class="modal-title">#<?php echo admin_e((string)$orderId); ?> <?php echo admin_e($orderTitle); ?></h5>
-                                                            <div class="admin-order-modal__links">
-                                                                <?php if ($orderCustomerHandle !== '' && (int)($row['customer_id'] ?? 0) > 0): ?>
-                                                                    <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-link admin-order-modal__header-link--handle">
-                                                                        @<?php echo admin_e($orderCustomerHandle); ?>
-                                                                    </a>
+                                                            <h5 class="modal-title">
+                                                                <span>#<?php echo admin_e((string)$orderId); ?> <?php echo admin_e($orderTitle); ?></span>
+                                                                <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                                    <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                                        <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                                    </span>
                                                                 <?php endif; ?>
-                                                                <?php if ((int)($row['customer_id'] ?? 0) > 0): ?>
-                                                                    <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-link">
-                                                                        <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
-                                                                    </a>
+                                                            </h5>
+                                                            <div class="admin-order-modal__links">
+                                                                <?php if (($orderCustomerHandle !== '' && (int)($row['customer_id'] ?? 0) > 0) || (int)($row['customer_id'] ?? 0) > 0): ?>
+                                                                <div class="admin-order-modal__header-contacts">
+                                                                    <?php if ($orderCustomerHandle !== '' && (int)($row['customer_id'] ?? 0) > 0): ?>
+                                                                        <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-link admin-order-modal__header-link--handle">
+                                                                            @<?php echo admin_e($orderCustomerHandle); ?>
+                                                                        </a>
+                                                                    <?php endif; ?>
+                                                                    <?php if ((int)($row['customer_id'] ?? 0) > 0): ?>
+                                                                        <a href="<?php echo admin_e($customerProfileUrl); ?>" class="admin-order-modal__header-email">
+                                                                            <?php echo admin_e((string)($row['customer_email'] ?? '')); ?>
+                                                                        </a>
+                                                                    <?php endif; ?>
+                                                                </div>
                                                                 <?php endif; ?>
                                                                 <?php if ($usesSubscriptionTiming && $subscriptionStartedLabel !== ''): ?>
                                                                     <span class="btn btn-outline-dark btn-md admin-order-modal__header-badge">
@@ -8243,17 +9867,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="hidden" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status-original>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
-                                                                        <?php if ($orderStatusRaw !== 'active'): ?>
-                                                                            <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert>
-                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
-                                                                                <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.')); ?></span>
-                                                                            </div>
-                                                                        <?php else: ?>
-                                                                            <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert hidden>
-                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
-                                                                                <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.')); ?></span>
-                                                                            </div>
-                                                                        <?php endif; ?>
+                                                                        <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert<?php echo in_array($orderStatusRaw, ['active', 'expired'], true) ? ' hidden' : ''; ?>>
+                                                                            <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
+                                                                            <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.')); ?></span>
+                                                                        </div>
+                                                                        <div class="alert alert-danger admin-order-modal__activation-alert" role="alert" data-admin-order-expired-alert<?php echo $orderStatusRaw === 'expired' ? '' : ' hidden'; ?>>
+                                                                            <strong><?php echo admin_e(admin_t($messages, 'order_expired_alert_title', 'The order has expired.')); ?></strong>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'order_expired_alert_text', 'Open the Extend tab, choose the appropriate package and extend the subscription to activate it again.')); ?></span>
+                                                                        </div>
                                                                         <?php if ($orderStatusRaw === 'active'): ?>
                                                                             <div class="alert alert-success admin-order-modal__activation-alert admin-order-modal__activation-alert--success" role="alert" data-admin-order-active-alert>
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'order_activation_success_title', 'Order has been completed.')); ?></strong>
@@ -8288,12 +9909,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                             <i class="bi bi-person-badge" aria-hidden="true"></i>
                                                                                             <span><?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?></span>
                                                                                         </a>
-                                                                                    <?php elseif ($providerDashboardUrl !== ''): ?>
-                                                                                        <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="btn btn-dark btn-lg admin-order-modal__provider-btn" target="_blank" rel="noopener noreferrer">
-                                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
-                                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
-                                                                                        </a>
-                                                                                    <?php endif; ?>
+	                                                                                <?php elseif ($providerDashboardUrl !== ''): ?>
+	                                                                                     <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="btn btn-warning btn-lg admin-order-modal__provider-btn admin-order-modal__provider-btn--left w-auto" target="_blank" rel="noopener noreferrer">
+	                                                                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+	                                                                                        <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
+	                                                                                    </a>
+	                                                                                <?php endif; ?>
                                                                                 </div>
                                                                                 <div class="admin-order-modal__next-step">
                                                                                     <strong class="admin-order-modal__next-step-title"><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_title', '2. Open Extend tab and apply package.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.'))); ?></strong>
@@ -8336,12 +9957,34 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         $statusOptionLabel = admin_t($messages, 'order_status_waiting_activation_short', 'Waiting for activation');
                                                                                     }
                                                                                     ?>
-                                                                                    <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)($row['status'] ?? '') === $statusOption ? ' selected' : ''; ?><?php echo ($statusOption === 'active' && !empty($balanceActivationContext['needs_attention'])) ? ' disabled' : ''; ?>>
+                                                                                    <option value="<?php echo admin_e($statusOption); ?>"<?php echo (string)($row['status'] ?? '') === $statusOption ? ' selected' : ''; ?>>
                                                                                         <?php echo admin_e($statusOptionLabel); ?>
                                                                                     </option>
                                                                                 <?php endforeach; ?>
                                                                             </select>
                                                                         </div>
+                                                                        <?php if ($billingAutoIssueEmailEnabled && $orderStatusRaw !== 'active'): ?>
+                                                                            <div class="admin-order-billing-delivery<?php echo !empty($orderBillingDeliveryContext['ready']) ? ' is-ready' : ' is-incomplete'; ?>">
+                                                                                <?php if (!empty($orderBillingDeliveryContext['ready'])): ?>
+                                                                                    <label class="form-check mb-0">
+                                                                                        <input class="form-check-input" type="checkbox" name="issue_billing_document_email" value="1">
+                                                                                        <span class="form-check-label">
+                                                                                            <strong><?php echo admin_e(admin_t($messages, 'order_billing_issue_email_label', 'Issue and email a billing document')); ?></strong>
+                                                                                            <small><?php echo admin_e(admin_t($messages, 'order_billing_issue_email_help', 'Optional. Uses the accepted payment amount and remains OFF by default.')); ?></small>
+                                                                                        </span>
+                                                                                    </label>
+                                                                                <?php else: ?>
+                                                                                    <div>
+                                                                                        <strong><?php echo admin_e(admin_t($messages, 'order_billing_customer_incomplete', 'Billing details are incomplete.')); ?></strong>
+                                                                                        <small><?php echo admin_e(admin_t($messages, 'order_billing_customer_incomplete_help', 'Add the customer name, address, email and electronic-delivery consent before issuing.')); ?></small>
+                                                                                    </div>
+                                                                                    <a class="btn btn-outline-dark btn-sm" href="<?php echo admin_e($orderBillingCustomerUrl); ?>">
+                                                                                        <i class="bi bi-person-vcard" aria-hidden="true"></i>
+                                                                                        <?php echo admin_e(admin_t($messages, 'order_billing_complete_customer', 'Complete billing details')); ?>
+                                                                                    </a>
+                                                                                <?php endif; ?>
+                                                                            </div>
+                                                                        <?php endif; ?>
                                                                         <div class="admin-order-modal__status-summary">
                                                                             <div class="admin-order-modal__status-row">
                                                                                 <span class="admin-order-modal__status-row-label"><?php echo admin_e(admin_t($messages, 'order_payment_short_label', 'Payment')); ?>:</span>
@@ -8365,19 +10008,37 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php endif; ?>
                                                                         <?php if (!empty($balanceActivationContext['needs_attention'])): ?>
                                                                             <div class="alert alert-warning admin-order-balance-alert" role="alert">
-                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_balance_attention_title', 'Insufficient balance for activation.')); ?></strong><br>
-                                                                                <?php echo admin_e(admin_t($messages, 'order_balance_attention_text', 'This order is already marked as paid, but the customer balance is still too low to activate this package.')); ?><br>
-                                                                                <?php if (!empty($balanceActivationContext['balance_debit_already_applied'])): ?>
-                                                                                    <?php echo admin_e(admin_t($messages, 'order_balance_attention_reserved', 'Already reserved for this order')); ?>:
-                                                                                    <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['covered_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong><br>
-                                                                                <?php else: ?>
-                                                                                    <?php echo admin_e(admin_t($messages, 'order_balance_attention_current', 'Current balance')); ?>:
-                                                                                    <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['current_balance'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong><br>
-                                                                                <?php endif; ?>
-                                                                                <?php echo admin_e(admin_t($messages, 'order_balance_attention_required', 'Required for this package')); ?>:
-                                                                                <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['required_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong><br>
-                                                                                <?php echo admin_e(admin_t($messages, 'order_balance_attention_missing', 'Missing amount')); ?>:
-                                                                                <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['shortfall_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong>
+                                                                                <strong><?php echo admin_e(admin_t($messages, 'order_balance_attention_title', 'Insufficient balance for activation.')); ?></strong>
+                                                                                <p class="admin-order-balance-alert__text">
+                                                                                    <?php echo admin_e(!empty($balanceActivationContext['has_partial_balance_for_activation']) ? admin_t($messages, 'order_balance_partial_attention_text', 'The customer has account balance, but it is lower than the order amount. Admin can decide whether the available amount is enough to activate it.') : admin_t($messages, 'order_balance_attention_text', 'This order is already marked as paid, but the customer balance is still lower than the order amount. Admin can decide whether the received amount is enough to activate it.')); ?>
+                                                                                </p>
+                                                                                <div class="admin-order-balance-summary">
+                                                                                    <span>
+                                                                                        <small><?php echo admin_e(!empty($balanceActivationContext['balance_debit_already_applied']) ? admin_t($messages, 'order_balance_attention_reserved', 'Already reserved for this order') : admin_t($messages, 'order_balance_attention_current', 'Current balance')); ?></small>
+                                                                                        <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext[!empty($balanceActivationContext['balance_debit_already_applied']) ? 'covered_amount' : 'current_balance'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong>
+                                                                                    </span>
+                                                                                    <span>
+                                                                                        <small><?php echo admin_e(admin_t($messages, 'order_balance_attention_required', 'Required for this package')); ?></small>
+                                                                                        <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['required_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong>
+                                                                                    </span>
+                                                                                    <span class="is-danger">
+                                                                                        <small><?php echo admin_e(admin_t($messages, 'order_balance_attention_missing', 'Missing amount')); ?></small>
+                                                                                        <strong><?php echo admin_e(admin_format_money_value((float)($balanceActivationContext['shortfall_amount'] ?? 0), (string)($row['currency_code'] ?? ''))); ?></strong>
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div class="admin-order-balance-decision" role="group" aria-label="<?php echo admin_e(admin_t($messages, 'order_balance_decision_title', 'Activation balance decision')); ?>">
+                                                                                    <strong><?php echo admin_e(admin_t($messages, 'order_balance_decision_title', 'Activation balance decision')); ?></strong>
+                                                                                    <small class="admin-order-balance-decision__hint"><?php echo admin_e(!empty($balanceActivationContext['has_partial_balance_for_activation']) ? admin_t($messages, 'order_balance_partial_decision_status_help', 'If the available balance is enough, deduct it and activate this order in one click.') : admin_t($messages, 'order_balance_decision_status_help', 'If the received payment is enough, activate this order in one click.')); ?></small>
+                                                                                    <div class="admin-order-balance-decision__actions">
+                                                                                        <button type="submit" class="btn btn-success btn-lg" name="admin_activate_accept_balance_shortfall">
+                                                                                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                                                                            <span><?php echo admin_e(admin_t($messages, 'order_balance_accept_shortfall_button', 'Accept received amount and activate')); ?></span>
+                                                                                        </button>
+                                                                                        <button type="submit" class="btn btn-outline-dark btn-sm" name="admin_activate_without_balance_charge">
+                                                                                            <?php echo admin_e(admin_t($messages, 'order_balance_activate_without_charge_button', 'Activate without balance debit')); ?>
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </div>
                                                                                 <?php if (!empty($balanceSuggestion['id'])): ?>
                                                                                     <div class="admin-order-balance-alert__actions">
                                                                                         <button type="submit" class="btn btn-dark btn-sm" name="admin_apply_order_balance_suggestion">
@@ -8403,6 +10064,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?></span>
                                                                             <i class="bi bi-chevron-down" aria-hidden="true"></i>
                                                                         </button>
+                                                                        <p class="admin-order-modal__details-hint">
+                                                                            <?php echo admin_e(admin_t($messages, 'order_click_edit_order_hint', 'Click to edit order details.')); ?>
+                                                                        </p>
                                                                         <div class="collapse" id="adminOrderDetails<?php echo admin_e((string)$orderId); ?>">
                                                                             <div class="admin-order-modal__details">
                                                                                 <?php if (!array_key_exists('supports_delivery_links', $row) || !empty($row['supports_delivery_links'])): ?>
@@ -8495,28 +10159,47 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <textarea class="form-control" name="customer_note" rows="3"><?php echo admin_e((string)($row['customer_note'] ?? '')); ?></textarea>
                                                                                 </div>
                                                                                 <div>
-                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_support_note', 'Support note')); ?></label>
+                                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_support_note', 'Support note (visible only to administrators)')); ?></label>
                                                                                     <textarea class="form-control" name="support_note" rows="3"><?php echo admin_e((string)($row['support_note'] ?? '')); ?></textarea>
                                                                                 </div>
                                                                             </div>
                                                                         </div>
                                                                     </div>
                                                                     <div class="admin-order-modal__actions">
-                                                                        <button type="submit" class="btn btn-dark" name="admin_save_order_info"<?php echo !empty($balanceActivationContext['needs_attention']) ? ' disabled' : ''; ?>>
+                                                                        <button type="submit" class="btn btn-success w-100" name="admin_save_order_info">
                                                                             <i class="bi bi-floppy" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_save_button', 'Save order')); ?></span>
                                                                         </button>
-                                                                        <button type="submit" class="btn btn-outline-danger" name="admin_delete_order" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');">
+                                                                        <button
+                                                                            type="submit"
+                                                                            class="btn btn-danger w-100"
+                                                                            name="admin_delete_order"
+                                                                            <?php if ($canDeleteOrderFromModal): ?>
+                                                                                onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');"
+                                                                            <?php else: ?>
+                                                                                disabled aria-disabled="true"
+                                                                            <?php endif; ?>
+                                                                        >
                                                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?></span>
                                                                         </button>
+                                                                        <?php if (!$canDeleteOrderFromModal): ?>
+                                                                            <p class="admin-order-modal__details-hint admin-order-modal__details-hint--danger">
+                                                                                <?php echo admin_e(admin_t($messages, 'order_delete_active_blocked', 'An active and completed order cannot be deleted.')); ?>
+                                                                            </p>
+                                                                        <?php endif; ?>
                                                                     </div>
                                                                 </form>
                                                             </div>
 
                                                             <?php if ($canExtendOrderFromModal): ?>
                                                                 <div class="tab-pane fade<?php echo $openExtendTabByDefault ? ' show active' : ''; ?>" id="<?php echo admin_e($tabExtendId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabExtendId); ?>">
-                                                                    <form method="post" class="admin-order-modal__form">
+                                                                    <form
+                                                                        method="post"
+                                                                        class="admin-order-modal__form"
+                                                                        data-admin-order-extend-form
+                                                                        data-current-expires-at="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>"
+                                                                    >
                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                         <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
                                                                         <div class="admin-order-modal__stack">
@@ -8561,11 +10244,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <div>
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_package', 'Extension package')); ?></label>
                                                                                 <?php if ($extendProducts): ?>
-                                                                                    <select class="form-select" name="extend_product_id" required>
+                                                                                    <select class="form-select" name="extend_product_id" required data-admin-order-extend-product>
                                                                                         <option value=""><?php echo admin_e(admin_t($messages, 'order_extend_package_placeholder', 'Choose extension package')); ?></option>
                                                                                         <?php foreach ($extendProducts as $extendProduct): ?>
                                                                                             <?php $extendOptionId = (int)($extendProduct['id'] ?? 0); ?>
-                                                                                            <option value="<?php echo admin_e((string)$extendOptionId); ?>"<?php echo ($isPendingRenewalAwaitingExtension && $pendingRenewalProductId > 0 && $pendingRenewalProductId === $extendOptionId) ? ' selected' : ''; ?>>
+                                                                                            <option
+                                                                                                value="<?php echo admin_e((string)$extendOptionId); ?>"
+                                                                                                data-duration-hours="<?php echo admin_e((string)((int)($extendProduct['duration_hours'] ?? 0))); ?>"
+                                                                                                <?php echo ($isPendingRenewalAwaitingExtension && $pendingRenewalProductId > 0 && $pendingRenewalProductId === $extendOptionId) ? ' selected' : ''; ?>
+                                                                                            >
                                                                                                 <?php echo admin_e(admin_format_product_option_label($extendProduct)); ?>
                                                                                             </option>
                                                                                         <?php endforeach; ?>
@@ -8576,9 +10263,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     </div>
                                                                                 <?php endif; ?>
                                                                             </div>
+                                                                            <div>
+                                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_predicted_expiry', 'Expected expiry after extension')); ?></label>
+                                                                                <input
+                                                                                    type="datetime-local"
+                                                                                    class="form-control admin-order-modal__readonly"
+                                                                                    value=""
+                                                                                    placeholder="<?php echo admin_e(admin_t($messages, 'order_extend_predicted_expiry_placeholder', 'Choose extension package')); ?>"
+                                                                                    name="extend_predicted_expiry"
+                                                                                    data-admin-order-extend-preview
+                                                                                >
+                                                                            </div>
                                                                         </div>
                                                                         <div class="admin-order-modal__actions">
-                                                                            <button type="submit" class="btn btn-dark" name="admin_extend_order"<?php echo $extendProducts ? '' : ' disabled'; ?>>
+                                                                            <button type="submit" class="btn btn-primary w-100" name="admin_extend_order"<?php echo $extendProducts ? '' : ' disabled'; ?>>
                                                                                 <i class="bi bi-plus-circle" aria-hidden="true"></i>
                                                                                 <span><?php echo admin_e(admin_t($messages, 'order_extend_button', 'Extend subscription')); ?></span>
                                                                             </button>
@@ -8593,11 +10291,32 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </div>
                                     <?php endforeach; ?>
                                     <?php if ($orderListTotalPages > 1): ?>
+                                        <?php
+                                        $orderPaginationParams = [
+                                            'page' => 'orders',
+                                        ];
+                                        if ($orderExpirySortDirection !== '') {
+                                            $orderPaginationParams['order_expiry_sort'] = $orderExpirySortDirection;
+                                        }
+                                        if ($orderIdSortDirection !== '') {
+                                            $orderPaginationParams['order_id_sort'] = $orderIdSortDirection;
+                                        }
+                                        if ($orderFilterCustomerId > 0) {
+                                            $orderPaginationParams['customer_id'] = $orderFilterCustomerId;
+                                        }
+                                        if ($orderFilterOrderId > 0) {
+                                            $orderPaginationParams['order_id'] = $orderFilterOrderId;
+                                        }
+                                        if ($orderStatusFilter !== '') {
+                                            $orderPaginationParams['order_status'] = $orderStatusFilter;
+                                        }
+                                        ?>
                                         <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'order_pagination', 'Order pages')); ?>">
                                             <ul class="pagination admin-pagination">
                                                 <?php for ($pageNumber = 1; $pageNumber <= $orderListTotalPages; $pageNumber++): ?>
+                                                    <?php $orderPaginationParams['order_list_page'] = $pageNumber; ?>
                                                     <li class="page-item<?php echo $pageNumber === $orderListPage ? ' active' : ''; ?>">
-                                                        <a class="page-link" href="/admin/?page=orders&amp;order_list_page=<?php echo admin_e((string)$pageNumber); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
+                                                        <a class="page-link" href="<?php echo admin_e('/admin/?' . http_build_query($orderPaginationParams)); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
                                                     </li>
                                                 <?php endfor; ?>
                                             </ul>
@@ -9221,7 +10940,30 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                     $productProviderRows = admin_product_provider_rows_paginated($db, 100, 0);
                                     $productRows = admin_product_rows_paginated($db, $productListPerPage, ($productListPage - 1) * $productListPerPage);
+                                    $productOnboardingVideoRows = $productListTotal <= 0
+                                        ? admin_help_video_rows_by_ids($db, [4])
+                                        : [];
                                     ?>
+                                    <?php if ($productOnboardingVideoRows): ?>
+                                        <section class="admin-module-tutorial admin-module-tutorial--wide" aria-labelledby="admin-products-onboarding-title">
+                                            <div class="admin-module-tutorial__header">
+                                                <h4 id="admin-products-onboarding-title"><?php echo admin_e(admin_t($messages, 'products_onboarding_title', 'How do I add a provider and product?')); ?></h4>
+                                                <p>
+                                                    <?php echo admin_e(admin_t($messages, 'products_onboarding_intro', 'See how to configure a provider and add the first product available to customers.')); ?>
+                                                    <a href="/admin/?page=help"><?php echo admin_e(admin_t($messages, 'wallet_onboarding_help_link', 'More tutorials are available in HELP.')); ?></a>
+                                                </p>
+                                            </div>
+                                            <div class="admin-module-tutorial__videos">
+                                                <?php foreach ($productOnboardingVideoRows as $productTutorial): ?>
+                                                    <article class="admin-module-tutorial__video">
+                                                        <h5><?php echo admin_e((string)($productTutorial['title'] ?? '')); ?></h5>
+                                                        <video controls preload="metadata" playsinline src="<?php echo admin_e((string)($productTutorial['video_url'] ?? '')); ?>"></video>
+                                                    </article>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </section>
+                                    <?php endif; ?>
+                                    <div class="admin-products-list">
                                     <div class="admin-editor-page__header">
                                         <div>
                                             <h3><?php echo admin_e(admin_t($messages, 'product_provider_section_title', 'Providers')); ?></h3>
@@ -9417,6 +11159,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <?php else: ?>
                                         <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
                                     <?php endif; ?>
+                                    </div>
                                     <?php
                                     break;
 
@@ -9707,6 +11450,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <span><?php echo admin_e(admin_t($messages, 'customer_password_save', 'Save new password')); ?></span>
                                                                 </button>
                                                             </div>
+                                                            <div class="admin-editor-actions admin-editor-actions--secondary">
+                                                                <button type="submit" class="btn btn-primary" name="admin_resend_customer_password">
+                                                                    <i class="bi bi-envelope" aria-hidden="true"></i>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'customer_password_resend', 'Send password again')); ?></span>
+                                                                </button>
+                                                            </div>
                                                         </form>
                                                     </section>
 
@@ -9794,22 +11543,43 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         } elseif ($orderStatus === 'cancelled') {
                                                                             $orderStatusClass = 'admin-status-pill--danger';
                                                                         } elseif ($orderStatus === 'expired') {
-                                                                            $orderStatusClass = 'admin-status-pill--muted';
+                                                                            $orderStatusClass = 'admin-status-pill--danger';
                                                                         }
                                                                         $statusLabel = admin_t($messages, 'enum_' . $orderStatus, ucfirst(str_replace('_', ' ', $orderStatus !== '' ? $orderStatus : 'order')));
                                                                         $paymentLabel = $paymentStatus !== '' ? admin_t($messages, 'enum_' . $paymentStatus, ucfirst(str_replace('_', ' ', $paymentStatus))) : '—';
                                                                         $fulfillmentLabel = $fulfillmentStatus !== '' ? admin_t($messages, 'enum_' . $fulfillmentStatus, ucfirst(str_replace('_', ' ', $fulfillmentStatus))) : '—';
                                                                         $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? null, (string)($row['currency_code'] ?? ''));
                                                                         $expiresAt = trim((string)($row['expires_at'] ?? ''));
+                                                                        $expiresAtTimestamp = $expiresAt !== '' && function_exists('app_timestamp_from_runtime_datetime')
+                                                                            ? app_timestamp_from_runtime_datetime($expiresAt)
+                                                                            : ($expiresAt !== '' ? strtotime($expiresAt) : 0);
+                                                                        $isFulfilledOrder = in_array($fulfillmentStatus, ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true);
+                                                                        $isExpiredOrder = $orderStatus === 'expired'
+                                                                            || ($paymentStatus === 'paid' && $expiresAtTimestamp > 0 && $expiresAtTimestamp <= time());
+                                                                        $isActiveOrder = !$isExpiredOrder
+                                                                            && $orderStatus === 'active'
+                                                                            && $paymentStatus === 'paid'
+                                                                            && $isFulfilledOrder;
+                                                                        $orderDatesTone = $isExpiredOrder
+                                                                            ? 'expired'
+                                                                            : ($isActiveOrder ? 'active' : 'pending');
+                                                                        $orderDeliveryLinkMode = admin_order_delivery_link_mode($row);
+                                                                        $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
+                                                                            ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
+                                                                            : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password');
                                                                         ?>
                                                                         <tr>
                                                                             <td>
                                                                                 <div class="admin-user-detail-table__cell">
                                                                                     <a class="admin-inline-link admin-user-detail-table__primary-link" href="<?php echo admin_e($orderUrl); ?>">#<?php echo admin_e((string)$orderId); ?></a>
-                                                                                    <span class="admin-user-detail-table__muted">
-                                                                                        <?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>: <?php echo admin_e(admin_compact_datetime_label((string)($row['created_at'] ?? ''))); ?>
-                                                                                        <?php if ($expiresAt !== ''): ?>
-                                                                                            · <?php echo admin_e(admin_t($messages, 'payment_expires_at', 'Expires at')); ?>: <?php echo admin_e(admin_compact_datetime_label($expiresAt)); ?>
+                                                                                    <span class="admin-user-detail-table__muted admin-user-detail-table__dates admin-user-detail-table__dates--<?php echo admin_e($orderDatesTone); ?>">
+                                                                                        <?php if ($isExpiredOrder && $expiresAt !== ''): ?>
+                                                                                            <?php echo admin_e(admin_t($messages, 'order_expired_at_short', 'Expired')); ?>: <?php echo admin_e(admin_compact_datetime_label($expiresAt)); ?>
+                                                                                        <?php else: ?>
+                                                                                            <?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>: <?php echo admin_e(admin_compact_datetime_label((string)($row['created_at'] ?? ''))); ?>
+                                                                                            <?php if ($expiresAt !== ''): ?>
+                                                                                                · <?php echo admin_e(admin_t($messages, 'payment_expires_at', 'Expires at')); ?>: <?php echo admin_e(admin_compact_datetime_label($expiresAt)); ?>
+                                                                                            <?php endif; ?>
                                                                                         <?php endif; ?>
                                                                                     </span>
                                                                                 </div>
@@ -9820,7 +11590,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <img src="<?php echo admin_e($providerLogoUrl); ?>" alt="<?php echo admin_e($providerName !== '' ? $providerName : $productLabel); ?>" class="admin-user-detail-asset__logo" loading="lazy">
                                                                                     <?php endif; ?>
                                                                                     <div class="admin-user-detail-asset__copy">
-                                                                                        <strong><?php echo admin_e($productLabel); ?></strong>
+                                                                                        <div class="admin-user-detail-asset__title-row">
+                                                                                            <strong><?php echo admin_e($productLabel); ?></strong>
+                                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
+                                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
+                                                                                                </span>
+                                                                                            <?php endif; ?>
+                                                                                        </div>
                                                                                         <span>
                                                                                             <?php echo admin_e($providerName !== '' ? $providerName : admin_t($messages, 'col_product', 'Product')); ?>
                                                                                             <?php if (trim((string)($row['payment_method'] ?? '')) !== ''): ?>
@@ -9834,10 +11611,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-user-detail-status">
                                                                                     <span class="admin-status-pill <?php echo admin_e($orderStatusClass); ?>"><?php echo admin_e($statusLabel); ?></span>
                                                                                     <span class="admin-user-detail-table__muted"><?php echo admin_e($paymentLabel); ?> / <?php echo admin_e($fulfillmentLabel); ?></span>
-                                                                                    <?php if (trim((string)($row['support_note'] ?? '')) !== ''): ?>
+                                                                                    <?php $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? '')); ?>
+                                                                                    <?php if ($orderVisibleSupportNote !== ''): ?>
                                                                                         <div class="admin-order-summary__note admin-order-summary__note--warning admin-user-detail-status__note">
                                                                                             <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                                                                            <span><?php echo admin_e((string)($row['support_note'] ?? '')); ?></span>
+                                                                                            <span><?php echo nl2br(admin_e($orderVisibleSupportNote)); ?></span>
                                                                                         </div>
                                                                                     <?php endif; ?>
                                                                                 </div>
@@ -10907,6 +12685,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                 case 'payments':
                                     $paymentSummary = admin_payment_summary($db, $paymentFilterCustomerId, $bankTransfersVisibleInPayments);
+                                    $paymentGlobalSummary = $paymentFilterCustomerId > 0
+                                        ? admin_payment_summary($db, 0, $bankTransfersVisibleInPayments)
+                                        : $paymentSummary;
+                                    $paymentOnboardingVideoRows = (int)($paymentGlobalSummary['total'] ?? 0) <= 0
+                                        ? admin_help_video_rows_by_ids($db, [5, 16])
+                                        : [];
                                     $paymentRows = admin_payment_rows($db, 25, $paymentFilterCustomerId, $paymentScope, $paymentTypeFilter, $bankTransfersVisibleInPayments);
                                     $paymentScopeOptions = [
                                         'all' => admin_t($messages, 'payment_filter_all', 'All'),
@@ -10978,10 +12762,39 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             && is_numeric((string)$paymentRequestedAmountRaw)
                                             && is_numeric((string)$paymentReceivedAmountRaw)
                                         ) {
-                                            $paymentAmountsMismatch = abs((float)$paymentRequestedAmountRaw - (float)$paymentReceivedAmountRaw) >= 0.01;
+                                            $paymentAmountsMismatch = ((float)$paymentReceivedAmountRaw + 0.00001) < (float)$paymentRequestedAmountRaw;
+                                        }
+                                        $paymentAmountDelta = 0.0;
+                                        $paymentAmountDeltaClass = '';
+                                        $paymentAmountDeltaLabel = '';
+                                        if (
+                                            $paymentReceivedAmountRaw !== null
+                                            && $paymentReceivedAmountRaw !== ''
+                                            && is_numeric((string)$paymentRequestedAmountRaw)
+                                            && is_numeric((string)$paymentReceivedAmountRaw)
+                                        ) {
+                                            $paymentAmountDelta = round((float)$paymentReceivedAmountRaw - (float)$paymentRequestedAmountRaw, 2);
+                                            if (abs($paymentAmountDelta) >= 0.01) {
+                                                $paymentAmountDeltaClass = $paymentAmountDelta < 0 ? 'is-underpaid' : 'is-overpaid';
+                                                $paymentAmountDeltaLabel = ($paymentAmountDelta < 0 ? '-' : '+')
+                                                    . admin_format_money_value_with_symbol(
+                                                        abs($paymentAmountDelta),
+                                                        $paymentEditorCurrencyCode,
+                                                        $paymentEditorCurrencySymbol
+                                                    )
+                                                    . ' '
+                                                    . admin_t($messages, $paymentAmountDelta < 0 ? 'payment_amount_delta_underpaid' : 'payment_amount_delta_overpaid', $paymentAmountDelta < 0 ? 'too low' : 'too much');
+                                            }
                                         }
                                         $paymentMismatchFieldClass = $paymentAmountsMismatch ? ' admin-payment-mismatch-field' : '';
                                         $paymentReferenceLabel = trim((string)($paymentEditor['payment_reference'] ?? ($paymentEditor['wallet_address'] ?? '')));
+                                        $paymentEditorAssetCode = strtoupper(trim((string)($paymentEditor['asset_code'] ?? '')));
+                                        $paymentEditorAssetName = trim((string)($paymentEditor['asset_name'] ?? $paymentEditorAssetCode));
+                                        $paymentEditorAssetLogo = $paymentEditorType === 'crypto'
+                                            ? admin_payment_asset_logo_url($paymentEditorAssetCode, (string)($paymentEditor['asset_logo_url'] ?? ''))
+                                            : '';
+                                        $paymentEditorFiatLabel = strtoupper(trim($paymentEditorCurrencyCode !== '' ? $paymentEditorCurrencyCode : $adminDefaultCurrencyCode));
+                                        $paymentEditorCryptoLabel = $paymentEditorAssetCode !== '' ? $paymentEditorAssetCode : strtoupper(trim((string)($paymentEditor['asset_name'] ?? '')));
                                         $paymentCustomerUrl = '/admin/?page=users&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
                                         $paymentOrdersUrl = '/admin/?page=orders&customer_id=' . (int)($paymentEditor['customer_id'] ?? 0);
                                         $paymentEditorExplorerUrl = ($paymentEditorType === 'crypto' && trim((string)($paymentEditor['wallet_address'] ?? '')) !== '')
@@ -10994,6 +12807,66 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $paymentWalletPanelUrl = ((int)($paymentEditor['wallet_address_id'] ?? 0) > 0)
                                             ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($paymentEditor['wallet_address_id'] ?? 0)
                                             : '';
+                                        $paymentEditorOrderId = (int)($paymentEditor['order_id'] ?? 0);
+                                        $paymentEditorHandle = trim((string)($paymentEditor['public_handle'] ?? ''));
+                                        $paymentEditorHandleLabel = $paymentEditorHandle !== '' ? '@' . ltrim($paymentEditorHandle, '@') : '';
+                                        $paymentEditorEmail = trim((string)($paymentEditor['customer_email'] ?? ''));
+                                        $paymentEditorCustomerLabel = $paymentEditorHandleLabel !== '' ? $paymentEditorHandleLabel : ($paymentEditorEmail !== '' ? $paymentEditorEmail : ('#' . (int)($paymentEditor['customer_id'] ?? 0)));
+                                        $paymentEditorRequestedAtRaw = trim((string)($paymentEditor['requested_at'] ?? ''));
+                                        $paymentEditorRequestedAtLabel = $paymentEditorRequestedAtRaw !== '' && function_exists('app_format_runtime_datetime_local')
+                                            ? app_format_runtime_datetime_local($paymentEditorRequestedAtRaw, 'd.m.Y, H:i')
+                                            : admin_compact_datetime_label($paymentEditorRequestedAtRaw);
+                                        $paymentEditorRequestedAtIsToday = admin_is_current_day_datetime($paymentEditorRequestedAtRaw);
+                                        $paymentEditorRequestedAtAgeLabel = '';
+                                        $paymentEditorRequestedAtAgeClass = '';
+                                        if ($paymentEditorRequestedAtRaw !== '') {
+                                            try {
+                                                $paymentEditorRequestedAtTimezone = function_exists('app_runtime_timezone_name')
+                                                    ? new DateTimeZone(app_runtime_timezone_name())
+                                                    : new DateTimeZone(date_default_timezone_get());
+                                                $paymentEditorRequestedAtTimestamp = function_exists('app_timestamp_from_runtime_datetime')
+                                                    ? app_timestamp_from_runtime_datetime($paymentEditorRequestedAtRaw)
+                                                    : strtotime($paymentEditorRequestedAtRaw);
+                                                if (is_int($paymentEditorRequestedAtTimestamp) && $paymentEditorRequestedAtTimestamp > 0) {
+                                                    $paymentEditorRequestedAtDate = (new DateTimeImmutable('@' . $paymentEditorRequestedAtTimestamp))
+                                                        ->setTimezone($paymentEditorRequestedAtTimezone)
+                                                        ->setTime(0, 0, 0);
+                                                    $paymentEditorTodayDate = (new DateTimeImmutable('now', $paymentEditorRequestedAtTimezone))->setTime(0, 0, 0);
+                                                    $paymentEditorRequestedAtDaysDiff = (int)$paymentEditorRequestedAtDate->diff($paymentEditorTodayDate)->format('%r%a');
+                                                    if ($paymentEditorRequestedAtDaysDiff === 0) {
+                                                        $paymentEditorRequestedAtAgeLabel = admin_t($messages, 'payment_requested_today_badge', 'Today');
+                                                        $paymentEditorRequestedAtAgeClass = 'is-today';
+                                                    } elseif ($paymentEditorRequestedAtDaysDiff > 0) {
+                                                        $paymentEditorRequestedAtAgeLabel = admin_t(
+                                                            $messages,
+                                                            $paymentEditorRequestedAtDaysDiff === 1 ? 'payment_requested_days_ago_one' : 'payment_requested_days_ago_many',
+                                                            $paymentEditorRequestedAtDaysDiff === 1 ? '1 day ago' : '{days} days ago',
+                                                            ['days' => $paymentEditorRequestedAtDaysDiff]
+                                                        );
+                                                    } else {
+                                                        $paymentEditorRequestedAtDaysAhead = abs($paymentEditorRequestedAtDaysDiff);
+                                                        $paymentEditorRequestedAtAgeLabel = admin_t(
+                                                            $messages,
+                                                            $paymentEditorRequestedAtDaysAhead === 1 ? 'payment_requested_days_ahead_one' : 'payment_requested_days_ahead_many',
+                                                            $paymentEditorRequestedAtDaysAhead === 1 ? 'in 1 day' : 'in {days} days',
+                                                            ['days' => $paymentEditorRequestedAtDaysAhead]
+                                                        );
+                                                    }
+                                                }
+                                            } catch (Throwable $exception) {
+                                                $paymentEditorRequestedAtAgeLabel = '';
+                                                $paymentEditorRequestedAtAgeClass = '';
+                                            }
+                                        }
+                                        $paymentEditorCanShowExpiryHelp = $paymentEditorType === 'crypto'
+                                            && !in_array(strtolower(trim((string)($paymentEditor['status'] ?? ''))), ['approved', 'paid', 'completed', 'archived'], true);
+                                        $paymentEditorCanBlockchainCheck = $paymentEditorType === 'crypto'
+                                            && in_array(
+                                                strtolower(trim((string)($paymentEditor['status'] ?? ''))),
+                                                array_merge(admin_payment_expired_statuses('crypto'), admin_payment_cancelled_statuses('crypto')),
+                                                true
+                                            );
+                                        $paymentEditorExtraCollapseId = 'adminPaymentExtraFields' . (int)$paymentEditorId;
                                         $paymentEditorAcceptPayloadJson = '{}';
                                         if ($paymentEditorType === 'crypto') {
                                             $paymentEditorAcceptPayloadJsonRaw = json_encode(admin_build_crypto_accept_payload($paymentEditor, $messages), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -11071,6 +12944,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
+                                                    <?php if ($paymentEditorCanBlockchainCheck): ?>
+                                                        <button type="button" class="btn btn-outline-dark btn-sm" data-admin-payment-blockchain-check data-loading-label="<?php echo admin_e(admin_t($messages, 'payment_blockchain_check_loading', 'Checking...')); ?>" data-explorer-label="<?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?>">
+                                                            <i class="bi bi-search" aria-hidden="true"></i>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_check_blockchain', 'Check Blockchain')); ?></span>
+                                                        </button>
+                                                    <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true)): ?>
                                                         <button type="submit" class="btn btn-dark btn-sm" name="quick_action" value="archive">
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
@@ -11081,18 +12960,36 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                             <div class="admin-payments-summary">
                                                 <div class="admin-payments-summary-card">
-                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></span>
-                                                    <strong><span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentEditor['status'] ?? ''))); ?>"><?php if (admin_payment_status_is_archived((string)($paymentEditor['status'] ?? ''))): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e(admin_t($messages, 'enum_' . (string)($paymentEditor['status'] ?? ''), ucfirst(str_replace('_', ' ', (string)($paymentEditor['status'] ?? ''))))); ?></span></strong>
-                                                </div>
-                                                <div class="admin-payments-summary-card">
-                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></span>
-                                                    <strong><?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?></strong>
+                                                    <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'payment_requested_at', 'Requested at')); ?></span>
+                                                    <strong class="admin-payments-summary-card__date <?php echo $paymentEditorRequestedAtIsToday ? 'is-today' : ''; ?>"><?php echo admin_e($paymentEditorRequestedAtLabel !== '' ? $paymentEditorRequestedAtLabel : '-'); ?></strong>
+                                                    <?php if ($paymentEditorRequestedAtAgeLabel !== ''): ?>
+                                                        <span class="admin-payments-summary-card__age-badge <?php echo admin_e($paymentEditorRequestedAtAgeClass); ?>"><?php echo admin_e($paymentEditorRequestedAtAgeLabel); ?></span>
+                                                    <?php endif; ?>
                                                 </div>
                                                 <div class="admin-payments-summary-card">
                                                     <span class="admin-payments-summary-card__label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></span>
-                                                    <strong><?php echo admin_e($paymentReceivedAmountLabel !== '' ? $paymentReceivedAmountLabel : $paymentAmountLabel); ?></strong>
+                                                    <strong class="admin-payments-summary-card__amount <?php echo admin_e($paymentAmountDeltaClass); ?>">
+                                                        <span><?php echo admin_e($paymentReceivedAmountLabel !== '' ? $paymentReceivedAmountLabel : $paymentAmountLabel); ?></span>
+                                                        <?php if ($paymentAmountDeltaLabel !== ''): ?>
+                                                            <span class="admin-payments-summary-card__delta-badge <?php echo admin_e($paymentAmountDeltaClass); ?>"><?php echo admin_e($paymentAmountDeltaLabel); ?></span>
+                                                        <?php endif; ?>
+                                                    </strong>
                                                     <?php if ($paymentReceivedAmountLabel !== ''): ?>
-                                                        <small class="text-muted d-block"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?>: <?php echo admin_e($paymentAmountLabel); ?></small>
+                                                        <small><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?>: <?php echo admin_e($paymentAmountLabel); ?></small>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <div class="admin-payments-summary-card admin-payments-summary-card--customer">
+                                                    <small>
+                                                        <?php if ($paymentEditorOrderId > 0): ?>
+                                                            <?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>:
+                                                            <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$paymentEditorOrderId); ?>" class="admin-payments-summary-card__order-link">#<?php echo admin_e((string)$paymentEditorOrderId); ?></a>
+                                                        <?php else: ?>
+                                                            <span class="badge bg-info text-dark admin-payments-summary-card__topup-badge"><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Top-up')); ?></span>
+                                                        <?php endif; ?>
+                                                    </small>
+                                                    <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="admin-payments-summary-card__handle"><?php echo admin_e($paymentEditorCustomerLabel); ?></a>
+                                                    <?php if ($paymentEditorEmail !== ''): ?>
+                                                        <span class="admin-payments-summary-card__email"><?php echo admin_e($paymentEditorEmail); ?></span>
                                                     <?php endif; ?>
                                                 </div>
                                             </div>
@@ -11115,6 +13012,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
 
                                                 <div class="row g-3">
+                                                    <div class="col-12" data-admin-payment-blockchain-check-result hidden></div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="payment_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
                                                         <select class="form-select admin-payment-status-select <?php echo admin_e($paymentEditorStatusSelectClass); ?>" id="payment_status" name="status">
@@ -11130,94 +13028,120 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </div>
                                                         <?php endif; ?>
                                                     </div>
-                                                    <div class="col-md-3">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?>" readonly>
-                                                    </div>
-                                                    <div class="col-md-3">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></label>
-                                                        <?php if ($paymentEditorType === 'crypto_topup'): ?>
-                                                            <input type="text" class="form-control" value="" readonly>
-                                                        <?php else: ?>
-                                                            <input type="number" class="form-control" name="order_id" min="1" step="1" value="<?php echo admin_e((int)($paymentEditor['order_id'] ?? 0) > 0 ? (string)(int)$paymentEditor['order_id'] : ''); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?> ID">
-                                                        <?php endif; ?>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['customer_email'] ?? '')); ?>" readonly>
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
-                                                        <?php if ($paymentEditorType === 'bank'): ?>
-                                                            <input type="text" class="form-control" id="payment_amount_value_bank" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
-                                                        <?php else: ?>
-                                                            <input type="text" class="form-control" value="<?php echo admin_e($paymentAmountLabel); ?>" readonly>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_reference_summary', 'Reference')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e($paymentReferenceLabel); ?>" readonly>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="payment_requested_at"><?php echo admin_e(admin_t($messages, 'payment_requested_at', 'Requested at')); ?></label>
-                                                        <input type="datetime-local" class="form-control" id="payment_requested_at" name="requested_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['requested_at'] ?? ''))); ?>">
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="payment_expires_at"><?php echo admin_e(admin_t($messages, 'payment_expires_at', 'Expires at')); ?></label>
-                                                        <input type="datetime-local" class="form-control" id="payment_expires_at" name="expires_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['expires_at'] ?? ''))); ?>">
-                                                    </div>
 
-                                                    <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
+                                                    <?php if ($paymentEditorType === 'crypto'): ?>
+                                                        <div class="col-12">
+                                                            <label class="form-label admin-payment-wallet-address-label" for="payment_wallet_address">
+                                                                <?php if ($paymentEditorAssetLogo !== ''): ?>
+                                                                    <img src="<?php echo admin_e($paymentEditorAssetLogo); ?>" alt="" loading="lazy">
+                                                                <?php endif; ?>
+                                                                <span><?php echo admin_e($paymentEditorAssetName !== '' ? $paymentEditorAssetName : $paymentEditorAssetCode); ?> - <?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?>:</span>
+                                                            </label>
+                                                            <input type="text" class="form-control admin-payment-wallet-address-input" id="payment_wallet_address" name="wallet_address" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?> - <?php echo admin_e($paymentEditorFiatLabel); ?>:</label>
+                                                            <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12" data-admin-payment-received-field>
+                                                            <label class="form-label" for="payment_received_fiat_amount"><?php echo admin_e(admin_t($messages, 'payment_received_amount_label', 'Received amount')); ?> - <?php echo admin_e($paymentEditorFiatLabel); ?>:</label>
+                                                            <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" id="payment_received_fiat_amount" name="received_fiat_amount" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['received_fiat_amount'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?> - <?php echo admin_e($paymentEditorCryptoLabel); ?>:</label>
+                                                            <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12" data-admin-payment-received-field>
+                                                            <label class="form-label" for="payment_received_crypto_amount"><?php echo admin_e(admin_t($messages, 'payment_received_crypto_amount_label', 'Received crypto amount')); ?> - <?php echo admin_e($paymentEditorCryptoLabel); ?>:</label>
+                                                            <input type="text" class="form-control" id="payment_received_crypto_amount" name="received_crypto_amount" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['received_crypto_amount'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="payment_request_note"><?php echo admin_e(admin_t($messages, 'payment_request_note', 'Request note')); ?></label>
+                                                            <textarea class="form-control" id="payment_request_note" name="request_note" rows="4"><?php echo admin_e(admin_localize_payment_request_note((string)($paymentEditor['request_note'] ?? ''))); ?></textarea>
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <a class="admin-payment-extra-toggle" data-bs-toggle="collapse" href="#<?php echo admin_e($paymentEditorExtraCollapseId); ?>" role="button" aria-expanded="false" aria-controls="<?php echo admin_e($paymentEditorExtraCollapseId); ?>">
+                                                                <span><?php echo admin_e(admin_t($messages, 'payment_extra_fields_toggle', 'Show remaining fields')); ?></span>
+                                                                <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                                                            </a>
+                                                        </div>
+                                                        <div class="col-12 collapse" id="<?php echo admin_e($paymentEditorExtraCollapseId); ?>">
+                                                            <div class="row g-3 admin-payment-extra-fields">
+                                                                <div class="col-12">
+                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
+                                                                    <input type="text" class="form-control" value="<?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?>" readonly>
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></label>
+                                                                    <input type="number" class="form-control" name="order_id" min="1" step="1" value="<?php echo admin_e($paymentEditorOrderId > 0 ? (string)$paymentEditorOrderId : ''); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?> ID">
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="payment_reference"><?php echo admin_e(admin_t($messages, 'payment_reference_label', 'Payment reference')); ?></label>
+                                                                    <input type="text" class="form-control" id="payment_reference" name="payment_reference" value="<?php echo admin_e((string)($paymentEditor['payment_reference'] ?? '')); ?>">
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_crypto_asset', 'Crypto asset')); ?></label>
+                                                                    <input type="text" class="form-control" value="<?php echo admin_e(trim((string)($paymentEditor['asset_code'] ?? '') . ' ' . (string)($paymentEditor['asset_name'] ?? ''))); ?>" readonly>
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="payment_requested_at"><?php echo admin_e(admin_t($messages, 'payment_requested_at', 'Requested at')); ?></label>
+                                                                    <input type="datetime-local" class="form-control" id="payment_requested_at" name="requested_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['requested_at'] ?? ''))); ?>">
+                                                                </div>
+                                                                <div class="col-12">
+                                                                    <label class="form-label" for="payment_expires_at"><?php echo admin_e(admin_t($messages, 'payment_expires_at', 'Expires at')); ?></label>
+                                                                    <input type="datetime-local" class="form-control" id="payment_expires_at" name="expires_at" value="<?php echo admin_e(admin_format_datetime_local((string)($paymentEditor['expires_at'] ?? ''))); ?>">
+                                                                </div>
+                                                                <?php if ($paymentEditorCanShowExpiryHelp): ?>
+                                                                    <div class="col-12">
+                                                                        <div class="alert alert-warning admin-payment-expiry-help" role="alert">
+                                                                            <?php echo admin_e(admin_t($messages, 'payment_expiry_edit_help', 'If the customer needs more time, extend the expiry date. You can also manually set the status back to pending and adjust the dates so the payment request becomes active again.')); ?>
+                                                                        </div>
+                                                                    </div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        </div>
+                                                    <?php elseif ($paymentEditorType === 'crypto_topup'): ?>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?>" readonly>
+                                                        </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_crypto_asset', 'Crypto asset')); ?></label>
                                                             <input type="text" class="form-control" value="<?php echo admin_e(trim((string)($paymentEditor['asset_code'] ?? '') . ' ' . (string)($paymentEditor['asset_name'] ?? ''))); ?>" readonly>
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="payment_amount_value"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?></label>
-                                                            <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
-                                                                <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
-                                                            <?php else: ?>
-                                                                <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>" readonly>
-                                                            <?php endif; ?>
+                                                            <input type="text" class="form-control" id="payment_amount_value" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
                                                         </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_requested_crypto_amount_label', 'Requested crypto amount')); ?></label>
-                                                            <?php if ($paymentEditorType === 'crypto' || $paymentEditorType === 'crypto_topup'): ?>
-                                                                <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
-                                                            <?php else: ?>
-                                                                <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>" readonly>
-                                                            <?php endif; ?>
+                                                            <input type="text" class="form-control" id="payment_amount_crypto" name="amount_crypto" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_crypto'] ?? '')); ?>">
                                                         </div>
-                                                        <?php if ($paymentEditorType === 'crypto'): ?>
-                                                            <div class="col-md-6">
-                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_received_amount_label', 'Received amount')); ?></label>
-                                                                <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" value="<?php echo admin_e($paymentReceivedAmountLabel); ?>" readonly>
-                                                            </div>
-                                                            <div class="col-md-6">
-                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_received_crypto_amount_label', 'Received crypto amount')); ?></label>
-                                                                <input type="text" class="form-control" value="<?php echo admin_e($paymentReceivedCryptoLabel); ?>" readonly>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                        <?php if ($paymentEditorType === 'crypto'): ?>
-                                                            <div class="col-md-6">
-                                                                <label class="form-label" for="payment_reference"><?php echo admin_e(admin_t($messages, 'payment_reference_label', 'Payment reference')); ?></label>
-                                                                <input type="text" class="form-control" id="payment_reference" name="payment_reference" value="<?php echo admin_e((string)($paymentEditor['payment_reference'] ?? '')); ?>">
-                                                            </div>
-                                                            <div class="col-12">
-                                                                <label class="form-label" for="payment_wallet_address"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
-                                                                <input type="text" class="form-control" id="payment_wallet_address" name="wallet_address" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>">
-                                                            </div>
-                                                            <div class="col-12">
-                                                                <label class="form-label" for="payment_request_note"><?php echo admin_e(admin_t($messages, 'payment_request_note', 'Request note')); ?></label>
-                                                                <textarea class="form-control" id="payment_request_note" name="request_note" rows="5"><?php echo admin_e((string)($paymentEditor['request_note'] ?? '')); ?></textarea>
-                                                            </div>
-                                                        <?php else: ?>
-                                                            <div class="col-12">
-                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
-                                                                <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>" readonly>
-                                                            </div>
-                                                        <?php endif; ?>
+                                                        <div class="col-12">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_wallet_address', 'Wallet address')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['wallet_address'] ?? '')); ?>" readonly>
+                                                        </div>
                                                     <?php else: ?>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_type', 'Type')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e(admin_payment_type_label((string)$paymentEditorType, $messages)); ?>" readonly>
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></label>
+                                                            <input type="number" class="form-control" name="order_id" min="1" step="1" value="<?php echo admin_e($paymentEditorOrderId > 0 ? (string)$paymentEditorOrderId : ''); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?> ID">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e((string)($paymentEditor['customer_email'] ?? '')); ?>" readonly>
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></label>
+                                                            <input type="text" class="form-control" id="payment_amount_value_bank" name="amount_value" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['amount_value'] ?? '')); ?>">
+                                                        </div>
+                                                        <div class="col-md-4">
+                                                            <label class="form-label"><?php echo admin_e(admin_t($messages, 'payment_reference_summary', 'Reference')); ?></label>
+                                                            <input type="text" class="form-control" value="<?php echo admin_e($paymentReferenceLabel); ?>" readonly>
+                                                        </div>
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="payment_reference"><?php echo admin_e(admin_t($messages, 'payment_reference_label', 'Payment reference')); ?></label>
                                                             <input type="text" class="form-control" id="payment_reference" name="payment_reference" value="<?php echo admin_e((string)($paymentEditor['payment_reference'] ?? '')); ?>">
@@ -11257,9 +13181,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <?php endif; ?>
                                                 </div>
 
+                                                <hr class="admin-payment-editor-actions-separator">
                                                 <div class="admin-editor-actions">
                                                     <button type="submit" class="btn btn-dark btn-lg" name="admin_save_payment">
-                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'payment_save_button', 'Save payment')); ?></span>
                                                     </button>
                                                     <?php if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed'], true)): ?>
@@ -11463,6 +13387,26 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'payment_filtered_customer', 'Filtered customer')); ?>: <?php echo admin_e((string)($paymentFilterCustomer['email'] ?? '')); ?></span>
                                                 <a class="admin-inline-link" href="<?php echo admin_e($buildPaymentsListUrl(['customer_id' => null])); ?>"><?php echo admin_e(admin_t($messages, 'payment_clear_customer_filter', 'Clear customer filter')); ?></a>
                                             </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($paymentOnboardingVideoRows): ?>
+                                            <section class="admin-module-tutorial admin-module-tutorial--two-columns" aria-labelledby="admin-payments-onboarding-title">
+                                                <div class="admin-module-tutorial__header">
+                                                    <h4 id="admin-payments-onboarding-title"><?php echo admin_e(admin_t($messages, 'payments_onboarding_title', 'How do I manage cryptocurrency payments?')); ?></h4>
+                                                    <p>
+                                                        <?php echo admin_e(admin_t($messages, 'payments_onboarding_intro', 'See how to review payment requests, confirm incoming funds and manage completed or expired payments.')); ?>
+                                                        <a href="/admin/?page=help"><?php echo admin_e(admin_t($messages, 'wallet_onboarding_help_link', 'More tutorials are available in HELP.')); ?></a>
+                                                    </p>
+                                                </div>
+                                                <div class="admin-module-tutorial__videos">
+                                                    <?php foreach ($paymentOnboardingVideoRows as $paymentTutorial): ?>
+                                                        <article class="admin-module-tutorial__video">
+                                                            <h5><?php echo admin_e((string)($paymentTutorial['title'] ?? '')); ?></h5>
+                                                            <video controls preload="metadata" playsinline src="<?php echo admin_e((string)($paymentTutorial['video_url'] ?? '')); ?>"></video>
+                                                        </article>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </section>
                                         <?php endif; ?>
 
                                         <?php if ($paymentRows): ?>
@@ -11968,6 +13912,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <label class="form-label" for="bank_transfer_instructions"><?php echo admin_e(admin_t($messages, 'bank_transfer_instructions', 'Transfer instructions')); ?></label>
                                                             <textarea class="form-control" id="bank_transfer_instructions" name="transfer_instructions" rows="3"><?php echo admin_e((string)($bankAccountEditor['transfer_instructions'] ?? '')); ?></textarea>
                                                         </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label" for="bank_monthly_limit_amount"><?php echo admin_e(admin_t($messages, 'bank_monthly_limit_amount', 'Monthly limit')); ?></label>
+                                                            <input type="number" min="0" step="0.01" class="form-control" id="bank_monthly_limit_amount" name="monthly_limit_amount" value="<?php echo admin_e((float)($bankAccountEditor['monthly_limit_amount'] ?? 0) > 0 ? number_format((float)$bankAccountEditor['monthly_limit_amount'], 2, '.', '') : ''); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'bank_monthly_limit_none_placeholder', 'No limit')); ?>">
+                                                            <small class="text-muted"><?php echo admin_e(admin_t($messages, 'bank_monthly_limit_help', 'Leave empty or enter 0 for no monthly limit. When the current month reaches this amount, this account will not be offered for new bank transfers.')); ?></small>
+                                                        </div>
                                                         <div class="col-12">
                                                             <label class="form-label" for="bank_notes"><?php echo admin_e(admin_t($messages, 'wallet_notes', 'Notes')); ?></label>
                                                             <textarea class="form-control" id="bank_notes" name="notes" rows="3"><?php echo admin_e((string)($bankAccountEditor['notes'] ?? '')); ?></textarea>
@@ -12049,9 +13998,104 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     endif;
 
                                     $accountRows = admin_bank_account_rows($db, $bankAccountListPerPage, ($bankAccountListPage - 1) * $bankAccountListPerPage);
+                                    $bankStatsRows = $bankAccountTab === 'stats' ? admin_bank_account_statistics_rows($db) : [];
                                     ?>
                                     <div class="admin-wallet-workspace">
                                         <div class="admin-wallet-workspace__list">
+                                            <div class="alert alert-info admin-bank-limit-info" role="alert">
+                                                <?php echo admin_e(admin_t($messages, 'bank_limit_info', 'You can set a monthly limit separately for each bank account or leave it empty for no limit. When the accepted payments in the current month reach the limit, that account will stop being offered for new bank transfer requests. Available accounts are shown to customers starting from the least used account in the current month, which helps distribute payments more evenly.')); ?>
+                                            </div>
+                                            <ul class="nav nav-pills admin-bank-tabs mb-3">
+                                                <li class="nav-item">
+                                                    <a class="nav-link<?php echo $bankAccountTab === 'accounts' ? ' active' : ''; ?>" href="/admin/?page=bank-accounts&amp;bank_tab=accounts">
+                                                        <?php echo admin_e(admin_t($messages, 'bank_tab_accounts', 'Bank accounts')); ?>
+                                                    </a>
+                                                </li>
+                                                <li class="nav-item">
+                                                    <a class="nav-link<?php echo $bankAccountTab === 'stats' ? ' active' : ''; ?>" href="/admin/?page=bank-accounts&amp;bank_tab=stats">
+                                                        <?php echo admin_e(admin_t($messages, 'bank_tab_statistics', 'Statistics')); ?>
+                                                    </a>
+                                                </li>
+                                            </ul>
+                                            <?php if ($bankAccountTab === 'stats'): ?>
+                                                <?php if (!$bankStatsRows): ?>
+                                                    <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
+                                                <?php else: ?>
+                                                    <div class="table-responsive">
+                                                        <table class="table admin-table admin-wallet-table align-middle">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
+                                                                    <th><?php echo admin_e(admin_t($messages, 'bank_stats_monthly_limit', 'Monthly limit')); ?></th>
+                                                                    <th><?php echo admin_e(admin_t($messages, 'bank_stats_30_days', '30 days')); ?></th>
+                                                                    <th><?php echo admin_e(admin_t($messages, 'bank_stats_90_days', '90 days')); ?></th>
+                                                                    <th><?php echo admin_e(admin_t($messages, 'bank_stats_current_year', 'This year')); ?></th>
+                                                                    <th><?php echo admin_e(admin_t($messages, 'bank_stats_previous_year', 'Previous year')); ?></th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <?php foreach ($bankStatsRows as $row): ?>
+                                                                    <?php
+                                                                    $currencyCode = (string)($row['currency_code'] ?? '');
+                                                                    $currencySymbol = (string)($row['currency_symbol'] ?? '');
+                                                                    $monthlyLimit = round((float)($row['monthly_limit_amount'] ?? 0), 2);
+                                                                    $currentMonthAmount = round((float)($row['current_month_amount'] ?? 0), 2);
+                                                                    $limitExceeded = $monthlyLimit > 0 && $currentMonthAmount + 0.00001 >= $monthlyLimit;
+                                                                    $limitPercent = $monthlyLimit > 0 ? min(100, max(0, (int)round(($currentMonthAmount / $monthlyLimit) * 100))) : 0;
+                                                                    $limitRemaining = max(0, $monthlyLimit - $currentMonthAmount);
+                                                                    $limitProgressClass = $limitPercent >= 100 ? 'bg-danger' : ($limitPercent >= 80 ? 'bg-warning' : 'bg-success');
+                                                                    $accountStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
+                                                                    $accountIsDisabled = $accountStatusRaw === 'disabled';
+                                                                    $ibanValue = trim((string)($row['iban'] ?? ''));
+                                                                    $accountNumberValue = trim((string)($row['account_number'] ?? ''));
+                                                                    $bankIdentifier = $ibanValue !== '' ? $ibanValue : $accountNumberValue;
+                                                                    $bankIdentifierShort = strlen($bankIdentifier) > 18 ? substr($bankIdentifier, 0, 8) . '...' . substr($bankIdentifier, -8) : $bankIdentifier;
+                                                                    $bankEditUrl = '/admin/?page=bank-accounts&bank_tab=stats&edit_account=' . urlencode((string)($row['id'] ?? 0));
+                                                                    $periodCell = static function ($count, $amount) use ($currencySymbol, $currencyCode, $messages): string {
+                                                                        return '<strong>' . admin_e(app_format_money_value((float)$amount, $currencySymbol, $currencyCode)) . '</strong><span>' . admin_e((string)((int)$count) . ' ' . admin_t($messages, 'bank_stats_payments_short', 'payments')) . '</span>';
+                                                                    };
+                                                                    ?>
+                                                                    <tr>
+                                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
+                                                                            <div class="admin-wallet-address">
+                                                                                <a href="<?php echo admin_e($bankEditUrl); ?>" class="admin-bank-account-title<?php echo ($limitExceeded || $accountIsDisabled) ? ' is-danger' : ''; ?>">
+                                                                                    <i class="bi <?php echo $accountIsDisabled ? 'bi-x-circle-fill' : 'bi-check-circle-fill'; ?>" aria-hidden="true"></i>
+                                                                                    <strong><?php echo admin_e((string)(($row['label'] ?? '') !== '' ? $row['label'] : $row['account_holder_name'])); ?></strong>
+                                                                                </a>
+                                                                                <span><?php echo admin_e((string)($row['bank_name'] ?? '')); ?><?php echo $bankIdentifierShort !== '' ? ' · ' . admin_e($bankIdentifierShort) : ''; ?></span>
+                                                                            </div>
+                                                                        </td>
+                                                                        <td data-label="<?php echo admin_e(admin_t($messages, 'bank_stats_monthly_limit', 'Monthly limit')); ?>">
+                                                                            <?php if ($monthlyLimit > 0): ?>
+                                                                                <div class="admin-bank-limit-progress">
+                                                                                    <div class="admin-bank-limit-progress__head">
+                                                                                        <strong><?php echo admin_e(app_format_money_value($currentMonthAmount, $currencySymbol, $currencyCode)); ?></strong>
+                                                                                        <span><?php echo admin_e($limitPercent . '%'); ?></span>
+                                                                                    </div>
+                                                                                    <div class="progress" role="progressbar" aria-valuenow="<?php echo admin_e((string)$limitPercent); ?>" aria-valuemin="0" aria-valuemax="100">
+                                                                                        <div class="progress-bar <?php echo admin_e($limitProgressClass); ?>" style="width: <?php echo admin_e((string)$limitPercent); ?>%"></div>
+                                                                                    </div>
+                                                                                    <?php if ($limitExceeded): ?>
+                                                                                        <span class="admin-bank-limit-progress__alert"><?php echo admin_e(admin_t($messages, 'bank_stats_limit_exceeded', 'Limit exceeded')); ?></span>
+                                                                                    <?php else: ?>
+                                                                                        <small><?php echo admin_e(admin_t($messages, 'bank_stats_limit_remaining', 'Left: {amount}', ['amount' => app_format_money_value($limitRemaining, $currencySymbol, $currencyCode)])); ?></small>
+                                                                                    <?php endif; ?>
+                                                                                </div>
+                                                                            <?php else: ?>
+                                                                                <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'bank_monthly_limit_none', 'No limit')); ?></span>
+                                                                            <?php endif; ?>
+                                                                        </td>
+                                                                        <td class="admin-bank-stats-cell" data-label="<?php echo admin_e(admin_t($messages, 'bank_stats_30_days', '30 days')); ?>"><?php echo $periodCell($row['count_30_days'] ?? 0, $row['amount_30_days'] ?? 0); ?></td>
+                                                                        <td class="admin-bank-stats-cell" data-label="<?php echo admin_e(admin_t($messages, 'bank_stats_90_days', '90 days')); ?>"><?php echo $periodCell($row['count_90_days'] ?? 0, $row['amount_90_days'] ?? 0); ?></td>
+                                                                        <td class="admin-bank-stats-cell" data-label="<?php echo admin_e(admin_t($messages, 'bank_stats_current_year', 'This year')); ?>"><?php echo $periodCell($row['count_current_year'] ?? 0, $row['amount_current_year'] ?? 0); ?></td>
+                                                                        <td class="admin-bank-stats-cell" data-label="<?php echo admin_e(admin_t($messages, 'bank_stats_previous_year', 'Previous year')); ?>"><?php echo $periodCell($row['count_previous_year'] ?? 0, $row['amount_previous_year'] ?? 0); ?></td>
+                                                                    </tr>
+                                                                <?php endforeach; ?>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                <?php endif; ?>
+                                            <?php else: ?>
                                             <div class="admin-wallet-workspace__list-actions mb-3 text-end">
                                                 <a href="/admin/?page=bank-accounts&amp;account_list_page=<?php echo admin_e((string)$bankAccountListPage); ?>&amp;create_account=1" class="btn btn-primary btn-sm">
                                                     <i class="bi bi-plus-circle" aria-hidden="true"></i>
@@ -12067,6 +14111,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <tr>
                                                             <th><?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?></th>
                                                             <th><?php echo admin_e(admin_t($messages, 'col_bank', 'Bank')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'bank_stats_monthly_limit', 'Monthly limit')); ?></th>
                                                             <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
                                                             <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
                                                         </tr>
@@ -12076,13 +14121,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php
                                                             $accountStatusRaw = strtolower(trim((string)($row['status'] ?? '')));
                                                             $activeAssignmentCount = (int)($row['active_assignment_count'] ?? 0);
+                                                            $monthlyLimit = round((float)($row['monthly_limit_amount'] ?? 0), 2);
                                                             $ibanValue = trim((string)($row['iban'] ?? ''));
                                                             $ibanShort = strlen($ibanValue) > 18 ? substr($ibanValue, 0, 8) . '...' . substr($ibanValue, -8) : $ibanValue;
+                                                            $bankEditUrl = '/admin/?page=bank-accounts&account_list_page=' . urlencode((string)$bankAccountListPage) . '&edit_account=' . urlencode((string)($row['id'] ?? 0));
                                                             ?>
                                                             <tr>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_title', 'Title')); ?>">
                                                                     <div class="admin-wallet-address">
-                                                                        <strong><?php echo admin_e((string)(($row['label'] ?? '') !== '' ? $row['label'] : $row['account_holder_name'])); ?></strong>
+                                                                        <a href="<?php echo admin_e($bankEditUrl); ?>" class="admin-bank-account-title">
+                                                                            <strong><?php echo admin_e((string)(($row['label'] ?? '') !== '' ? $row['label'] : $row['account_holder_name'])); ?></strong>
+                                                                        </a>
                                                                         <span><?php echo admin_e((string)($row['account_holder_name'] ?? '')); ?></span>
                                                                     </div>
                                                                 </td>
@@ -12091,6 +14140,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <strong><?php echo admin_e((string)($row['bank_name'] ?? '')); ?></strong>
                                                                         <span><?php echo admin_e($ibanShort !== '' ? $ibanShort : (string)($row['account_number'] ?? '')); ?></span>
                                                                     </div>
+                                                                </td>
+                                                                <td data-label="<?php echo admin_e(admin_t($messages, 'bank_stats_monthly_limit', 'Monthly limit')); ?>">
+                                                                    <?php if ($monthlyLimit > 0): ?>
+                                                                        <strong><?php echo admin_e(app_format_money_value($monthlyLimit, (string)($row['currency_symbol'] ?? ''), (string)($row['currency_code'] ?? ''))); ?></strong>
+                                                                    <?php else: ?>
+                                                                        <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e(admin_t($messages, 'bank_monthly_limit_none', 'No limit')); ?></span>
+                                                                    <?php endif; ?>
                                                                 </td>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
                                                                     <?php if ($accountStatusRaw === 'disabled'): ?>
@@ -12132,6 +14188,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <?php endfor; ?>
                                                     </ul>
                                                 </nav>
+                                            <?php endif; ?>
                                             <?php endif; ?>
                                         </div>
                                     </div>
@@ -12185,6 +14242,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 && in_array($editorAssetCode, ['USDT', 'USDC'], true);
                                             $editorWalletProvider = trim((string)($walletEditor['wallet_provider'] ?? ''));
                                             $editorWalletProviderOptions = admin_crypto_wallet_provider_options($editorWalletProvider);
+                                            $editorHasActiveUsdtCompanionTarget = is_array(admin_crypto_wallet_active_customer_payment_asset($db, 'USDT'));
+                                            $editorHasActiveEthCompanionTarget = is_array(admin_crypto_wallet_active_customer_payment_asset($db, 'ETH'));
+                                            $editorCanOfferEvmCompanion = $walletCreateMode
+                                                && ($editorHasActiveUsdtCompanionTarget || $editorHasActiveEthCompanionTarget);
                                             $walletPaymentRows = !$walletCreateMode && !empty($walletEditor['id'])
                                                 ? admin_crypto_wallet_payment_rows($db, (int)$walletEditor['id'])
                                                 : [];
@@ -12244,7 +14305,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <input type="hidden" name="wallet_id" value="<?php echo admin_e((string)$walletEditor['id']); ?>">
                                                     <input type="hidden" name="wallet_list_page" value="<?php echo admin_e((string)$walletListPage); ?>">
 
-                                                    <div class="row g-3" data-admin-wallet-network-form>
+                                                    <div
+                                                        class="row g-3"
+                                                        data-admin-wallet-network-form
+                                                        data-admin-wallet-lookup-url="/admin/wallets.php?action=lookup_address"
+                                                        data-admin-wallet-exists-default="<?php echo admin_e(admin_t($messages, 'wallet_address_duplicate_default', 'This wallet address already exists.')); ?>"
+                                                        data-admin-wallet-check-error="<?php echo admin_e(admin_t($messages, 'wallet_address_check_error', 'Unable to check wallet address.')); ?>">
                                                         <div class="col-md-6">
                                                             <label class="form-label" for="wallet_asset_id"><?php echo admin_e(admin_t($messages, 'col_asset', 'Asset')); ?></label>
                                                             <select class="form-select" id="wallet_asset_id" name="crypto_asset_id" required data-admin-wallet-asset-select>
@@ -12284,6 +14350,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div class="col-12">
                                                             <label class="form-label" for="wallet_address"><?php echo admin_e(admin_t($messages, 'col_wallet', 'Wallet')); ?></label>
                                                             <input type="text" class="form-control border-red admin-wallet-editor__address-input" id="wallet_address" name="address" value="<?php echo admin_e((string)($walletEditor['address'] ?? '')); ?>" required>
+                                                            <div class="alert alert-info admin-wallet-existing-address-alert mt-2 mb-0" data-admin-wallet-existing-address-alert hidden></div>
                                                         </div>
 
                                                         <div class="col-md-6">
@@ -12305,6 +14372,25 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <div class="col-md-6">
                                                                 <div class="admin-wallet-network-help">
                                                                     <?php echo admin_e(admin_t($messages, 'wallet_network_help', 'For BTC, BNB, SOL and similar coins the network is filled automatically. Stablecoins like USDT or USDC allow network selection per wallet.')); ?>
+                                                                </div>
+                                                            </div>
+                                                        <?php endif; ?>
+
+                                                        <?php if ($editorCanOfferEvmCompanion): ?>
+                                                            <div
+                                                                class="col-12"
+                                                                data-admin-wallet-usdt-companion-row
+                                                                data-admin-wallet-evm-companion-usdt="<?php echo $editorHasActiveUsdtCompanionTarget ? '1' : '0'; ?>"
+                                                                data-admin-wallet-evm-companion-eth="<?php echo $editorHasActiveEthCompanionTarget ? '1' : '0'; ?>"
+                                                                hidden>
+                                                                <div class="form-check form-switch admin-wallet-usdt-companion">
+                                                                    <input class="form-check-input" type="checkbox" role="switch" id="wallet_create_usdt_companion_wallet" name="create_usdt_companion_wallet" value="1" data-admin-wallet-usdt-companion-switch>
+                                                                    <label class="form-check-label" for="wallet_create_usdt_companion_wallet">
+                                                                        <?php echo admin_e(admin_t($messages, 'wallet_create_evm_companion', 'Also add paired EVM wallet for this address')); ?>
+                                                                    </label>
+                                                                    <div class="form-text">
+                                                                        <?php echo admin_e(admin_t($messages, 'wallet_create_evm_companion_help', 'Creates a second ETH/USDT wallet row for the same EVM address when the paired asset is active. Customer assignment is created later when that customer opens a payment request.')); ?>
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                         <?php endif; ?>
@@ -12615,6 +14701,25 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div class="alert alert-info" role="alert">
                                                     <?php echo admin_e(admin_t($messages, 'wallet_pool_low_inline_alert', 'Only 1 free crypto wallet address is left in the database. Add another address now to avoid blocking the next payment request.')); ?>
                                                 </div>
+                                            <?php endif; ?>
+                                            <?php if ($walletGlobalTotal <= 0 && $walletOnboardingVideoRows): ?>
+                                                <section class="admin-module-tutorial admin-module-tutorial--two-columns" aria-labelledby="admin-wallet-onboarding-title">
+                                                    <div class="admin-module-tutorial__header">
+                                                        <h4 id="admin-wallet-onboarding-title"><?php echo admin_e(admin_t($messages, 'wallet_onboarding_title', 'How do I add cryptocurrency wallets?')); ?></h4>
+                                                        <p>
+                                                            <?php echo admin_e(admin_t($messages, 'wallet_onboarding_intro', 'See tips for managing cryptocurrencies in the panel and learn how to add crypto wallets.')); ?>
+                                                            <a href="/admin/?page=help"><?php echo admin_e(admin_t($messages, 'wallet_onboarding_help_link', 'More tutorials are available in HELP.')); ?></a>
+                                                        </p>
+                                                    </div>
+                                                    <div class="admin-module-tutorial__videos">
+                                                        <?php foreach ($walletOnboardingVideoRows as $walletTutorial): ?>
+                                                            <article class="admin-module-tutorial__video">
+                                                                <h5><?php echo admin_e((string)($walletTutorial['title'] ?? '')); ?></h5>
+                                                                <video controls preload="metadata" playsinline src="<?php echo admin_e((string)($walletTutorial['video_url'] ?? '')); ?>"></video>
+                                                            </article>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </section>
                                             <?php endif; ?>
                                             <?php if (!$walletRows): ?>
                                                 <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'wallet_empty_state', 'No wallet addresses added yet.')); ?></div>
@@ -13389,13 +15494,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         if ($emailTemplateRows):
                                             ?>
                                             <div class="admin-table-card">
-                                                <div class="admin-table-card__header">
-                                                    <div>
-                                                        <h3><?php echo admin_e(admin_t($messages, 'email_template_library_title', 'Template library')); ?></h3>
-                                                        <p><?php echo admin_e(admin_t($messages, 'email_template_library_intro', 'Edit subjects and plain-text bodies used by orders, live chat and system notifications.')); ?></p>
-                                                    </div>
-                                                </div>
-
                                                 <div class="table-responsive">
                                                     <table class="table admin-table align-middle">
                                                         <thead>
@@ -14147,145 +16245,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         break;
                                     endif;
 
-                                    if ($helpShowCreate):
-                                        $helpDraft = $helpFormState;
-                                        ?>
-                                        <div class="admin-editor-page">
-                                            <div class="admin-editor-page__header">
-                                                <div>
-                                                    <h3><?php echo admin_e(admin_t($messages, 'help_create_title', 'Add help topic')); ?></h3>
-                                                </div>
-                                                <a href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-outline-dark btn-sm">
-                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_help', 'Back to help')); ?></span>
-                                                </a>
-                                            </div>
-
-                                            <form method="post" class="admin-editor-form">
-                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                <input type="hidden" name="help_list_page" value="<?php echo admin_e((string)$helpListPage); ?>">
-
-                                                <div class="row g-3">
-                                                    <div class="col-md-8">
-                                                        <label class="form-label" for="help_question"><?php echo admin_e(admin_t($messages, 'help_question_label', 'Question')); ?></label>
-                                                        <input type="text" class="form-control" id="help_question" name="question" value="<?php echo admin_e((string)($helpDraft['question'] ?? '')); ?>" required>
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label" for="help_audience"><?php echo admin_e(admin_t($messages, 'help_audience_label', 'Audience')); ?></label>
-                                                        <select class="form-select" id="help_audience" name="audience_code">
-                                                            <?php foreach ($adminHelpAudienceOptions as $audienceCode => $audienceLabel): ?>
-                                                                <option value="<?php echo admin_e($audienceCode); ?>"<?php echo (string)($helpDraft['audience_code'] ?? 'all') === $audienceCode ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'help_audience_' . $audienceCode, $audienceLabel)); ?></option>
-                                                            <?php endforeach; ?>
-                                                        </select>
-                                                    </div>
-                                                    <div class="col-md-8">
-                                                        <label class="form-label" for="help_keywords"><?php echo admin_e(admin_t($messages, 'help_keywords_label', 'Keywords')); ?></label>
-                                                        <input type="text" class="form-control" id="help_keywords" name="keywords" value="<?php echo admin_e((string)($helpDraft['keywords'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'help_keywords_placeholder', 'search words, emails, payments, group chat')); ?>">
-                                                    </div>
-                                                    <div class="col-md-2">
-                                                        <label class="form-label" for="help_sort_order"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?></label>
-                                                        <input type="number" class="form-control" id="help_sort_order" name="sort_order" value="<?php echo admin_e((string)($helpDraft['sort_order'] ?? 100)); ?>">
-                                                    </div>
-                                                    <div class="col-md-2">
-                                                        <label class="form-label" for="help_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
-                                                        <select class="form-select" id="help_status" name="is_active">
-                                                            <option value="1"<?php echo !empty($helpDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
-                                                            <option value="0"<?php echo empty($helpDraft['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
-                                                        </select>
-                                                    </div>
-                                                    <div class="col-12">
-                                                        <label class="form-label" for="help_answer_html"><?php echo admin_e(admin_t($messages, 'help_answer_html_label', 'Answer HTML')); ?></label>
-                                                        <textarea class="form-control" id="help_answer_html" name="answer_html" rows="12" required data-admin-rich-editor="1"><?php echo admin_e((string)($helpDraft['answer_html'] ?? '')); ?></textarea>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'help_answer_html_help', 'You can use short HTML such as p, ul, li, strong, img or links. Keep the answer concise.')); ?></small>
-                                                    </div>
-                                                </div>
-
-                                                <div class="admin-editor-actions">
-                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_create_help_topic">
-                                                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
-                                                        <span><?php echo admin_e(admin_t($messages, 'help_create_button', 'Create help topic')); ?></span>
-                                                    </button>
-                                                </div>
-                                            </form>
-                                        </div>
-                                        <?php
-                                        break;
-                                    endif;
-
-                                    if ($helpEditorId > 0 && is_array($helpEditor) && !empty($helpEditor['id'])):
-                                        ?>
-                                        <div class="admin-editor-page">
-                                            <div class="admin-editor-page__header">
-                                                <div>
-                                                    <h3><?php echo admin_e(admin_t($messages, 'help_editor_title', 'Edit help topic')); ?></h3>
-                                                </div>
-                                                <a href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-outline-dark btn-sm">
-                                                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e(admin_t($messages, 'back_to_help', 'Back to help')); ?></span>
-                                                </a>
-                                            </div>
-
-                                            <form method="post" class="admin-editor-form">
-                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                <input type="hidden" name="help_id" value="<?php echo admin_e((string)$helpEditor['id']); ?>">
-                                                <input type="hidden" name="help_list_page" value="<?php echo admin_e((string)$helpListPage); ?>">
-
-                                                <div class="row g-3">
-                                                    <div class="col-md-8">
-                                                        <label class="form-label" for="help_question"><?php echo admin_e(admin_t($messages, 'help_question_label', 'Question')); ?></label>
-                                                        <input type="text" class="form-control" id="help_question" name="question" value="<?php echo admin_e((string)($helpEditor['question'] ?? '')); ?>" required>
-                                                    </div>
-                                                    <div class="col-md-4">
-                                                        <label class="form-label" for="help_audience"><?php echo admin_e(admin_t($messages, 'help_audience_label', 'Audience')); ?></label>
-                                                        <select class="form-select" id="help_audience" name="audience_code">
-                                                            <?php foreach ($adminHelpAudienceOptions as $audienceCode => $audienceLabel): ?>
-                                                                <option value="<?php echo admin_e($audienceCode); ?>"<?php echo (string)($helpEditor['audience_code'] ?? 'all') === $audienceCode ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'help_audience_' . $audienceCode, $audienceLabel)); ?></option>
-                                                            <?php endforeach; ?>
-                                                        </select>
-                                                    </div>
-                                                    <div class="col-md-8">
-                                                        <label class="form-label" for="help_keywords"><?php echo admin_e(admin_t($messages, 'help_keywords_label', 'Keywords')); ?></label>
-                                                        <input type="text" class="form-control" id="help_keywords" name="keywords" value="<?php echo admin_e((string)($helpEditor['keywords'] ?? '')); ?>" placeholder="<?php echo admin_e(admin_t($messages, 'help_keywords_placeholder', 'search words, emails, payments, group chat')); ?>">
-                                                    </div>
-                                                    <div class="col-md-2">
-                                                        <label class="form-label" for="help_sort_order"><?php echo admin_e(admin_t($messages, 'help_sort_order_label', 'Order')); ?></label>
-                                                        <input type="number" class="form-control" id="help_sort_order" name="sort_order" value="<?php echo admin_e((string)($helpEditor['sort_order'] ?? 100)); ?>">
-                                                    </div>
-                                                    <div class="col-md-2">
-                                                        <label class="form-label" for="help_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
-                                                        <select class="form-select" id="help_status" name="is_active">
-                                                            <option value="1"<?php echo !empty($helpEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_active', 'Active')); ?></option>
-                                                            <option value="0"<?php echo empty($helpEditor['is_active']) ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'status_archived', 'Archived')); ?></option>
-                                                        </select>
-                                                    </div>
-                                                    <div class="col-12">
-                                                        <label class="form-label" for="help_answer_html"><?php echo admin_e(admin_t($messages, 'help_answer_html_label', 'Answer HTML')); ?></label>
-                                                        <textarea class="form-control" id="help_answer_html" name="answer_html" rows="12" required data-admin-rich-editor="1"><?php echo admin_e((string)($helpEditor['answer_html'] ?? '')); ?></textarea>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'help_answer_html_help', 'You can use short HTML such as p, ul, li, strong, img or links. Keep the answer concise.')); ?></small>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_created', 'Created')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($helpEditor['created_at'] ?? ''), 0, 16)); ?>" readonly>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></label>
-                                                        <input type="text" class="form-control" value="<?php echo admin_e(substr((string)($helpEditor['updated_at'] ?? ''), 0, 16)); ?>" readonly>
-                                                    </div>
-                                                </div>
-
-                                                <div class="admin-editor-actions">
-                                                    <button type="submit" class="btn btn-dark btn-lg" name="admin_save_help_topic">
-                                                        <i class="bi bi-floppy" aria-hidden="true"></i>
-                                                        <span><?php echo admin_e(admin_t($messages, 'help_save_button', 'Save help topic')); ?></span>
-                                                    </button>
-                                                </div>
-                                            </form>
-                                        </div>
-                                        <?php
-                                        break;
-                                    endif;
-
-                                    $helpRows = admin_help_topic_rows($db, $helpListPerPage, ($helpListPage - 1) * $helpListPerPage);
                                     $helpVideoRows = admin_help_video_rows($db, false);
                                     ?>
                                     <section class="admin-help-videos-panel">
@@ -14345,90 +16304,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php endif; ?>
                                     </section>
 
-                                    <section class="admin-help-topics-panel">
-                                        <div class="admin-help-topics-panel__header">
-                                            <div>
-                                                <h3><?php echo admin_e(admin_t($messages, 'help_topics_section_title', 'Admin tutorial')); ?></h3>
-                                                <p><?php echo admin_e(admin_t($messages, 'help_topics_section_intro', 'Short written topics shown in the floating help modal.')); ?></p>
-                                            </div>
-                                            <a href="/admin/?page=help&amp;view=create&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-dark">
-                                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
-                                                <span><?php echo admin_e(admin_t($messages, 'help_add_new', 'Add help topic')); ?></span>
-                                            </a>
-                                        </div>
-
-                                    <?php if ($helpRows): ?>
-                                        <div class="table-responsive">
-                                            <table class="table admin-table align-middle">
-                                                <thead>
-                                                    <tr>
-                                                        <th><?php echo admin_e(admin_t($messages, 'help_question_label', 'Question')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'help_audience_label', 'Audience')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($helpRows as $row): ?>
-                                                        <?php
-                                                        $audienceCode = admin_help_topic_normalize_audience((string)($row['audience_code'] ?? 'all'));
-                                                        $audienceLabel = admin_t($messages, 'help_audience_' . $audienceCode, (string)($adminHelpAudienceOptions[$audienceCode] ?? $audienceCode));
-                                                        ?>
-                                                        <tr>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'help_question_label', 'Question')); ?>">
-                                                                <strong><?php echo admin_e((string)($row['question'] ?? '')); ?></strong>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'help_audience_label', 'Audience')); ?>">
-                                                                <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($audienceLabel); ?></span>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
-                                                                <span class="admin-status-pill <?php echo !empty($row['is_active']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
-                                                                    <?php echo admin_e(!empty($row['is_active']) ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'status_archived', 'Archived')); ?>
-                                                                </span>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_updated', 'Updated')); ?>">
-                                                                <?php echo admin_e(substr((string)($row['updated_at'] ?? ''), 0, 16)); ?>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                <?php if ($settingsAdminMode): ?>
-                                                                    <div class="admin-wallet-actions">
-                                                                        <a href="/admin/?page=help&amp;edit_help=<?php echo admin_e((string)$row['id']); ?>&amp;help_list_page=<?php echo admin_e((string)$helpListPage); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>" class="btn btn-dark btn-sm">
-                                                                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
-                                                                        </a>
-                                                                        <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'help_delete_confirm', 'Delete this help topic?')); ?>');">
-                                                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                                                            <input type="hidden" name="help_id" value="<?php echo admin_e((string)$row['id']); ?>">
-                                                                            <input type="hidden" name="help_list_page" value="<?php echo admin_e((string)$helpListPage); ?>">
-                                                                            <button type="submit" class="btn btn-outline-danger btn-sm" name="admin_delete_help_topic" title="<?php echo admin_e(admin_t($messages, 'help_delete_button', 'Delete help topic')); ?>">
-                                                                                <i class="bi bi-trash" aria-hidden="true"></i>
-                                                                            </button>
-                                                                        </form>
-                                                                    </div>
-                                                                <?php endif; ?>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                        <?php if ($helpListTotalPages > 1): ?>
-                                            <nav class="admin-pagination-wrap" aria-label="<?php echo admin_e(admin_t($messages, 'help_pagination', 'Help pages')); ?>">
-                                                <ul class="pagination admin-pagination">
-                                                    <?php for ($pageNumber = 1; $pageNumber <= $helpListTotalPages; $pageNumber++): ?>
-                                                        <li class="page-item<?php echo $pageNumber === $helpListPage ? ' active' : ''; ?>">
-                                                            <a class="page-link" href="/admin/?page=help&amp;help_list_page=<?php echo admin_e((string)$pageNumber); ?><?php echo admin_e($settingsAdminUrlSuffix); ?>"><?php echo admin_e((string)$pageNumber); ?></a>
-                                                        </li>
-                                                    <?php endfor; ?>
-                                                </ul>
-                                            </nav>
-                                        <?php endif; ?>
-                                    <?php else: ?>
-                                        <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
-                                    <?php
-                                    endif;
-                                    ?>
-                                    </section>
                                     <?php
                                     break;
 
@@ -14475,7 +16350,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                         $nativeSymbol = strtoupper((string)($networkEffectiveOption['native_symbol'] ?? ''));
                                         $networkAssets = [];
-                                        if ($nativeSymbol !== '' && (!isset($mixerActiveCryptoCodes[$nativeSymbol]) || !empty($mixerActiveCryptoCodes[$nativeSymbol]))) {
+                                        if ($nativeSymbol !== '') {
                                             $networkAssets[] = [
                                                 'key' => 'native',
                                                 'type' => 'native',
@@ -14486,18 +16361,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             ];
                                         }
 
-                                        if (!empty($mixerActiveCryptoCodes['USDT'])) {
-                                            $usdtContract = (string)($mixerVaultTokenContracts[$networkKeyString][$networkMode]['USDT'] ?? '');
-                                            if ($usdtContract !== '') {
-                                                $networkAssets[] = [
-                                                    'key' => 'USDT',
-                                                    'type' => 'token',
-                                                    'symbol' => 'USDT',
-                                                    'label' => 'USDT',
-                                                    'address' => $usdtContract,
-                                                    'decimals' => 6,
-                                                ];
-                                            }
+                                        $usdtContract = (string)($mixerVaultTokenContracts[$networkKeyString][$networkMode]['USDT'] ?? '');
+                                        if ($usdtContract !== '') {
+                                            $networkAssets[] = [
+                                                'key' => 'USDT',
+                                                'type' => 'token',
+                                                'symbol' => 'USDT',
+                                                'label' => 'USDT',
+                                                'address' => $usdtContract,
+                                                'decimals' => $networkKeyString === 'bsc' ? 18 : 6,
+                                            ];
                                         }
 
                                         $mixerVaultOwnerNetworks[] = [
@@ -14511,26 +16384,119 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             'rpcUrl' => $networkRpc,
                                             'explorerUrl' => preg_replace('/\/tx\/?$/i', '', (string)($networkEffectiveOption['explorer_tx_url'] ?? '')) ?: '',
                                             'available' => !empty($networkOption['available']),
+                                            'enabled' => in_array($networkKeyString, $mixerAllowedNetworks, true),
                                             'assets' => $networkAssets,
                                         ];
                                     }
+                                    $mixerPayoutRuntimeAvailable = admin_mixer_crypto_runtime_available();
+                                    $mixerPayoutExecutorConfigured = $settingsAdminMode
+                                        ? ($mixerPayoutRuntimeAvailable && admin_mixer_payout_signer_is_configured($appSettings) && admin_mixer_payout_executor_is_configured($appSettings))
+                                        : false;
+                                    $mixerPayoutExecutorGasAlerts = [];
+                                    if ($settingsAdminMode && $mixerAutoPayoutEnabled && $mixerPayoutExecutorConfigured) {
+                                        $executorAddress = admin_mixer_private_key_to_address(admin_mixer_payout_executor_private_key($appSettings));
+                                        if ($executorAddress !== '') {
+	                                            foreach ($mixerVaultOwnerNetworks as $ownerNetwork) {
+	                                                $networkRpc = trim((string)($ownerNetwork['rpcUrl'] ?? ''));
+	                                                $networkVault = trim((string)($ownerNetwork['vault'] ?? ''));
+	                                                $networkLabel = trim((string)($ownerNetwork['label'] ?? $ownerNetwork['key'] ?? ''));
+	                                                $nativeSymbol = strtoupper(trim((string)($ownerNetwork['nativeSymbol'] ?? 'POL')));
+	                                                if (empty($ownerNetwork['enabled']) || $networkRpc === '' || !preg_match('/^0x[a-fA-F0-9]{40}$/', $networkVault)) {
+	                                                    continue;
+	                                                }
+
+                                                $executorGasState = admin_mixer_native_pool_state($networkRpc, $executorAddress, $nativeSymbol);
+                                                if (empty($executorGasState['ok'])) {
+                                                    $mixerPayoutExecutorGasAlerts[] = [
+                                                        'type' => 'warning',
+                                                        'title' => admin_t($messages, 'settings_mixer_payout_executor_gas_unknown_title', 'Payout executor gas balance is unavailable'),
+                                                        'message' => admin_t(
+                                                            $messages,
+                                                            'settings_mixer_payout_executor_gas_unknown_message',
+                                                            'Unable to read executor gas balance on {network}. Check RPC before relying on automatic payouts.',
+                                                            ['network' => $networkLabel !== '' ? $networkLabel : strtoupper((string)($ownerNetwork['key'] ?? 'network'))]
+                                                        ),
+                                                    ];
+                                                    continue;
+                                                }
+
+                                                $gasBalance = (float)($executorGasState['balance'] ?? 0.0);
+                                                $gasLabel = (string)($executorGasState['label'] ?? admin_mixer_format_pool_balance($gasBalance, $nativeSymbol));
+                                                if ($gasBalance <= 0.000001) {
+                                                    $mixerPayoutExecutorGasAlerts[] = [
+                                                        'type' => 'danger',
+                                                        'title' => admin_t($messages, 'settings_mixer_payout_executor_no_gas_title', 'Payout executor has no gas'),
+                                                        'message' => admin_t(
+                                                            $messages,
+                                                            'settings_mixer_payout_executor_no_gas_message',
+                                                            'Executor balance on {network} is {balance}. Add {symbol} to the executor wallet before automatic payouts can send transactions.',
+                                                            ['network' => $networkLabel, 'balance' => $gasLabel, 'symbol' => $nativeSymbol]
+                                                        ),
+                                                    ];
+                                                } elseif ($gasBalance < 0.05) {
+                                                    $mixerPayoutExecutorGasAlerts[] = [
+                                                        'type' => 'warning',
+                                                        'title' => admin_t($messages, 'settings_mixer_payout_executor_low_gas_title', 'Payout executor gas is low'),
+                                                        'message' => admin_t(
+                                                            $messages,
+                                                            'settings_mixer_payout_executor_low_gas_message',
+                                                            'Executor balance on {network} is {balance}. Add more {symbol} for stable automatic payouts.',
+                                                            ['network' => $networkLabel, 'balance' => $gasLabel, 'symbol' => $nativeSymbol]
+                                                        ),
+                                                    ];
+                                                }
+                                            }
+                                        }
+                                    }
                                     $mixerVaultOwnerConfig = [
+                                        'payoutExecutorConfigured' => $mixerPayoutExecutorConfigured,
                                         'networks' => $mixerVaultOwnerNetworks,
                                         'labels' => [
                                             'connect' => admin_t($messages, 'settings_mixer_owner_connect', 'Connect owner wallet'),
                                             'connected' => admin_t($messages, 'settings_mixer_owner_connected', 'Wallet connected'),
+                                            'disconnect' => admin_t($messages, 'settings_mixer_owner_disconnect', 'Disconnect'),
+                                            'disconnected' => admin_t($messages, 'settings_mixer_owner_disconnected', 'Wallet disconnected.'),
                                             'notOwner' => admin_t($messages, 'settings_mixer_owner_not_owner', 'Connected wallet is not the vault owner. Controls are locked.'),
                                             'ownerReady' => admin_t($messages, 'settings_mixer_owner_ready', 'Owner detected. Vault controls are unlocked.'),
                                             'noWallet' => admin_t($messages, 'settings_mixer_owner_no_wallet', 'No EVM wallet extension detected.'),
+                                            'detectingWallets' => admin_t($messages, 'settings_mixer_owner_detecting_wallets', 'Detecting wallets...'),
                                             'txSent' => admin_t($messages, 'settings_mixer_owner_tx_sent', 'Transaction sent'),
                                             'txFailed' => admin_t($messages, 'settings_mixer_owner_tx_failed', 'Transaction was rejected or failed.'),
                                             'refreshFailed' => admin_t($messages, 'settings_mixer_owner_refresh_failed', 'Unable to read vault data. Check RPC, network and vault address.'),
                                             'invalidAmount' => admin_t($messages, 'settings_mixer_owner_invalid_amount', 'Enter a valid amount.'),
                                             'invalidRecipient' => admin_t($messages, 'settings_mixer_owner_invalid_recipient', 'Enter a valid recipient address.'),
+                                            'invalidSigner' => admin_t($messages, 'settings_mixer_owner_invalid_signer', 'Enter a valid payout signer address.'),
                                             'confirmWithdrawAll' => admin_t($messages, 'settings_mixer_owner_confirm_withdraw_all', 'Withdraw the full selected balance from the vault?'),
+                                            'assetConfigEnabled' => admin_t($messages, 'settings_mixer_owner_asset_config_enabled_label', 'Enabled'),
+                                            'assetConfigDisabled' => admin_t($messages, 'settings_mixer_owner_asset_config_disabled_label', 'Disabled'),
+                                            'readyPayoutOwnerRequired' => admin_t($messages, 'settings_mixer_ready_payout_owner_required', 'Connect the vault owner wallet with gas to send this payout manually.'),
+                                            'readyPayoutProcessing' => admin_t($messages, 'settings_mixer_ready_payout_processing', 'Preparing payout...'),
+                                            'readyPayoutDone' => admin_t($messages, 'settings_mixer_ready_payout_done', 'Payout sent. The order status will refresh after the transaction is confirmed.'),
+                                            'payoutExplorer' => admin_t($messages, 'settings_mixer_payout_history_explorer', 'Explorer'),
+                                        'payoutExecutorMissing' => !$mixerPayoutRuntimeAvailable
+                                            ? admin_mixer_crypto_runtime_missing_message()
+                                            : admin_t($messages, 'settings_mixer_payout_executor_missing_title', 'Payout executor is not configured'),
                                         ],
                                     ];
                                     $mixerVaultOwnerConfigJson = json_encode($mixerVaultOwnerConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                                    $mixerReadyPayoutOrders = $settingsAdminMode
+                                        ? admin_mixer_ready_payout_orders($db, $appSettings, $messages, 12)
+                                        : [];
+                                    $mixerRecentPayoutOrders = $settingsAdminMode
+                                        ? admin_mixer_recent_payout_orders($db, $appSettings, $messages, 12)
+                                        : [];
+                                    $mixerReadyPayoutButtonTemplate = admin_t($messages, 'settings_mixer_ready_payout_button', 'Withdraw {asset}');
+                                    $mixerReadyPayoutFormatAmount = static function ($amount, string $asset): string {
+                                        $amountNumber = (float)str_replace(',', '.', (string)$amount);
+                                        $asset = strtoupper(trim($asset));
+                                        $decimals = $asset === 'BTC' ? 8 : ($asset === 'DOGE' ? 2 : ($asset === 'SOL' ? 9 : 6));
+                                        $formatted = rtrim(rtrim(number_format(max(0.0, $amountNumber), $decimals, '.', ''), '0'), '.');
+                                        return ($formatted !== '' ? $formatted : '0') . ' ' . $asset;
+                                    };
+                                    $mixerReadyPayoutCompact = static function (string $value): string {
+                                        $value = trim($value);
+                                        return strlen($value) > 16 ? substr($value, 0, 8) . '...' . substr($value, -6) : $value;
+                                    };
                                     ?>
                                     <div class="admin-settings-tabs-wrap">
                                         <div class="admin-settings-tabs-scroller">
@@ -14541,7 +16507,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <?php if ($settingsAdminMode): ?>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-smtp-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-smtp-pane" type="button" role="tab" aria-controls="admin-settings-smtp-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-runner-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-runner-pane" type="button" role="tab" aria-controls="admin-settings-runner-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_maintenance_runner_title', 'Maintenance runner')); ?></button></li>
-                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-backup-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-backup-pane" type="button" role="tab" aria-controls="admin-settings-backup-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></button></li>
+                                                <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-backup-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-backup-pane" type="button" role="tab" aria-controls="admin-settings-backup-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_title', 'Admin panel payment')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-change-log-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-change-log-pane" type="button" role="tab" aria-controls="admin-settings-change-log-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_change_log_title', 'Wprowadzone zmiany')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-danger-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-danger-pane" type="button" role="tab" aria-controls="admin-settings-danger-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_danger_zone_title', 'Safety zone')); ?></button></li>
                                                 <?php endif; ?>
@@ -14557,6 +16523,67 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-settings-access__copy">
                                             <h3><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></h3>
                                             <p><?php echo admin_e(admin_t($messages, 'settings_site_intro', 'Update the public page name, URL, support email and basic SEO data used across the service.')); ?></p>
+                                        </div>
+
+                                        <div class="admin-settings-table-wrap admin-settings-backup-download mb-4">
+                                            <div class="admin-settings-access__copy">
+                                                <h3><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></h3>
+                                                <p><?php echo admin_e(admin_t($messages, 'settings_database_backup_latest_intro', 'Create a new SQL backup or download the latest ready database copy.')); ?></p>
+                                            </div>
+                                            <form
+                                                method="post"
+                                                class="admin-settings-backup-download__generator"
+                                                data-admin-database-backup-form
+                                                data-running-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_running', 'Creating SQL backup...')); ?>"
+                                                data-success-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_success', 'SQL backup created successfully.')); ?>"
+                                                data-error-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.')); ?>">
+                                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                                <div class="admin-settings-backup-download__controls">
+                                                    <button type="submit" class="btn btn-danger btn-md" name="admin_download_database_backup" data-admin-database-backup-submit><?php echo admin_e(admin_t($messages, 'settings_database_backup_button', 'Create SQL backup')); ?></button>
+                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_help', 'Only one latest SQL backup is kept on the server. Creating a new version replaces the previous file.')); ?></small>
+                                                </div>
+                                                <div hidden data-admin-database-backup-progress>
+                                                    <div class="admin-settings-backup-progress">
+                                                        <div class="progress" role="progressbar" aria-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_progress_label', 'Backup progress')); ?>" aria-valuemin="0" aria-valuemax="100">
+                                                            <div class="progress-bar bg-danger" style="width: 0%" data-admin-database-backup-progress-bar>0%</div>
+                                                        </div>
+                                                        <div class="admin-settings-backup-progress__status" data-admin-database-backup-status><?php echo admin_e(admin_t($messages, 'settings_database_backup_progress_idle', 'Ready to create a new SQL backup.')); ?></div>
+                                                    </div>
+                                                </div>
+                                            </form>
+                                            <div class="table-responsive">
+                                                <table class="table admin-table align-middle">
+                                                    <thead>
+                                                        <tr>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_name', 'Name')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
+                                                            <th><?php echo admin_e(admin_t($messages, 'col_size', 'Size')); ?></th>
+                                                            <th class="text-end"><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody
+                                                        data-admin-database-backup-latest-body
+                                                        data-empty-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_empty', 'No SQL backup has been created yet.')); ?>"
+                                                        data-download-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_download_latest', 'Download')); ?>">
+                                                        <?php if (!empty($manualDatabaseBackupInfo['exists'])): ?>
+                                                            <tr>
+                                                                <td><?php echo admin_e((string)($manualDatabaseBackupInfo['download_name'] ?? 'latest-database-backup.sql')); ?></td>
+                                                                <td><?php echo admin_e(!empty($manualDatabaseBackupInfo['generated_at']) ? date('d.m.Y H:i:s', strtotime((string)$manualDatabaseBackupInfo['generated_at'])) : ''); ?></td>
+                                                                <td><?php echo admin_e((string)($manualDatabaseBackupInfo['size_label'] ?? '0 B')); ?></td>
+                                                                <td class="text-end">
+                                                                    <a class="btn btn-success btn-sm" href="/admin/?page=settings&amp;download_latest_database_backup=1&amp;_csrf=<?php echo admin_e(rawurlencode($csrfToken)); ?>">
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_database_backup_download_latest', 'Download')); ?>
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        <?php else: ?>
+                                                            <tr>
+                                                                <td colspan="4" class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_empty', 'No SQL backup has been created yet.')); ?></td>
+                                                            </tr>
+                                                        <?php endif; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
                                         </div>
 
                                         <?php if (!$settingsAdminMode && $settingsAdminModeHintVisible): ?>
@@ -14858,6 +16885,31 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled_help', 'If ON, users still can generate bank and crypto payment requests, but a yellow warning says the service is in test mode and they should not send any money.')); ?></small>
                                                 </div>
+                                                <?php if ($settingsAdminMode): ?>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="crypto_auto_accept_enabled" name="crypto_auto_accept_enabled"<?php echo admin_crypto_auto_accept_enabled($appSettings) ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="crypto_auto_accept_enabled"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_enabled', 'Crypto payment auto-accept')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_enabled_help', 'If ON, maintenance can automatically accept clear crypto payments that arrive shortly after the request, match the configured amount threshold and use an unambiguous wallet.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="crypto_auto_accept_window_minutes"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_window_minutes', 'Auto-accept window')); ?></label>
+                                                        <div class="input-group">
+                                                            <input type="number" class="form-control" id="crypto_auto_accept_window_minutes" name="crypto_auto_accept_window_minutes" min="5" max="240" step="1" value="<?php echo admin_e((string)max(5, min(240, (int)($appSettings['crypto_auto_accept_window_minutes'] ?? 60)))); ?>">
+                                                            <span class="input-group-text">min</span>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_window_minutes_help', 'Only transactions detected after the request and inside this window can be accepted automatically.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="crypto_auto_accept_min_amount_percent"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_min_amount_percent', 'Minimum paid amount')); ?></label>
+                                                        <div class="input-group">
+                                                            <input type="number" class="form-control" id="crypto_auto_accept_min_amount_percent" name="crypto_auto_accept_min_amount_percent" min="50" max="100" step="1" value="<?php echo admin_e((string)max(50, min(100, (int)($appSettings['crypto_auto_accept_min_amount_percent'] ?? 80)))); ?>">
+                                                            <span class="input-group-text">%</span>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_min_amount_percent_help', 'Example: 80% means a 20.00 request can be auto-accepted from 16.00 paid, but the customer balance receives the real detected amount only.')); ?></small>
+                                                    </div>
+                                                <?php endif; ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="crypto_daily_backup_enabled" name="crypto_daily_backup_enabled"<?php echo admin_crypto_daily_backup_enabled($appSettings) ? ' checked' : ''; ?>>
@@ -14923,6 +16975,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_bank_account_shared_assignments_enabled_help', 'If OFF, one bank account can be assigned to one user only.')); ?></small>
                                                 </div>
+                                                <?php if ($billingSwitchCanManage): ?>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="billing_enabled" name="billing_enabled"<?php echo $billingEnabled ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="billing_enabled"><?php echo admin_e(admin_t($messages, 'settings_billing_enabled', 'Billing module')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_billing_enabled_help', 'If OFF, Billing is hidden from the sidebar and cannot be opened. Only the main admin account can change this global switch.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="billing_auto_issue_email_enabled" name="billing_auto_issue_email_enabled"<?php echo $billingAutoIssueEmailEnabled ? ' checked' : ''; ?><?php echo !$billingEnabled ? ' disabled' : ''; ?>>
+                                                            <label class="form-check-label" for="billing_auto_issue_email_enabled"><?php echo admin_e(admin_t($messages, 'settings_billing_auto_issue_email_enabled', 'Billing document option on order approval')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_billing_auto_issue_email_enabled_help', 'When ON, order approval shows an optional checkbox for issuing and emailing a paid document. The checkbox remains OFF by default.')); ?></small>
+                                                    </div>
+                                                <?php endif; ?>
                                                 <?php if ($settingsAdminMode): ?>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
@@ -14968,6 +17036,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             placeholder="LI.FI API key">
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_api_key_help', 'Optional. If provided, the key is used by the widget in the browser.')); ?></small>
                                                     </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="swap_converter_default_from_asset"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_default_from_asset', 'Bridge default Asset A')); ?></label>
+                                                        <select class="form-select" id="swap_converter_default_from_asset" name="swap_converter_default_from_asset">
+                                                            <?php foreach ($swapConverterDefaultAssetOptions as $assetKey => $assetOption): ?>
+                                                                <option value="<?php echo admin_e((string)$assetKey); ?>"<?php echo $swapConverterDefaultFromAsset === (string)$assetKey ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_default_from_asset_help', 'Starting Send asset for LI.FI Bridge. Choose native token or USDT on Ethereum, Polygon or BNB Smart Chain.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="swap_converter_default_to_asset"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_default_to_asset', 'Bridge default Asset B')); ?></label>
+                                                        <select class="form-select" id="swap_converter_default_to_asset" name="swap_converter_default_to_asset">
+                                                            <?php foreach ($swapConverterDefaultAssetOptions as $assetKey => $assetOption): ?>
+                                                                <option value="<?php echo admin_e((string)$assetKey); ?>"<?php echo $swapConverterDefaultToAsset === (string)$assetKey ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_default_to_asset_help', 'Starting Receive asset for LI.FI Bridge. If its chain is hidden, the widget falls back to the first visible supported chain.')); ?></small>
+                                                    </div>
                                                     <div class="col-12">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_chains', 'Visible LI.FI chains')); ?></label>
                                                         <div class="row g-2">
@@ -15010,7 +17100,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12 admin-feature-settings__body" id="settingsHinkalPrivateSendBody" data-admin-feature-settings-body="hinkal_private_send_enabled"<?php echo $hinkalPrivateSendEnabled ? '' : ' hidden'; ?>>
                                                         <div class="row g-3">
-                                                    <div class="col-12">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="hinkal_private_send_input_asset"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_input_asset', 'Asset A (sender pays)')); ?></label>
+                                                        <select class="form-select" id="hinkal_private_send_input_asset" name="hinkal_private_send_input_asset">
+                                                            <option value="POL"<?php echo $hinkalPrivateSendInputAsset === 'POL' ? ' selected' : ''; ?>>POL (Polygon)</option>
+                                                            <option value="USDT"<?php echo $hinkalPrivateSendInputAsset === 'USDT' ? ' selected' : ''; ?>>USDT (Polygon)</option>
+                                                        </select>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_input_asset_help', 'Default: POL. POL is converted to USDT before the private Hinkal payout.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_output_asset', 'Asset B (recipient gets)')); ?></label>
+                                                        <input type="text" class="form-control" value="USDT (Polygon)" disabled>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_output_asset_help', 'The private payout asset is always USDT on Polygon.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
                                                         <label class="form-label" for="hinkal_private_send_fee_wallet"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_wallet', 'Hinkal fee wallet (Polygon)')); ?></label>
                                                         <input
                                                             type="text"
@@ -15019,7 +17122,40 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             name="hinkal_private_send_fee_wallet"
                                                             value="<?php echo admin_e($hinkalPrivateSendFeeWallet); ?>"
                                                             placeholder="0x...">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_wallet_help', 'Required for the 1% Private Send fee. Use a Polygon/EVM wallet that can receive USDT on Polygon.')); ?></small>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_wallet_help', 'Required when the Hinkal fee is greater than zero. Use a Polygon/EVM wallet that can receive USDT on Polygon.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="hinkal_private_send_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_percent', 'Hinkal fee (%)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            class="form-control"
+                                                            id="hinkal_private_send_fee_percent"
+                                                            name="hinkal_private_send_fee_percent"
+                                                            min="0"
+                                                            max="10"
+                                                            step="0.01"
+                                                            value="<?php echo admin_e(number_format($hinkalPrivateSendFeePercent, 2, '.', '')); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_percent_help', 'This fee is independent from LI.FI and is split to the configured fee wallet.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="hinkal_private_send_notification_email"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_notification_email', 'Hinkal notification email')); ?></label>
+                                                        <input
+                                                            type="email"
+                                                            class="form-control"
+                                                            id="hinkal_private_send_notification_email"
+                                                            name="hinkal_private_send_notification_email"
+                                                            value="<?php echo admin_e($hinkalPrivateSendNotificationEmail); ?>"
+                                                            placeholder="support@example.com">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_notification_email_help', 'Notifications are sent after the deposit is submitted and after the private payout completes or fails.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6 d-flex align-items-center">
+                                                        <div>
+                                                            <div class="form-check form-switch">
+                                                                <input class="form-check-input" type="checkbox" role="switch" id="hinkal_private_send_show_fee_details" name="hinkal_private_send_show_fee_details"<?php echo $hinkalPrivateSendShowFeeDetails ? ' checked' : ''; ?>>
+                                                                <label class="form-check-label" for="hinkal_private_send_show_fee_details"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_show_fee_details', 'Show Hinkal fee details')); ?></label>
+                                                            </div>
+                                                            <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_show_fee_details_help', 'If OFF, the sender sees only the recipient amount and its approximate USD value.')); ?></small>
+                                                        </div>
                                                     </div>
                                                         </div>
                                                     </div>
@@ -15103,12 +17239,74 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
                                                             <input class="form-check-input" type="checkbox" role="switch" id="mixer_enabled" name="mixer_enabled" data-admin-feature-settings-toggle aria-controls="settingsMixerBody"<?php echo $mixerEnabled ? ' checked' : ''; ?>>
-                                                            <label class="form-check-label" for="mixer_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled', 'Swapper (BTC/DOGE -> Polygon vault)')); ?></label>
+                                                            <label class="form-check-label" for="mixer_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled', 'Swapper (BTC/DOGE/SOL -> EVM vault)')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled_help', 'If OFF, the internal Swapper tab is hidden from the Swap Converter page.')); ?></small>
                                                     </div>
                                                     <div class="col-12 admin-feature-settings__body" id="settingsMixerBody" data-admin-feature-settings-body="mixer_enabled"<?php echo $mixerEnabled ? '' : ' hidden'; ?>>
                                                         <div class="row g-3">
+                                                    <?php if ($settingsAdminMode): ?>
+                                                        <div class="col-12">
+                                                            <div class="admin-mixer-readiness">
+                                                                <div class="admin-mixer-readiness__head">
+                                                                    <strong><?php echo admin_e(admin_t($messages, 'settings_mixer_readiness_title', 'Swapper readiness')); ?></strong>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_readiness_help', 'Quick status for each payout network before you use Swapper.')); ?></span>
+                                                                </div>
+                                                                <div class="admin-mixer-readiness__grid">
+                                                                    <?php foreach ($mixerNetworkOptions as $networkKey => $networkOption): ?>
+                                                                        <?php
+                                                                        $networkKeyString = (string)$networkKey;
+                                                                        $networkModeValue = $networkKeyString === 'bsc' ? $mixerBscNetworkMode : $mixerPolygonNetworkMode;
+                                                                        $networkEffectiveOption = admin_mixer_effective_network_option($networkKeyString, $networkModeValue);
+                                                                        $networkVault = $networkKeyString === 'bsc'
+                                                                            ? ($networkModeValue === 'testnet' ? $mixerBscTestnetVaultContract : $mixerBscVaultContract)
+                                                                            : ($networkModeValue === 'testnet' ? $mixerPolygonTestnetVaultContract : $mixerPolygonVaultContract);
+                                                                        $networkRpc = $networkKeyString === 'bsc'
+                                                                            ? ($networkModeValue === 'testnet' ? $mixerBscTestnetRpcUrl : $mixerBscRpcUrl)
+                                                                            : ($networkModeValue === 'testnet' ? $mixerPolygonTestnetRpcUrl : $mixerPolygonRpcUrl);
+                                                                        if ($networkRpc === '') {
+                                                                            $networkRpc = admin_mixer_default_rpc_url($networkKeyString, $networkModeValue);
+                                                                        }
+                                                                        $networkEnabled = in_array($networkKeyString, $mixerAllowedNetworks, true);
+                                                                        $vaultReady = preg_match('/^0x[a-fA-F0-9]{40}$/', $networkVault) === 1;
+                                                                        $rpcReady = $networkRpc !== '';
+                                                                        $networkOutputAssets = array_values(array_filter($mixerAllowedOutputAssets, static fn($assetKey): bool => admin_mixer_network_key_for_output_asset((string)$assetKey) === $networkKeyString));
+                                                                        $networkAssetLabels = [];
+                                                                        foreach ($networkOutputAssets as $assetKey) {
+                                                                            $assetOption = $mixerOutputAssetOptions[(string)$assetKey] ?? [];
+                                                                            $networkAssetLabels[] = (string)($assetOption['symbol'] ?? $assetKey);
+                                                                        }
+                                                                        $primaryOutputAsset = (string)($networkOutputAssets[0] ?? ($networkKeyString === 'bsc' ? 'BSC_BNB' : 'POLYGON_POL'));
+                                                                        $readinessPoolState = $vaultReady && $rpcReady
+                                                                            ? admin_mixer_pool_state_for_output_asset($networkRpc, $networkVault, $primaryOutputAsset)
+                                                                            : ['ok' => false, 'label' => '0'];
+                                                                        $networkReady = $mixerEnabled && $networkEnabled && $vaultReady && $rpcReady && !empty($readinessPoolState['ok']) && $mixerPayoutExecutorConfigured && $mixerMaxPayoutUsd > 0 && $mixerDailyPayoutLimitUsd > 0 && $networkOutputAssets !== [];
+                                                                        ?>
+                                                                        <div class="admin-mixer-readiness__card<?php echo $networkReady ? ' is-ready' : ' is-warning'; ?>">
+                                                                            <div class="admin-mixer-readiness__title">
+                                                                                <?php if (!empty($networkOption['icon'])): ?>
+                                                                                    <img src="<?php echo admin_e((string)$networkOption['icon']); ?>" alt="">
+                                                                                <?php endif; ?>
+                                                                                <strong><?php echo admin_e((string)($networkEffectiveOption['label'] ?? $networkKeyString)); ?></strong>
+                                                                                <span><?php echo admin_e($networkModeValue); ?></span>
+                                                                            </div>
+                                                                            <div class="admin-mixer-readiness__badges">
+                                                                                <span class="<?php echo $networkEnabled ? 'is-ok' : 'is-off'; ?>"><?php echo admin_e($networkEnabled ? 'Network ON' : 'Network OFF'); ?></span>
+                                                                                <span class="<?php echo $vaultReady ? 'is-ok' : 'is-off'; ?>"><?php echo admin_e($vaultReady ? 'Vault OK' : 'Vault missing'); ?></span>
+                                                                                <span class="<?php echo $rpcReady ? 'is-ok' : 'is-off'; ?>"><?php echo admin_e($rpcReady ? 'RPC OK' : 'RPC missing'); ?></span>
+                                                                                <span class="<?php echo $mixerPayoutExecutorConfigured ? 'is-ok' : 'is-off'; ?>"><?php echo admin_e($mixerPayoutExecutorConfigured ? 'Signer/executor OK' : 'Signer/executor missing'); ?></span>
+                                                                                <span class="<?php echo $mixerMaxPayoutUsd > 0 && $mixerDailyPayoutLimitUsd > 0 ? 'is-ok' : 'is-off'; ?>"><?php echo admin_e('Limits ' . number_format($mixerMaxPayoutUsd, 2, '.', '') . ' / ' . number_format($mixerDailyPayoutLimitUsd, 2, '.', '') . ' USD'); ?></span>
+                                                                            </div>
+                                                                            <div class="admin-mixer-readiness__meta">
+                                                                                <span><?php echo admin_e(admin_t($messages, 'settings_mixer_readiness_assets', 'Assets')); ?>: <strong><?php echo admin_e($networkAssetLabels !== [] ? implode(', ', array_unique($networkAssetLabels)) : '-'); ?></strong></span>
+                                                                                <span><?php echo admin_e(admin_t($messages, 'settings_mixer_readiness_pool', 'Pool')); ?>: <strong><?php echo admin_e((string)($readinessPoolState['label'] ?? '-')); ?></strong></span>
+                                                                            </div>
+                                                                        </div>
+                                                                    <?php endforeach; ?>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    <?php endif; ?>
                                                     <div class="col-md-6">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_mixer_input_assets', 'Input assets')); ?></label>
                                                         <div class="row g-2">
@@ -15160,12 +17358,38 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php endforeach; ?>
                                                         </div>
                                                     </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="mixer_default_input_asset"><?php echo admin_e(admin_t($messages, 'settings_mixer_default_input_asset', 'Swapper default Asset A')); ?></label>
+                                                        <select class="form-select" id="mixer_default_input_asset" name="mixer_default_input_asset">
+                                                            <?php foreach ($mixerInputAssetOptions as $assetKey => $assetOption): ?>
+                                                                <option value="<?php echo admin_e((string)$assetKey); ?>"<?php echo $mixerDefaultInputAsset === (string)$assetKey ? ' selected' : ''; ?>>
+                                                                    <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_default_input_asset_help', 'Starting deposit asset in Swapper. It must also be enabled above and have a public deposit address.')); ?></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label" for="mixer_default_output_asset"><?php echo admin_e(admin_t($messages, 'settings_mixer_default_output_asset', 'Swapper default Asset B')); ?></label>
+                                                        <select class="form-select" id="mixer_default_output_asset" name="mixer_default_output_asset">
+                                                            <?php foreach ($mixerOutputAssetOptions as $assetKey => $assetOption): ?>
+                                                                <?php $mixerDefaultOutputAvailable = !empty($assetOption['available']); ?>
+                                                                <option
+                                                                    value="<?php echo admin_e((string)$assetKey); ?>"
+                                                                    <?php echo $mixerDefaultOutputAsset === (string)$assetKey ? ' selected' : ''; ?>
+                                                                    <?php echo !$mixerDefaultOutputAvailable ? ' disabled' : ''; ?>>
+                                                                    <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_default_output_asset_help', 'Starting payout asset in Swapper. Disabled networks, missing vaults or unavailable assets fall back to the first available payout asset.')); ?></small>
+                                                    </div>
                                                     <div class="col-12">
                                                         <div class="admin-mixer-settings-networks">
                                                             <div class="admin-mixer-settings-networks__head">
                                                                 <div>
                                                                     <h4><?php echo admin_e(admin_t($messages, 'settings_mixer_networks', 'Swapper networks')); ?></h4>
-                                                                    <p><?php echo admin_e(admin_t($messages, 'settings_mixer_networks_help', 'Choose payout networks and keep each network vault/RPC configuration in one place. Polygon is active now; BSC is prepared for future support.')); ?></p>
+                                                                    <p><?php echo admin_e(admin_t($messages, 'settings_mixer_networks_help', 'Choose payout networks and keep each network vault/RPC configuration in one place. Polygon and BSC use separate vault contracts and gas balances.')); ?></p>
                                                                 </div>
                                                             </div>
                                                             <div class="form-check form-switch admin-mixer-settings-networks__visibility">
@@ -15335,16 +17559,30 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <section
                                                             class="admin-mixer-owner-tools"
                                                             data-admin-mixer-owner-tools
+                                                            data-csrf="<?php echo admin_e($csrfToken); ?>"
+                                                            data-payout-ajax-url="/admin/?page=swap-converter"
                                                             data-config="<?php echo admin_e($mixerVaultOwnerConfigJson !== false ? $mixerVaultOwnerConfigJson : '{}'); ?>">
                                                             <div class="admin-mixer-owner-tools__head">
                                                                 <div>
                                                                     <h4><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_title', 'Vault owner controls')); ?></h4>
                                                                     <p><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_intro', 'Connect the owner wallet to pause the vault, add liquidity or withdraw funds without opening Remix.')); ?></p>
                                                                 </div>
-                                                                <button type="button" class="btn btn-dark btn-sm" data-admin-vault-connect>
-                                                                    <i class="bi bi-wallet2" aria-hidden="true"></i>
-                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_connect', 'Connect owner wallet')); ?></span>
-                                                                </button>
+                                                                <div class="admin-mixer-owner-tools__wallet-picker">
+                                                                    <label class="form-label" for="admin_vault_wallet_provider"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_wallet_provider', 'Wallet provider')); ?></label>
+                                                                    <select class="form-select form-select-sm" id="admin_vault_wallet_provider" data-admin-vault-wallet-provider>
+                                                                        <option value=""><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_detecting_wallets', 'Detecting wallets...')); ?></option>
+                                                                    </select>
+                                                                    <div class="admin-mixer-owner-tools__wallet-actions">
+                                                                        <button type="button" class="btn btn-dark btn-sm" data-admin-vault-connect>
+                                                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_connect', 'Connect owner wallet')); ?></span>
+                                                                        </button>
+                                                                        <button type="button" class="btn btn-outline-danger btn-sm" data-admin-vault-disconnect disabled>
+                                                                            <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                                                            <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_disconnect', 'Disconnect')); ?></span>
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                             <div class="admin-mixer-owner-tools__status is-muted" data-admin-vault-status>
                                                                 <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_status_idle', 'Connect the wallet that owns the selected vault contract.')); ?>
@@ -15379,6 +17617,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <div>
                                                                     <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_pause_status', 'Pause status')); ?></span>
                                                                     <strong data-admin-vault-paused>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_current_signer', 'Current payout signer')); ?></span>
+                                                                    <strong data-admin-vault-current-signer>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_config_status', 'Payouts for selected asset')); ?></span>
+                                                                    <strong data-admin-vault-asset-config-status>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_max_payout_current', 'Current max payout')); ?></span>
+                                                                    <strong data-admin-vault-max-payout-current>-</strong>
+                                                                </div>
+                                                                <div>
+                                                                    <span><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_daily_limit_current', 'Current daily limit')); ?></span>
+                                                                    <strong data-admin-vault-daily-limit-current>-</strong>
                                                                 </div>
                                                             </div>
                                                             <div class="admin-mixer-owner-tools__actions">
@@ -15422,6 +17676,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                                 <div class="admin-mixer-owner-tools__box">
                                                                     <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_config_title', 'Payout asset config')); ?></h5>
+                                                                    <div class="alert alert-info mb-3 admin-mixer-owner-tools__info" role="alert">
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_config_info', 'These are on-chain limits for the selected asset. Backend USD limits below block large orders in the panel; on-chain limits protect the vault even if someone calls the contract directly.')); ?>
+                                                                    </div>
                                                                     <div class="form-check form-switch mb-2">
                                                                         <input class="form-check-input" type="checkbox" role="switch" id="admin_vault_asset_enabled" data-admin-vault-asset-enabled checked>
                                                                         <label class="form-check-label" for="admin_vault_asset_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_enabled', 'Enable selected asset for payouts')); ?></label>
@@ -15430,8 +17687,44 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="text" inputmode="decimal" class="form-control" id="admin_vault_max_payout" data-admin-vault-max-payout placeholder="0.00">
                                                                     <label class="form-label" for="admin_vault_daily_limit"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_daily_limit', 'Daily limit')); ?></label>
                                                                     <input type="text" inputmode="decimal" class="form-control" id="admin_vault_daily_limit" data-admin-vault-daily-limit placeholder="0.00">
-                                                                    <button type="button" class="btn btn-outline-dark w-100" data-admin-vault-set-asset data-owner-action disabled>
+                                                                    <button type="button" class="btn btn-success w-100" data-admin-vault-set-asset data-owner-action disabled>
                                                                         <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_save_asset_config', 'Save asset config')); ?>
+                                                                    </button>
+                                                                </div>
+                                                                <div class="admin-mixer-owner-tools__box">
+                                                                    <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_signer_title', 'Payout signer')); ?></h5>
+                                                                    <label class="form-label" for="mixer_payout_secret_storage_mode"><?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_mode', 'Private key storage')); ?></label>
+                                                                    <select class="form-select" id="mixer_payout_secret_storage_mode" name="mixer_payout_secret_storage_mode" data-admin-mixer-secret-mode<?php echo $settingsProtectedFeatureDisabledAttr; ?>>
+                                                                        <option value="file"<?php echo $mixerPayoutSecretStorageMode === 'file' ? ' selected' : ''; ?>>
+                                                                            <?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_file', 'Server env/file secret (recommended)')); ?>
+                                                                        </option>
+                                                                        <option value="database_encrypted"<?php echo $mixerPayoutSecretStorageMode === 'database_encrypted' ? ' selected' : ''; ?>>
+                                                                            <?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_database', 'Encrypted in admin panel (testing)')); ?>
+                                                                        </option>
+                                                                    </select>
+                                                                    <small class="text-muted d-block mb-2"><?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_help', 'Recommended mode keeps the key outside SQL. Encrypted panel mode is useful for local tests and frequent signer changes.')); ?></small>
+                                                                    <div data-admin-mixer-secret-db-fields<?php echo $mixerPayoutSecretStorageMode !== 'database_encrypted' ? ' hidden' : ''; ?>>
+                                                                        <label class="form-label" for="mixer_payout_signer_private_key"><?php echo admin_e(admin_t($messages, 'settings_mixer_signer_private_key', 'Signer private key')); ?></label>
+                                                                        <input
+                                                                            type="password"
+                                                                            class="form-control"
+                                                                            id="mixer_payout_signer_private_key"
+                                                                            name="mixer_payout_signer_private_key"
+                                                                            value=""
+                                                                            autocomplete="new-password"
+                                                                            spellcheck="false"
+                                                                            placeholder="0x..."
+                                                                            <?php echo $settingsProtectedFeatureDisabledAttr; ?>>
+                                                                        <small class="text-muted d-block mb-2">
+                                                                            <?php echo admin_e($mixerPayoutSignerPrivateKeyEncrypted !== ''
+                                                                                ? admin_t($messages, 'settings_mixer_signer_private_key_saved', 'Encrypted private key is saved. Leave blank to keep it unchanged.')
+                                                                                : admin_t($messages, 'settings_mixer_signer_private_key_missing', 'No encrypted private key saved yet. Paste it only when setting or replacing the signer.')); ?>
+                                                                        </small>
+                                                                    </div>
+                                                                    <label class="form-label" for="admin_vault_payout_signer"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_signer_address', 'New signer address')); ?></label>
+                                                                    <input type="text" class="form-control" id="admin_vault_payout_signer" data-admin-vault-payout-signer placeholder="0x...">
+                                                                    <button type="button" class="btn btn-success w-100" data-admin-vault-set-signer data-owner-action disabled>
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_set_signer', 'Set payout signer')); ?>
                                                                     </button>
                                                                 </div>
                                                             </div>
@@ -15441,7 +17734,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </section>
                                                     </div>
                                                     <?php endif; ?>
-                                                    <div class="col-md-4">
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_mixer_fee_percent', 'Swapper fee (%)')); ?></label>
                                                         <input
                                                             type="number"
@@ -15452,9 +17745,29 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             id="mixer_fee_percent"
                                                             name="mixer_fee_percent"
                                                             value="<?php echo admin_e(number_format($mixerFeePercent, 2, '.', '')); ?>">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_fee_percent_help', 'Default 1.5%. It is subtracted before the Polygon vault payout.')); ?></small>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_fee_percent_help', 'Default 1.5%. It is subtracted before the vault payout.')); ?></small>
                                                     </div>
-                                                    <div class="col-md-4">
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="mixer_show_fee_breakdown" name="mixer_show_fee_breakdown"<?php echo $mixerShowFeeBreakdown ? ' checked' : ''; ?>>
+                                                            <label class="form-check-label" for="mixer_show_fee_breakdown"><?php echo admin_e(admin_t($messages, 'settings_mixer_show_fee_breakdown', 'Show fee details in Swapper')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_show_fee_breakdown_help', 'When disabled, the estimate shows only the output amount and its USD value. The configured fee is still applied.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="mixer_min_order_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_min_order_usd', 'Minimum order (USD)')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="0.01"
+                                                            max="1000"
+                                                            step="0.01"
+                                                            class="form-control"
+                                                            id="mixer_min_order_usd"
+                                                            name="mixer_min_order_usd"
+                                                            value="<?php echo admin_e(number_format($mixerMinOrderUsd, 2, '.', '')); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_min_order_usd_help', 'Use a low value such as 0.10 USD only for test swaps.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_max_payout_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_max_payout_usd', 'Max payout per order (USD)')); ?></label>
                                                         <input
                                                             type="number"
@@ -15466,7 +17779,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             name="mixer_max_payout_usd"
                                                             value="<?php echo admin_e(number_format($mixerMaxPayoutUsd, 2, '.', '')); ?>">
                                                     </div>
-                                                    <div class="col-md-4">
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_daily_payout_limit_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_daily_payout_limit_usd', 'Daily payout limit (USD)')); ?></label>
                                                         <input
                                                             type="number"
@@ -15478,7 +17791,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             name="mixer_daily_payout_limit_usd"
                                                             value="<?php echo admin_e(number_format($mixerDailyPayoutLimitUsd, 2, '.', '')); ?>">
                                                     </div>
-                                                    <div class="col-md-4">
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_btc_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_confirmations_required', 'BTC confirmations')); ?></label>
                                                         <input
                                                             type="number"
@@ -15490,7 +17803,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             name="mixer_btc_confirmations_required"
                                                             value="<?php echo admin_e((string)$mixerBtcConfirmationsRequired); ?>">
                                                     </div>
-                                                    <div class="col-md-4">
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_doge_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_confirmations_required', 'DOGE confirmations')); ?></label>
                                                         <input
                                                             type="number"
@@ -15502,7 +17815,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             name="mixer_doge_confirmations_required"
                                                             value="<?php echo admin_e((string)$mixerDogeConfirmationsRequired); ?>">
                                                     </div>
-                                                    <div class="col-md-4">
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="mixer_sol_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_sol_confirmations_required', 'SOL confirmations')); ?></label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            max="32"
+                                                            step="1"
+                                                            class="form-control"
+                                                            id="mixer_sol_confirmations_required"
+                                                            name="mixer_sol_confirmations_required"
+                                                            value="<?php echo admin_e((string)$mixerSolConfirmationsRequired); ?>">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_sol_confirmations_required_help', '1 means the Solana transaction must reach confirmed commitment before payout.')); ?></small>
+                                                    </div>
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_quote_lifetime_minutes"><?php echo admin_e(admin_t($messages, 'settings_mixer_quote_lifetime_minutes', 'Quote lifetime (minutes)')); ?></label>
                                                         <input
                                                             type="number"
@@ -15514,7 +17840,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             name="mixer_quote_lifetime_minutes"
                                                             value="<?php echo admin_e((string)$mixerQuoteLifetimeMinutes); ?>">
                                                     </div>
-                                                    <div class="col-md-6">
+                                                    <div class="col-12">
                                                         <label class="form-label" for="mixer_detection_provider"><?php echo admin_e(admin_t($messages, 'settings_mixer_detection_provider', 'Deposit watcher provider')); ?></label>
                                                         <select class="form-select" id="mixer_detection_provider" name="mixer_detection_provider">
                                                             <?php foreach ($mixerDetectionProviderOptions as $providerKey => $providerLabel): ?>
@@ -15524,37 +17850,58 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php endforeach; ?>
                                                         </select>
                                                     </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="mixer_notification_email"><?php echo admin_e(admin_t($messages, 'settings_mixer_notification_email', 'Notification email')); ?></label>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="mixer_notification_email"><?php echo admin_e(admin_t($messages, 'settings_mixer_notification_email', 'Swapper notification email')); ?></label>
                                                         <input
                                                             type="email"
                                                             class="form-control"
                                                             id="mixer_notification_email"
                                                             name="mixer_notification_email"
                                                             value="<?php echo admin_e($mixerNotificationEmail); ?>"
+                                                            autocomplete="email"
                                                             placeholder="admin@example.com">
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_notification_email_help', 'Exchange and payout notifications from Swapper are sent to this address.')); ?></small>
                                                     </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="mixer_btc_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address', 'BTC public deposit address')); ?></label>
-                                                        <input
-                                                            type="text"
-                                                            class="form-control"
-                                                            id="mixer_btc_deposit_address"
-                                                            name="mixer_btc_deposit_address"
-                                                            value="<?php echo admin_e($mixerBtcDepositAddress); ?>"
-                                                            placeholder="bc1...">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address_help', 'Paste only your public BTC receiving address from Trust Wallet.')); ?></small>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="mixer_doge_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address', 'DOGE public deposit address')); ?></label>
-                                                        <input
-                                                            type="text"
-                                                            class="form-control"
-                                                            id="mixer_doge_deposit_address"
-                                                            name="mixer_doge_deposit_address"
-                                                            value="<?php echo admin_e($mixerDogeDepositAddress); ?>"
-                                                            placeholder="D...">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address_help', 'Paste only your public DOGE receiving address from Trust Wallet.')); ?></small>
+                                                    <div class="col-12">
+                                                        <div class="admin-mixer-deposit-addresses">
+                                                            <div class="admin-mixer-deposit-addresses__head">
+                                                                <strong><?php echo admin_e(admin_t($messages, 'settings_mixer_deposit_addresses_title', 'Admin deposit addresses')); ?></strong>
+                                                                <span><?php echo admin_e(admin_t($messages, 'settings_mixer_deposit_addresses_help', 'These are public addresses where the admin sends BTC, DOGE or SOL before Swapper releases the selected payout asset.')); ?></span>
+                                                            </div>
+                                                            <div class="admin-mixer-deposit-addresses__field">
+                                                                <label class="form-label" for="mixer_btc_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address', 'BTC public deposit address')); ?></label>
+                                                                <input
+                                                                    type="text"
+                                                                    class="form-control w-100"
+                                                                    id="mixer_btc_deposit_address"
+                                                                    name="mixer_btc_deposit_address"
+                                                                    value="<?php echo admin_e($mixerBtcDepositAddress); ?>"
+                                                                    placeholder="bc1...">
+                                                                <small><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address_help', 'Paste only your public BTC receiving address from Trust Wallet.')); ?></small>
+                                                            </div>
+                                                            <div class="admin-mixer-deposit-addresses__field">
+                                                                <label class="form-label" for="mixer_doge_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address', 'DOGE public deposit address')); ?></label>
+                                                                <input
+                                                                    type="text"
+                                                                    class="form-control w-100"
+                                                                    id="mixer_doge_deposit_address"
+                                                                    name="mixer_doge_deposit_address"
+                                                                    value="<?php echo admin_e($mixerDogeDepositAddress); ?>"
+                                                                    placeholder="D...">
+                                                                <small><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address_help', 'Paste only your public DOGE receiving address from Trust Wallet.')); ?></small>
+                                                            </div>
+                                                            <div class="admin-mixer-deposit-addresses__field">
+                                                                <label class="form-label" for="mixer_sol_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_sol_deposit_address', 'SOL public deposit address')); ?></label>
+                                                                <input
+                                                                    type="text"
+                                                                    class="form-control w-100"
+                                                                    id="mixer_sol_deposit_address"
+                                                                    name="mixer_sol_deposit_address"
+                                                                    value="<?php echo admin_e($mixerSolDepositAddress); ?>"
+                                                                    placeholder="Solana address...">
+                                                                <small><?php echo admin_e(admin_t($messages, 'settings_mixer_sol_deposit_address_help', 'Paste only your public Solana receiving address from Trust Wallet.')); ?></small>
+                                                            </div>
+                                                        </div>
                                                     </div>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
@@ -15562,51 +17909,183 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <label class="form-check-label" for="mixer_auto_payout_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_auto_payout_enabled', 'Enable automatic payouts')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_auto_payout_enabled_help', 'Keep OFF until the watcher, vault contract and payout executor are deployed and tested.')); ?></small>
+                                                        <?php if ($settingsAdminMode && !$mixerPayoutExecutorConfigured): ?>
+                                                            <div class="alert alert-danger bg-danger text-white border-0 mt-3 admin-mixer-payout-executor-alert" role="alert">
+                                                                <strong><?php echo admin_e(!$mixerPayoutRuntimeAvailable ? 'Payout runtime is not ready' : admin_t($messages, 'settings_mixer_payout_executor_missing_title', 'Payout executor is not configured')); ?></strong>
+                                                                <span><?php echo admin_e(!$mixerPayoutRuntimeAvailable ? admin_mixer_crypto_runtime_missing_message() : admin_t($messages, 'settings_mixer_payout_executor_missing_message', 'Add the backend payout signer secret before using vault payouts.')); ?></span>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                        <?php if ($settingsAdminMode): ?>
+                                                            <div class="admin-mixer-ready-payouts" data-admin-vault-ready-payouts>
+                                                                <div class="alert alert-danger bg-danger text-white border-0 mb-3 d-none admin-mixer-payout-click-alert" data-admin-vault-payout-alert role="alert"></div>
+                                                                <?php foreach ($mixerPayoutExecutorGasAlerts as $gasAlert): ?>
+                                                                    <?php
+                                                                    $gasAlertType = (string)($gasAlert['type'] ?? 'warning');
+                                                                    $gasAlertClass = $gasAlertType === 'danger'
+                                                                        ? 'alert-danger bg-danger text-white'
+                                                                        : 'alert-warning';
+                                                                    ?>
+                                                                    <div class="alert <?php echo admin_e($gasAlertClass); ?> border-0 mb-3 admin-mixer-payout-gas-alert" role="alert">
+                                                                        <strong><?php echo admin_e((string)($gasAlert['title'] ?? '')); ?></strong>
+                                                                        <span><?php echo admin_e((string)($gasAlert['message'] ?? '')); ?></span>
+                                                                    </div>
+                                                                <?php endforeach; ?>
+                                                                <div class="admin-mixer-ready-payouts__head">
+                                                                    <div>
+                                                                        <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payouts_title', 'Deposits ready for payout')); ?></h5>
+                                                                        <p><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payouts_intro', 'Confirmed Swapper deposits waiting for vault payout.')); ?></p>
+                                                                    </div>
+                                                                    <span><?php echo admin_e((string)count($mixerReadyPayoutOrders)); ?></span>
+                                                                </div>
+                                                                <?php if ($mixerReadyPayoutOrders): ?>
+                                                                    <div class="table-responsive">
+                                                                        <table class="table admin-table align-middle admin-mixer-ready-payouts__table">
+                                                                            <thead>
+                                                                                <tr>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_order', 'Order')); ?></th>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_deposit', 'Deposit')); ?></th>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_receive', 'Payout')); ?></th>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_recipient', 'Recipient')); ?></th>
+                                                                                    <th class="text-end"><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_action', 'Action')); ?></th>
+                                                                                </tr>
+                                                                            </thead>
+                                                                            <tbody>
+                                                                                <?php foreach ($mixerReadyPayoutOrders as $readyOrder): ?>
+                                                                                    <?php
+                                                                                    $readyOrderId = (string)($readyOrder['id'] ?? '');
+                                                                                    $readyInputAsset = (string)($readyOrder['inputAsset'] ?? '');
+                                                                                    $readyOutputAsset = (string)($readyOrder['outputAsset'] ?? '');
+                                                                                    $readyInputAmount = (string)($readyOrder['detected_amount'] ?: ($readyOrder['amount'] ?? '0'));
+                                                                                    $readyOutputAmount = (string)($readyOrder['estimated_output_amount'] ?? '0');
+                                                                                    $readyRecipient = (string)($readyOrder['recipient'] ?? '');
+                                                                                    $readyDepositTxid = (string)($readyOrder['depositTxid'] ?? '');
+                                                                                    $readyDepositUrl = $readyDepositTxid !== ''
+                                                                                        ? ($readyInputAsset === 'DOGE'
+                                                                                            ? 'https://blockchair.com/dogecoin/transaction/' . rawurlencode($readyDepositTxid)
+                                                                                            : 'https://mempool.space/tx/' . rawurlencode($readyDepositTxid))
+                                                                                        : '';
+                                                                                    ?>
+                                                                                    <tr data-admin-vault-payout-row="<?php echo admin_e($readyOrderId); ?>">
+                                                                                        <td>
+                                                                                            <strong><?php echo admin_e($mixerReadyPayoutCompact($readyOrderId)); ?></strong>
+                                                                                            <small class="d-block text-muted"><?php echo admin_e((string)($readyOrder['statusLabel'] ?? '')); ?></small>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <strong><?php echo admin_e($mixerReadyPayoutFormatAmount($readyInputAmount, $readyInputAsset)); ?></strong>
+                                                                                            <?php if ($readyDepositUrl !== ''): ?>
+                                                                                                <a class="d-block admin-inline-link" href="<?php echo admin_e($readyDepositUrl); ?>" target="_blank" rel="noopener noreferrer">Explorer</a>
+                                                                                            <?php endif; ?>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <strong><?php echo admin_e($mixerReadyPayoutFormatAmount($readyOutputAmount, $readyOutputAsset)); ?></strong>
+                                                                                            <small class="d-block text-muted"><?php echo admin_e((string)($readyOrder['outputNetwork'] ?? '')); ?></small>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <span title="<?php echo admin_e($readyRecipient); ?>"><?php echo admin_e($mixerReadyPayoutCompact($readyRecipient)); ?></span>
+                                                                                        </td>
+                                                                                        <td class="text-end">
+                                                                                            <?php if ($mixerAutoPayoutEnabled && $mixerPayoutExecutorConfigured): ?>
+                                                                                                <span class="admin-mixer-ready-payouts__auto d-block mb-2">
+                                                                                                    <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                                                                                                    <?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_auto', 'Auto payout ON')); ?>
+                                                                                                </span>
+                                                                                            <?php endif; ?>
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                class="btn btn-success btn-sm admin-mixer-ready-payouts__button"
+                                                                                                data-admin-vault-payout-order
+                                                                                                data-public-id="<?php echo admin_e($readyOrderId); ?>"
+                                                                                                data-asset="<?php echo admin_e($readyOutputAsset); ?>"
+                                                                                                data-owner-action
+                                                                                                disabled>
+                                                                                                <i class="bi bi-check2-circle" aria-hidden="true"></i>
+                                                                                                <span><?php echo admin_e(str_replace('{asset}', $readyOutputAsset, $mixerReadyPayoutButtonTemplate)); ?></span>
+                                                                                            </button>
+                                                                                        </td>
+                                                                                    </tr>
+                                                                                <?php endforeach; ?>
+                                                                            </tbody>
+                                                                        </table>
+                                                                    </div>
+                                                                <?php else: ?>
+                                                                    <div class="admin-mixer-ready-payouts__empty">
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payouts_empty', 'No confirmed deposits are ready for payout.')); ?>
+                                                                    </div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <div class="admin-mixer-ready-payouts admin-mixer-payout-history">
+                                                                <div class="admin-mixer-ready-payouts__head">
+                                                                    <div>
+                                                                        <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_payout_history_title', 'Payout history from the last 24h')); ?></h5>
+                                                                        <p><?php echo admin_e(admin_t($messages, 'settings_mixer_payout_history_intro', 'Recent Swapper payouts with transaction hash and explorer link.')); ?></p>
+                                                                    </div>
+                                                                    <span><?php echo admin_e((string)count($mixerRecentPayoutOrders)); ?></span>
+                                                                </div>
+                                                                <?php if ($mixerRecentPayoutOrders): ?>
+                                                                    <div class="table-responsive">
+                                                                        <table class="table admin-table align-middle admin-mixer-ready-payouts__table">
+                                                                            <thead>
+                                                                                <tr>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_order', 'Order')); ?></th>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_receive', 'Payout')); ?></th>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_recipient', 'Recipient')); ?></th>
+                                                                                    <th><?php echo admin_e(admin_t($messages, 'settings_mixer_payout_history_tx', 'Transaction')); ?></th>
+                                                                                    <th class="text-end"><?php echo admin_e(admin_t($messages, 'settings_mixer_ready_payout_action', 'Action')); ?></th>
+                                                                                </tr>
+                                                                            </thead>
+                                                                            <tbody data-admin-vault-payout-history-body>
+                                                                                <?php foreach ($mixerRecentPayoutOrders as $historyOrder): ?>
+                                                                                    <?php
+                                                                                    $historyOrderId = (string)($historyOrder['id'] ?? '');
+                                                                                    $historyOutputAsset = (string)($historyOrder['outputAsset'] ?? '');
+                                                                                    $historyOutputAmount = (string)($historyOrder['estimated_output_amount'] ?? '0');
+                                                                                    $historyRecipient = (string)($historyOrder['recipient'] ?? '');
+                                                                                    $historyPayoutTxid = (string)($historyOrder['payoutTxid'] ?? '');
+                                                                                    $historyPayoutBase = (string)($historyOrder['payoutExplorerBase'] ?? '');
+                                                                                    $historyPayoutUrl = $historyPayoutTxid !== '' && $historyPayoutBase !== ''
+                                                                                        ? $historyPayoutBase . rawurlencode($historyPayoutTxid)
+                                                                                        : '';
+                                                                                    ?>
+                                                                                    <tr>
+                                                                                        <td>
+                                                                                            <strong><?php echo admin_e($mixerReadyPayoutCompact($historyOrderId)); ?></strong>
+                                                                                            <small class="d-block text-muted"><?php echo admin_e((string)($historyOrder['statusLabel'] ?? '')); ?></small>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <strong><?php echo admin_e($mixerReadyPayoutFormatAmount($historyOutputAmount, $historyOutputAsset)); ?></strong>
+                                                                                            <small class="d-block text-muted"><?php echo admin_e((string)($historyOrder['outputNetwork'] ?? '')); ?></small>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <span title="<?php echo admin_e($historyRecipient); ?>"><?php echo admin_e($mixerReadyPayoutCompact($historyRecipient)); ?></span>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <span title="<?php echo admin_e($historyPayoutTxid); ?>"><?php echo admin_e($mixerReadyPayoutCompact($historyPayoutTxid)); ?></span>
+                                                                                        </td>
+                                                                                        <td class="text-end">
+                                                                                            <?php if ($historyPayoutUrl !== ''): ?>
+                                                                                                <a class="btn btn-outline-dark btn-sm" href="<?php echo admin_e($historyPayoutUrl); ?>" target="_blank" rel="noopener noreferrer">
+                                                                                                    <?php echo admin_e(admin_t($messages, 'settings_mixer_payout_history_explorer', 'Explorer')); ?>
+                                                                                                </a>
+                                                                                            <?php else: ?>
+                                                                                                <span class="text-muted">-</span>
+                                                                                            <?php endif; ?>
+                                                                                        </td>
+                                                                                    </tr>
+                                                                                <?php endforeach; ?>
+                                                                            </tbody>
+                                                                        </table>
+                                                                    </div>
+                                                                <?php else: ?>
+                                                                    <div class="admin-mixer-ready-payouts__empty">
+                                                                        <?php echo admin_e(admin_t($messages, 'settings_mixer_payout_history_empty', 'No payouts in the last 24 hours.')); ?>
+                                                                    </div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endif; ?>
                                                     </div>
                                                         </div>
                                                     </div>
                                                 <?php endif; ?>
-                                                <div class="col-12">
-                                                    <div class="admin-settings-table-wrap">
-                                                        <div class="admin-settings-access__copy">
-                                                            <h3><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></h3>
-                                                            <p><?php echo admin_e(admin_t($messages, 'settings_database_backup_latest_intro', 'The latest ready SQL backup can be downloaded below. Creating a new backup remains available only in admin mode.')); ?></p>
-                                                        </div>
-                                                        <div class="table-responsive">
-                                                            <table class="table admin-table align-middle">
-                                                                <thead>
-                                                                    <tr>
-                                                                        <th><?php echo admin_e(admin_t($messages, 'col_name', 'Name')); ?></th>
-                                                                        <th><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
-                                                                        <th><?php echo admin_e(admin_t($messages, 'col_size', 'Size')); ?></th>
-                                                                        <th class="text-end"><?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?></th>
-                                                                    </tr>
-                                                                </thead>
-                                                                <tbody
-                                                                    data-admin-database-backup-latest-body
-                                                                    data-empty-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_empty', 'No SQL backup has been created yet.')); ?>"
-                                                                    data-download-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_download_latest', 'Download')); ?>">
-                                                                    <?php if (!empty($manualDatabaseBackupInfo['exists'])): ?>
-                                                                        <tr>
-                                                                            <td><?php echo admin_e((string)($manualDatabaseBackupInfo['download_name'] ?? 'latest-database-backup.sql')); ?></td>
-                                                                            <td><?php echo admin_e(!empty($manualDatabaseBackupInfo['generated_at']) ? date('d.m.Y H:i:s', strtotime((string)$manualDatabaseBackupInfo['generated_at'])) : ''); ?></td>
-                                                                            <td><?php echo admin_e((string)($manualDatabaseBackupInfo['size_label'] ?? '0 B')); ?></td>
-                                                                            <td class="text-end">
-                                                                                <a class="btn btn-success btn-sm" href="/admin/?page=settings&amp;download_latest_database_backup=1&amp;_csrf=<?php echo admin_e(rawurlencode($csrfToken)); ?>">
-                                                                                    <?php echo admin_e(admin_t($messages, 'settings_database_backup_download_latest', 'Download')); ?>
-                                                                                </a>
-                                                                            </td>
-                                                                        </tr>
-                                                                    <?php else: ?>
-                                                                        <tr>
-                                                                            <td colspan="4" class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_empty', 'No SQL backup has been created yet.')); ?></td>
-                                                                        </tr>
-                                                                    <?php endif; ?>
-                                                                </tbody>
-                                                            </table>
-                                                        </div>
-                                                    </div>
-                                                </div>
                                             </div>
                                             <hr>
                                             <div class="admin-settings-access__actions">
@@ -15627,7 +18106,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <?php $cryptoPreviewStatusRows = admin_crypto_preview_network_status_rows($messages, false); ?>
                                         <?php endif; ?>
 
-                                        <form method="post" class="admin-settings-access__form" autocomplete="off">
+                                        <form method="post" class="admin-settings-access__form" autocomplete="off" data-admin-crypto-status-form data-status-url="/admin/crypto_status.php"
+                                            data-checked-at="<?php echo min(array_map(static fn(array $row): int => app_timestamp_from_utc_datetime((string)($row['checked_at'] ?? '')), $cryptoPreviewStatusRows)); ?>"
+                                            data-loading="<?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_loading', 'Checking API availability...')); ?>"
+                                            data-error="<?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_refresh_error', 'Unable to refresh. Please retry shortly.')); ?>">
                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                             <div class="admin-settings-access__actions mt-0 mb-3">
                                                 <button type="submit" class="btn btn-dark btn-lg" name="admin_refresh_crypto_preview_status"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_refresh', 'Refresh status')); ?></button>
@@ -15635,40 +18117,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </form>
 
                                         <?php if ($cryptoPreviewStatusRows): ?>
-                                            <div class="admin-crypto-network-status-grid">
-                                                <?php foreach ($cryptoPreviewStatusRows as $statusRow): ?>
-                                                    <div class="admin-crypto-network-status-card admin-crypto-network-status-card--<?php echo admin_e((string)($statusRow['key'] ?? 'default')); ?>">
-                                                        <div class="admin-crypto-network-status-card__header">
-                                                            <div>
-                                                                <div class="admin-crypto-network-status-card__asset"><?php echo admin_e((string)($statusRow['asset_label'] ?? 'CRYPTO')); ?></div>
-                                                                <div class="admin-crypto-network-status-card__network"><?php echo admin_e((string)($statusRow['network_label'] ?? '')); ?></div>
-                                                            </div>
-                                                            <span class="admin-status-pill <?php echo (($statusRow['status_code'] ?? '') === 'available') ? 'admin-status-pill--available' : ((($statusRow['status_code'] ?? '') === 'warning') ? 'admin-status-pill--warning' : 'admin-status-pill--danger'); ?>">
-                                                                <?php echo admin_e((string)($statusRow['status_label'] ?? '')); ?>
-                                                            </span>
-                                                        </div>
-                                                        <div class="admin-crypto-network-status-card__provider"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_provider_prefix', 'Provider:')); ?> <?php echo admin_e((string)($statusRow['provider_label'] ?? '')); ?></div>
-                                                        <div class="admin-crypto-network-status-card__message"><?php echo admin_e((string)($statusRow['message'] ?? '')); ?></div>
-                                                        <div class="admin-crypto-network-status-card__meta">
-                                                            <span><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_checked_at', 'Checked')); ?>: <?php echo admin_e((string)($statusRow['checked_at_label'] ?? '')); ?></span>
-                                                            <span><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_latency', 'Latency')); ?>: <?php echo admin_e((string)((int)($statusRow['latency_ms'] ?? 0))); ?> ms</span>
-                                                        </div>
-                                                        <?php $statusChecks = (array)($statusRow['checks'] ?? []); ?>
-                                                        <?php if ($statusChecks): ?>
-                                                            <div class="admin-crypto-network-status-card__checks">
-                                                                <?php foreach ($statusChecks as $statusCheck): ?>
-                                                                    <div class="admin-crypto-network-status-card__check">
-                                                                        <span class="admin-status-pill <?php echo !empty($statusCheck['ok']) ? 'admin-status-pill--available' : 'admin-status-pill--danger'; ?>">
-                                                                            <?php echo admin_e((string)($statusCheck['label'] ?? 'Check')); ?>
-                                                                        </span>
-                                                                        <div class="admin-crypto-network-status-card__check-detail"><?php echo admin_e((string)($statusCheck['detail'] ?? '')); ?></div>
-                                                                    </div>
-                                                                <?php endforeach; ?>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                <?php endforeach; ?>
-                                            </div>
+                                            <div data-admin-crypto-status-results><?php echo admin_render_crypto_network_status_grid($cryptoPreviewStatusRows, $messages); ?></div>
                                         <?php else: ?>
                                             <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_empty', 'No status rows available yet.')); ?></div>
                                         <?php endif; ?>
@@ -15736,38 +18185,30 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                             </div>
                                             <div class="tab-pane fade" id="admin-settings-backup-pane" role="tabpanel" aria-labelledby="admin-settings-backup-tab" tabindex="0">
-                                    <div class="admin-settings-access">
-                                        <div class="admin-settings-access__copy">
-                                            <h3><?php echo admin_e(admin_t($messages, 'settings_database_backup_title', 'Database backup')); ?></h3>
-                                            <p><?php echo admin_e(admin_t($messages, 'settings_database_backup_intro', 'Create one fresh SQL backup on the server and download the latest ready file when needed.')); ?></p>
-                                        </div>
+	                                    <div class="admin-settings-access">
+	                                        <div class="admin-settings-access__copy">
+	                                            <h3><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_title', 'Admin panel payment')); ?></h3>
+	                                            <p><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_intro', 'Manage the paid-through date and renewal URL for admin panel access.')); ?></p>
+	                                        </div>
 
-                                        <form
-                                            method="post"
-                                            class="admin-settings-access__form"
-                                            data-admin-database-backup-form
-                                            data-running-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_running', 'Creating SQL backup...')); ?>"
-                                            data-success-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_success', 'SQL backup created successfully.')); ?>"
-                                            data-error-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_error', 'Unable to create the SQL backup.')); ?>">
-                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
-                                            <div class="row g-3">
-                                                <div class="col-12">
-                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_database_backup_help', 'Only one latest SQL backup is kept on the server. Creating a new version replaces the previous file.')); ?></small>
-                                                </div>
-                                                <div class="col-12" hidden data-admin-database-backup-progress>
-                                                    <div class="admin-settings-backup-progress">
-                                                        <div class="progress" role="progressbar" aria-label="<?php echo admin_e(admin_t($messages, 'settings_database_backup_progress_label', 'Backup progress')); ?>" aria-valuemin="0" aria-valuemax="100">
-                                                            <div class="progress-bar bg-danger" style="width: 0%" data-admin-database-backup-progress-bar>0%</div>
-                                                        </div>
-                                                        <div class="admin-settings-backup-progress__status" data-admin-database-backup-status><?php echo admin_e(admin_t($messages, 'settings_database_backup_progress_idle', 'Ready to create a new SQL backup.')); ?></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <hr>
-                                            <div class="admin-settings-access__actions">
-                                                <button type="submit" class="btn btn-danger btn-lg" name="admin_download_database_backup" data-admin-database-backup-submit><?php echo admin_e(admin_t($messages, 'settings_database_backup_button', 'Create SQL backup')); ?></button>
-                                            </div>
-                                        </form>
+	                                        <form method="post" class="admin-settings-access__form mb-4" autocomplete="off">
+	                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+	                                            <div class="row g-3">
+	                                                <div class="col-md-4">
+	                                                    <label class="form-label" for="admin_panel_subscription_paid_until"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_paid_until', 'Data opłacenia subskrypcji')); ?></label>
+	                                                    <input type="date" class="form-control" id="admin_panel_subscription_paid_until" name="admin_panel_subscription_paid_until" value="<?php echo admin_e((string)($appSettings['admin_panel_subscription_paid_until'] ?? '')); ?>">
+	                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_paid_until_help', 'Podaj datę, do której dostęp do panelu admina jest opłacony.')); ?></small>
+	                                                </div>
+	                                                <div class="col-md-8">
+	                                                    <label class="form-label" for="admin_panel_subscription_renewal_url"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_renewal_url', 'Link URL do płatności za przedłużenie')); ?></label>
+	                                                    <input type="url" class="form-control" id="admin_panel_subscription_renewal_url" name="admin_panel_subscription_renewal_url" value="<?php echo admin_e((string)($appSettings['admin_panel_subscription_renewal_url'] ?? '')); ?>" placeholder="https://...">
+	                                                    <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_renewal_url_help', 'Ten link pojawi się w powiadomieniu, gdy do końca opłaconego dostępu zostanie mniej niż 7 dni.')); ?></small>
+	                                                </div>
+	                                            </div>
+	                                            <div class="admin-settings-access__actions mt-3">
+	                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_panel_subscription_settings"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_save_button', 'Zapisz płatność panelu')); ?></button>
+	                                            </div>
+	                                        </form>
                                     </div>
 
                                             </div>
@@ -16284,51 +18725,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         </div>
     </div>
 
-    <button
-        type="button"
-        class="admin-help-launcher"
-        data-bs-toggle="modal"
-        data-bs-target="#adminHelpModal"
-        aria-label="<?php echo admin_e(admin_t($messages, 'help_modal_open', 'Open help')); ?>">
-        <i class="bi bi-book" aria-hidden="true"></i>
-    </button>
-
-    <div
-        class="modal fade admin-help-modal"
-        id="adminHelpModal"
-        tabindex="-1"
-        aria-hidden="true"
-        data-can-edit="<?php echo $adminHelpModalCanEdit ? '1' : '0'; ?>"
-        data-edit-label="<?php echo admin_e(admin_t($messages, 'help_modal_edit_link', 'Edit')); ?>"
-        data-save-label="<?php echo admin_e(admin_t($messages, 'help_modal_save_button', 'Save')); ?>"
-        data-saved-label="<?php echo admin_e(admin_t($messages, 'help_modal_saved_label', 'Saved')); ?>"
-        data-save-error="<?php echo admin_e(admin_t($messages, 'help_modal_edit_error', 'Unable to save help content.')); ?>"
-        data-locked-error="<?php echo admin_e(admin_t($messages, 'help_modal_edit_locked', 'Unlock Settings access first to edit help content.')); ?>"
-        data-empty-title="<?php echo admin_e(admin_t($messages, 'help_modal_empty_title', 'Brak wyników')); ?>"
-        data-empty-text="<?php echo admin_e(admin_t($messages, 'help_modal_empty_text', 'Spróbuj wpisać inne słowa kluczowe lub krótsze pytanie.')); ?>">
-        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="admin-help-modal__topbar">
-                    <label class="admin-help-modal__search">
-                        <i class="bi bi-search" aria-hidden="true"></i>
-                        <input
-                            type="search"
-                            autocomplete="off"
-                            spellcheck="false"
-                            data-admin-help-search
-                            placeholder="<?php echo admin_e(admin_t($messages, 'help_modal_search_placeholder', 'Szukaj jak coś zrobić, np. dodać usera lub utworzyć płatność')); ?>">
-                    </label>
-                    <button type="button" class="admin-help-modal__close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'help_modal_close', 'Close')); ?>">
-                        <i class="bi bi-x-lg" aria-hidden="true"></i>
-                    </button>
-                </div>
-                <div class="modal-body admin-help-modal__body" data-admin-help-results></div>
-            </div>
-        </div>
-    </div>
-
-    <script type="application/json" id="adminHelpTopicsData"><?php echo $adminHelpModalTopicsJson; ?></script>
-
     <?php if ($route === 'settings'): ?>
         <script>
             (() => {
@@ -16430,6 +18826,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     choice.addEventListener('change', () => syncMixerEnvPanels(choice.dataset.adminMixerEnvChoice || ''));
                 });
 
+                const signerStorageMode = document.querySelector('[data-admin-mixer-secret-mode]');
+                const signerStorageFields = document.querySelector('[data-admin-mixer-secret-db-fields]');
+                const syncSignerStorageFields = () => {
+                    if (!signerStorageMode || !signerStorageFields) {
+                        return;
+                    }
+                    signerStorageFields.hidden = signerStorageMode.value !== 'database_encrypted';
+                };
+                syncSignerStorageFields();
+                if (signerStorageMode) {
+                    signerStorageMode.addEventListener('change', syncSignerStorageFields);
+                }
+
                 const initVaultOwnerTools = () => {
                     const root = document.querySelector('[data-admin-mixer-owner-tools]');
                     if (!root || root.dataset.initialized === '1') {
@@ -16446,8 +18855,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     const labels = config.labels || {};
                     const networks = Array.isArray(config.networks) ? config.networks : [];
+                    const payoutExecutorConfigured = !!config.payoutExecutorConfigured;
+                    const csrfToken = root.dataset.csrf || '';
+                    const payoutAjaxUrl = root.dataset.payoutAjaxUrl || '/admin/?page=swap-converter';
                     const connectButton = root.querySelector('[data-admin-vault-connect]');
                     const connectLabel = connectButton ? connectButton.querySelector('span') : null;
+                    const disconnectButton = root.querySelector('[data-admin-vault-disconnect]');
+                    const walletProviderSelect = root.querySelector('[data-admin-vault-wallet-provider]');
                     const networkSelect = root.querySelector('[data-admin-vault-network]');
                     const assetSelect = root.querySelector('[data-admin-vault-asset]');
                     const statusBox = root.querySelector('[data-admin-vault-status]');
@@ -16456,6 +18870,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const walletBalanceField = root.querySelector('[data-admin-vault-wallet-balance]');
                     const vaultBalanceField = root.querySelector('[data-admin-vault-balance]');
                     const pausedField = root.querySelector('[data-admin-vault-paused]');
+                    const currentSignerField = root.querySelector('[data-admin-vault-current-signer]');
+                    const assetConfigStatusField = root.querySelector('[data-admin-vault-asset-config-status]');
+                    const currentMaxPayoutField = root.querySelector('[data-admin-vault-max-payout-current]');
+                    const currentDailyLimitField = root.querySelector('[data-admin-vault-daily-limit-current]');
                     const refreshButton = root.querySelector('[data-admin-vault-refresh]');
                     const pauseButton = root.querySelector('[data-admin-vault-pause]');
                     const unpauseButton = root.querySelector('[data-admin-vault-unpause]');
@@ -16469,7 +18887,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const maxPayoutInput = root.querySelector('[data-admin-vault-max-payout]');
                     const dailyLimitInput = root.querySelector('[data-admin-vault-daily-limit]');
                     const setAssetButton = root.querySelector('[data-admin-vault-set-asset]');
-                    const ownerActions = Array.from(root.querySelectorAll('[data-owner-action]'));
+                    const payoutSignerInput = root.querySelector('[data-admin-vault-payout-signer]');
+                    const setSignerButton = root.querySelector('[data-admin-vault-set-signer]');
+                    const readyPayoutButtons = Array.from(document.querySelectorAll('[data-admin-vault-payout-order]'));
+                    const readyPayoutAlert = document.querySelector('[data-admin-vault-payout-alert]');
+                    const ownerActions = Array.from(root.querySelectorAll('[data-owner-action]')).concat(readyPayoutButtons);
                     const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
                     const selectors = {
                         owner: '0x8da5cb5b',
@@ -16481,9 +18903,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         withdrawToken: '0x01e33667',
                         withdrawAllToken: '0x3aeebedb',
                         setAssetConfig: '0xfae95931',
+                        setPayoutSigner: '0x2216da56',
+                        payoutSigner: '0x61bc1208',
+                        assetConfigs: '0x7609d7f6',
                         balanceOf: '0x70a08231',
                         transfer: '0xa9059cbb'
                     };
+                    const zeroAddress = '0x0000000000000000000000000000000000000000';
+                    const nativeEvent = typeof Event === 'function' ? Event : null;
+                    let walletProviders = [];
                     let provider = null;
                     let connectedWallet = '';
                     let contractOwner = '';
@@ -16498,6 +18926,40 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         statusBox.classList.toggle('is-success', type === 'success');
                         statusBox.classList.toggle('is-warning', type === 'warning');
                         statusBox.classList.toggle('is-danger', type === 'danger');
+                    };
+
+                    const showReadyPayoutAlert = (message) => {
+                        if (!readyPayoutAlert) {
+                            return;
+                        }
+                        readyPayoutAlert.textContent = message || labels.payoutExecutorMissing || 'Payout executor is not configured';
+                        readyPayoutAlert.classList.remove('d-none');
+                        readyPayoutAlert.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    };
+
+                    const postPayoutAction = (action, payload = {}) => {
+                        const body = new URLSearchParams();
+                        body.set('_csrf', csrfToken);
+                        body.set(action, '1');
+                        Object.keys(payload).forEach((key) => {
+                            body.set(key, String(payload[key] ?? ''));
+                        });
+
+                        return fetch(payoutAjaxUrl, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                                'Accept': 'application/json'
+                            },
+                            body: body.toString()
+                        }).then(async (response) => {
+                            const data = await response.json().catch(() => ({}));
+                            if (!response.ok || !data || data.ok === false) {
+                                throw new Error((data && data.message) ? data.message : (labels.txFailed || 'Transaction failed.'));
+                            }
+                            return data;
+                        });
                     };
 
                     const compactAddress = (address) => {
@@ -16537,6 +18999,210 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         const fraction = (amount % base).toString().padStart(decimals, '0').replace(/0+$/, '').slice(0, 6);
                         return whole.toString() + (fraction ? '.' + fraction : '') + (symbol ? ' ' + symbol : '');
                     };
+                    const formatUnitsInput = (value, decimals) => formatUnits(value, decimals, '');
+                    const decodeAssetConfig = (hex) => {
+                        const clean = cleanHex(hex).padStart(192, '0');
+                        return {
+                            enabled: hexToBigInt('0x' + clean.slice(0, 64)) !== 0n,
+                            maxPayout: hexToBigInt('0x' + clean.slice(64, 128)),
+                            dailyLimit: hexToBigInt('0x' + clean.slice(128, 192))
+                        };
+                    };
+                    const setAddressField = (field, address) => {
+                        if (!field) {
+                            return;
+                        }
+                        const normalized = String(address || '').trim();
+                        const activeAddress = evmAddressPattern.test(normalized) && normalized.toLowerCase() !== zeroAddress;
+                        field.textContent = activeAddress ? compactAddress(normalized) : '-';
+                        field.title = activeAddress ? normalized : '';
+                    };
+                    const setMetricState = (field, isEnabled) => {
+                        if (!field) {
+                            return;
+                        }
+                        field.classList.toggle('is-success', !!isEnabled);
+                        field.classList.toggle('is-danger', !isEnabled);
+                    };
+
+                    const inferWalletProviderName = (walletProvider, info = {}) => {
+                        const explicitName = String(info.name || '').trim();
+                        if (explicitName) {
+                            return explicitName;
+                        }
+                        if (walletProvider && (walletProvider.isTrust || walletProvider.isTrustWallet)) {
+                            return 'Trust Wallet';
+                        }
+                        if (walletProvider && (walletProvider.isOkxWallet || walletProvider.isOKExWallet || walletProvider.okxwallet)) {
+                            return 'OKX Wallet';
+                        }
+                        if (walletProvider && walletProvider.isCoinbaseWallet) {
+                            return 'Coinbase Wallet';
+                        }
+                        if (walletProvider && walletProvider.isRabby) {
+                            return 'Rabby Wallet';
+                        }
+                        if (walletProvider && walletProvider.isBraveWallet) {
+                            return 'Brave Wallet';
+                        }
+                        if (walletProvider && walletProvider.isMetaMask) {
+                            return 'MetaMask';
+                        }
+                        return 'Injected wallet';
+                    };
+
+                    const isMetaMaskProvider = (item) => {
+                        const name = String(item && item.name ? item.name : '').toLowerCase();
+                        const rdns = String(item && item.rdns ? item.rdns : '').toLowerCase();
+                        const itemProvider = item ? item.provider : null;
+                        return rdns.indexOf('metamask') !== -1
+                            || name.indexOf('metamask') !== -1
+                            || (!!itemProvider && !!itemProvider.isMetaMask && !itemProvider.isTrust && !itemProvider.isTrustWallet && !itemProvider.isOkxWallet && !itemProvider.isOKExWallet && !itemProvider.isCoinbaseWallet && !itemProvider.isRabby && !itemProvider.isBraveWallet);
+                    };
+
+                    const walletProviderRank = (item) => {
+                        const name = String(item && item.name ? item.name : '').toLowerCase();
+                        if (isMetaMaskProvider(item)) {
+                            return 0;
+                        }
+                        if (name.indexOf('trust') !== -1) {
+                            return 1;
+                        }
+                        if (name.indexOf('okx') !== -1) {
+                            return 2;
+                        }
+                        if (name.indexOf('rabby') !== -1) {
+                            return 3;
+                        }
+                        return 10;
+                    };
+
+                    const selectedWalletProviderMeta = () => {
+                        const selectedId = walletProviderSelect ? String(walletProviderSelect.value || '') : '';
+                        return walletProviders.find((item) => item.id === selectedId) || walletProviders.find(isMetaMaskProvider) || walletProviders[0] || null;
+                    };
+
+                    const selectedWalletProvider = () => {
+                        const selected = selectedWalletProviderMeta();
+                        provider = selected ? selected.provider : null;
+                        return provider;
+                    };
+
+                    const renderWalletProviderOptions = () => {
+                        if (!walletProviderSelect) {
+                            return;
+                        }
+                        const currentId = walletProviderSelect.value || '';
+                        walletProviders = walletProviders.slice().sort((first, second) => {
+                            const rankDelta = walletProviderRank(first) - walletProviderRank(second);
+                            return rankDelta !== 0 ? rankDelta : String(first.name || '').localeCompare(String(second.name || ''));
+                        });
+                        walletProviderSelect.innerHTML = '';
+                        if (!walletProviders.length) {
+                            const option = document.createElement('option');
+                            option.value = '';
+                            option.textContent = labels.noWallet || 'No EVM wallet extension detected.';
+                            walletProviderSelect.appendChild(option);
+                            walletProviderSelect.disabled = true;
+                            if (connectButton) {
+                                connectButton.disabled = true;
+                            }
+                            return;
+                        }
+
+                        walletProviders.forEach((item) => {
+                            const option = document.createElement('option');
+                            option.value = item.id;
+                            option.textContent = item.name;
+                            walletProviderSelect.appendChild(option);
+                        });
+
+                        const selected = walletProviders.find((item) => item.id === currentId)
+                            || walletProviders.find(isMetaMaskProvider)
+                            || walletProviders[0];
+                        walletProviderSelect.value = selected ? selected.id : '';
+                        walletProviderSelect.disabled = walletProviders.length <= 1;
+                        if (connectButton) {
+                            connectButton.disabled = false;
+                        }
+                        selectedWalletProvider();
+                    };
+
+                    const bindWalletProviderEvents = (item) => {
+                        if (!item || item.bound || !item.provider || typeof item.provider.on !== 'function') {
+                            return;
+                        }
+                        item.bound = true;
+                        item.provider.on('accountsChanged', (accounts) => {
+                            if (selectedWalletProvider() !== item.provider) {
+                                return;
+                            }
+                            connectedWallet = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
+                            ownerVerified = false;
+                            setOwnerActions(false);
+                            if (!connectedWallet) {
+                                resetOwnerConnection(labels.disconnected || 'Wallet disconnected.', 'muted');
+                                return;
+                            }
+                            refreshState().catch(() => {});
+                        });
+                        item.provider.on('chainChanged', () => {
+                            if (selectedWalletProvider() === item.provider && connectedWallet) {
+                                refreshState().catch(() => {});
+                            }
+                        });
+                    };
+
+                    const addWalletProvider = (walletProvider, info = {}) => {
+                        if (!walletProvider || typeof walletProvider.request !== 'function') {
+                            return;
+                        }
+                        const uuid = String(info.uuid || '').trim();
+                        const rdns = String(info.rdns || '').trim();
+                        const existing = walletProviders.find((item) => item.provider === walletProvider || (uuid && item.uuid === uuid));
+                        if (existing) {
+                            const inferredName = inferWalletProviderName(walletProvider, info);
+                            if (inferredName && existing.name === 'Injected wallet') {
+                                existing.name = inferredName;
+                            }
+                            renderWalletProviderOptions();
+                            return;
+                        }
+                        const name = inferWalletProviderName(walletProvider, info);
+                        const idBase = (uuid || rdns || name || 'wallet').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'wallet';
+                        let id = idBase;
+                        let suffix = 2;
+                        while (walletProviders.some((item) => item.id === id)) {
+                            id = idBase + '-' + suffix;
+                            suffix += 1;
+                        }
+                        const item = { id, uuid, rdns, name, provider: walletProvider, bound: false };
+                        walletProviders.push(item);
+                        bindWalletProviderEvents(item);
+                        renderWalletProviderOptions();
+                    };
+
+                    const discoverWalletProviders = () => {
+                        renderWalletProviderOptions();
+                        window.addEventListener('eip6963:announceProvider', (event) => {
+                            const detail = event && event.detail ? event.detail : {};
+                            addWalletProvider(detail.provider, detail.info || {});
+                        });
+                        try {
+                            if (nativeEvent) {
+                                window.dispatchEvent(new nativeEvent('eip6963:requestProvider'));
+                            }
+                        } catch (error) {}
+
+                        const injectedProvider = window.ethereum || null;
+                        if (injectedProvider) {
+                            if (Array.isArray(injectedProvider.providers)) {
+                                injectedProvider.providers.forEach((walletProvider) => addWalletProvider(walletProvider));
+                            }
+                            addWalletProvider(injectedProvider);
+                        }
+                        window.setTimeout(renderWalletProviderOptions, 350);
+                    };
 
                     const currentNetwork = () => networks.find((network) => network.key === (networkSelect ? networkSelect.value : '')) || networks[0] || null;
                     const currentAsset = () => {
@@ -16552,12 +19218,54 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         if (refreshButton) {
                             refreshButton.disabled = !connectedWallet;
                         }
+                        if (disconnectButton) {
+                            disconnectButton.disabled = !connectedWallet;
+                        }
                         if (pauseButton) {
                             pauseButton.disabled = !enabled || vaultPaused;
                         }
                         if (unpauseButton) {
                             unpauseButton.disabled = !enabled || !vaultPaused;
                         }
+                    };
+
+                    const resetOwnerConnection = (message, type = 'muted') => {
+                        connectedWallet = '';
+                        contractOwner = '';
+                        ownerVerified = false;
+                        vaultPaused = false;
+                        selectedWalletProvider();
+                        if (walletField) {
+                            walletField.textContent = '-';
+                        }
+                        if (ownerField) {
+                            ownerField.textContent = '-';
+                        }
+                        if (walletBalanceField) {
+                            walletBalanceField.textContent = '-';
+                        }
+                        if (vaultBalanceField) {
+                            vaultBalanceField.textContent = '-';
+                        }
+                        if (pausedField) {
+                            pausedField.textContent = '-';
+                        }
+                        setAddressField(currentSignerField, '');
+                        if (assetConfigStatusField) {
+                            assetConfigStatusField.textContent = '-';
+                            assetConfigStatusField.classList.remove('is-success', 'is-danger');
+                        }
+                        if (currentMaxPayoutField) {
+                            currentMaxPayoutField.textContent = '-';
+                        }
+                        if (currentDailyLimitField) {
+                            currentDailyLimitField.textContent = '-';
+                        }
+                        if (connectLabel) {
+                            connectLabel.textContent = labels.connect || 'Connect owner wallet';
+                        }
+                        setOwnerActions(false);
+                        setStatus(message || (labels.disconnected || 'Wallet disconnected.'), type);
                     };
 
                     const fillSelects = () => {
@@ -16652,7 +19360,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     };
 
                     const refreshState = async () => {
-                        provider = window.ethereum;
+                        provider = selectedWalletProvider();
                         const network = currentNetwork();
                         const asset = currentAsset();
                         if (!provider || typeof provider.request !== 'function' || !network || !asset || !evmAddressPattern.test(String(network.vault || ''))) {
@@ -16668,11 +19376,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                         const walletBalance = connectedWallet ? await readBalance(asset, connectedWallet) : 0n;
                         const vaultBalance = await readBalance(asset, network.vault);
+                        const currentSigner = decodeAddress(await ethCall(network.vault, selectors.payoutSigner));
+                        const assetAddress = asset.type === 'native' ? zeroAddress : String(asset.address || '');
+                        const assetConfig = decodeAssetConfig(await ethCall(network.vault, selectors.assetConfigs + encodeAddress(assetAddress)));
                         if (walletField) {
                             walletField.textContent = compactAddress(connectedWallet);
+                            walletField.title = connectedWallet;
                         }
                         if (ownerField) {
                             ownerField.textContent = compactAddress(contractOwner);
+                            ownerField.title = contractOwner;
                         }
                         if (walletBalanceField) {
                             walletBalanceField.textContent = formatUnits(walletBalance, Number(asset.decimals || 18), asset.symbol || '');
@@ -16683,6 +19396,31 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         if (pausedField) {
                             pausedField.textContent = vaultPaused ? 'Paused' : 'Active';
                         }
+                        setAddressField(currentSignerField, currentSigner);
+                        if (assetConfigStatusField) {
+                            assetConfigStatusField.textContent = assetConfig.enabled
+                                ? (labels.assetConfigEnabled || 'Enabled')
+                                : (labels.assetConfigDisabled || 'Disabled');
+                            setMetricState(assetConfigStatusField, assetConfig.enabled);
+                        }
+                        if (currentMaxPayoutField) {
+                            currentMaxPayoutField.textContent = formatUnits(assetConfig.maxPayout, Number(asset.decimals || 18), asset.symbol || '');
+                        }
+                        if (currentDailyLimitField) {
+                            currentDailyLimitField.textContent = formatUnits(assetConfig.dailyLimit, Number(asset.decimals || 18), asset.symbol || '');
+                        }
+                        if (assetEnabledInput) {
+                            assetEnabledInput.checked = assetConfig.enabled;
+                        }
+                        if (maxPayoutInput) {
+                            maxPayoutInput.value = formatUnitsInput(assetConfig.maxPayout, Number(asset.decimals || 18));
+                        }
+                        if (dailyLimitInput) {
+                            dailyLimitInput.value = formatUnitsInput(assetConfig.dailyLimit, Number(asset.decimals || 18));
+                        }
+                        if (payoutSignerInput && currentSigner && currentSigner.toLowerCase() !== zeroAddress && !payoutSignerInput.value) {
+                            payoutSignerInput.value = currentSigner;
+                        }
                         if (recipientInput && connectedWallet && !recipientInput.value) {
                             recipientInput.value = connectedWallet;
                         }
@@ -16692,7 +19430,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     };
 
                     const connectWallet = async () => {
-                        provider = window.ethereum;
+                        provider = selectedWalletProvider();
                         if (!provider || typeof provider.request !== 'function') {
                             setStatus(labels.noWallet || 'No EVM wallet extension detected.', 'danger');
                             return;
@@ -16711,6 +19449,19 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             setOwnerActions(false);
                             setStatus(error && error.message ? error.message : (labels.txFailed || 'Transaction failed.'), 'danger');
                         }
+                    };
+
+                    const disconnectWallet = async () => {
+                        const activeProvider = selectedWalletProvider();
+                        if (activeProvider && typeof activeProvider.request === 'function') {
+                            try {
+                                await activeProvider.request({
+                                    method: 'wallet_revokePermissions',
+                                    params: [{ eth_accounts: {} }]
+                                });
+                            } catch (error) {}
+                        }
+                        resetOwnerConnection(labels.disconnected || 'Wallet disconnected.', 'muted');
                     };
 
                     const sendTransaction = async (tx) => {
@@ -16733,6 +19484,43 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         } catch (error) {
                             setStatus(error && error.message ? error.message : (labels.txFailed || 'Transaction was rejected or failed.'), 'danger');
                             setOwnerActions(ownerVerified);
+                        }
+                    };
+
+                    const networkForPayout = (payout) => {
+                        const payoutNetwork = String(payout && payout.network ? payout.network : '').trim().toLowerCase();
+                        const payoutMode = String(payout && payout.networkMode ? payout.networkMode : '').trim().toLowerCase();
+                        const payoutChainHex = String(payout && payout.chainHex ? payout.chainHex : '').trim().toLowerCase();
+                        return networks.find((network) => {
+                            const networkKey = String(network && network.key ? network.key : '').trim().toLowerCase();
+                            const networkMode = String(network && network.mode ? network.mode : '').trim().toLowerCase();
+                            const networkChainHex = String(network && network.chainHex ? network.chainHex : '').trim().toLowerCase();
+                            return (payoutNetwork === '' || payoutNetwork === networkKey)
+                                && (payoutMode === '' || payoutMode === networkMode)
+                                && (payoutChainHex === '' || payoutChainHex === networkChainHex);
+                        }) || currentNetwork();
+                    };
+
+                    const sendPayoutTransaction = async (network, tx) => {
+                        if (!provider || !ownerVerified) {
+                            throw new Error(labels.readyPayoutOwnerRequired || labels.notOwner || 'Connected wallet is not the vault owner.');
+                        }
+                        await switchNetwork(network);
+                        ownerActions.forEach((button) => {
+                            button.disabled = true;
+                        });
+                        try {
+                            const hash = await provider.request({
+                                method: 'eth_sendTransaction',
+                                params: [tx]
+                            });
+                            setStatus((labels.txSent || 'Transaction sent') + ': ' + hash, 'success');
+                            window.setTimeout(() => refreshState().catch(() => {}), 4500);
+                            return hash;
+                        } catch (error) {
+                            setStatus(error && error.message ? error.message : (labels.txFailed || 'Transaction was rejected or failed.'), 'danger');
+                            setOwnerActions(ownerVerified);
+                            throw error;
                         }
                     };
 
@@ -16813,6 +19601,100 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         });
                     };
 
+                    const setPayoutSigner = async () => {
+                        const network = currentNetwork();
+                        const signer = String(payoutSignerInput ? payoutSignerInput.value : '').trim();
+                        if (!evmAddressPattern.test(signer)) {
+                            throw new Error(labels.invalidSigner || 'Enter a valid payout signer address.');
+                        }
+                        await sendTransaction({
+                            from: connectedWallet,
+                            to: network.vault,
+                            data: selectors.setPayoutSigner + encodeAddress(signer)
+                        });
+                    };
+
+                    const payoutReadyOrder = async (button) => {
+                        if (!button) {
+                            return;
+                        }
+                        if (!ownerVerified) {
+                            throw new Error(labels.readyPayoutOwnerRequired || labels.notOwner || 'Connect the owner wallet first.');
+                        }
+                        if (!payoutExecutorConfigured) {
+                            const missingMessage = labels.payoutExecutorMissing || 'Payout executor is not configured';
+                            showReadyPayoutAlert(missingMessage);
+                            throw new Error(missingMessage);
+                        }
+
+                        const publicId = String(button.dataset.publicId || '').trim();
+                        if (!publicId) {
+                            throw new Error(labels.txFailed || 'Transaction failed.');
+                        }
+
+                        const labelNode = button.querySelector('span');
+                        const previousLabel = labelNode ? labelNode.textContent : button.textContent;
+                        if (labelNode) {
+                            labelNode.textContent = labels.readyPayoutProcessing || 'Preparing payout...';
+                        }
+                        button.disabled = true;
+                        let completed = false;
+
+                        try {
+                            const prepared = await postPayoutAction('admin_mixer_prepare_payout_ajax', { public_id: publicId });
+                            const payout = prepared && prepared.payout ? prepared.payout : null;
+                            if (!payout || !payout.to || !payout.data) {
+                                throw new Error(prepared && prepared.message ? prepared.message : (labels.txFailed || 'Transaction failed.'));
+                            }
+
+                            const payoutNetwork = networkForPayout(payout);
+                            const txHash = await sendPayoutTransaction(payoutNetwork, {
+                                from: connectedWallet,
+                                to: payout.to,
+                                value: payout.value || '0x0',
+                                data: payout.data
+                            });
+                            await postPayoutAction('admin_mixer_record_payout_ajax', {
+                                public_id: publicId,
+                                tx_hash: txHash
+                            });
+
+                            completed = true;
+                            const row = button.closest('[data-admin-vault-payout-row]');
+                            if (row) {
+                                row.classList.add('is-submitted');
+                            }
+                            const actionCell = button.closest('td');
+                            if (actionCell) {
+                                const explorerBase = String(payout.explorerBase || '').trim();
+                                actionCell.innerHTML = '';
+                                if (explorerBase) {
+                                    const link = document.createElement('a');
+                                    link.className = 'btn btn-outline-dark btn-sm';
+                                    link.href = explorerBase + encodeURIComponent(txHash);
+                                    link.target = '_blank';
+                                    link.rel = 'noopener noreferrer';
+                                    link.textContent = labels.payoutExplorer || 'Explorer';
+                                    actionCell.appendChild(link);
+                                } else {
+                                    const tx = document.createElement('span');
+                                    tx.className = 'admin-mixer-ready-payouts__hash';
+                                    tx.textContent = txHash.slice(0, 10) + '...' + txHash.slice(-8);
+                                    tx.title = txHash;
+                                    actionCell.appendChild(tx);
+                                }
+                            }
+                            if (labelNode) {
+                                labelNode.textContent = labels.readyPayoutDone || 'Payout sent.';
+                            }
+                            setStatus(labels.readyPayoutDone || 'Payout sent.', 'success');
+                        } finally {
+                            if (!completed && labelNode) {
+                                labelNode.textContent = previousLabel;
+                            }
+                        }
+                    };
+
                     const bindSafe = (button, handler) => {
                         if (!button) {
                             return;
@@ -16826,8 +19708,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     };
 
                     fillSelects();
+                    discoverWalletProviders();
                     setOwnerActions(false);
+                    if (walletProviderSelect) {
+                        walletProviderSelect.addEventListener('change', () => {
+                            resetOwnerConnection(labels.disconnected || 'Wallet disconnected.', 'muted');
+                        });
+                    }
                     bindSafe(connectButton, connectWallet);
+                    bindSafe(disconnectButton, disconnectWallet);
                     bindSafe(refreshButton, refreshState);
                     bindSafe(pauseButton, () => sendTransaction({ from: connectedWallet, to: currentNetwork().vault, data: selectors.pause }));
                     bindSafe(unpauseButton, () => sendTransaction({ from: connectedWallet, to: currentNetwork().vault, data: selectors.unpause }));
@@ -16835,22 +19724,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     bindSafe(withdrawButton, withdraw);
                     bindSafe(withdrawAllButton, withdrawAll);
                     bindSafe(setAssetButton, setAssetConfig);
-
-                    if (window.ethereum && typeof window.ethereum.on === 'function') {
-                        window.ethereum.on('accountsChanged', (accounts) => {
-                            connectedWallet = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
-                            ownerVerified = false;
-                            setOwnerActions(false);
-                            if (connectedWallet) {
-                                refreshState().catch(() => {});
-                            }
-                        });
-                        window.ethereum.on('chainChanged', () => {
-                            if (connectedWallet) {
-                                refreshState().catch(() => {});
-                            }
-                        });
-                    }
+                    bindSafe(setSignerButton, setPayoutSigner);
+                    readyPayoutButtons.forEach((button) => {
+                        bindSafe(button, () => payoutReadyOrder(button));
+                    });
                 };
 
                 initVaultOwnerTools();
@@ -16880,8 +19757,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const errorLabel = mount.dataset.errorLabel || 'Unable to load LI.FI widget.';
                     const integrator = (mount.dataset.integrator || '').trim();
                     const apiKey = (mount.dataset.apiKey || '').trim();
-                    const fee = Number.parseFloat(mount.dataset.fee || '0.01');
-                    const safeFee = Number.isFinite(fee) ? Math.max(0, Math.min(0.1, fee)) : 0.01;
+                    const defaultFromAsset = (mount.dataset.defaultFromAsset || '').trim();
+                    const defaultToAsset = (mount.dataset.defaultToAsset || '').trim();
+                    const fee = Number.parseFloat(mount.dataset.fee || '0');
+                    const safeFee = Number.isFinite(fee) ? Math.max(0, Math.min(0.1, fee)) : 0;
                     let allowedChains = [];
                     try {
                         allowedChains = JSON.parse(mount.dataset.allowedChains || '[]');
@@ -16908,7 +19787,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             integrator,
                             apiKey: apiKey || undefined,
                             fee: safeFee,
-                            allowedChains
+                            allowedChains,
+                            defaultFromAsset: defaultFromAsset || undefined,
+                            defaultToAsset: defaultToAsset || undefined
                         });
                         mount.dataset.rendered = '1';
                     } catch (error) {
@@ -16925,8 +19806,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     const loadingLabel = mount.dataset.loadingLabel || 'Loading Hinkal module...';
                     const errorLabel = mount.dataset.errorLabel || 'Unable to load Hinkal module.';
+                    const inputAsset = (mount.dataset.inputAsset || 'POL').trim().toUpperCase();
                     const feePercent = Number.parseFloat(mount.dataset.feePercent || '1');
                     const feeWallet = (mount.dataset.feeWallet || '').trim();
+                    const showFeeDetails = mount.dataset.showFeeDetails !== '0';
+                    const quoteUrl = (mount.dataset.quoteUrl || '').trim();
+                    const notificationUrl = (mount.dataset.notificationUrl || '').trim();
+                    const csrfToken = (mount.dataset.csrfToken || '').trim();
                     const walletConnectProjectId = (mount.dataset.walletconnectProjectId || '').trim();
 
                     mount.innerHTML = '<div class="admin-swap-loader admin-private-send-loader" role="status" aria-live="polite"><span class="admin-swap-loader__spinner" aria-hidden="true"></span><span>' + loadingLabel + '</span></div>';
@@ -16938,7 +19824,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                         window.AdminHinkalPrivateSend.render(mount, {
                             feePercent: Number.isFinite(feePercent) ? feePercent : 1,
+                            inputAsset,
                             feeWallet,
+                            showFeeDetails,
+                            quoteUrl,
+                            notificationUrl,
+                            csrfToken,
                             walletConnectProjectId
                         });
                         mount.dataset.rendered = '1';
@@ -17014,19 +19905,36 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const routeReady = widget.dataset.routeReady === '1';
                     const connectButton = widget.querySelector('[data-admin-mixer-connect]');
                     const amountInput = widget.querySelector('[data-admin-mixer-amount]');
+                    const amountUsdLabel = widget.querySelector('[data-admin-mixer-usd]');
                     const recipientInput = widget.querySelector('[data-admin-mixer-recipient]');
                     const createButton = widget.querySelector('[data-admin-mixer-create-order]');
                     const formView = widget.querySelector('[data-admin-mixer-form]');
                     const orderView = widget.querySelector('[data-admin-mixer-order]');
                     const orderAmount = widget.querySelector('[data-admin-mixer-order-amount]');
                     const orderAddress = widget.querySelector('[data-admin-mixer-order-address]');
+                    const orderRecipientLabel = widget.querySelector('[data-admin-mixer-order-recipient-label]');
                     const orderRecipient = widget.querySelector('[data-admin-mixer-order-recipient]');
                     const orderEstimated = widget.querySelector('[data-admin-mixer-order-estimated]');
+                    const orderEstimatedLabel = widget.querySelector('[data-admin-mixer-order-estimated-label]');
+                    const orderTitle = widget.querySelector('[data-admin-mixer-order-title]');
                     const orderStatus = widget.querySelector('[data-admin-mixer-order-status]');
                     const orderQr = widget.querySelector('[data-admin-mixer-qr]');
+                    const orderQrBox = widget.querySelector('[data-admin-mixer-qr-box]');
                     const orderCountdown = widget.querySelector('[data-admin-mixer-countdown]');
                     const orderConfirmations = widget.querySelector('[data-admin-mixer-confirmations]');
                     const orderWarning = widget.querySelector('[data-admin-mixer-order-warning]');
+                    const orderMeta = widget.querySelector('[data-admin-mixer-order-meta]');
+                    const orderStepAsset = widget.querySelector('[data-admin-mixer-order-step-asset]');
+                    const orderSteps = widget.querySelector('[data-admin-mixer-order-steps]');
+                    const detectedVisual = widget.querySelector('[data-admin-mixer-detected-visual]');
+                    const detectedIcon = widget.querySelector('[data-admin-mixer-detected-icon]');
+                    const detectedStatus = widget.querySelector('[data-admin-mixer-detected-status]');
+                    const detectedTitle = widget.querySelector('[data-admin-mixer-detected-title]');
+                    const detectedMessage = widget.querySelector('[data-admin-mixer-detected-message]');
+                    const paymentDetailCards = Array.from(widget.querySelectorAll('[data-admin-mixer-payment-detail]'));
+                    const confirmationsRow = widget.querySelector('[data-admin-mixer-confirmations-row]');
+                    const depositRow = widget.querySelector('[data-admin-mixer-deposit-row]');
+                    const payoutRow = widget.querySelector('[data-admin-mixer-payout-row]');
                     const depositLink = widget.querySelector('[data-admin-mixer-deposit-link]');
                     const depositEmpty = widget.querySelector('[data-admin-mixer-deposit-empty]');
                     const payoutLink = widget.querySelector('[data-admin-mixer-payout-link]');
@@ -17036,6 +19944,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const copyFeedback = widget.querySelector('[data-admin-mixer-copy-feedback]');
                     const backButton = widget.querySelector('[data-admin-mixer-order-back]');
                     const cancelButton = widget.querySelector('[data-admin-mixer-order-cancel]');
+                    const payoutButton = widget.querySelector('[data-admin-mixer-payout]');
+                    const finishButton = widget.querySelector('[data-admin-mixer-finish]');
+                    const payoutNotice = widget.querySelector('[data-admin-mixer-payout-notice]');
                     const historyView = widget.querySelector('[data-admin-mixer-history]');
                     const historyWallet = widget.querySelector('[data-admin-mixer-history-wallet]');
                     const historyState = widget.querySelector('[data-admin-mixer-history-state]');
@@ -17043,7 +19954,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const notice = widget.querySelector('[data-admin-mixer-notice]');
                     const noticeIcon = widget.querySelector('[data-admin-mixer-notice-icon]');
                     const noticeText = widget.querySelector('[data-admin-mixer-notice-text]');
+                    const quoteCard = widget.querySelector('[data-admin-mixer-quote]');
+                    const quoteInputUsd = widget.querySelector('[data-admin-mixer-quote-input-usd]');
+                    const quoteFee = widget.querySelector('[data-admin-mixer-quote-fee]');
+                    const quotePayoutUsd = widget.querySelector('[data-admin-mixer-quote-payout-usd]');
+                    const quoteReceive = widget.querySelector('[data-admin-mixer-quote-receive]');
+                    const quoteReceiveUsd = widget.querySelector('[data-admin-mixer-quote-receive-usd]');
+                    const quoteNote = widget.querySelector('[data-admin-mixer-quote-note]');
+                    const quoteDefaultNote = quoteNote ? quoteNote.textContent : '';
                     const inputSelect = widget.querySelector('[data-admin-mixer-input-select]');
+                    const outputSelect = widget.querySelector('[data-admin-mixer-output-select]');
                     const inputTokenNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-token]'));
                     const inputTokenImages = Array.from(widget.querySelectorAll('[data-admin-mixer-input-token-img]'));
                     const inputTokenTextNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-token-text]'));
@@ -17052,28 +19972,62 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     const inputSymbolNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-symbol]'));
                     const inputNetworkLabelNodes = Array.from(widget.querySelectorAll('[data-admin-mixer-input-network-label]'));
                     const orderInputIcon = widget.querySelector('[data-admin-mixer-order-input-icon]');
+                    const orderAmountIcon = widget.querySelector('[data-admin-mixer-order-amount-icon]');
+                    const orderOutputIcon = widget.querySelector('[data-admin-mixer-order-output-icon]');
+                    const orderTitleOutputIcon = widget.querySelector('[data-admin-mixer-order-title-output-icon]');
                     const orderPair = widget.querySelector('[data-admin-mixer-order-pair]');
+                    const orderTitleBar = orderTitle ? orderTitle.closest('.admin-mixer-order__title') : null;
                     const orderInputSymbol = widget.querySelector('[data-admin-mixer-order-input-symbol]');
                     const outputAssetKey = widget.dataset.outputAssetKey || 'POLYGON_POL';
                     const outputAsset = widget.dataset.outputAsset || 'POL';
+                    const outputIcon = widget.dataset.outputIcon || '';
                     const outputNetwork = widget.dataset.outputNetwork || 'Polygon';
+                    const outputRateUsd = Number.parseFloat(widget.dataset.outputRateUsd || '0') || 0;
                     const outputChainHex = widget.dataset.outputChainHex || '0x89';
                     const outputRpcUrl = widget.dataset.outputRpcUrl || '';
                     const outputNativeSymbol = widget.dataset.outputNativeSymbol || outputAsset;
+                    const payoutFactor = Math.max(0, Math.min(1, Number.parseFloat(widget.dataset.payoutFactor || '1') || 1));
+                    const minOrderUsd = Math.max(0, Number.parseFloat(widget.dataset.minOrderUsd || '10') || 10);
                     const payoutExplorerBase = widget.dataset.payoutExplorerUrl || 'https://polygonscan.com/tx/';
                     const quoteLifetimeMinutes = Number.parseInt(widget.dataset.quoteLifetimeMinutes || '15', 10) || 15;
                     const csrfToken = widget.dataset.csrf || '';
                     const ajaxUrl = widget.dataset.ajaxUrl || window.location.href;
                     const connectErrorLabel = widget.dataset.connectErrorLabel || 'Unable to connect wallet. Paste the recipient address manually.';
                     const connectedLabel = widget.dataset.connectedLabel || 'Wallet connected';
+                    const disconnectLabel = widget.dataset.disconnectLabel || 'Disconnect wallet';
                     const noWalletLabel = widget.dataset.noWalletLabel || 'No EVM wallet extension detected. Paste the recipient address manually.';
                     const fillRequiredLabel = widget.dataset.fillRequiredLabel || 'Enter the amount and a valid recipient address to continue.';
                     const backendPendingLabel = widget.dataset.backendPendingLabel || 'Deposit order generation will be enabled after the watcher and payout executor are connected.';
                     const payWarningLabel = widget.dataset.payWarningLabel || 'Do not close or refresh this page while the payment is being detected.';
+                    const quoteUnavailableLabel = widget.dataset.quoteUnavailableLabel || 'Price quote is not available right now.';
+                    const minOrderLabel = widget.dataset.minOrderLabel || ('Minimum swap amount is ' + minOrderUsd.toFixed(2) + ' USD.');
+                    const orderSendLabel = widget.dataset.orderSendLabel || 'Send';
+                    const orderReceiveLabel = widget.dataset.orderReceiveLabel || 'You receive';
+                    const orderSentLabel = widget.dataset.orderSentLabel || 'Sent';
+                    const orderStepAssetTemplate = widget.dataset.orderStepAssetTemplate || 'Open Trust Wallet and choose {asset}.';
+                    const recipientLabelTemplate = widget.dataset.recipientLabelTemplate || 'Payout address {asset}';
+                    const orderDetectedTitle = widget.dataset.orderDetectedTitle || 'Transaction detected';
+                    const orderDetectedMessage = 'Wykryliśmy wpłatę. Oczekiwanie na potwierdzenie.';
+                    const orderConfirmedTitle = widget.dataset.orderConfirmedTitle || 'Transaction confirmed';
+                    const orderConfirmedMessage = widget.dataset.orderConfirmedMessage || 'Required confirmations are complete. Preparing payout.';
+                    const orderPaidTitle = widget.dataset.orderPaidTitle || 'Payout sent';
+                    const orderPaidMessage = 'Wypłata została wysłana. Sprawdź transakcję w explorerze.';
+                    const payoutButtonLabel = widget.dataset.payoutButtonLabel || 'Withdraw {asset}';
+                    const payoutPreparingLabel = widget.dataset.payoutPreparingLabel || 'Preparing payout...';
+                    const autoPayoutEnabled = widget.dataset.autoPayoutEnabled === '1';
+                    const autoPayoutLabel = widget.dataset.autoPayoutLabel || 'Automatic payout is enabled. The system will send the payout shortly.';
+                    const activeOrderLabel = widget.dataset.activeOrderLabel || 'You have an active Swapper transaction. Finish it before creating a new one.';
+                    const historyOpenLabel = widget.dataset.historyOpenLabel || 'Return to transaction';
+                    const historyDeleteLabel = widget.dataset.historyDeleteLabel || 'Usuń';
+                    const historyPaidLabel = widget.dataset.historyPaidLabel || 'Paid out';
+                    const historyPendingLabel = widget.dataset.historyPendingLabel || 'Pending...';
                     const copiedLabel = widget.dataset.copiedLabel || 'Copied';
+                    const finalOrderStatuses = ['paid', 'cancelled', 'failed', 'expired'];
+                    const cancelledHistoryDeleteDelayMs = 60 * 60 * 1000;
                     const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
                     const orderStorageKey = 'subme-admin-swapper-active-order';
                     const historyStoragePrefix = 'subme-admin-swapper-recipient-history:';
+                    const walletStorageKey = 'subme-admin-swapper-connected-wallet';
                     const inputAssetFallback = {
                         key: String(widget.dataset.inputAssetKey || widget.dataset.inputAsset || 'BTC').toUpperCase(),
                         symbol: widget.dataset.inputAsset || widget.dataset.inputAssetKey || 'BTC',
@@ -17087,6 +20041,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     let countdownTimer = 0;
                     let statusTimer = 0;
                     let connectedWalletAddress = '';
+                    let activeOrderLocked = false;
+                    const connectDefaultLabel = connectButton && connectButton.querySelector('span')
+                        ? connectButton.querySelector('span').textContent
+                        : 'Connect wallet';
 
                     try {
                         const parsedInputAssets = JSON.parse(widget.dataset.inputAssets || '[]');
@@ -17095,11 +20053,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             return {
                                 key,
                                 symbol: String(asset && asset.symbol ? asset.symbol : key).trim() || key,
-                                network: String(asset && asset.network ? asset.network : (key === 'DOGE' ? 'Dogecoin' : 'Bitcoin')).trim(),
+                                network: String(asset && asset.network ? asset.network : (key === 'DOGE' ? 'Dogecoin' : (key === 'SOL' ? 'Solana' : 'Bitcoin'))).trim(),
                                 icon: String(asset && asset.icon ? asset.icon : '').trim(),
                                 networkIcon: String(asset && asset.networkIcon ? asset.networkIcon : '').trim(),
                                 badge: String(asset && asset.badge ? asset.badge : key.slice(0, 1)).trim() || key.slice(0, 1),
-                                depositAddress: String(asset && asset.depositAddress ? asset.depositAddress : '').trim()
+                                depositAddress: String(asset && asset.depositAddress ? asset.depositAddress : '').trim(),
+                                rateUsd: Number.parseFloat(String(asset && asset.rateUsd ? asset.rateUsd : '0')) || 0,
+                                rateUpdatedAt: String(asset && asset.rateUpdatedAt ? asset.rateUpdatedAt : '').trim()
                             };
                         }).filter((asset) => asset.key !== '') : [];
                     } catch (error) {
@@ -17116,11 +20076,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         return {
                             key: safeKey,
                             symbol: safeKey,
-                            network: safeKey === 'DOGE' ? 'Dogecoin' : 'Bitcoin',
-                            icon: safeKey === 'DOGE' ? '/img/crypto/doge.png' : '/img/crypto/btc.png',
-                            networkIcon: safeKey === 'DOGE' ? '/img/crypto/doge.png' : '/img/crypto/btc.png',
+                            network: safeKey === 'DOGE' ? 'Dogecoin' : (safeKey === 'SOL' ? 'Solana' : 'Bitcoin'),
+                            icon: safeKey === 'DOGE' ? '/img/crypto/doge.png' : (safeKey === 'SOL' ? '/img/crypto/sol.png' : '/img/crypto/btc.png'),
+                            networkIcon: safeKey === 'DOGE' ? '/img/crypto/doge.png' : (safeKey === 'SOL' ? '/img/crypto/sol.png' : '/img/crypto/btc.png'),
                             badge: safeKey.slice(0, 1),
-                            depositAddress: ''
+                            depositAddress: '',
+                            rateUsd: 0,
+                            rateUpdatedAt: ''
                         };
                     };
 
@@ -17135,6 +20097,52 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     let selectedInputAsset = findInputAssetOption(inputSelect ? inputSelect.value : widget.dataset.inputAssetKey);
                     const currentInputAsset = () => selectedInputAsset || inputAssetOptions[0] || inputAssetFallback;
+                    const isFinalOrderStatus = (status) => finalOrderStatuses.includes(String(status || '').trim().toLowerCase());
+                    const isFinalOrder = (order) => isFinalOrderStatus(order && order.status);
+                    const readRememberedSwapperWallet = () => {
+                        try {
+                            const rawValue = window.localStorage ? window.localStorage.getItem(walletStorageKey) : '';
+                            if (!rawValue) {
+                                return '';
+                            }
+                            const parsedValue = JSON.parse(rawValue);
+                            return String(parsedValue && parsedValue.address ? parsedValue.address : rawValue).trim();
+                        } catch (error) {
+                            try {
+                                return String(window.localStorage ? window.localStorage.getItem(walletStorageKey) : '').trim();
+                            } catch (storageError) {
+                                return '';
+                            }
+                        }
+                    };
+                    const rememberSwapperWallet = (address) => {
+                        if (!evmAddressPattern.test(String(address || '').trim())) {
+                            return;
+                        }
+                        try {
+                            if (window.localStorage) {
+                                window.localStorage.setItem(walletStorageKey, JSON.stringify({
+                                    address: String(address).trim(),
+                                    savedAt: Date.now()
+                                }));
+                            }
+                        } catch (error) {}
+                    };
+                    const forgetSwapperWallet = () => {
+                        try {
+                            if (window.localStorage) {
+                                window.localStorage.removeItem(walletStorageKey);
+                            }
+                        } catch (error) {}
+                    };
+                    const isWaitingOrderExpired = (order) => {
+                        const status = String(order && order.status ? order.status : '').trim().toLowerCase();
+                        const depositTxid = String(order && (order.depositTxid || order.deposit_txid) ? (order.depositTxid || order.deposit_txid) : '').trim();
+                        const confirmations = Number.parseInt(String(order && order.confirmations ? order.confirmations : 0), 10) || 0;
+                        const expiresAt = Number(order && order.expiresAt ? order.expiresAt : 0);
+                        return status === 'waiting_deposit' && depositTxid === '' && confirmations < 1 && expiresAt > 0 && expiresAt < Date.now();
+                    };
+                    const isBlockingOrder = (order) => !!(order && order.id && !isFinalOrder(order) && !isWaitingOrderExpired(order));
 
                     const setNotice = (message, type = 'info') => {
                         if (!notice || !noticeText) {
@@ -17145,6 +20153,99 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         noticeText.textContent = message;
                         if (noticeIcon) {
                             noticeIcon.className = 'bi ' + (type === 'success' ? 'bi-check2-circle' : (type === 'warning' ? 'bi-info-circle' : 'bi-credit-card-2-front'));
+                        }
+                    };
+
+                    const setPayoutNotice = (message, type = 'info') => {
+                        if (!payoutNotice) {
+                            setNotice(message, type);
+                            return;
+                        }
+                        const text = String(message || '').trim();
+                        payoutNotice.hidden = text === '';
+                        payoutNotice.textContent = text;
+                        payoutNotice.classList.toggle('is-success', type === 'success');
+                        payoutNotice.classList.toggle('is-warning', type === 'warning');
+                    };
+
+                    const scrollMixerWidgetIntoView = () => {
+                        const target = widget.closest('.admin-mixer-widget') || widget;
+                        const rect = target.getBoundingClientRect();
+                        const offset = window.innerWidth < 768 ? 82 : 28;
+                        window.scrollTo({
+                            top: Math.max(0, window.pageYOffset + rect.top - offset),
+                            behavior: 'smooth'
+                        });
+                    };
+
+                    const syncConnectButtonState = () => {
+                        if (!connectButton) {
+                            return;
+                        }
+                        const isConnected = evmAddressPattern.test(connectedWalletAddress);
+                        const label = connectButton.querySelector('span');
+                        const icon = connectButton.querySelector('i');
+                        connectButton.classList.toggle('is-connected', isConnected);
+                        if (label) {
+                            label.textContent = isConnected ? disconnectLabel : connectDefaultLabel;
+                        }
+                        if (icon) {
+                            icon.className = 'bi ' + (isConnected ? 'bi-x-lg' : 'bi-wallet2');
+                        }
+                    };
+
+                    const disconnectSwapperWallet = async (provider) => {
+                        const previousAddress = connectedWalletAddress;
+                        if (provider && typeof provider.request === 'function') {
+                            try {
+                                await provider.request({
+                                    method: 'wallet_revokePermissions',
+                                    params: [{ eth_accounts: {} }]
+                                });
+                            } catch (error) {}
+	                        }
+                        connectedWalletAddress = '';
+	                        forgetSwapperWallet();
+	                        if (recipientInput && recipientInput.value.trim().toLowerCase() === previousAddress.toLowerCase()) {
+	                            recipientInput.value = '';
+	                        }
+                        if (historyView) {
+                            historyView.hidden = true;
+                        }
+                        syncConnectButtonState();
+                        setNotice(fillRequiredLabel, 'info');
+                        updateCreateState();
+                    };
+
+                    const switchOutputNetwork = async (provider) => {
+                        if (!provider || typeof provider.request !== 'function') {
+                            throw new Error(noWalletLabel);
+                        }
+                        try {
+                            await provider.request({
+                                method: 'wallet_switchEthereumChain',
+                                params: [{ chainId: outputChainHex }]
+                            });
+                        } catch (switchError) {
+                            if (switchError && Number(switchError.code) === 4902 && outputRpcUrl) {
+                                const explorerUrl = payoutExplorerBase.replace(/\/tx\/?$/i, '');
+                                await provider.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                        chainId: outputChainHex,
+                                        chainName: outputNetwork,
+                                        nativeCurrency: {
+                                            name: outputNativeSymbol,
+                                            symbol: outputNativeSymbol,
+                                            decimals: 18
+                                        },
+                                        rpcUrls: [outputRpcUrl],
+                                        blockExplorerUrls: explorerUrl ? [explorerUrl] : []
+                                    }]
+                                });
+                                return;
+                            }
+                            throw switchError;
                         }
                     };
 
@@ -17161,6 +20262,117 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             image.removeAttribute('src');
                             image.alt = '';
                             image.hidden = true;
+                        }
+                    };
+
+                    const formatUsd = (value) => {
+                        const amount = Number(value);
+                        if (!Number.isFinite(amount)) {
+                            return '0.00 USD';
+                        }
+
+                        return amount.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                        }) + ' USD';
+                    };
+
+                    const formatAssetAmount = (value, symbol) => {
+                        const amount = Number(value);
+                        if (!Number.isFinite(amount) || amount <= 0) {
+                            return '0 ' + String(symbol || '').trim();
+                        }
+
+                        const digits = 3;
+                        return amount.toLocaleString(undefined, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: digits
+                        }) + ' ' + String(symbol || '').trim();
+                    };
+
+                    const formatInputAmountNumber = (value, asset) => {
+                        const amount = Number.parseFloat(String(value || '').replace(',', '.'));
+                        const symbol = String(asset || '').trim().toUpperCase();
+                        if (!Number.isFinite(amount) || amount <= 0) {
+                            return symbol === 'BTC' ? '0.000000' : '0.00';
+                        }
+
+                        const minDigits = symbol === 'BTC' ? 6 : (symbol === 'SOL' ? 4 : 2);
+                        return amount.toLocaleString('en-US', {
+                            useGrouping: false,
+                            minimumFractionDigits: minDigits,
+                            maximumFractionDigits: symbol === 'SOL' ? 9 : 8
+                        });
+                    };
+
+                    const currentAmount = () => Number.parseFloat(String(amountInput ? amountInput.value : '').replace(',', '.'));
+
+                    const updateQuote = () => {
+                        const activeInputAsset = currentInputAsset();
+                        const amount = currentAmount();
+                        const inputRateUsd = Number(activeInputAsset.rateUsd || 0);
+                        const canQuote = Number.isFinite(amount) && amount > 0 && inputRateUsd > 0 && outputRateUsd > 0;
+
+                        if (!Number.isFinite(amount) || amount <= 0) {
+                            if (amountUsdLabel) {
+                                amountUsdLabel.textContent = '0.00 USD';
+                            }
+                            if (quoteCard) {
+                                quoteCard.hidden = true;
+                                quoteCard.classList.toggle('is-warning', false);
+                            }
+                            return;
+                        }
+
+                        if (!canQuote) {
+                            if (amountUsdLabel) {
+                                amountUsdLabel.textContent = '0.00 USD';
+                            }
+                            [quoteInputUsd, quoteFee, quotePayoutUsd, quoteReceive, quoteReceiveUsd].forEach((node) => {
+                                if (node) {
+                                    node.textContent = '-';
+                                }
+                            });
+                            if (quoteNote) {
+                                quoteNote.textContent = quoteUnavailableLabel;
+                            }
+                            if (quoteCard) {
+                                quoteCard.hidden = false;
+                                quoteCard.classList.toggle('is-warning', true);
+                            }
+                            return;
+                        }
+
+                        const inputUsd = amount * inputRateUsd;
+                        const payoutUsd = Math.max(0, inputUsd * payoutFactor);
+                        const feeUsd = Math.max(0, inputUsd - payoutUsd);
+                        const receiveAmount = payoutUsd / outputRateUsd;
+                        const belowMinimum = inputUsd < minOrderUsd;
+
+                        if (amountUsdLabel) {
+                            amountUsdLabel.textContent = formatUsd(inputUsd);
+                        }
+                        if (quoteInputUsd) {
+                            quoteInputUsd.textContent = formatUsd(inputUsd);
+                        }
+                        if (quoteFee) {
+                            quoteFee.textContent = formatUsd(feeUsd);
+                        }
+                        if (quotePayoutUsd) {
+                            quotePayoutUsd.textContent = formatUsd(payoutUsd);
+                        }
+                        if (quoteReceive) {
+                            quoteReceive.textContent = formatAssetAmount(receiveAmount, outputAsset);
+                        }
+                        if (quoteReceiveUsd) {
+                            quoteReceiveUsd.textContent = formatUsd(payoutUsd);
+                        }
+                        if (quoteNote) {
+                            quoteNote.textContent = belowMinimum ? minOrderLabel : quoteDefaultNote;
+                        }
+                        if (quoteCard) {
+                            quoteCard.hidden = false;
+                            quoteCard.classList.toggle('is-warning', belowMinimum);
                         }
                     };
 
@@ -17191,16 +20403,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         });
                     };
 
-                    const showCopyFeedback = () => {
-                        if (!copyFeedback) {
-                            return;
+                    const showCopyFeedback = (copyButton = null) => {
+                        if (copyButton) {
+                            copyButton.dataset.copyLabel = copiedLabel;
+                            copyButton.classList.add('is-copied');
+                            window.clearTimeout(Number(copyButton.dataset.copyTimer || 0));
+                            copyButton.dataset.copyTimer = String(window.setTimeout(() => {
+                                copyButton.classList.remove('is-copied');
+                                copyButton.removeAttribute('data-copy-label');
+                            }, 1400));
                         }
-                        copyFeedback.textContent = copiedLabel;
-                        copyFeedback.classList.add('is-visible');
-                        window.clearTimeout(Number(copyFeedback.dataset.timer || 0));
-                        copyFeedback.dataset.timer = String(window.setTimeout(() => {
-                            copyFeedback.classList.remove('is-visible');
-                        }, 1400));
+                        if (copyFeedback) {
+                            copyFeedback.textContent = copiedLabel;
+                            copyFeedback.classList.add('is-visible');
+                            window.clearTimeout(Number(copyFeedback.dataset.timer || 0));
+                            copyFeedback.dataset.timer = String(window.setTimeout(() => {
+                                copyFeedback.classList.remove('is-visible');
+                            }, 1400));
+                        }
                     };
 
                     const postSwapper = (action, payload = {}) => {
@@ -17233,9 +20453,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         if (!txid) {
                             return '';
                         }
-                        return String(order.inputAsset || '').toUpperCase() === 'DOGE'
-                            ? 'https://blockchair.com/dogecoin/transaction/' + encodeURIComponent(txid)
-                            : 'https://mempool.space/tx/' + encodeURIComponent(txid);
+                        const inputAsset = String(order.inputAsset || '').toUpperCase();
+                        if (inputAsset === 'DOGE') {
+                            return 'https://blockchair.com/dogecoin/transaction/' + encodeURIComponent(txid);
+                        }
+                        if (inputAsset === 'SOL') {
+                            return 'https://solscan.io/tx/' + encodeURIComponent(txid);
+                        }
+                        return 'https://mempool.space/tx/' + encodeURIComponent(txid);
                     };
 
                     const payoutExplorerUrl = (order) => {
@@ -17244,14 +20469,134 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         return txid && base ? base + encodeURIComponent(txid) : '';
                     };
 
+                    const payoutAddressExplorerUrl = (order, address) => {
+                        const recipient = String(address || '').trim();
+                        if (!evmAddressPattern.test(recipient)) {
+                            return '';
+                        }
+                        const base = String(order && order.payoutExplorerBase ? order.payoutExplorerBase : payoutExplorerBase).trim();
+                        if (!base) {
+                            return '';
+                        }
+                        if (/\/tx\/?$/i.test(base)) {
+                            return base.replace(/\/tx\/?$/i, '/address/') + encodeURIComponent(recipient);
+                        }
+                        if (/\/address\/?$/i.test(base)) {
+                            return base.replace(/\/address\/?$/i, '/address/') + encodeURIComponent(recipient);
+                        }
+                        return base.replace(/\/?$/i, '/') + 'address/' + encodeURIComponent(recipient);
+                    };
+
                     const compactAddress = (address) => {
                         const text = String(address || '').trim();
                         return text.length > 14 ? (text.slice(0, 6) + '...' + text.slice(-4)) : text;
                     };
 
+                    const formatHistoryDate = (value) => {
+                        const timestamp = Number(value || 0);
+                        if (!Number.isFinite(timestamp) || timestamp <= 0) {
+                            return '';
+                        }
+
+                        const date = new Date(timestamp);
+                        if (Number.isNaN(date.getTime())) {
+                            return '';
+                        }
+
+                        const pad = (part) => String(part).padStart(2, '0');
+                        return pad(date.getDate()) + '.'
+                            + pad(date.getMonth() + 1) + '.'
+                            + date.getFullYear() + ', '
+                            + pad(date.getHours()) + ':'
+                            + pad(date.getMinutes());
+                    };
+
+                    const historyStatusClass = (entry) => {
+                        const status = String(entry && entry.status ? entry.status : '').trim().toLowerCase();
+                        const label = String(entry && entry.statusLabel ? entry.statusLabel : '').trim().toLowerCase();
+                        if (status === 'cancelled'
+                            || status === 'failed'
+                            || status === 'expired'
+                            || label === 'cancelled'
+                            || label === 'failed'
+                            || label === 'expired'
+                            || label === 'anulowano'
+                            || label === 'wygasło') {
+                            return 'is-cancelled';
+                        }
+                        if (status === 'ready_to_pay' || label === 'ready to pay' || label === 'gotowe do wypłaty') {
+                            return 'is-ready';
+                        }
+                        if (status === 'paid' || label === 'completed' || label === 'paid' || label === 'zakończono' || label === 'wypłacono' || label === 'zatwierdzone') {
+                            return 'is-paid';
+                        }
+
+                        return '';
+                    };
+
+                    const isCancelledHistoryEntry = (entry) => {
+                        return historyStatusClass(entry) === 'is-cancelled';
+                    };
+
+                    const isExpiredHistoryEntry = (entry) => {
+                        const status = String(entry && entry.status ? entry.status : '').trim().toLowerCase();
+                        const label = String(entry && entry.statusLabel ? entry.statusLabel : '').trim().toLowerCase();
+                        return status === 'expired' || label === 'expired' || label === 'wygasło';
+                    };
+
+                    const isPaidHistoryEntry = (entry) => {
+                        const status = String(entry && entry.status ? entry.status : '').trim().toLowerCase();
+                        const label = String(entry && entry.statusLabel ? entry.statusLabel : '').trim().toLowerCase();
+                        return status === 'paid'
+                            || status === 'completed'
+                            || label === 'completed'
+                            || label === 'paid'
+                            || label === 'zakończono'
+                            || label === 'wypłacono'
+                            || label === 'zatwierdzono'
+                            || label === 'zatwierdzone'
+                            || label === 'zrealizowano';
+                    };
+
+                    const historyStatusText = (entry) => {
+                        const status = String(entry && entry.status ? entry.status : '').trim().toLowerCase();
+                        const label = String(entry && entry.statusLabel ? entry.statusLabel : '').trim();
+                        const normalizedLabel = label.toLowerCase();
+                        if (isPaidHistoryEntry(entry)) {
+                            return historyPaidLabel;
+                        }
+                        if (status === 'waiting_deposit' || status === 'waiting' || normalizedLabel === 'waiting deposit' || normalizedLabel === 'oczekuje na wpłatę') {
+                            return historyPendingLabel;
+                        }
+
+                        return label || String(entry && entry.status ? entry.status : '').trim();
+                    };
+
                     const historyKeyForWallet = (address) => {
                         const normalized = String(address || '').trim().toLowerCase();
                         return normalized && evmAddressPattern.test(normalized) ? historyStoragePrefix + normalized : '';
+                    };
+
+                    const historyEntryStartedAt = (entry) => {
+                        const createdAt = Number(entry && entry.createdAt ? entry.createdAt : 0);
+                        if (Number.isFinite(createdAt) && createdAt > 0) {
+                            return createdAt;
+                        }
+
+                        const updatedAt = Number(entry && entry.updatedAt ? entry.updatedAt : 0);
+                        return Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0;
+                    };
+
+                    const canDeleteCancelledHistoryEntry = (entry) => {
+                        if (!isCancelledHistoryEntry(entry)) {
+                            return false;
+                        }
+                        if (isExpiredHistoryEntry(entry)) {
+                            return true;
+                        }
+
+                        const startedAt = historyEntryStartedAt(entry);
+                        return startedAt > 0 && (Date.now() - startedAt) >= cancelledHistoryDeleteDelayMs;
                     };
 
                     const loadWalletHistory = (address) => {
@@ -17280,9 +20625,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         } catch (error) {}
                     };
 
-                    const renderWalletHistory = (address) => {
-                        if (!historyView || !historyList || !historyState) {
-                            return;
+	                    const renderWalletHistory = (address) => {
+	                        if (!historyView || !historyList || !historyState) {
+	                            return;
                         }
 
                         const walletAddress = String(address || '').trim();
@@ -17309,27 +20654,94 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             const item = document.createElement('div');
                             item.className = 'admin-mixer-history__item';
 
+                            const icon = document.createElement('img');
+                            icon.className = 'admin-mixer-history__icon';
+                            setImageNode(icon, entry.outputIcon || outputIcon, entry.outputAsset || outputAsset);
+
                             const left = document.createElement('div');
+                            const amountLine = document.createElement('div');
+                            amountLine.className = 'admin-mixer-history__amount-line';
                             const title = document.createElement('strong');
-                            title.textContent = [
-                                String(entry.estimatedOutputAmount || entry.outputAmount || '').trim(),
-                                String(entry.outputAsset || '').trim(),
-                                String(entry.outputNetwork || '').trim()
-                            ].filter(Boolean).join(' ') || 'Swapper payout';
+                            const paidHistoryEntry = isPaidHistoryEntry(entry);
+                            const cancelledHistoryEntry = isCancelledHistoryEntry(entry);
+                            const exactOutputAmount = Number.parseFloat(String(entry.outputAmount || '0').replace(',', '.'));
+                            const estimatedOutputAmount = Number.parseFloat(String(entry.estimatedOutputAmount || '0').replace(',', '.'));
+                            const outputAmount = paidHistoryEntry && exactOutputAmount > 0 ? exactOutputAmount : estimatedOutputAmount;
+                            const outputAmountText = outputAmount > 0
+                                ? ((paidHistoryEntry ? '+' : '≈ ') + formatAssetAmount(outputAmount, entry.outputAsset || outputAsset))
+                                : String(entry.outputAsset || outputAsset || '').trim();
+                            title.textContent = outputAmountText || 'Swapper payout';
+                            title.classList.toggle('is-paid-output', paidHistoryEntry);
+                            title.classList.toggle('is-cancelled-output', cancelledHistoryEntry);
+                            const outputNetworkText = String(entry.outputNetwork || '').trim();
+                            const outputNetworkBadge = document.createElement('span');
+                            outputNetworkBadge.className = 'admin-mixer-history__network-badge';
+                            outputNetworkBadge.textContent = outputNetworkText;
                             const meta = document.createElement('span');
-                            meta.textContent = [
-                                String(entry.inputAmount || '').trim() && String(entry.inputAsset || '').trim()
-                                    ? String(entry.inputAmount).trim() + ' ' + String(entry.inputAsset).trim()
-                                    : '',
-                                String(entry.statusLabel || entry.status || '').trim(),
-                                entry.updatedAt ? new Date(Number(entry.updatedAt)).toLocaleString() : ''
-                            ].filter(Boolean).join(' • ');
-                            left.appendChild(title);
+                            meta.className = 'admin-mixer-history__meta';
+                            const inputAsset = String(entry.inputAsset || '').trim();
+                            const inputAmount = String(entry.inputAmount || '').trim();
+                            const inputText = inputAmount && inputAsset
+                                ? formatInputAmountNumber(inputAmount, inputAsset) + ' ' + inputAsset
+                                : '';
+                            const statusText = historyStatusText(entry);
+                            const dateText = formatHistoryDate(entry.updatedAt);
+                            if (inputText) {
+                                const inputNode = document.createElement('span');
+                                inputNode.textContent = inputText;
+                                meta.appendChild(inputNode);
+                            }
+                            if (statusText) {
+                                if (meta.childNodes.length > 0) {
+                                    meta.appendChild(document.createTextNode(' • '));
+                                }
+                                const statusNode = document.createElement('span');
+                                statusNode.textContent = statusText;
+                                const statusClass = historyStatusClass(entry);
+                                if (statusClass !== '') {
+                                    statusNode.className = statusClass;
+                                }
+                                meta.appendChild(statusNode);
+                            }
+                            if (dateText) {
+                                const dateNode = document.createElement('span');
+                                dateNode.className = 'admin-mixer-history__date';
+                                dateNode.textContent = dateText;
+                                meta.appendChild(dateNode);
+                            }
+                            amountLine.appendChild(title);
+                            if (outputNetworkText) {
+                                amountLine.appendChild(outputNetworkBadge);
+                            }
+                            left.appendChild(amountLine);
                             left.appendChild(meta);
 
                             const right = document.createElement('div');
                             right.className = 'admin-mixer-history__tx';
                             const txid = String(entry.payoutTxid || '').trim();
+                            const entryId = String(entry.id || '').trim();
+                            const canOpenOrder = entryId !== '' && !isFinalOrderStatus(entry.status);
+                            const canDeleteCancelled = entryId !== '' && canDeleteCancelledHistoryEntry(entry);
+                            let hasHistoryAction = false;
+                            if (canOpenOrder) {
+                                const openButton = document.createElement('button');
+                                openButton.type = 'button';
+                                openButton.className = 'admin-mixer-history__open';
+                                openButton.dataset.adminMixerHistoryOpen = entryId;
+                                openButton.textContent = historyOpenLabel;
+                                right.appendChild(openButton);
+                                hasHistoryAction = true;
+                            }
+                            if (canDeleteCancelled) {
+                                const deleteButton = document.createElement('button');
+                                deleteButton.type = 'button';
+                                deleteButton.className = 'admin-mixer-history__delete';
+                                deleteButton.dataset.adminMixerHistoryDelete = entryId;
+                                deleteButton.dataset.adminMixerHistoryWallet = walletAddress;
+                                deleteButton.textContent = historyDeleteLabel;
+                                right.appendChild(deleteButton);
+                                hasHistoryAction = true;
+                            }
                             if (txid) {
                                 const link = document.createElement('a');
                                 const explorerBase = String(entry.payoutExplorerBase || payoutExplorerBase || '').trim();
@@ -17338,14 +20750,102 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 link.rel = 'noopener noreferrer';
                                 link.textContent = String(entry.outputNetwork || '').toLowerCase().includes('amoy') ? 'AmoyScan' : 'Explorer';
                                 right.appendChild(link);
+                                hasHistoryAction = true;
                             } else {
-                                right.textContent = '-';
+                                if (!hasHistoryAction) {
+                                    const empty = document.createElement('span');
+                                    empty.textContent = '-';
+                                    right.appendChild(empty);
+                                }
                             }
 
+                            item.appendChild(icon);
                             item.appendChild(left);
                             item.appendChild(right);
                             historyList.appendChild(item);
                         });
+                    };
+
+                    const setConnectedSwapperWallet = (address, options = {}) => {
+                        const walletAddress = String(address || '').trim();
+                        if (!evmAddressPattern.test(walletAddress)) {
+                            return false;
+	                        }
+
+                        const previousAddress = String(connectedWalletAddress || '').trim();
+                        connectedWalletAddress = walletAddress;
+                        if (recipientInput) {
+                            const currentRecipient = String(recipientInput.value || '').trim();
+                            const canReplaceRecipient = options.forceInput
+                                || currentRecipient === ''
+                                || (previousAddress !== '' && currentRecipient.toLowerCase() === previousAddress.toLowerCase());
+                            if (canReplaceRecipient) {
+                                recipientInput.value = walletAddress;
+	                            }
+	                        }
+                        if (options.remember !== false) {
+                            rememberSwapperWallet(walletAddress);
+	                        }
+                        renderWalletHistory(walletAddress);
+                        syncConnectButtonState();
+                        updateCreateState();
+                        return true;
+                    };
+
+                    const restoreRememberedSwapperWallet = async () => {
+	                        const rememberedAddress = readRememberedSwapperWallet();
+	                        if (!evmAddressPattern.test(rememberedAddress)) {
+	                            forgetSwapperWallet();
+	                            syncConnectButtonState();
+	                            return;
+	                        }
+
+                        const provider = window.ethereum;
+	                        if (!provider || typeof provider.request !== 'function') {
+	                            syncConnectButtonState();
+	                            return;
+	                        }
+
+	                        try {
+	                            const accounts = await provider.request({ method: 'eth_accounts' });
+	                            const accountList = Array.isArray(accounts) ? accounts.map((account) => String(account || '').trim()) : [];
+	                            const matchingAddress = accountList.find((account) => account.toLowerCase() === rememberedAddress.toLowerCase())
+	                                || accountList.find((account) => evmAddressPattern.test(account))
+	                                || '';
+	                            if (!evmAddressPattern.test(matchingAddress)) {
+	                                forgetSwapperWallet();
+	                                syncConnectButtonState();
+	                                return;
+	                            }
+
+	                            try {
+	                                await switchOutputNetwork(provider);
+	                            } catch (networkError) {}
+	                            setConnectedSwapperWallet(matchingAddress, { forceInput: true });
+	                        } catch (error) {
+	                            syncConnectButtonState();
+	                        }
+                    };
+
+                    const handleSwapperAccountsChanged = (accounts) => {
+	                        const accountList = Array.isArray(accounts) ? accounts.map((account) => String(account || '').trim()) : [];
+	                        const nextAddress = accountList.find((account) => evmAddressPattern.test(account)) || '';
+	                        if (!nextAddress) {
+	                            const previousAddress = connectedWalletAddress;
+	                            connectedWalletAddress = '';
+	                            forgetSwapperWallet();
+	                            if (recipientInput && previousAddress && recipientInput.value.trim().toLowerCase() === previousAddress.toLowerCase()) {
+                                recipientInput.value = '';
+	                            }
+	                            if (historyView) {
+	                                historyView.hidden = true;
+	                            }
+	                            syncConnectButtonState();
+	                            updateCreateState();
+	                            return;
+	                        }
+
+	                        setConnectedSwapperWallet(nextAddress, { forceInput: true });
                     };
 
                     const rememberWalletHistoryOrder = (order) => {
@@ -17356,25 +20856,37 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                         const entries = loadWalletHistory(recipient);
                         const orderId = String(order.id || '').trim();
+                        const detectedAmount = Number.parseFloat(String(order.detected_amount || order.detectedAmount || '0').replace(',', '.'));
+                        const expectedAmount = String(order.amount || '').trim();
+                        const inputAmount = detectedAmount > 0
+                            ? String(order.detected_amount || order.detectedAmount || '').trim()
+                            : expectedAmount;
                         const historyEntry = {
                             id: orderId || ('local-' + Date.now()),
+                            recipient,
                             inputAsset: String(order.inputAsset || currentInputAsset().symbol || currentInputAsset().key || '').trim(),
-                            inputAmount: String(order.detected_amount || order.amount || '').trim(),
+                            inputAmount,
                             outputAsset: String(order.outputAsset || outputAsset || '').trim(),
+                            outputIcon: String(order.outputIcon || outputIcon || '').trim(),
                             outputNetwork: String(order.outputNetwork || outputNetwork || '').trim(),
                             estimatedOutputAmount: String(order.estimated_output_amount || order.estimatedOutputAmount || '').trim(),
+                            outputAmount: String(order.output_amount || order.outputAmount || '').trim(),
                             status: String(order.status || '').trim(),
                             statusLabel: String(order.statusLabel || '').trim(),
                             payoutTxid: String(order.payoutTxid || '').trim(),
                             payoutExplorerBase: String(order.payoutExplorerBase || payoutExplorerBase || '').trim(),
+                            depositTxid: String(order.depositTxid || '').trim(),
+                            confirmations: String(order.confirmations || '').trim(),
+                            expiresAt: Number(order.expiresAt || 0),
+                            createdAt: Number(order.createdAt || 0) || Date.now(),
                             updatedAt: Date.now()
                         };
                         const nextEntries = entries.filter((entry) => String(entry.id || '') !== historyEntry.id);
                         nextEntries.unshift(historyEntry);
                         saveWalletHistory(recipient, nextEntries);
 
-                        if (connectedWalletAddress && recipient.toLowerCase() === connectedWalletAddress.toLowerCase()) {
-                            renderWalletHistory(connectedWalletAddress);
+                        if (!connectedWalletAddress || recipient.toLowerCase() === connectedWalletAddress.toLowerCase()) {
+                            renderWalletHistory(recipient);
                         }
                     };
 
@@ -17430,82 +20942,267 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         }
                     };
 
-                    const renderOrder = (order) => {
+                    const renderOrder = (order, shouldScroll = false) => {
                         if (!orderView || !formView) {
                             return;
                         }
                         const orderInputAsset = findInputAssetOption(order && order.inputAsset ? order.inputAsset : currentInputAsset().key, false);
                         const orderInputSymbolText = String(order && order.inputAsset ? order.inputAsset : (orderInputAsset.symbol || orderInputAsset.key || 'BTC')).toUpperCase();
+                        const orderInputNetworkText = String(order && order.inputNetwork ? order.inputNetwork : (orderInputAsset.network || orderInputSymbolText)).trim();
+                        activeOrderLocked = isBlockingOrder(order);
                         formView.hidden = true;
                         orderView.hidden = false;
                         setImageNode(orderInputIcon, orderInputAsset.icon, orderInputSymbolText);
+                        setImageNode(orderAmountIcon, orderInputAsset.icon, orderInputSymbolText);
+                        setImageNode(orderOutputIcon, order && order.outputIcon ? order.outputIcon : outputIcon, order && order.outputAsset ? order.outputAsset : outputAsset);
+                        setImageNode(orderTitleOutputIcon, order && order.outputIcon ? order.outputIcon : outputIcon, order && order.outputAsset ? order.outputAsset : outputAsset);
+                        if (orderTitle) {
+                            orderTitle.textContent = [orderSendLabel, orderInputNetworkText || orderInputSymbolText].filter(Boolean).join(' ');
+                        }
                         if (orderPair) {
-                            orderPair.textContent = [
-                                orderInputSymbolText,
-                                '->',
-                                String(order.outputAsset || outputAsset || '').trim(),
-                                String(order.outputNetwork || outputNetwork || '').trim()
-                            ].filter(Boolean).join(' ');
+                            orderPair.textContent = orderInputSymbolText;
+                        }
+                        if (orderStepAsset) {
+                            orderStepAsset.textContent = orderStepAssetTemplate.replace('{asset}', orderInputNetworkText || orderInputSymbolText);
                         }
                         if (orderInputSymbol) {
                             orderInputSymbol.textContent = orderInputSymbolText;
                         }
                         if (orderAmount) {
-                            orderAmount.textContent = order.amount;
+                            orderAmount.textContent = formatInputAmountNumber(order.amount, orderInputSymbolText);
                         }
                         if (orderAddress) {
                             orderAddress.textContent = order.depositAddress || '-';
                         }
+                        const recipientAddress = String(order.recipient || '').trim();
                         if (orderRecipient) {
-                            orderRecipient.textContent = order.recipient || '-';
+                            orderRecipient.textContent = recipientAddress || '-';
+                        }
+                        if (orderRecipientLabel) {
+                            orderRecipientLabel.textContent = recipientLabelTemplate.replace('{asset}', String(order.outputAsset || outputAsset || '').trim());
+                        }
+                        const estimatedOrderStatusKey = String(order.status || '').trim().toLowerCase();
+                        const estimatedOrderIsPaid = estimatedOrderStatusKey === 'paid';
+                        if (orderEstimatedLabel) {
+                            orderEstimatedLabel.textContent = estimatedOrderIsPaid ? orderSentLabel : orderReceiveLabel;
                         }
                         if (orderEstimated) {
-                            const estimated = String(order.estimated_output_amount || order.estimatedOutputAmount || '').trim();
-                            orderEstimated.textContent = estimated ? (estimated + ' ' + (order.outputAsset || outputAsset)) : '-';
+                            const estimated = String(estimatedOrderIsPaid
+                                ? (order.outputAmount || order.output_amount || order.estimated_output_amount || order.estimatedOutputAmount || '')
+                                : (order.estimated_output_amount || order.estimatedOutputAmount || '')).trim();
+                            const estimatedNumber = Number.parseFloat(estimated.replace(',', '.'));
+                            orderEstimated.textContent = estimated && Number.isFinite(estimatedNumber)
+                                ? ((estimatedOrderIsPaid ? '' : '≈ ') + formatAssetAmount(estimatedNumber, order.outputAsset || outputAsset))
+                                : '-';
                         }
                         if (orderWarning) {
                             orderWarning.textContent = payWarningLabel;
+                            orderWarning.hidden = estimatedOrderIsPaid;
+                        }
+                        const confirmations = Number.parseInt(String(order.confirmations || 0), 10) || 0;
+                        const fallbackConfirmations = orderInputSymbolText === 'DOGE' ? 20 : (orderInputSymbolText === 'SOL' ? 1 : 3);
+                        const confirmationsRequired = Number.parseInt(String(order.confirmationsRequired || fallbackConfirmations), 10) || fallbackConfirmations;
+                        const depositTxid = String(order.depositTxid || '').trim();
+                        const payoutTxid = String(order.payoutTxid || '').trim();
+                        const orderStatusKey = String(order.status || '').trim().toLowerCase();
+                        const orderOutputSymbolText = String(order.outputAsset || outputAsset || '').trim().toUpperCase();
+                        const payoutCompleted = orderStatusKey === 'paid';
+                        const paymentDetected = depositTxid !== ''
+                            || payoutTxid !== ''
+                            || confirmations > 0
+                            || ['confirming', 'ready_to_pay', 'paying', 'paid', 'manual_review', 'failed'].includes(orderStatusKey);
+                        const paymentConfirmed = confirmationsRequired > 0 && confirmations >= confirmationsRequired
+                            || ['ready_to_pay', 'paying', 'paid'].includes(orderStatusKey);
+                        if (orderRecipient) {
+                            orderRecipient.innerHTML = '';
+                            const recipientUrl = paymentDetected ? payoutAddressExplorerUrl(order, recipientAddress) : '';
+                            if (recipientUrl !== '') {
+                                const recipientLink = document.createElement('a');
+                                recipientLink.className = 'admin-mixer-order__recipient-link';
+                                recipientLink.href = recipientUrl;
+                                recipientLink.target = '_blank';
+                                recipientLink.rel = 'noopener noreferrer';
+                                recipientLink.title = recipientAddress;
+                                recipientLink.textContent = compactAddress(recipientAddress);
+                                orderRecipient.appendChild(recipientLink);
+                            } else {
+                                orderRecipient.textContent = recipientAddress || '-';
+                            }
+                        }
+                        if (orderTitleBar) {
+                            orderTitleBar.classList.toggle('is-confirmed-pair', paymentConfirmed);
+                            orderTitleBar.hidden = paymentDetected && !paymentConfirmed;
+                        }
+                        if (orderTitleOutputIcon) {
+                            orderTitleOutputIcon.hidden = !paymentConfirmed;
+                        }
+                        if (orderTitle) {
+                            orderTitle.textContent = paymentConfirmed
+                                ? orderInputSymbolText
+                                : [orderSendLabel, orderInputNetworkText || orderInputSymbolText].filter(Boolean).join(' ');
+                        }
+                        if (orderPair) {
+                            orderPair.textContent = '';
+                            if (paymentConfirmed) {
+                                const icon = document.createElement('i');
+                                icon.className = 'bi bi-arrow-left-right';
+                                icon.setAttribute('aria-hidden', 'true');
+                                orderPair.appendChild(icon);
+                                orderPair.appendChild(document.createTextNode(orderOutputSymbolText));
+                            } else {
+                                orderPair.textContent = orderInputSymbolText;
+                            }
                         }
                         if (orderConfirmations) {
-                            const confirmations = Number.parseInt(String(order.confirmations || 0), 10) || 0;
-                            const confirmationsRequired = Number.parseInt(String(order.confirmationsRequired || (orderInputSymbolText === 'DOGE' ? 20 : 3)), 10) || 3;
                             orderConfirmations.textContent = confirmations + '/' + confirmationsRequired;
                         }
+                        orderView.classList.toggle('is-payment-detected', paymentDetected);
+                        orderView.classList.toggle('is-payment-confirmed', paymentConfirmed);
+                        if (orderQr) {
+                            orderQr.hidden = paymentDetected;
+                        }
+                        if (orderQrBox) {
+                            orderQrBox.classList.toggle('is-detected', paymentDetected);
+                            orderQrBox.classList.toggle('is-confirmed', paymentConfirmed);
+                        }
+                        if (detectedVisual) {
+                            detectedVisual.hidden = !paymentDetected;
+                        }
+                        if (detectedIcon) {
+                            detectedIcon.className = 'bi ' + (payoutCompleted ? 'bi-check2-circle' : (paymentConfirmed ? 'bi-check2' : 'bi-search'));
+                        }
+                        if (orderSteps) {
+                            orderSteps.hidden = paymentDetected;
+                        }
+                        if (detectedStatus) {
+                            detectedStatus.hidden = !paymentDetected;
+                            detectedStatus.classList.toggle('is-confirmed', paymentConfirmed);
+                            detectedStatus.classList.toggle('is-paid', payoutCompleted);
+                            detectedStatus.classList.toggle('is-waiting-confirmation', paymentDetected && !paymentConfirmed);
+                        }
+                        if (detectedTitle) {
+                            detectedTitle.textContent = payoutCompleted ? orderPaidTitle : (paymentConfirmed ? orderConfirmedTitle : orderDetectedTitle);
+                        }
+                        if (detectedMessage) {
+                            let detectedMessageText = (payoutCompleted ? orderPaidMessage : (paymentConfirmed ? orderConfirmedMessage : orderDetectedMessage))
+                                .replace('{confirmations}', String(confirmations))
+                                .replace('{required}', String(confirmationsRequired));
+                            if (paymentConfirmed && !payoutCompleted) {
+                                detectedMessageText = detectedMessageText
+                                    .replace('. Przygotowujemy', '.\nPrzygotowujemy')
+                                    .replace('. Preparing', '.\nPreparing');
+                            } else if (paymentDetected && !paymentConfirmed) {
+                                detectedMessageText = 'Wykryliśmy wpłatę.\nOczekiwanie na potwierdzenie.';
+                            } else if (payoutCompleted) {
+                                detectedMessageText = 'Wypłata została wysłana.\nSprawdź transakcję w explorerze.';
+                            }
+                            detectedMessage.textContent = detectedMessageText;
+                        }
+                        if (confirmationsRow) {
+                            confirmationsRow.hidden = !paymentDetected;
+                        }
+                        paymentDetailCards.forEach((card) => {
+                            card.hidden = paymentConfirmed;
+                        });
                         if (orderQr && order.depositAddress) {
-                            orderQr.src = 'https://quickchart.io/qr?size=300&text=' + encodeURIComponent(order.depositAddress);
+                            orderQr.src = 'https://quickchart.io/qr?size=420&text=' + encodeURIComponent(order.depositAddress);
                         }
                         const depositUrl = depositExplorerUrl(order);
+                        if (depositRow) {
+                            depositRow.hidden = depositUrl === '';
+                        }
                         if (depositLink && depositEmpty) {
                             depositLink.hidden = depositUrl === '';
-                            depositEmpty.hidden = depositUrl !== '';
+                            depositEmpty.hidden = true;
                             if (depositUrl !== '') {
                                 depositLink.href = depositUrl;
                             }
                         }
                         const payoutUrl = payoutExplorerUrl(order);
+                        if (payoutRow) {
+                            payoutRow.hidden = payoutUrl === '';
+                        }
                         if (payoutLink && payoutEmpty) {
                             payoutLink.hidden = payoutUrl === '';
-                            payoutEmpty.hidden = payoutUrl !== '';
+                            payoutEmpty.hidden = true;
                             if (payoutUrl !== '') {
                                 payoutLink.href = payoutUrl;
                             }
                         }
+                        if (orderMeta) {
+                            orderMeta.hidden = !(paymentDetected || depositUrl !== '' || payoutUrl !== '');
+                        }
+                        if (cancelButton) {
+                            cancelButton.hidden = confirmations >= 1 || ['ready_to_pay', 'paying', 'paid'].includes(orderStatusKey);
+                        }
+                        if (payoutButton) {
+                            const canPreparePayout = paymentConfirmed && payoutTxid === '' && !['paying', 'paid', 'cancelled', 'failed'].includes(orderStatusKey);
+                            payoutButton.hidden = !canPreparePayout || autoPayoutEnabled;
+                            payoutButton.disabled = !canPreparePayout || autoPayoutEnabled;
+                            payoutButton.textContent = payoutButtonLabel.replace('{asset}', orderOutputSymbolText || outputAsset);
+                            if (payoutCompleted) {
+                                setPayoutNotice('', 'success');
+                            } else if ((canPreparePayout && autoPayoutEnabled) || orderStatusKey === 'paying') {
+                                setPayoutNotice(autoPayoutLabel, 'success');
+                            } else {
+                                setPayoutNotice('', 'info');
+                            }
+                        }
+                        if (finishButton) {
+                            finishButton.hidden = !payoutCompleted;
+                        }
                         rememberWalletHistoryOrder(order);
-                        updateProgress(order.progress || 12, order.statusLabel || 'Waiting deposit');
+                        updateCreateState();
+                        const confirmationProgress = confirmationsRequired > 0
+                            ? Math.min(68, 35 + (Math.min(confirmations, confirmationsRequired) / confirmationsRequired) * 33)
+                            : 42;
+                        const displayProgress = payoutCompleted
+                            ? 100
+                            : (paymentConfirmed
+                                ? Math.max(Number(order.progress || 0), 68)
+                                : (paymentDetected ? Math.max(Number(order.progress || 0), confirmationProgress) : (order.progress || 12)));
+                        const statusCanUseBackendLabel = String(order.statusLabel || '').trim() !== ''
+                            && !['waiting_deposit', 'expired', 'cancelled'].includes(orderStatusKey);
+                        const displayStatus = payoutCompleted
+                            ? historyPaidLabel
+                            : (paymentConfirmed
+                                ? (order.statusLabel || orderConfirmedTitle)
+                                : (paymentDetected ? (statusCanUseBackendLabel ? order.statusLabel : orderDetectedTitle) : (order.statusLabel || 'Waiting deposit')));
+                        updateProgress(displayProgress, displayStatus);
 
                         window.clearInterval(countdownTimer);
-                        countdownTimer = window.setInterval(() => {
+                        if (orderCountdown) {
+                            orderCountdown.hidden = paymentDetected;
+                            orderCountdown.classList.toggle('is-danger', false);
+                        }
+                        if (paymentDetected) {
+                            if (shouldScroll) {
+                                window.requestAnimationFrame(scrollMixerWidgetIntoView);
+                            }
+                            return;
+                        }
+                        const updateOrderCountdown = () => {
                             const remaining = Math.max(0, Math.floor((Number(order.expiresAt) - Date.now()) / 1000));
                             if (orderCountdown) {
+                                orderCountdown.hidden = false;
                                 orderCountdown.textContent = remaining > 0 ? formatCountdown(remaining) : 'Expired';
+                                orderCountdown.classList.toggle('is-danger', remaining <= 300);
                             }
                             if (remaining <= 0) {
                                 window.clearInterval(countdownTimer);
                                 if (String(order.status || '') === 'waiting_deposit') {
+                                    activeOrderLocked = false;
+                                    updateCreateState();
                                     updateProgress(0, 'Expired');
                                 }
                             }
-                        }, 1000);
+                        };
+                        updateOrderCountdown();
+                        countdownTimer = window.setInterval(updateOrderCountdown, 1000);
+
+                        if (shouldScroll) {
+                            window.requestAnimationFrame(scrollMixerWidgetIntoView);
+                        }
                     };
 
                     const showForm = () => {
@@ -17517,6 +21214,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         if (orderView) {
                             orderView.hidden = true;
                         }
+                        if (activeOrderLocked) {
+                            setNotice(activeOrderLabel, 'warning');
+                        }
+                        updateCreateState();
                     };
 
                     const pollOrder = (publicId) => {
@@ -17525,7 +21226,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             return;
                         }
 
-                        statusTimer = window.setInterval(() => {
+                        let refreshInFlight = false;
+                        let refreshErrorCount = 0;
+                        const refreshOrderStatus = () => {
+                            if (refreshInFlight) {
+                                return;
+                            }
+                            refreshInFlight = true;
                             postSwapper('admin_mixer_order_status_ajax', { public_id: publicId })
                                 .then((data) => {
                                     if (!data.order) {
@@ -17533,12 +21240,26 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     }
                                     saveOrder(data.order);
                                     renderOrder(data.order);
-                                    if (['paid', 'cancelled', 'expired', 'failed'].includes(String(data.order.status || ''))) {
+                                    refreshErrorCount = 0;
+                                    if (isFinalOrder(data.order) || isWaitingOrderExpired(data.order)) {
+                                        clearOrder();
                                         window.clearInterval(statusTimer);
                                     }
                                 })
-                                .catch(() => {});
-                        }, 15000);
+                                .catch((error) => {
+                                    refreshErrorCount += 1;
+                                    if (refreshErrorCount >= 2) {
+                                        setNotice(error && error.message ? error.message : backendPendingLabel, 'warning');
+                                    }
+                                })
+                                .finally(() => {
+                                    refreshInFlight = false;
+                                });
+                        };
+
+                        refreshOrderStatus();
+                        window.setTimeout(refreshOrderStatus, 2500);
+                        statusTimer = window.setInterval(refreshOrderStatus, 5000);
                     };
 
                     const updateCreateState = () => {
@@ -17548,7 +21269,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         const activeInputAsset = currentInputAsset();
                         const amount = Number.parseFloat(String(amountInput ? amountInput.value : '').replace(',', '.'));
                         const recipient = String(recipientInput ? recipientInput.value : '').trim();
-                        const formReady = vaultReady && routeReady && String(activeInputAsset.depositAddress || '').trim() !== '' && Number.isFinite(amount) && amount > 0 && evmAddressPattern.test(recipient);
+                        const inputRateUsd = Number(activeInputAsset.rateUsd || 0);
+                        const inputUsd = Number.isFinite(amount) && inputRateUsd > 0 ? amount * inputRateUsd : 0;
+                        const formReady = !activeOrderLocked && vaultReady && routeReady && String(activeInputAsset.depositAddress || '').trim() !== '' && Number.isFinite(amount) && amount > 0 && inputUsd >= minOrderUsd && evmAddressPattern.test(recipient);
                         createButton.disabled = !formReady;
                     };
 
@@ -17560,7 +21283,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         const badge = String(activeInputAsset.badge || symbol.slice(0, 1)).trim();
 
                         inputTokenNodes.forEach((token) => {
-                            token.classList.remove('admin-mixer-widget__token--btc', 'admin-mixer-widget__token--doge');
+                            token.classList.remove('admin-mixer-widget__token--btc', 'admin-mixer-widget__token--doge', 'admin-mixer-widget__token--sol');
                             token.classList.add('admin-mixer-widget__token--' + key);
                         });
                         inputTokenImages.forEach((image) => setImageNode(image, activeInputAsset.icon, symbol));
@@ -17582,8 +21305,22 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         if (inputSelect && inputSelect.value !== activeInputAsset.key) {
                             inputSelect.value = activeInputAsset.key;
                         }
+                        updateQuote();
                         updateCreateState();
                     };
+
+                    if (outputSelect) {
+                        outputSelect.disabled = false;
+                        outputSelect.addEventListener('change', () => {
+                            const nextOutput = String(outputSelect.value || '').trim().toUpperCase();
+                            if (!nextOutput || nextOutput === outputAssetKey) {
+                                return;
+                            }
+                            const url = new URL(window.location.href);
+                            url.searchParams.set('mixer_output_asset', nextOutput);
+                            window.location.href = url.toString();
+                        });
+                    }
 
                     if (!vaultReady) {
                         updateInputAssetView();
@@ -17603,8 +21340,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     if (connectButton) {
                         connectButton.disabled = false;
+                        syncConnectButtonState();
+                        const provider = window.ethereum;
+                        if (provider && typeof provider.on === 'function') {
+                            provider.on('accountsChanged', handleSwapperAccountsChanged);
+	                        }
+                        restoreRememberedSwapperWallet();
                         connectButton.addEventListener('click', async () => {
                             const provider = window.ethereum;
+                            if (connectedWalletAddress) {
+                                await disconnectSwapperWallet(provider);
+                                return;
+                            }
                             if (!provider || typeof provider.request !== 'function') {
                                 setNotice(noWalletLabel, 'warning');
                                 return;
@@ -17612,58 +21359,27 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                             try {
                                 const accounts = await provider.request({ method: 'eth_requestAccounts' });
-                                try {
-                                    await provider.request({
-                                        method: 'wallet_switchEthereumChain',
-                                        params: [{ chainId: outputChainHex }]
-                                    });
-                                } catch (switchError) {
-                                    if (switchError && Number(switchError.code) === 4902 && outputRpcUrl) {
-                                        const explorerUrl = payoutExplorerBase.replace(/\/tx\/?$/i, '');
-                                        try {
-                                            await provider.request({
-                                                method: 'wallet_addEthereumChain',
-                                                params: [{
-                                                    chainId: outputChainHex,
-                                                    chainName: outputNetwork,
-                                                    nativeCurrency: {
-                                                        name: outputNativeSymbol,
-                                                        symbol: outputNativeSymbol,
-                                                        decimals: 18
-                                                    },
-                                                    rpcUrls: [outputRpcUrl],
-                                                    blockExplorerUrls: explorerUrl ? [explorerUrl] : []
-                                                }]
-                                            });
-                                        } catch (addError) {}
-                                    }
-                                }
+                                await switchOutputNetwork(provider);
                                 const address = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
                                 if (!evmAddressPattern.test(address)) {
                                     setNotice(connectErrorLabel, 'warning');
                                     return;
                                 }
 
-                                if (recipientInput) {
-                                    recipientInput.value = address;
-                                }
-                                connectedWalletAddress = address;
-                                renderWalletHistory(address);
-                                const connectLabel = connectButton.querySelector('span');
-                                if (connectLabel) {
-                                    connectLabel.textContent = connectedLabel;
-                                }
-                                setNotice(fillRequiredLabel, 'success');
-                                updateCreateState();
-                            } catch (error) {
-                                setNotice(connectErrorLabel, 'warning');
-                            }
+	                                setConnectedSwapperWallet(address, { forceInput: true });
+	                                setNotice(fillRequiredLabel, 'success');
+	                            } catch (error) {
+	                                setNotice(connectErrorLabel, 'warning');
+	                            }
                         });
                     }
 
                     if (amountInput) {
                         amountInput.disabled = false;
-                        amountInput.addEventListener('input', updateCreateState);
+                        amountInput.addEventListener('input', () => {
+                            updateQuote();
+                            updateCreateState();
+                        });
                     }
 
                     if (recipientInput) {
@@ -17673,6 +21389,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     if (createButton) {
                         createButton.addEventListener('click', () => {
+                            const localActiveOrder = loadOrder();
+                            if (isBlockingOrder(localActiveOrder)) {
+                                renderOrder(localActiveOrder, true);
+                                pollOrder(localActiveOrder.id);
+                                setNotice(activeOrderLabel, 'warning');
+                                return;
+                            }
+
                             const activeInputAsset = currentInputAsset();
                             const depositAddress = String(activeInputAsset.depositAddress || '').trim();
                             const amount = String(amountInput ? amountInput.value : '').trim().replace(',', '.');
@@ -17683,8 +21407,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                 updateCreateState();
                                 return;
                             }
+                            const inputUsd = parsedAmount * Number(activeInputAsset.rateUsd || 0);
+                            if (!Number.isFinite(inputUsd) || inputUsd < minOrderUsd) {
+                                setNotice(minOrderLabel, 'warning');
+                                updateCreateState();
+                                return;
+                            }
 
                             createButton.disabled = true;
+                            const localEstimatedOutput = Number(activeInputAsset.rateUsd || 0) > 0 && outputRateUsd > 0
+                                ? ((parsedAmount * Number(activeInputAsset.rateUsd || 0)) * payoutFactor / outputRateUsd)
+                                : 0;
                             postSwapper('admin_mixer_create_order_ajax', {
                                 input_asset: activeInputAsset.key,
                                 output_asset: outputAssetKey,
@@ -17698,6 +21431,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     inputNetwork: activeInputAsset.network,
                                     outputAsset,
                                     outputNetwork,
+                                    estimatedOutputAmount: localEstimatedOutput > 0 ? String(localEstimatedOutput) : '',
                                     recipient,
                                     depositAddress,
                                     status: 'waiting_deposit',
@@ -17707,8 +21441,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     expiresAt: Date.now() + quoteLifetimeMinutes * 60 * 1000
                                 };
                                 saveOrder(order);
-                                renderOrder(order);
+                                renderOrder(order, true);
                                 pollOrder(order.id);
+                                if (data.activeExisting) {
+                                    setNotice(data.message || activeOrderLabel, 'warning');
+                                }
                             }).catch((error) => {
                                 setNotice(error && error.message ? error.message : backendPendingLabel, 'warning');
                             }).finally(() => {
@@ -17718,6 +21455,65 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     }
 
                     widget.addEventListener('click', (event) => {
+                        const historyButton = event.target.closest('[data-admin-mixer-history-open]');
+                        if (historyButton) {
+                            event.preventDefault();
+                            const publicId = String(historyButton.dataset.adminMixerHistoryOpen || '').trim();
+                            if (!publicId || publicId.indexOf('local-') === 0) {
+                                const localOrder = loadOrder();
+                                if (localOrder && localOrder.id === publicId) {
+                                    renderOrder(localOrder, true);
+                                }
+                                return;
+                            }
+
+                            historyButton.disabled = true;
+                            postSwapper('admin_mixer_order_status_ajax', { public_id: publicId })
+                                .then((data) => {
+                                    if (!data.order) {
+                                        setNotice(activeOrderLabel, 'warning');
+                                        return;
+                                    }
+                                    saveOrder(data.order);
+                                    renderOrder(data.order, true);
+                                    if (isFinalOrder(data.order) || isWaitingOrderExpired(data.order)) {
+                                        clearOrder();
+                                        setNotice(fillRequiredLabel, 'info');
+                                        return;
+                                    }
+                                    pollOrder(data.order.id || publicId);
+                                    setNotice(activeOrderLabel, 'warning');
+                                })
+                                .catch((error) => {
+                                    setNotice(error && error.message ? error.message : activeOrderLabel, 'warning');
+                                })
+                                .finally(() => {
+                                    historyButton.disabled = false;
+                                });
+                            return;
+                        }
+
+                        const historyDeleteButton = event.target.closest('[data-admin-mixer-history-delete]');
+                        if (historyDeleteButton) {
+                            event.preventDefault();
+                            const publicId = String(historyDeleteButton.dataset.adminMixerHistoryDelete || '').trim();
+                            const walletAddress = String(historyDeleteButton.dataset.adminMixerHistoryWallet || connectedWalletAddress || '').trim();
+                            if (!publicId || !evmAddressPattern.test(walletAddress)) {
+                                return;
+                            }
+
+                            const entries = loadWalletHistory(walletAddress);
+                            const targetEntry = entries.find((entry) => String(entry.id || '') === publicId);
+                            if (!targetEntry || !canDeleteCancelledHistoryEntry(targetEntry)) {
+                                renderWalletHistory(walletAddress);
+                                return;
+                            }
+
+                            saveWalletHistory(walletAddress, entries.filter((entry) => String(entry.id || '') !== publicId));
+                            renderWalletHistory(walletAddress);
+                            return;
+                        }
+
                         const copyButton = event.target.closest('[data-admin-mixer-copy]');
                         if (!copyButton) {
                             return;
@@ -17728,7 +21524,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         const value = copyType === 'amount'
                             ? (activeOrder ? activeOrder.amount : '')
                             : (activeOrder ? activeOrder.depositAddress : '');
-                        copyText(value).then(showCopyFeedback).catch(() => {});
+                        copyText(value).then(() => showCopyFeedback(copyButton)).catch(() => {});
                     });
 
                     if (backButton) {
@@ -17742,6 +21538,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             const activeOrder = loadOrder();
                             const publicId = activeOrder && activeOrder.id ? activeOrder.id : '';
                             if (!publicId || publicId.indexOf('local-') === 0) {
+                                activeOrderLocked = false;
                                 clearOrder();
                                 showForm();
                                 setNotice(fillRequiredLabel, 'info');
@@ -17751,6 +21548,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             cancelButton.disabled = true;
                             postSwapper('admin_mixer_cancel_order_ajax', { public_id: publicId })
                                 .then(() => {
+                                    rememberWalletHistoryOrder(Object.assign({}, activeOrder, {
+                                        status: 'cancelled',
+                                        statusLabel: 'Anulowano',
+                                        updatedAt: Date.now()
+                                    }));
+                                    activeOrderLocked = false;
                                     clearOrder();
                                     showForm();
                                     setNotice(fillRequiredLabel, 'info');
@@ -17764,10 +21567,110 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         });
                     }
 
+                    if (payoutButton) {
+                        payoutButton.addEventListener('click', () => {
+                            const activeOrder = loadOrder();
+                            const publicId = activeOrder && activeOrder.id ? String(activeOrder.id) : '';
+                            if (!publicId || publicId.indexOf('local-') === 0) {
+                                setPayoutNotice(backendPendingLabel, 'warning');
+                                return;
+                            }
+
+                            const previousLabel = payoutButton.textContent;
+                            payoutButton.disabled = true;
+                            payoutButton.textContent = payoutPreparingLabel;
+                            setPayoutNotice('', 'info');
+                            postSwapper('admin_mixer_prepare_payout_ajax', { public_id: publicId })
+                                .then(async (data) => {
+                                    const payout = data && data.payout ? data.payout : null;
+                                    if (!payout || !payout.to || !payout.data) {
+                                        throw new Error(data && data.message ? data.message : backendPendingLabel);
+                                    }
+                                    const provider = window.ethereum;
+                                    if (!provider || typeof provider.request !== 'function') {
+                                        throw new Error(noWalletLabel);
+                                    }
+                                    const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                                    const from = Array.isArray(accounts) ? String(accounts[0] || '').trim() : '';
+                                    if (!evmAddressPattern.test(from)) {
+                                        throw new Error(connectErrorLabel);
+                                    }
+                                    await switchOutputNetwork(provider);
+                                    const txHash = await provider.request({
+                                        method: 'eth_sendTransaction',
+                                        params: [{
+                                            from,
+                                            to: payout.to,
+                                            value: payout.value || '0x0',
+                                            data: payout.data
+                                        }]
+                                    });
+                                    const saved = await postSwapper('admin_mixer_record_payout_ajax', {
+                                        public_id: publicId,
+                                        tx_hash: txHash
+                                    });
+                                    if (data.order) {
+                                        saveOrder(data.order);
+                                        renderOrder(data.order);
+                                    }
+                                    if (saved.order) {
+                                        saveOrder(saved.order);
+                                        renderOrder(saved.order);
+                                        pollOrder(saved.order.id || publicId);
+                                    }
+                                    setPayoutNotice(saved.message || data.message || payoutPreparingLabel, 'success');
+                                })
+                                .catch((error) => {
+                                    setPayoutNotice(error && error.message ? error.message : backendPendingLabel, 'warning');
+                                })
+                                .finally(() => {
+                                    payoutButton.disabled = false;
+                                    payoutButton.textContent = previousLabel;
+                                });
+                        });
+                    }
+
+                    if (finishButton) {
+                        finishButton.addEventListener('click', () => {
+                            activeOrderLocked = false;
+                            clearOrder();
+                            showForm();
+                            setNotice(fillRequiredLabel, 'info');
+                            window.requestAnimationFrame(scrollMixerWidgetIntoView);
+                        });
+                    }
+
+                    const restoreActiveOrder = () => {
+                        if (!csrfToken) {
+                            return;
+                        }
+                        postSwapper('admin_mixer_active_order_ajax')
+                            .then((data) => {
+                                if (!data.order || isFinalOrder(data.order) || isWaitingOrderExpired(data.order)) {
+                                    activeOrderLocked = false;
+                                    updateCreateState();
+                                    return;
+                                }
+                                saveOrder(data.order);
+                                renderOrder(data.order);
+                                pollOrder(data.order.id);
+                                setNotice(activeOrderLabel, 'warning');
+                            })
+                            .catch(() => {});
+                    };
+
                     const storedOrder = loadOrder();
                     if (storedOrder && storedOrder.depositAddress && storedOrder.amount && storedOrder.recipient) {
-                        renderOrder(storedOrder);
-                        pollOrder(storedOrder.id);
+                        if (isFinalOrder(storedOrder) || isWaitingOrderExpired(storedOrder)) {
+                            rememberWalletHistoryOrder(storedOrder);
+                            clearOrder();
+                            restoreActiveOrder();
+                        } else {
+                            renderOrder(storedOrder);
+                            pollOrder(storedOrder.id);
+                        }
+                    } else {
+                        restoreActiveOrder();
                     }
 
                     updateInputAssetView();
@@ -17843,7 +21746,60 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         </script>
     <?php endif; ?>
 
+    <?php if (!empty($adminTopbarAdminPanelSubscriptionNotice['show'])): ?>
+        <div
+            class="modal fade"
+            id="adminPanelSubscriptionReminderModal"
+            tabindex="-1"
+            aria-labelledby="adminPanelSubscriptionReminderModalLabel"
+            aria-hidden="true"
+            data-admin-panel-subscription-modal
+            data-storage-key="admin-panel-subscription-reminder-<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until'] ?? '')); ?>"
+            data-throttle-minutes="60">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="adminPanelSubscriptionReminderModalLabel">
+                            <?php echo admin_e(admin_t($messages, 'admin_panel_subscription_modal_reminder_title', 'Przypomnienie!')); ?>
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="admin-panel-subscription-modal-content">
+                            <strong class="admin-panel-subscription-modal-content__heading">
+                                <?php if (!empty($adminTopbarAdminPanelSubscriptionNotice['is_expired'])): ?>
+                                    <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_expired_heading', 'Admin panel access payment has expired.')); ?>
+                                <?php else: ?>
+                                    <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_warning_heading', 'Admin panel access payment expires soon.')); ?>
+                                <?php endif; ?>
+                            </strong>
+                            <div class="admin-panel-subscription-modal-content__label"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_paid_until', 'Paid until')); ?>:</div>
+                            <input type="text" class="admin-topbar-panel-subscription__date" value="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')); ?> ·" readonly>
+                            <?php if ($adminTopbarAdminPanelSubscriptionNotice['days_left'] !== null): ?>
+                                <div class="admin-panel-subscription-modal-content__days">
+                                    <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_days_left', 'Days left')); ?>:
+                                    <strong><?php echo admin_e((string)max(0, (int)$adminTopbarAdminPanelSubscriptionNotice['days_left'])); ?></strong>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['renewal_url'] ?? '')) !== ''): ?>
+                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger w-100">
+                                <i class="bi bi-credit-card me-1" aria-hidden="true"></i>
+                                <span><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?></span>
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
+    <?php if ($route === 'dashboard'): ?>
+        <script src="/assets/js/admin-dashboard.js?v=<?php echo admin_public_asset_version('assets/js/admin-dashboard.js'); ?>"></script>
+    <?php endif; ?>
 </body>
 </html>

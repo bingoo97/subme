@@ -77,6 +77,7 @@ if ($action === 'voice_file') {
          INNER JOIN support_conversations
             ON support_conversations.id = support_messages.conversation_id
          WHERE support_messages.id = {$messageId}
+           AND (support_messages.expires_at IS NULL OR support_messages.expires_at > NOW())
          LIMIT 1"
     );
 
@@ -94,7 +95,15 @@ if ($action === 'voice_file') {
         }
     } else {
         $groupConversation = $conversationId > 0 ? chat_group_accessible_for_customer($db, (int)$_SESSION['id'], $conversationId) : null;
-        if (!$groupConversation) {
+        if (
+            $groupConversation
+            && function_exists('chat_is_global_group_conversation_type')
+            && chat_is_global_group_conversation_type((string)($groupConversation['conversation_type'] ?? ''))
+            && !chat_customer_global_group_enabled($user, is_array($settings ?? null) ? $settings : [])
+        ) {
+            $groupConversation = null;
+        }
+        if (!$groupConversation || (string)($groupConversation['invite_status'] ?? '') !== 'accepted') {
             http_response_code(404);
             exit;
         }
@@ -752,6 +761,43 @@ if ($requestedConversationId > 0 && function_exists('chat_group_accessible_for_c
     $requestedGroupConversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
 }
 
+$requestedGlobalGroupDisabled = $requestedGroupConversation
+    && function_exists('chat_is_global_group_conversation_type')
+    && chat_is_global_group_conversation_type((string)($requestedGroupConversation['conversation_type'] ?? ''))
+    && !chat_customer_global_group_enabled($user, is_array($settings ?? null) ? $settings : []);
+
+if ($requestedGlobalGroupDisabled) {
+    $requestedGroupConversation = null;
+    $globalGroupMutationActions = [
+        'send',
+        'upload',
+        'voice_upload',
+        'toggle_reaction',
+        'delete_message',
+        'set_group_email_notifications',
+        'set_group_retention',
+        'invite_to_group',
+        'respond_group_invite',
+        'leave_group',
+        'remove_group',
+        'delete_group',
+    ];
+    if (
+        in_array($action, $globalGroupMutationActions, true)
+        || !empty($_FILES['file']['tmp_name'])
+        || !empty($_FILES['voice_file']['tmp_name'])
+    ) {
+        if ($responseFormat === 'json') {
+            chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
+        }
+        echo '<p>Conversation not found.</p>';
+        exit;
+    }
+
+    $requestedConversationId = 0;
+    $requestedConversationType = '';
+}
+
 $currentCustomerIsGlobalChatBlocked = $requestedGroupConversation
     && function_exists('chat_is_global_group_conversation_type')
     && chat_is_global_group_conversation_type((string)($requestedGroupConversation['conversation_type'] ?? ''))
@@ -1164,6 +1210,11 @@ if (app_uses_v2_schema($db)) {
         } elseif ($responseFormat === 'json') {
             chat_json_response(['ok' => false, 'message' => 'Image upload failed.']);
         }
+    }
+
+    if ($action === 'voice_upload' && empty($settings['messenger_voice_enabled'])) {
+        http_response_code(422);
+        chat_json_response(['ok' => false, 'message' => 'Voice messages are disabled.']);
     }
 
     if ($action === 'voice_upload' && !empty($_FILES['voice_file']['tmp_name'])) {

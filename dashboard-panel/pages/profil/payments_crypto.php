@@ -15,7 +15,8 @@ switch ($site) {
         $cryptoTopupCreatedAtColumn = schema_read_column($db, 'crypto_topups', 'created_at', 'date');
         $cryptoTopupStatusColumn = schema_read_column($db, 'crypto_topups', 'is_active', 'status');
 
-        $btcPayment = $db->select('cryptocurrency', '*', 'WHERE id = 1 LIMIT 1');
+        $v2CryptoRequestsEnabled = app_uses_v2_schema($db) && schema_object_exists($db, 'crypto_deposit_requests');
+        $btcPayment = $v2CryptoRequestsEnabled ? null : $db->select('cryptocurrency', '*', 'WHERE id = 1 LIMIT 1');
         if (!$btcPayment) {
             $btcPayment = [
                 'id' => 1,
@@ -27,22 +28,27 @@ switch ($site) {
         }
         $btcPayment['rate'] = isset($btcPayment['rate']) ? (float)$btcPayment['rate'] : 0.0;
 
-        $ratePayload = @file_get_contents('https://bitpay.com/api/rates');
-        if ($ratePayload !== false) {
-            $rateData = json_decode($ratePayload, true);
-            if (is_array($rateData) && isset($rateData[3]['rate'])) {
-                $marketRate = (float)$rateData[3]['rate'];
-                $discountedRate = $marketRate - ($marketRate * 0.01);
-                $btcPayment['rate'] = $discountedRate;
-
-                if (!empty($btcPayment['id'])) {
-                    $db->update_using_id(['rate', 'date_rate'], [$btcPayment['rate'], $time], 'cryptocurrency', $btcPayment['id']);
+        // The current payment flow uses the shared, currency-aware CoinGecko cache.
+        // Keep legacy BitPay quotes bounded and identify currency by code, never array position.
+        if (!$v2CryptoRequestsEnabled) {
+            $legacyRateTime = strtotime((string)($btcPayment['date_rate'] ?? '')) ?: 0;
+            if ($legacyRateTime < time() - 3600 || $legacyRateTime > time() + 60) $btcPayment['rate'] = 0.0;
+            $legacyCurrency = strtoupper(trim((string)($reseller['currency_short'] ?? 'USD')));
+            $rateData = app_http_json('https://bitpay.com/api/rates');
+            foreach ((array)$rateData as $rateRow) {
+                if (!is_array($rateRow) || strtoupper((string)($rateRow['code'] ?? '')) !== $legacyCurrency) continue;
+                $marketRate = (float)($rateRow['rate'] ?? 0);
+                if (!is_finite($marketRate) || $marketRate <= 0) break;
+                $discountedRate = $marketRate * 0.99;
+                if (abs($btcPayment['rate'] - $discountedRate) > 0.00000001 && !empty($btcPayment['id'])) {
+                    $db->update_using_id(['rate', 'date_rate'], [$discountedRate, $time], 'cryptocurrency', $btcPayment['id']);
                 }
+                $btcPayment['rate'] = $discountedRate;
+                break;
             }
         }
         $btcPayment['rate_formatted'] = app_format_crypto_rate($btcPayment['rate']);
         $safeNow = date('Y-m-d H:i:s');
-        $v2CryptoRequestsEnabled = app_uses_v2_schema($db) && schema_object_exists($db, 'crypto_deposit_requests');
         $paymentRedirectUrl = '';
         $activeV2CryptoRequest = null;
         $activeV2CryptoRequestRemainingSeconds = 0;
@@ -77,9 +83,6 @@ switch ($site) {
 
         if ($v2CryptoRequestsEnabled && !empty($settings['crypto_payments_enabled'])) {
             $balanceTopupPendingOrderPayment = app_find_customer_pending_order_payment($db, (int)$user['id'], $safeNow);
-            if (!$balanceTopupPendingOrderPayment) {
-                $topupCryptoAssets = app_load_customer_crypto_assets($db, (int)$user['id'], $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
-            }
         }
 
         if (isset($_POST['del_crypto'])) {
@@ -152,6 +155,14 @@ switch ($site) {
             );
             $activePayment += (int)($v2ActiveRow['total'] ?? 0);
         }
+
+        // An existing ticket displays its locked quote; do not fetch a new market quote/catalog.
+        if ($v2CryptoRequestsEnabled && !empty($settings['crypto_payments_enabled']) && $activePayment === 0 && !$balanceTopupPendingOrderPayment) {
+            $topupCryptoAssets = app_load_customer_crypto_assets($db, (int)$user['id'], $topupCurrencyCode, is_array($settings ?? null) ? $settings : []);
+        }
+        $hasActiveV2Ticket = (int)($v2ActiveRow['total'] ?? 0) > 0;
+        $cryptoTicketBefore = max(0, (int)($_GET['ticket_before'] ?? 0));
+        $cryptoTicketNext = 0;
 
         if (isset($_POST['create_topup_payment'])) {
             if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
@@ -371,7 +382,7 @@ switch ($site) {
             WHERE {$cryptoTopupsReadTable}.user_id = " . (int)$user['id'] . "
             ORDER BY {$cryptoTopupsReadTable}.{$cryptoTopupStatusColumn} ASC, {$cryptoTopupsReadTable}.{$cryptoTopupCreatedAtColumn} ASC
         ";
-        $cryptoPayments = $db->select_full_user($cryptoPaymentsQuery);
+        $cryptoPayments = $hasActiveV2Ticket ? [] : $db->select_full_user($cryptoPaymentsQuery);
 
         if ($cryptoPayments) {
             foreach ($cryptoPayments as $index => $cryptoPayment) {
@@ -423,7 +434,8 @@ switch ($site) {
             $cryptoPayments = array_values($cryptoPayments);
         }
 
-        if ($v2CryptoRequestsEnabled) {
+        if ($v2CryptoRequestsEnabled && !$hasActiveV2Ticket) {
+            $ticketCursorSql = $cryptoTicketBefore > 0 ? ' AND crypto_deposit_requests.id < ' . $cryptoTicketBefore : '';
             $v2CryptoPayments = $db->select_full_user(
                 "SELECT
                     crypto_deposit_requests.id,
@@ -450,8 +462,14 @@ switch ($site) {
                  LEFT JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
                  LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
                  WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
-                 ORDER BY crypto_deposit_requests.id DESC"
+                 {$ticketCursorSql}
+                 ORDER BY crypto_deposit_requests.id DESC
+                 LIMIT 51"
             );
+            if (count((array)$v2CryptoPayments) > 50) {
+                array_pop($v2CryptoPayments);
+                $cryptoTicketNext = (int)$v2CryptoPayments[49]['id'];
+            }
 
             if ($v2CryptoPayments) {
                 foreach ($v2CryptoPayments as $index => $cryptoPayment) {
@@ -570,6 +588,8 @@ switch ($site) {
             }
         }
 
+        $smarty->assign('crypto_ticket_before', $cryptoTicketBefore);
+        $smarty->assign('crypto_ticket_next', $cryptoTicketNext);
         $smarty->assign('pay_btc', $btcPayment);
         $smarty->assign('active_payment', $activePayment);
         $smarty->assign('active_v2_crypto_request', $activeV2CryptoRequest ?: null);

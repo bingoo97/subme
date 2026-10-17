@@ -510,6 +510,386 @@ document.addEventListener('DOMContentLoaded', function () {
             return select;
         }
 
+        function renderToolbarFontSizeSelect() {
+            var select = doc.createElement('select');
+            var placeholder = doc.createElement('option');
+            var size;
+
+            select.className = 'admin-rich-editor__select admin-rich-editor__select--font-size';
+            select.setAttribute('data-rich-editor-control', 'font-size');
+            select.setAttribute('title', 'Font size');
+            select.setAttribute('aria-label', 'Font size');
+
+            placeholder.value = '';
+            placeholder.textContent = 'Size';
+            select.appendChild(placeholder);
+
+            for (size = 8; size <= 32; size += 1) {
+                var option = doc.createElement('option');
+                option.value = size + 'px';
+                option.textContent = size + 'px';
+                select.appendChild(option);
+            }
+
+            return select;
+        }
+
+        function editorCsrfToken() {
+            var input = q('input[name="_csrf"]');
+            return input ? String(input.value || '') : '';
+        }
+
+        function normalizeImageDimension(value) {
+            var raw = String(value || '').trim();
+            if (!raw) {
+                return '';
+            }
+
+            if (/^\d{1,5}(\.\d{1,2})?$/.test(raw)) {
+                return raw + 'px';
+            }
+
+            if (/^\d{1,5}(\.\d{1,2})?(px|%|rem|em|vw|vh)$/i.test(raw)) {
+                return raw;
+            }
+
+            if (raw.toLowerCase() === 'auto') {
+                return 'auto';
+            }
+
+            return '';
+        }
+
+        function buildEditorImageHtml(url, altText, widthValue, heightValue, mode) {
+            var safeMode = String(mode || 'responsive');
+            var width = normalizeImageDimension(widthValue);
+            var height = normalizeImageDimension(heightValue);
+            var styles = ['display:block'];
+
+            if (safeMode === 'full') {
+                styles.push('width:100%', 'max-width:100%', 'height:auto');
+            } else if (safeMode === 'custom') {
+                if (width) {
+                    styles.push('width:' + width, 'max-width:100%');
+                } else {
+                    styles.push('max-width:100%', 'width:auto');
+                }
+                styles.push('height:' + (height || 'auto'));
+            } else {
+                styles.push('max-width:100%', 'height:auto', 'width:auto');
+            }
+
+            return '<p><img src="' + escapeHtml(url) + '" alt="' + escapeHtml(altText || '') + '" style="' + escapeHtml(styles.join(';') + ';') + '"></p>';
+        }
+
+        function createEditorModal(className, title) {
+            var overlay = doc.createElement('div');
+            overlay.className = className + ' admin-editor-modal';
+            overlay.setAttribute('hidden', 'hidden');
+            overlay.innerHTML = [
+                '<div class="admin-editor-modal__backdrop" data-editor-modal-close></div>',
+                '<section class="admin-editor-modal__panel" role="dialog" aria-modal="true">',
+                '<div class="admin-editor-modal__header">',
+                '<strong>' + escapeHtml(title) + '</strong>',
+                '<button type="button" class="btn btn-outline-dark btn-sm" data-editor-modal-close aria-label="Close"><i class="bi bi-x-lg"></i></button>',
+                '</div>',
+                '<div class="admin-editor-modal__body"></div>',
+                '</section>'
+            ].join('');
+            doc.body.appendChild(overlay);
+            overlay.addEventListener('click', function (event) {
+                if (closest(event.target, '[data-editor-modal-close]')) {
+                    overlay.setAttribute('hidden', 'hidden');
+                }
+            });
+            return overlay;
+        }
+
+        var imageSettingsModal = null;
+        var imageSettingsTarget = null;
+        var imageSettingsEditor = null;
+
+        function openImageSettingsModal(editorApi, imageNode) {
+            var body;
+            var src;
+            var alt;
+            var styleValue;
+            var widthMatch;
+            var heightMatch;
+
+            if (!editorApi || !imageNode) {
+                return;
+            }
+
+            imageSettingsEditor = editorApi;
+            imageSettingsTarget = imageNode;
+
+            if (!imageSettingsModal) {
+                imageSettingsModal = createEditorModal('admin-editor-image-modal', 'Ustawienia obrazka');
+                body = q('.admin-editor-modal__body', imageSettingsModal);
+                body.innerHTML = [
+                    '<form class="admin-editor-image-form" data-editor-image-form>',
+                    '<label><span>Adres URL</span><input type="text" class="form-control" data-editor-image-src placeholder="https:// albo /uploads/..."></label>',
+                    '<label><span>Opis ALT</span><input type="text" class="form-control" data-editor-image-alt placeholder="Opis obrazka"></label>',
+                    '<label><span>Rozmiar</span><select class="form-select" data-editor-image-mode><option value="responsive">Responsywnie</option><option value="full">Pełna szerokość</option><option value="custom">Własny rozmiar</option></select></label>',
+                    '<div class="admin-editor-image-form__grid">',
+                    '<label><span>Szerokość</span><input type="text" class="form-control" data-editor-image-width placeholder="np. 420px albo 50%"></label>',
+                    '<label><span>Wysokość</span><input type="text" class="form-control" data-editor-image-height placeholder="auto"></label>',
+                    '</div>',
+                    '<div class="admin-editor-image-form__preview"><img alt="" data-editor-image-preview></div>',
+                    '<div class="admin-editor-image-form__actions">',
+                    '<button type="button" class="btn btn-outline-danger" data-editor-image-remove>Usuń obrazek</button>',
+                    '<button type="submit" class="btn btn-success">Zapisz obrazek</button>',
+                    '</div>',
+                    '</form>'
+                ].join('');
+
+                body.addEventListener('input', function () {
+                    var preview = q('[data-editor-image-preview]', body);
+                    var url = q('[data-editor-image-src]', body);
+                    if (preview && url) {
+                        preview.src = String(url.value || '');
+                    }
+                });
+
+                body.addEventListener('click', function (event) {
+                    var removeButton = closest(event.target, '[data-editor-image-remove]');
+                    if (!removeButton || !imageSettingsTarget || !imageSettingsEditor) {
+                        return;
+                    }
+                    event.preventDefault();
+                    imageSettingsTarget.remove();
+                    imageSettingsEditor.sync();
+                    imageSettingsModal.setAttribute('hidden', 'hidden');
+                });
+
+                body.addEventListener('submit', function (event) {
+                    var urlInput = q('[data-editor-image-src]', body);
+                    var altInput = q('[data-editor-image-alt]', body);
+                    var modeInput = q('[data-editor-image-mode]', body);
+                    var widthInput = q('[data-editor-image-width]', body);
+                    var heightInput = q('[data-editor-image-height]', body);
+                    var html;
+                    var template;
+                    var nextImage;
+
+                    event.preventDefault();
+                    if (!imageSettingsTarget || !imageSettingsEditor || !urlInput) {
+                        return;
+                    }
+                    if (!isSafeUrl(urlInput.value, true)) {
+                        window.alert('Ten adres obrazka nie jest dozwolony.');
+                        return;
+                    }
+
+                    html = buildEditorImageHtml(
+                        urlInput.value,
+                        altInput ? altInput.value : '',
+                        widthInput ? widthInput.value : '',
+                        heightInput ? heightInput.value : '',
+                        modeInput ? modeInput.value : 'responsive'
+                    );
+                    template = doc.createElement('template');
+                    template.innerHTML = html;
+                    nextImage = template.content.querySelector('img');
+                    if (!nextImage) {
+                        return;
+                    }
+
+                    imageSettingsTarget.setAttribute('src', nextImage.getAttribute('src') || '');
+                    imageSettingsTarget.setAttribute('alt', nextImage.getAttribute('alt') || '');
+                    imageSettingsTarget.setAttribute('style', nextImage.getAttribute('style') || '');
+                    imageSettingsTarget.removeAttribute('width');
+                    imageSettingsTarget.removeAttribute('height');
+                    imageSettingsEditor.sync();
+                    imageSettingsModal.setAttribute('hidden', 'hidden');
+                });
+            }
+
+            body = q('.admin-editor-modal__body', imageSettingsModal);
+            src = imageNode.getAttribute('src') || '';
+            alt = imageNode.getAttribute('alt') || '';
+            styleValue = imageNode.getAttribute('style') || '';
+            widthMatch = styleValue.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i);
+            heightMatch = styleValue.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i);
+
+            q('[data-editor-image-src]', body).value = src;
+            q('[data-editor-image-alt]', body).value = alt;
+            q('[data-editor-image-width]', body).value = widthMatch ? widthMatch[1].trim() : (imageNode.getAttribute('width') || '');
+            q('[data-editor-image-height]', body).value = heightMatch ? heightMatch[1].trim() : (imageNode.getAttribute('height') || '');
+            q('[data-editor-image-mode]', body).value = /width\s*:\s*100%/i.test(styleValue) ? 'full' : (widthMatch || heightMatch ? 'custom' : 'responsive');
+            q('[data-editor-image-preview]', body).src = src;
+            imageSettingsModal.removeAttribute('hidden');
+            q('[data-editor-image-src]', body).focus();
+        }
+
+        var editorGalleryModal = null;
+        var editorGalleryActiveEditor = null;
+        var editorGalleryItems = [];
+
+        function renderEditorGalleryItems() {
+            var body = editorGalleryModal ? q('.admin-editor-modal__body', editorGalleryModal) : null;
+            var grid = body ? q('[data-editor-gallery-grid]', body) : null;
+            if (!grid) {
+                return;
+            }
+
+            if (!editorGalleryItems.length) {
+                grid.innerHTML = '<div class="admin-editor-gallery__empty">Brak obrazów w galerii.</div>';
+                return;
+            }
+
+            grid.innerHTML = editorGalleryItems.map(function (item) {
+                var url = String(item.url || '');
+                return [
+                    '<article class="admin-editor-gallery__item" data-editor-gallery-item data-url="' + escapeHtml(url) + '">',
+                    '<button type="button" class="admin-editor-gallery__thumb" data-editor-gallery-insert><img src="' + escapeHtml(url) + '" alt=""></button>',
+                    '<div class="admin-editor-gallery__meta">',
+                    '<span title="' + escapeHtml(item.name || '') + '">' + escapeHtml(item.name || 'image') + '</span>',
+                    '<button type="button" class="btn btn-outline-danger btn-sm" data-editor-gallery-delete>Usuń</button>',
+                    '</div>',
+                    '</article>'
+                ].join('');
+            }).join('');
+        }
+
+        function loadEditorGallery() {
+            if (!editorGalleryModal) {
+                return Promise.resolve();
+            }
+
+            var body = q('.admin-editor-modal__body', editorGalleryModal);
+            var status = q('[data-editor-gallery-status]', body);
+            if (status) {
+                status.textContent = 'Ładowanie...';
+            }
+
+            return jsonFetch('/admin/editor_gallery.php?action=list', { credentials: 'same-origin' }).then(function (payload) {
+                editorGalleryItems = payload && payload.ok && Array.isArray(payload.items) ? payload.items : [];
+                renderEditorGalleryItems();
+                if (status) {
+                    status.textContent = payload && payload.ok ? '' : 'Nie udało się załadować galerii.';
+                }
+            }).catch(function () {
+                if (status) {
+                    status.textContent = 'Nie udało się załadować galerii.';
+                }
+            });
+        }
+
+        function openEditorGallery(editorApi) {
+            var body;
+            editorGalleryActiveEditor = editorApi || null;
+            if (editorGalleryActiveEditor && typeof editorGalleryActiveEditor.saveSelection === 'function') {
+                editorGalleryActiveEditor.saveSelection();
+            }
+
+            if (!editorGalleryModal) {
+                editorGalleryModal = createEditorModal('admin-editor-gallery-modal', 'Galeria edytora');
+                body = q('.admin-editor-modal__body', editorGalleryModal);
+                body.innerHTML = [
+                    '<div class="admin-editor-gallery">',
+                    '<div class="admin-editor-gallery__upload">',
+                    '<input type="file" class="form-control" accept="image/jpeg,image/png,image/gif,image/webp" data-editor-gallery-file>',
+                    '<button type="button" class="btn btn-dark" data-editor-gallery-upload>Dodaj zdjęcie</button>',
+                    '</div>',
+                    '<div class="admin-editor-gallery__status" data-editor-gallery-status></div>',
+                    '<div class="admin-editor-gallery__grid" data-editor-gallery-grid></div>',
+                    '</div>'
+                ].join('');
+
+                body.addEventListener('click', function (event) {
+                    var item = closest(event.target, '[data-editor-gallery-item]');
+                    var uploadButton = closest(event.target, '[data-editor-gallery-upload]');
+                    var deleteButton = closest(event.target, '[data-editor-gallery-delete]');
+                    var insertButton = closest(event.target, '[data-editor-gallery-insert]');
+                    var fileInput = q('[data-editor-gallery-file]', body);
+                    var status = q('[data-editor-gallery-status]', body);
+                    var formData;
+                    var url;
+
+                    if (uploadButton) {
+                        event.preventDefault();
+                        if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+                            if (status) {
+                                status.textContent = 'Wybierz plik obrazu.';
+                            }
+                            return;
+                        }
+                        formData = new FormData();
+                        formData.append('action', 'upload');
+                        formData.append('_csrf', editorCsrfToken());
+                        formData.append('image', fileInput.files[0]);
+                        if (status) {
+                            status.textContent = 'Wgrywanie...';
+                        }
+                        fetch('/admin/editor_gallery.php', {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            body: formData
+                        }).then(function (response) {
+                            return response.json();
+                        }).then(function (payload) {
+                            editorGalleryItems = payload && payload.ok && Array.isArray(payload.items) ? payload.items : editorGalleryItems;
+                            fileInput.value = '';
+                            renderEditorGalleryItems();
+                            if (status) {
+                                status.textContent = payload && payload.ok ? 'Zdjęcie dodane do galerii.' : (payload.message || 'Nie udało się dodać zdjęcia.');
+                            }
+                        }).catch(function () {
+                            if (status) {
+                                status.textContent = 'Nie udało się dodać zdjęcia.';
+                            }
+                        });
+                        return;
+                    }
+
+                    if (deleteButton && item) {
+                        event.preventDefault();
+                        url = item.getAttribute('data-url') || '';
+                        if (!url || !window.confirm('Usunąć ten obraz z galerii?')) {
+                            return;
+                        }
+                        formData = new FormData();
+                        formData.append('action', 'delete');
+                        formData.append('_csrf', editorCsrfToken());
+                        formData.append('url', url);
+                        fetch('/admin/editor_gallery.php', {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            body: formData
+                        }).then(function (response) {
+                            return response.json();
+                        }).then(function (payload) {
+                            editorGalleryItems = payload && Array.isArray(payload.items) ? payload.items : editorGalleryItems;
+                            renderEditorGalleryItems();
+                            if (status) {
+                                status.textContent = payload && payload.ok ? 'Obraz usunięty.' : (payload.message || 'Nie udało się usunąć obrazu.');
+                            }
+                        }).catch(function () {
+                            if (status) {
+                                status.textContent = 'Nie udało się usunąć obrazu.';
+                            }
+                        });
+                        return;
+                    }
+
+                    if (insertButton && item && editorGalleryActiveEditor) {
+                        event.preventDefault();
+                        url = item.getAttribute('data-url') || '';
+                        if (!url) {
+                            return;
+                        }
+                        editorGalleryActiveEditor.insertImage(url, '');
+                        editorGalleryModal.setAttribute('hidden', 'hidden');
+                    }
+                });
+            }
+
+            editorGalleryModal.removeAttribute('hidden');
+            loadEditorGallery();
+        }
+
         qa('textarea[data-admin-rich-editor]').forEach(function (textarea) {
             if (!textarea || textarea.getAttribute('data-admin-rich-editor-ready') === '1') {
                 return;
@@ -527,6 +907,7 @@ document.addEventListener('DOMContentLoaded', function () {
             toolbar.className = 'admin-rich-editor__toolbar';
             var colorInput = renderToolbarColorInput();
             var weightSelect = renderToolbarWeightSelect();
+            var fontSizeSelect = renderToolbarFontSizeSelect();
 
             var tools = [
                 { action: 'paragraph', label: 'Paragraph', html: '<strong>P</strong>' },
@@ -576,6 +957,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (tool.action === 'textControls') {
                     toolbar.appendChild(colorInput);
                     toolbar.appendChild(weightSelect);
+                    toolbar.appendChild(fontSizeSelect);
                     return;
                 }
                 toolbar.appendChild(renderToolbarButton(tool));
@@ -597,12 +979,28 @@ document.addEventListener('DOMContentLoaded', function () {
             fileInput.accept = 'image/*';
             fileInput.hidden = true;
 
+            var galleryActions = doc.createElement('div');
+            galleryActions.className = 'admin-rich-editor__gallery-actions';
+            galleryActions.innerHTML = '<button type="button" class="btn btn-success btn-md" data-rich-editor-gallery><i class="bi bi-images" aria-hidden="true"></i><span>Galeria obrazów</span></button>';
+
             wrapper.appendChild(toolbar);
             wrapper.appendChild(surface);
             wrapper.appendChild(source);
             wrapper.appendChild(fileInput);
+            wrapper.appendChild(galleryActions);
             textarea.insertAdjacentElement('afterend', wrapper);
             textarea.hidden = true;
+            var helpText = wrapper.nextElementSibling;
+            if (helpText && helpText.classList && helpText.classList.contains('form-text')) {
+                helpText.classList.add('admin-rich-editor__gallery-hint');
+                if (!helpText.nextElementSibling || !helpText.nextElementSibling.classList || !helpText.nextElementSibling.classList.contains('admin-rich-editor__hint-divider')) {
+                    var hintDivider = doc.createElement('hr');
+                    hintDivider.className = 'admin-rich-editor__hint-divider';
+                    helpText.insertAdjacentElement('afterend', hintDivider);
+                }
+            }
+            var savedRange = null;
+            var editorApi = null;
 
             function dispatchTextareaEvent(name) {
                 var event;
@@ -676,6 +1074,27 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 return range;
+            }
+
+            function saveSelectionRange() {
+                var range = getSelectionRange();
+                if (range) {
+                    savedRange = range.cloneRange();
+                }
+            }
+
+            function isSavedRangeUsable() {
+                var container;
+                if (!savedRange) {
+                    return false;
+                }
+
+                container = savedRange.commonAncestorContainer;
+                if (container && container.nodeType === 3) {
+                    container = container.parentNode;
+                }
+
+                return !!container && surface.contains(container);
             }
 
             function applyInlineStyle(property, value) {
@@ -781,25 +1200,39 @@ document.addEventListener('DOMContentLoaded', function () {
                 runCommand('insertHTML', videoHtml);
             }
 
+            function insertHtmlAtSavedRange(html) {
+                var selection;
+                var wrapperNode;
+
+                if (isSourceMode()) {
+                    source.value += (source.value ? '\n' : '') + String(html || '');
+                    syncSurfaceFromSource();
+                    return;
+                }
+
+                surface.focus();
+                if (isSavedRangeUsable()) {
+                    selection = window.getSelection ? window.getSelection() : null;
+                    if (selection) {
+                        selection.removeAllRanges();
+                        selection.addRange(savedRange);
+                    }
+                    runCommand('insertHTML', html);
+                    saveSelectionRange();
+                    return;
+                }
+
+                wrapperNode = doc.createElement('div');
+                wrapperNode.innerHTML = String(html || '');
+                while (wrapperNode.firstChild) {
+                    surface.appendChild(wrapperNode.firstChild);
+                }
+                syncTextareaFromSurface(true);
+                saveSelectionRange();
+            }
+
             function buildResponsiveImageHtml(url, altText, widthValue, heightValue) {
-                var styles = ['max-width:100%', 'height:auto', 'width:auto', 'display:block'];
-
-                if (String(widthValue || '').trim() !== '') {
-                    styles = styles.filter(function (styleValue) {
-                        return styleValue.indexOf('width:') !== 0 && styleValue.indexOf('max-width:') !== 0;
-                    });
-                    styles.unshift('width:' + String(widthValue).trim());
-                    styles.push('max-width:100%');
-                }
-
-                if (String(heightValue || '').trim() !== '') {
-                    styles = styles.filter(function (styleValue) {
-                        return styleValue.indexOf('height:') !== 0;
-                    });
-                    styles.push('height:' + String(heightValue).trim());
-                }
-
-                return '<p><img src="' + escapeHtml(url) + '" alt="' + escapeHtml(altText || '') + '" style="' + escapeHtml(styles.join(';') + ';') + '"></p>';
+                return buildEditorImageHtml(url, altText, widthValue, heightValue, String(widthValue || heightValue || '').trim() ? 'custom' : 'responsive');
             }
 
             function promptForImageUrl() {
@@ -843,12 +1276,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     var imageHtml = buildResponsiveImageHtml(result, file.name || 'image', '', '');
-                    if (isSourceMode()) {
-                        source.value += (source.value ? '\n' : '') + imageHtml;
-                        syncSurfaceFromSource();
-                    } else {
-                        runCommand('insertHTML', imageHtml);
-                    }
+                    insertHtmlAtSavedRange(imageHtml);
                 };
                 reader.readAsDataURL(file);
             }
@@ -884,6 +1312,24 @@ document.addEventListener('DOMContentLoaded', function () {
             surface.innerHTML = sanitizeHtml(textarea.value);
             syncTextareaFromSurface(false);
             updateToggleButton();
+
+            editorApi = {
+                saveSelection: saveSelectionRange,
+                sync: function () {
+                    if (isSourceMode()) {
+                        syncSurfaceFromSource();
+                    } else {
+                        syncTextareaFromSurface(true);
+                    }
+                },
+                insertImage: function (url, altText) {
+                    if (!isSafeUrl(url, true)) {
+                        window.alert('Ten adres obrazka nie jest dozwolony.');
+                        return;
+                    }
+                    insertHtmlAtSavedRange(buildEditorImageHtml(url, altText || '', '', '', 'responsive'));
+                }
+            };
 
             toolbar.addEventListener('click', function (event) {
                 var button = closest(event.target, '[data-rich-editor-action]');
@@ -975,6 +1421,21 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             });
 
+            galleryActions.addEventListener('mousedown', function () {
+                saveSelectionRange();
+            });
+
+            galleryActions.addEventListener('click', function (event) {
+                var button = closest(event.target, '[data-rich-editor-gallery]');
+                if (!button) {
+                    return;
+                }
+
+                event.preventDefault();
+                saveSelectionRange();
+                openEditorGallery(editorApi);
+            });
+
             colorInput.addEventListener('input', function () {
                 if (isSourceMode()) {
                     return;
@@ -991,6 +1452,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 weightSelect.value = '';
             });
 
+            fontSizeSelect.addEventListener('change', function () {
+                var fontSize = String(fontSizeSelect.value || '').trim();
+                if (!fontSize) {
+                    return;
+                }
+                applyInlineStyle('font-size', fontSize);
+                fontSizeSelect.value = '';
+            });
+
             fileInput.addEventListener('change', function () {
                 var file = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
                 if (file) {
@@ -1001,14 +1471,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
             surface.addEventListener('input', function () {
                 syncTextareaFromSurface(true);
+                saveSelectionRange();
             });
             surface.addEventListener('blur', function () {
                 syncTextareaFromSurface(true);
                 dispatchTextareaEvent('change');
             });
+            surface.addEventListener('keyup', saveSelectionRange);
+            surface.addEventListener('mouseup', saveSelectionRange);
+            surface.addEventListener('focus', saveSelectionRange);
+            surface.addEventListener('click', function (event) {
+                var imageNode = closest(event.target, 'img');
+                if (!imageNode || !surface.contains(imageNode)) {
+                    saveSelectionRange();
+                    return;
+                }
+
+                event.preventDefault();
+                openImageSettingsModal(editorApi, imageNode);
+            });
             surface.addEventListener('paste', function () {
                 window.setTimeout(function () {
                     syncTextareaFromSurface(true);
+                    saveSelectionRange();
                 }, 0);
             });
 
@@ -1496,6 +1981,48 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initAdminPanelSubscriptionReminderModal() {
+        var modalNode = q('[data-admin-panel-subscription-modal]');
+        var storageKey;
+        var throttleMinutes;
+        var now;
+        var lastShown;
+        var shouldShow = true;
+        var modal;
+
+        if (!modalNode || !hasBootstrap || !window.bootstrap.Modal) {
+            return;
+        }
+
+        storageKey = modalNode.getAttribute('data-storage-key') || 'admin-panel-subscription-reminder';
+        throttleMinutes = parseInt(modalNode.getAttribute('data-throttle-minutes') || '60', 10) || 60;
+        now = Date.now();
+
+        try {
+            lastShown = parseInt(window.localStorage ? (window.localStorage.getItem(storageKey) || '0') : '0', 10) || 0;
+            shouldShow = !lastShown || (now - lastShown) >= (throttleMinutes * 60 * 1000);
+        } catch (error) {
+            shouldShow = true;
+        }
+
+        if (!shouldShow) {
+            return;
+        }
+
+        try {
+            if (window.localStorage) {
+                window.localStorage.setItem(storageKey, String(now));
+            }
+        } catch (error) {
+            // localStorage may be unavailable in privacy-restricted contexts.
+        }
+
+        modal = window.bootstrap.Modal.getOrCreateInstance(modalNode);
+        window.setTimeout(function () {
+            modal.show();
+        }, 350);
+    }
+
     function initProviderUrlReplacement() {
         qa('[data-provider-url-replacement-scope]').forEach(function (scope) {
             var toggle = q('[data-provider-url-replacement-toggle]', scope);
@@ -1884,6 +2411,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var paymentPill = q('[data-admin-order-payment-pill]', form);
             var fulfillmentPill = q('[data-admin-order-fulfillment-pill]', form);
             var activationAlert = q('[data-admin-order-activation-alert]', form);
+            var expiredAlert = q('[data-admin-order-expired-alert]', form);
             var activeAlert = q('[data-admin-order-active-alert]', form);
 
             if (!statusField || !paymentField || !fulfillmentField) {
@@ -1941,7 +2469,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 applyPill(paymentPill, paymentField.value, 'payment', paymentLabels);
                 applyPill(fulfillmentPill, fulfillmentField.value, 'fulfillment', fulfillmentLabels);
                 if (activationAlert) {
-                    setHidden(activationAlert, statusValue === 'active');
+                    setHidden(activationAlert, statusValue === 'active' || statusValue === 'expired');
+                }
+                if (expiredAlert) {
+                    setHidden(expiredAlert, statusValue !== 'expired');
                 }
                 if (activeAlert) {
                     setHidden(activeAlert, statusValue !== 'active');
@@ -1952,6 +2483,121 @@ document.addEventListener('DOMContentLoaded', function () {
             paymentField.addEventListener('change', function () {
                 applyPill(paymentPill, paymentField.value, 'payment', paymentLabels);
             });
+            sync();
+        });
+    }
+
+    function initOrderExtendPreviews() {
+        function pad(value) {
+            return value < 10 ? '0' + value : String(value);
+        }
+
+        function parseSqlDateTime(value) {
+            var match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+            if (!match) {
+                return null;
+            }
+
+            var date = new Date(
+                parseInt(match[1], 10),
+                parseInt(match[2], 10) - 1,
+                parseInt(match[3], 10),
+                parseInt(match[4] || '0', 10),
+                parseInt(match[5] || '0', 10),
+                parseInt(match[6] || '0', 10)
+            );
+
+            return Number.isNaN(date.getTime()) ? null : date;
+        }
+
+        function formatDateTime(date) {
+            if (!date || Number.isNaN(date.getTime())) {
+                return '';
+            }
+
+            return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear() + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+        }
+
+        function formatDateTimeInput(date) {
+            if (!date || Number.isNaN(date.getTime())) {
+                return '';
+            }
+
+            return date.getFullYear()
+                + '-'
+                + pad(date.getMonth() + 1)
+                + '-'
+                + pad(date.getDate())
+                + 'T'
+                + pad(date.getHours())
+                + ':'
+                + pad(date.getMinutes());
+        }
+
+        function calendarMonthsFromDuration(durationHours) {
+            durationHours = Math.max(0, parseInt(durationHours || '0', 10) || 0);
+            if (durationHours <= 24) {
+                return 0;
+            }
+            if (durationHours % 8760 === 0) {
+                return (durationHours / 8760) * 12;
+            }
+            if (durationHours % 720 === 0) {
+                return durationHours / 720;
+            }
+
+            return 0;
+        }
+
+        function addCalendarMonths(baseDate, months) {
+            var baseDay = baseDate.getDate();
+            var targetMonth = new Date(
+                baseDate.getFullYear(),
+                baseDate.getMonth() + months,
+                1,
+                baseDate.getHours(),
+                baseDate.getMinutes(),
+                baseDate.getSeconds()
+            );
+            var lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0).getDate();
+            targetMonth.setDate(Math.min(baseDay, lastDay));
+
+            return targetMonth;
+        }
+
+        function addDuration(baseDate, durationHours) {
+            var months = calendarMonthsFromDuration(durationHours);
+            if (months > 0) {
+                return addCalendarMonths(baseDate, months);
+            }
+
+            return new Date(baseDate.getTime() + ((parseInt(durationHours || '0', 10) || 0) * 3600000));
+        }
+
+        qa('[data-admin-order-extend-form]').forEach(function (form) {
+            var productField = q('[data-admin-order-extend-product]', form);
+            var previewField = q('[data-admin-order-extend-preview]', form);
+
+            if (!productField || !previewField) {
+                return;
+            }
+
+            var sync = function () {
+                var selected = productField.options[productField.selectedIndex];
+                var durationHours = selected ? parseInt(selected.getAttribute('data-duration-hours') || '0', 10) || 0 : 0;
+                var currentExpiry = parseSqlDateTime(form.getAttribute('data-current-expires-at') || '');
+                var now = new Date();
+                var baseDate = currentExpiry && currentExpiry.getTime() > now.getTime() ? currentExpiry : now;
+
+                if (durationHours <= 0) {
+                    previewField.value = '';
+                    return;
+                }
+
+                previewField.value = formatDateTimeInput(addDuration(baseDate, durationHours));
+            };
+
+            productField.addEventListener('change', sync);
             sync();
         });
     }
@@ -1972,8 +2618,22 @@ document.addEventListener('DOMContentLoaded', function () {
         var errorText = input.getAttribute('data-error-text') || 'Unable to load search results right now.';
         var csrfToken = input.getAttribute('data-csrf-token') || '';
         var requestIndex = 0;
+        var controller = null;
+        var timeout = null;
+        var searchTimer = null;
+        var minimumHint = input.getAttribute('data-minimum-hint') || 'Enter at least 2 characters or a complete ID.';
+
+        function cancelRequest() {
+            if (controller) { controller.abort(); controller = null; }
+            if (timeout) { window.clearTimeout(timeout); timeout = null; }
+            results.removeAttribute('aria-busy');
+        }
 
         function resetSearch() {
+            if (searchTimer) window.clearTimeout(searchTimer);
+            searchTimer = null;
+            requestIndex += 1;
+            cancelRequest();
             input.value = '';
             setHidden(results, true);
             results.innerHTML = '';
@@ -1984,6 +2644,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function runSearch() {
+            if (searchTimer) window.clearTimeout(searchTimer);
+            searchTimer = null;
             var query = input.value.trim();
             if (reset) {
                 setHidden(reset, query === '');
@@ -1995,18 +2657,27 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             requestIndex += 1;
+            cancelRequest();
             var activeRequest = requestIndex;
             defaultContent.setAttribute('hidden', 'hidden');
             setHidden(results, false);
-            results.innerHTML = '<div class="admin-panel-card"><div class="admin-search-feedback">' + escapeHtml(loadingText) + '</div></div>';
+            if (!/^\d+$/.test(query) && Array.from(query.replace(/^@/, '')).length < 2) {
+                results.innerHTML = '<div class="admin-panel-card admin-search-card"><div class="admin-search-feedback" role="status">' + escapeHtml(minimumHint) + '</div></div>';
+                return;
+            }
+            results.setAttribute('aria-busy', 'true');
+            results.innerHTML = '<div class="admin-panel-card admin-search-card"><div class="admin-search-feedback" role="status"><span class="spinner-border" aria-hidden="true"></span>' + escapeHtml(loadingText) + '</div></div>';
+            controller = window.AbortController ? new window.AbortController() : null;
+            var activeController = controller;
+            timeout = controller ? window.setTimeout(function () { activeController.abort(); }, 10000) : null;
 
-            jsonFetch(searchUrl + '?' + toQuery({ q: query })).then(function (payload) {
-                if (activeRequest !== requestIndex) {
+            jsonFetch(searchUrl + '?' + toQuery({ q: query }), { signal: controller ? controller.signal : undefined }).then(function (payload) {
+                if (activeRequest !== requestIndex || input.value.trim() !== query) {
                     return;
                 }
 
-                if (!payload.ok) {
-                    results.innerHTML = '<div class="admin-panel-card"><div class="admin-search-feedback"><strong>' + escapeHtml(errorTitle) + '</strong><span>' + escapeHtml(errorText) + '</span></div></div>';
+                if (!payload || !payload.ok || payload.__http_ok === false) {
+                    results.innerHTML = '<div class="admin-panel-card admin-search-card"><div class="admin-search-feedback" role="status"><strong>' + escapeHtml(errorTitle) + '</strong><span>' + escapeHtml(errorText) + '</span></div></div>';
                     return;
                 }
 
@@ -2016,14 +2687,32 @@ document.addEventListener('DOMContentLoaded', function () {
                     defaultContent.removeAttribute('hidden');
                 }
             }).catch(function () {
-                if (activeRequest !== requestIndex) {
+                if (activeRequest !== requestIndex || input.value.trim() !== query) {
                     return;
                 }
-                results.innerHTML = '<div class="admin-panel-card"><div class="admin-search-feedback"><strong>' + escapeHtml(errorTitle) + '</strong><span>' + escapeHtml(errorText) + '</span></div></div>';
+                results.innerHTML = '<div class="admin-panel-card admin-search-card"><div class="admin-search-feedback" role="status"><strong>' + escapeHtml(errorTitle) + '</strong><span>' + escapeHtml(errorText) + '</span></div></div>';
+            }).then(function () {
+                if (activeRequest === requestIndex) {
+                    if (timeout) window.clearTimeout(timeout);
+                    timeout = null; controller = null;
+                    results.removeAttribute('aria-busy');
+                }
             });
         }
 
-        input.addEventListener('input', debounce(runSearch, 250));
+        function debouncedSearch() {
+            if (searchTimer) window.clearTimeout(searchTimer);
+            searchTimer = window.setTimeout(runSearch, 250);
+        }
+        input.addEventListener('input', function () {
+            requestIndex += 1; cancelRequest();
+            if (input.value.trim() === '') resetSearch();
+            else debouncedSearch();
+        });
+        input.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') { event.preventDefault(); resetSearch(); }
+            if (event.key === 'Enter') { event.preventDefault(); runSearch(); }
+        });
         if (reset) {
             reset.addEventListener('click', function () {
                 resetSearch();
@@ -2378,211 +3067,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    function initAdminHelpModal() {
-        var modal = q('#adminHelpModal');
-        var input = q('[data-admin-help-search]', modal);
-        var results = q('[data-admin-help-results]', modal);
-        var dataNode = q('#adminHelpTopicsData');
-        if (!modal || !input || !results || !dataNode) {
-            return;
-        }
-
-        var topics = [];
-        try {
-            topics = JSON.parse(dataNode.textContent || '[]');
-        } catch (error) {
-            topics = [];
-        }
-
-        function normalizeText(value) {
-            return String(value || '').toLowerCase().trim();
-        }
-
-        function audienceClass(code) {
-            if (code === 'admin') {
-                return 'admin-help-modal__badge admin-help-modal__badge--admin';
-            }
-            if (code === 'client') {
-                return 'admin-help-modal__badge admin-help-modal__badge--client';
-            }
-            if (code === 'reseller') {
-                return 'admin-help-modal__badge admin-help-modal__badge--reseller';
-            }
-            return 'admin-help-modal__badge admin-help-modal__badge--all';
-        }
-
-        function canEditTopics() {
-            return !!doc.body
-                && doc.body.getAttribute('data-admin-help-edit-allowed') === '1'
-                && doc.body.getAttribute('data-admin-sensitive-unlocked') === '1';
-        }
-
-        function render(items) {
-            if (!items.length) {
-                results.innerHTML = '<div class="admin-help-modal__empty"><strong>'
-                    + escapeHtml(modal.getAttribute('data-empty-title') || 'Brak wyników')
-                    + '</strong><span>'
-                    + escapeHtml(modal.getAttribute('data-empty-text') || 'Spróbuj wpisać inne słowa kluczowe.')
-                    + '</span></div>';
-                return;
-            }
-
-            results.innerHTML = items.map(function (topic) {
-                var showEditor = canEditTopics();
-                var topicId = parseInt(topic.id || '0', 10) || 0;
-                return '<article class="admin-help-modal__topic">'
-                    + '<div class="admin-help-modal__topic-shell" data-admin-help-topic data-topic-id="' + topicId + '">'
-                    + '<div class="admin-help-modal__topic-meta">'
-                    + '<span class="' + audienceClass(String(topic.audience_code || 'all')) + '">'
-                    + escapeHtml(String(topic.audience_label || 'All'))
-                    + '</span>'
-                    + '</div>'
-                    + '<h3 class="admin-help-modal__question">' + escapeHtml(String(topic.question || '')) + '</h3>'
-                    + '<div class="admin-help-modal__answer" data-admin-help-answer>' + String(topic.answer_html || '') + '</div>'
-                    + (showEditor
-                        ? '<div class="admin-help-modal__topic-actions">'
-                            + '<a href="#" class="admin-help-modal__edit-link" data-admin-help-edit-topic data-topic-id="' + topicId + '">' + escapeHtml(modal.getAttribute('data-edit-label') || 'Edit') + '</a>'
-                            + '<span class="admin-help-modal__saved" data-admin-help-saved hidden>' + escapeHtml(modal.getAttribute('data-saved-label') || 'Saved') + '</span>'
-                        + '</div>'
-                        : '')
-                    + (showEditor
-                        ? '<div class="admin-help-modal__editor" data-admin-help-editor hidden>'
-                            + '<textarea class="form-control" rows="8" spellcheck="false" data-admin-help-edit-input>' + escapeHtml(String(topic.answer_html || '')) + '</textarea>'
-                            + '<div class="admin-help-modal__editor-actions">'
-                                + '<button type="button" class="btn btn-dark btn-sm" data-admin-help-save-topic data-topic-id="' + topicId + '"><i class="bi bi-save" aria-hidden="true"></i><span>' + escapeHtml(modal.getAttribute('data-save-label') || 'Save') + '</span></button>'
-                            + '</div>'
-                        + '</div>'
-                        : '')
-                    + '</div>'
-                    + '</article>';
-            }).join('');
-        }
-
-        function applySearch() {
-            var query = normalizeText(input.value);
-            if (!query) {
-                render(topics);
-                return;
-            }
-
-            render(topics.filter(function (topic) {
-                return normalizeText(topic.search_text || '').indexOf(query) !== -1;
-            }));
-        }
-
-        modal.addEventListener('click', function (event) {
-            var editLink = closest(event.target, '[data-admin-help-edit-topic]');
-            if (editLink) {
-                var topicNode = closest(editLink, '[data-admin-help-topic]');
-                var editorNode = q('[data-admin-help-editor]', topicNode);
-                var inputNode = q('[data-admin-help-edit-input]', topicNode);
-                var savedNode = q('[data-admin-help-saved]', topicNode);
-
-                event.preventDefault();
-                if (!topicNode || !editorNode || !inputNode) {
-                    return;
-                }
-
-                if (!canEditTopics()) {
-                    window.alert(modal.getAttribute('data-locked-error') || 'Unlock Settings access first to edit help content.');
-                    return;
-                }
-
-                qa('[data-admin-help-topic]', results).forEach(function (otherTopicNode) {
-                    if (otherTopicNode !== topicNode) {
-                        var otherEditorNode = q('[data-admin-help-editor]', otherTopicNode);
-                        var otherSavedNode = q('[data-admin-help-saved]', otherTopicNode);
-                        if (otherEditorNode) {
-                            otherEditorNode.hidden = true;
-                        }
-                        if (otherSavedNode) {
-                            otherSavedNode.hidden = true;
-                        }
-                    }
-                });
-
-                editorNode.hidden = false;
-                if (savedNode) {
-                    savedNode.hidden = true;
-                }
-                inputNode.focus();
-                inputNode.setSelectionRange(inputNode.value.length, inputNode.value.length);
-                return;
-            }
-
-            var saveButton = closest(event.target, '[data-admin-help-save-topic]');
-            if (saveButton) {
-                var saveTopicId = parseInt(saveButton.getAttribute('data-topic-id') || '0', 10) || 0;
-                var saveTopicNode = closest(saveButton, '[data-admin-help-topic]');
-                var saveEditorNode = q('[data-admin-help-editor]', saveTopicNode);
-                var saveInputNode = q('[data-admin-help-edit-input]', saveTopicNode);
-                var saveAnswerNode = q('[data-admin-help-answer]', saveTopicNode);
-                var saveSavedNode = q('[data-admin-help-saved]', saveTopicNode);
-                var formData = new window.FormData();
-
-                event.preventDefault();
-                if (!saveTopicId || !saveTopicNode || !saveEditorNode || !saveInputNode || !saveAnswerNode) {
-                    return;
-                }
-
-                if (!canEditTopics()) {
-                    window.alert(modal.getAttribute('data-locked-error') || 'Unlock Settings access first to edit help content.');
-                    return;
-                }
-
-                saveButton.disabled = true;
-                formData.append('admin_update_help_topic_ajax', '1');
-                formData.append('_csrf', (doc.body && doc.body.getAttribute('data-admin-sensitive-csrf')) || '');
-                formData.append('topic_id', String(saveTopicId));
-                formData.append('answer_html', saveInputNode.value);
-
-                jsonFetch(window.location.href, {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'same-origin'
-                }).then(function (payload) {
-                    var updatedTopic;
-
-                    saveButton.disabled = false;
-                    if (!payload || !payload.ok || !payload.topic) {
-                        window.alert((payload && payload.message) ? payload.message : (modal.getAttribute('data-save-error') || 'Unable to save help content.'));
-                        return;
-                    }
-
-                    updatedTopic = payload.topic;
-                    topics = topics.map(function (topic) {
-                        return (parseInt(topic.id || '0', 10) || 0) === saveTopicId ? updatedTopic : topic;
-                    });
-
-                    saveAnswerNode.innerHTML = String(updatedTopic.answer_html || '');
-                    saveInputNode.value = String(updatedTopic.answer_html || '');
-                    saveEditorNode.hidden = true;
-                    if (saveSavedNode) {
-                        saveSavedNode.hidden = false;
-                    }
-                }).catch(function () {
-                    saveButton.disabled = false;
-                    window.alert(modal.getAttribute('data-save-error') || 'Unable to save help content.');
-                });
-            }
-        });
-
-        modal.addEventListener('shown.bs.modal', function () {
-            applySearch();
-            window.setTimeout(function () {
-                input.focus();
-                input.select();
-            }, 80);
-        });
-
-        modal.addEventListener('hidden.bs.modal', function () {
-            input.value = '';
-        });
-
-        input.addEventListener('input', debounce(applySearch, 90));
-        render(topics);
-    }
-
     function initWalletCustomerPickers() {
         qa('[data-admin-wallet-customer-picker]').forEach(function (picker) {
             var form = closest(picker, 'form');
@@ -2694,15 +3178,31 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    function initWalletNetworkForms() {
-        qa('[data-admin-wallet-network-form]').forEach(function (form) {
-            var assetSelect = q('[data-admin-wallet-asset-select]', form);
-            var networkSelect = q('[data-admin-wallet-network-select]', form);
-            var fixedInput = q('[data-admin-wallet-network-fixed]', form);
+	    function initWalletNetworkForms() {
+	        qa('[data-admin-wallet-network-form]').forEach(function (form) {
+	            var walletForm = closest(form, 'form') || form;
+	            var assetSelect = q('[data-admin-wallet-asset-select]', form);
+	            var networkSelect = q('[data-admin-wallet-network-select]', form);
+	            var fixedInput = q('[data-admin-wallet-network-fixed]', form);
+	            var addressInput = q('input[name="address"]', form);
+	            var walletIdInput = q('input[name="wallet_id"]', walletForm);
+	            var saveButton = q('button[name="admin_save_crypto_wallet"]', walletForm);
+	            var ownerInput = q('input[name="owner_full_name"]', form);
+	            var providerSelect = q('select[name="wallet_provider"]', form);
+	            var memoInput = q('input[name="memo_tag"]', form);
+	            var notesInput = q('textarea[name="notes"]', form);
+	            var existingAddressAlert = q('[data-admin-wallet-existing-address-alert]', form);
+	            var usdtCompanionRow = q('[data-admin-wallet-usdt-companion-row]', form);
+	            var usdtCompanionSwitch = q('[data-admin-wallet-usdt-companion-switch]', form);
+	            var lookupUrl = String(form.getAttribute('data-admin-wallet-lookup-url') || '').trim();
+	            var existingAddressDefaultText = String(form.getAttribute('data-admin-wallet-exists-default') || '').trim();
+	            var lookupErrorText = String(form.getAttribute('data-admin-wallet-check-error') || '').trim();
+	            var lookupSequence = 0;
+	            var addressLookupBlocked = false;
 
-            if (!assetSelect || !networkSelect || !fixedInput) {
-                return;
-            }
+	            if (!assetSelect || !networkSelect || !fixedInput) {
+	                return;
+	            }
 
             function parseNetworkOptions(raw) {
                 if (!raw) {
@@ -2716,16 +3216,213 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
 
-            function renderNetworkOptions(optionsMap, selectedValue) {
-                return Object.keys(optionsMap).map(function (networkCode) {
-                    var selected = String(networkCode) === String(selectedValue || '') ? ' selected' : '';
-                    return '<option value="' + escapeHtml(networkCode) + '"' + selected + '>' + escapeHtml(String(optionsMap[networkCode] || networkCode)) + '</option>';
-                }).join('');
-            }
+	            function renderNetworkOptions(optionsMap, selectedValue) {
+	                return Object.keys(optionsMap).map(function (networkCode) {
+	                    var selected = String(networkCode) === String(selectedValue || '') ? ' selected' : '';
+	                    return '<option value="' + escapeHtml(networkCode) + '"' + selected + '>' + escapeHtml(String(optionsMap[networkCode] || networkCode)) + '</option>';
+	                }).join('');
+	            }
 
-            function syncNetworkFromAsset() {
-                var selectedOption = assetSelect.options[assetSelect.selectedIndex];
-                var networkOptions = parseNetworkOptions(selectedOption ? selectedOption.getAttribute('data-network-options') : '');
+	            function setProviderValue(value) {
+	                var existingOption = null;
+	                value = String(value || '').trim();
+	                if (!providerSelect || !value) {
+	                    return;
+	                }
+	                Array.prototype.slice.call(providerSelect.options || []).some(function (option) {
+	                    if (String(option.value || '') === value) {
+	                        existingOption = option;
+	                        return true;
+	                    }
+	                    return false;
+	                });
+	                if (!existingOption) {
+	                    existingOption = doc.createElement('option');
+	                    existingOption.value = value;
+	                    existingOption.textContent = value;
+	                    providerSelect.appendChild(existingOption);
+	                }
+	                providerSelect.value = value;
+	            }
+
+	            function evmCompanionTargetForAsset(assetCode, networkCode) {
+	                assetCode = String(assetCode || '').toUpperCase();
+	                networkCode = String(networkCode || '').toLowerCase();
+	                if (['ethereum', 'bnb', 'polygon'].indexOf(networkCode) === -1) {
+	                    return null;
+	                }
+	                if (['ETH', 'BNB', 'POL', 'MATIC'].indexOf(assetCode) !== -1) {
+	                    return {
+	                        assetCode: 'USDT',
+	                        networkCode: networkCode
+	                    };
+	                }
+	                if (assetCode === 'USDT') {
+	                    return {
+	                        assetCode: 'ETH',
+	                        networkCode: 'ethereum'
+	                    };
+	                }
+	                return null;
+	            }
+
+	            function syncUsdtCompanionSwitch() {
+	                var selectedOption = assetSelect.options[assetSelect.selectedIndex];
+	                var assetCode = selectedOption ? String(selectedOption.getAttribute('data-asset-code') || '').toUpperCase() : '';
+	                var companionTarget = evmCompanionTargetForAsset(assetCode, networkSelect.value);
+	                var targetEnabled = companionTarget && usdtCompanionRow
+	                    ? usdtCompanionRow.getAttribute('data-admin-wallet-evm-companion-' + String(companionTarget.assetCode || '').toLowerCase()) === '1'
+	                    : false;
+	                var shouldShow = !!(usdtCompanionRow && companionTarget && targetEnabled);
+
+	                if (!usdtCompanionRow) {
+	                    return;
+	                }
+	                usdtCompanionRow.setAttribute('data-usdt-companion-asset', companionTarget ? companionTarget.assetCode : '');
+	                usdtCompanionRow.setAttribute('data-usdt-companion-network', companionTarget ? companionTarget.networkCode : '');
+	                setHidden(usdtCompanionRow, !shouldShow);
+	                if (!shouldShow && usdtCompanionSwitch) {
+	                    usdtCompanionSwitch.checked = false;
+	                }
+	            }
+
+	            function setWalletAddressBlocked(blocked) {
+	                addressLookupBlocked = !!blocked;
+	                if (saveButton) {
+	                    saveButton.disabled = addressLookupBlocked;
+	                    saveButton.classList.toggle('disabled', addressLookupBlocked);
+	                }
+	            }
+
+	            function renderExistingAddressAlert(payload) {
+	                var wallets = Array.isArray(payload.wallets) ? payload.wallets : [];
+	                var message = String(payload.message || '').trim();
+	                var walletText = wallets.map(function (wallet) {
+	                    var parts = [];
+	                    if (wallet.asset_code) {
+	                        parts.push(String(wallet.asset_code));
+	                    }
+	                    if (wallet.network_label) {
+	                        parts.push(String(wallet.network_label));
+	                    }
+	                    if (wallet.label) {
+	                        parts.push(String(wallet.label));
+	                    }
+	                    return parts.join(' / ');
+	                }).filter(Boolean).join(', ');
+
+	                if (!existingAddressAlert || !payload.found) {
+	                    setHidden(existingAddressAlert, true);
+	                    return;
+	                }
+
+	                existingAddressAlert.classList.remove('alert-info', 'alert-warning', 'alert-danger');
+	                existingAddressAlert.classList.add(payload.can_reuse ? 'alert-info' : 'alert-danger');
+	                existingAddressAlert.innerHTML = '<strong>' + escapeHtml(message || existingAddressDefaultText) + '</strong>'
+	                    + (walletText ? '<div class="small mt-1">' + escapeHtml(walletText) + '</div>' : '');
+	                setHidden(existingAddressAlert, false);
+	            }
+
+	            function applyExistingAddressPayload(payload) {
+	                if (payload && payload.ok === false) {
+	                    if (existingAddressAlert) {
+	                        existingAddressAlert.classList.remove('alert-info', 'alert-warning');
+	                        existingAddressAlert.classList.add('alert-danger');
+	                        existingAddressAlert.textContent = String(payload.message || lookupErrorText || '').trim();
+	                        setHidden(existingAddressAlert, false);
+	                    }
+	                    setWalletAddressBlocked(true);
+	                    return;
+	                }
+
+	                if (!payload || !payload.found) {
+	                    renderExistingAddressAlert({ found: false });
+	                    setWalletAddressBlocked(false);
+	                    return;
+	                }
+
+	                if (payload.can_reuse) {
+	                    if (ownerInput && payload.owner_full_name) {
+	                        ownerInput.value = String(payload.owner_full_name || '');
+	                    }
+	                    if (notesInput && payload.notes) {
+	                        notesInput.value = String(payload.notes || '');
+	                    }
+	                    if (memoInput && payload.memo_tag && !String(memoInput.value || '').trim()) {
+	                        memoInput.value = String(payload.memo_tag || '');
+	                    }
+	                    setProviderValue(payload.wallet_provider || '');
+	                }
+
+	                renderExistingAddressAlert(payload);
+	                setWalletAddressBlocked(!payload.can_reuse);
+	            }
+
+	            function scheduleExistingAddressLookup() {
+	                var address = addressInput ? String(addressInput.value || '').trim() : '';
+	                if (lookupUrl && address) {
+	                    setWalletAddressBlocked(true);
+	                }
+	                lookupExistingAddress();
+	            }
+
+	            var lookupExistingAddress = debounce(function () {
+	                var address = addressInput ? String(addressInput.value || '').trim() : '';
+	                var requestId;
+	                var params;
+
+	                if (!lookupUrl || !address) {
+	                    renderExistingAddressAlert({ found: false });
+	                    setWalletAddressBlocked(false);
+	                    return;
+	                }
+
+	                requestId = ++lookupSequence;
+	                setWalletAddressBlocked(true);
+	                params = new URLSearchParams();
+	                params.set('address', address);
+	                params.set('crypto_asset_id', String(assetSelect.value || '0'));
+	                params.set('network_code', String(networkSelect.value || ''));
+	                params.set('wallet_id', walletIdInput ? String(walletIdInput.value || '0') : '0');
+
+	                fetch(lookupUrl + '&' + params.toString(), {
+	                    method: 'GET',
+	                    credentials: 'same-origin',
+	                    headers: { 'Accept': 'application/json' }
+	                }).then(function (response) {
+	                    return response.json().catch(function () {
+	                        return { ok: false, message: lookupErrorText };
+	                    });
+	                }).then(function (payload) {
+	                    if (requestId !== lookupSequence) {
+	                        return;
+	                    }
+	                    applyExistingAddressPayload(payload || {});
+	                }).catch(function () {
+	                    if (existingAddressAlert) {
+	                        existingAddressAlert.classList.remove('alert-info', 'alert-warning');
+	                        existingAddressAlert.classList.add('alert-danger');
+	                        existingAddressAlert.textContent = lookupErrorText;
+	                        setHidden(existingAddressAlert, false);
+	                    }
+	                    setWalletAddressBlocked(true);
+	                });
+	            }, 350);
+
+	            if (walletForm && saveButton) {
+	                walletForm.addEventListener('submit', function (event) {
+	                    var submitter = event.submitter || doc.activeElement;
+	                    var isWalletSaveSubmit = !submitter || submitter === saveButton || String(submitter.name || '') === 'admin_save_crypto_wallet';
+	                    if (addressLookupBlocked && isWalletSaveSubmit) {
+	                        event.preventDefault();
+	                        event.stopPropagation();
+	                    }
+	                });
+	            }
+
+	            function syncNetworkFromAsset() {
+	                var selectedOption = assetSelect.options[assetSelect.selectedIndex];
+	                var networkOptions = parseNetworkOptions(selectedOption ? selectedOption.getAttribute('data-network-options') : '');
                 var defaultNetwork = selectedOption ? String(selectedOption.getAttribute('data-default-network') || '') : '';
                 var allowsChoice = selectedOption ? selectedOption.getAttribute('data-allows-network-choice') === '1' : false;
                 var currentNetwork = String(networkSelect.value || '');
@@ -2740,21 +3437,31 @@ document.addEventListener('DOMContentLoaded', function () {
                 networkSelect.innerHTML = renderNetworkOptions(networkOptions, resolvedNetwork);
                 networkSelect.value = resolvedNetwork;
 
-                if (allowsChoice) {
-                    networkSelect.classList.remove('d-none');
-                    fixedInput.classList.add('d-none');
-                    fixedInput.value = '';
-                } else {
-                    networkSelect.classList.add('d-none');
-                    fixedInput.classList.remove('d-none');
-                    fixedInput.value = resolvedNetwork ? String(networkOptions[resolvedNetwork] || resolvedNetwork) : '';
-                }
-            }
+	                if (allowsChoice) {
+	                    networkSelect.classList.remove('d-none');
+	                    fixedInput.classList.add('d-none');
+	                    fixedInput.value = '';
+	                } else {
+	                    networkSelect.classList.add('d-none');
+	                    fixedInput.classList.remove('d-none');
+	                    fixedInput.value = resolvedNetwork ? String(networkOptions[resolvedNetwork] || resolvedNetwork) : '';
+	                }
+	                syncUsdtCompanionSwitch();
+	                scheduleExistingAddressLookup();
+	            }
 
-            assetSelect.addEventListener('change', syncNetworkFromAsset);
-            syncNetworkFromAsset();
-        });
-    }
+	            assetSelect.addEventListener('change', syncNetworkFromAsset);
+	            networkSelect.addEventListener('change', function () {
+	                syncUsdtCompanionSwitch();
+	                scheduleExistingAddressLookup();
+	            });
+	            if (addressInput) {
+	                addressInput.addEventListener('input', scheduleExistingAddressLookup);
+	                addressInput.addEventListener('blur', scheduleExistingAddressLookup);
+	            }
+	            syncNetworkFromAsset();
+	        });
+	    }
 
     function initOrderCreateForms() {
         qa('[data-admin-order-create]').forEach(function (form) {
@@ -3197,27 +3904,288 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function initUserDetailCopy() {
-        qa('[data-admin-copy-value]').forEach(function (button) {
-            var timer = 0;
-            var feedback = q('[data-admin-copy-feedback]', button);
-            var feedbackText = String(button.getAttribute('data-admin-copy-feedback-text') || 'Copied').trim();
+        var feedbackTimers = new WeakMap();
 
-            function showFeedback() {
+        document.addEventListener('click', function (event) {
+            var button = closest(event.target, '[data-admin-copy-value]');
+            var feedback;
+            var feedbackText;
+            var previousTimer;
+
+            if (!button || button.disabled) {
+                return;
+            }
+
+            feedback = q('[data-admin-copy-feedback]', button);
+            feedbackText = String(button.getAttribute('data-admin-copy-feedback-text') || 'Copied').trim();
+            copyTextWithFallback(button.getAttribute('data-admin-copy-value') || '').then(function () {
                 if (!feedback) {
                     return;
                 }
                 feedback.textContent = feedbackText || 'Copied';
                 setHidden(feedback, false);
-                window.clearTimeout(timer);
-                timer = window.setTimeout(function () {
+                previousTimer = feedbackTimers.get(button) || 0;
+                window.clearTimeout(previousTimer);
+                feedbackTimers.set(button, window.setTimeout(function () {
                     setHidden(feedback, true);
-                }, 1200);
-            }
+                }, 1200));
+            });
+        });
+    }
 
-            button.addEventListener('click', function () {
-                copyTextWithFallback(button.getAttribute('data-admin-copy-value') || '').then(function () {
-                    showFeedback();
+	    function initOrdersGuidanceToggle() {
+	        var toggle = q('[data-admin-orders-guidance-toggle]');
+	        var targets = qa('.admin-orders-workflow-card, .admin-orders-help-alert, .alert-info.admin-orders-help-alert');
+	        var storageKey = 'subme-admin-orders-guidance-visible';
+        var hiddenClass = 'is-admin-orders-guidance-hidden';
+
+        if (!toggle || !targets.length) {
+            return;
+        }
+
+        function readStoredState() {
+            try {
+                return window.localStorage ? window.localStorage.getItem(storageKey) : null;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function writeStoredState(visible) {
+            try {
+                if (window.localStorage) {
+                    window.localStorage.setItem(storageKey, visible ? '1' : '0');
+                }
+            } catch (error) {
+                // Local view preference only; ignore storage errors.
+            }
+        }
+
+        function setGuidanceVisible(visible, persist) {
+            targets.forEach(function (target) {
+                setHidden(target, !visible);
+            });
+            if (doc.body) {
+                doc.body.classList.toggle(hiddenClass, !visible);
+            }
+            toggle.checked = visible;
+            toggle.setAttribute('aria-checked', visible ? 'true' : 'false');
+            if (persist) {
+                writeStoredState(visible);
+            }
+        }
+
+        setGuidanceVisible(readStoredState() === '1', false);
+
+	        toggle.addEventListener('change', function () {
+	            setGuidanceVisible(toggle.checked, true);
+	        });
+	    }
+
+	    function initOrdersTableViewToggle() {
+	        var toggle = q('[data-admin-orders-table-view-toggle]');
+	        var defaultViews = qa('[data-admin-orders-view="default"]');
+	        var simpleViews = qa('[data-admin-orders-view="simple"]');
+	        var storageKey = 'subme-admin-orders-table-view';
+	        var simpleClass = 'is-admin-orders-simple-table-view';
+
+	        if (!toggle || (!defaultViews.length && !simpleViews.length)) {
+	            return;
+	        }
+
+	        function readStoredState() {
+	            try {
+	                return window.localStorage ? window.localStorage.getItem(storageKey) : null;
+	            } catch (error) {
+	                return null;
+	            }
+	        }
+
+	        function writeStoredState(isSimple) {
+	            try {
+	                if (window.localStorage) {
+	                    window.localStorage.setItem(storageKey, isSimple ? 'simple' : 'default');
+	                }
+	            } catch (error) {
+	                // Local view preference only; ignore storage errors.
+	            }
+	        }
+
+	        function setSimpleView(isSimple, persist) {
+	            defaultViews.forEach(function (target) {
+	                setHidden(target, isSimple);
+	            });
+	            simpleViews.forEach(function (target) {
+	                setHidden(target, !isSimple);
+	            });
+	            if (doc.body) {
+	                doc.body.classList.toggle(simpleClass, isSimple);
+	            }
+	            toggle.checked = isSimple;
+	            toggle.setAttribute('aria-checked', isSimple ? 'true' : 'false');
+	            if (persist) {
+	                writeStoredState(isSimple);
+	            }
+	        }
+
+        setSimpleView(readStoredState() !== 'default', false);
+
+	        toggle.addEventListener('change', function () {
+	            setSimpleView(toggle.checked, true);
+	        });
+	    }
+
+    function initCompletedOrdersExpirySort() {
+        qa('[data-admin-completed-orders-body]').forEach(function (body) {
+            var direction = String(body.getAttribute('data-sort-direction') || '').toLowerCase();
+            if (direction !== 'asc' && direction !== 'desc') {
+                return;
+            }
+            var rows = qa('[data-admin-completed-order-row]', body);
+
+            rows.sort(function (left, right) {
+                var leftExpiry = String(left.getAttribute('data-order-expires-at') || '');
+                var rightExpiry = String(right.getAttribute('data-order-expires-at') || '');
+
+                if (leftExpiry === rightExpiry) {
+                    return 0;
+                }
+                if (leftExpiry === '') {
+                    return 1;
+                }
+                if (rightExpiry === '') {
+                    return -1;
+                }
+
+                return direction === 'asc'
+                    ? leftExpiry.localeCompare(rightExpiry)
+                    : rightExpiry.localeCompare(leftExpiry);
+            });
+
+            rows.forEach(function (row) {
+                body.appendChild(row);
+            });
+        });
+    }
+
+    function initPaymentReceivedFields() {
+        var statusSelect = q('#payment_status');
+        var receivedFields = qa('[data-admin-payment-received-field]');
+
+        if (!statusSelect || !receivedFields.length) {
+            return;
+        }
+
+        function syncReceivedFields() {
+            var status = String(statusSelect.value || '').toLowerCase();
+            var shouldHide = status === 'pending' || status === 'pending_payment';
+
+            receivedFields.forEach(function (field) {
+                setHidden(field, shouldHide);
+            });
+        }
+
+        syncReceivedFields();
+        statusSelect.addEventListener('change', syncReceivedFields);
+    }
+
+    function initPaymentBlockchainCheck() {
+        var button = q('[data-admin-payment-blockchain-check]');
+        var editorForm = q('.admin-editor-form');
+        var resultNode = q('[data-admin-payment-blockchain-check-result]');
+        var statusSelect = q('#payment_status');
+        var receivedCryptoInput = q('#payment_received_crypto_amount');
+        var receivedFiatInput = q('#payment_received_fiat_amount');
+
+        if (!button || !editorForm || !resultNode) {
+            return;
+        }
+
+        function renderResult(type, title, message, explorerUrl) {
+            var className = type === 'success' ? 'alert-success' : (type === 'danger' ? 'alert-danger' : 'alert-warning');
+            var html = '';
+
+            resultNode.className = 'alert ' + className + ' admin-payment-blockchain-check-alert';
+            html += title ? '<strong>' + escapeHtml(title) + '</strong>' : '';
+            html += message ? '<span>' + escapeHtml(message) + '</span>' : '';
+            if (explorerUrl) {
+                html += '<a href="' + escapeHtml(explorerUrl) + '" target="_blank" rel="noopener noreferrer" class="admin-payment-blockchain-check-alert__link">'
+                    + escapeHtml(button.getAttribute('data-explorer-label') || 'Explorer')
+                    + '</a>';
+            }
+            resultNode.innerHTML = html;
+            setHidden(resultNode, false);
+        }
+
+        button.addEventListener('click', function (event) {
+            var labelNode = q('span', button);
+            var originalLabel = labelNode ? labelNode.textContent : '';
+            var loadingLabel = button.getAttribute('data-loading-label') || 'Checking...';
+            var formData = new URLSearchParams(new FormData(editorForm));
+
+            event.preventDefault();
+            formData.set('admin_crypto_payment_blockchain_check_ajax', '1');
+
+            button.disabled = true;
+            if (labelNode) {
+                labelNode.textContent = loadingLabel;
+            }
+            renderResult('warning', '', loadingLabel, '');
+
+            fetch(editorForm.getAttribute('action') || window.location.href, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                credentials: 'same-origin',
+                body: formData.toString()
+            }).then(function (response) {
+                return response.json().catch(function () {
+                    return { ok: false, message: 'Invalid JSON response.' };
+                }).then(function (payload) {
+                    payload.__http_ok = response.ok;
+                    return payload;
                 });
+            }).then(function (payload) {
+                if (!payload || !payload.ok) {
+                    renderResult(
+                        'warning',
+                        payload && payload.match_title ? payload.match_title : '',
+                        payload && payload.message ? payload.message : 'Unable to check blockchain right now.',
+                        payload && payload.explorer_url ? payload.explorer_url : ''
+                    );
+                    return;
+                }
+
+                if (statusSelect && payload.status) {
+                    statusSelect.value = String(payload.status);
+                    statusSelect.classList.remove(
+                        'admin-payment-status-select--danger',
+                        'admin-payment-status-select--warning',
+                        'admin-payment-status-select--info',
+                        'admin-payment-status-select--success'
+                    );
+                    statusSelect.classList.add('admin-payment-status-select--success');
+                    statusSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                if (receivedCryptoInput && payload.received_crypto_amount) {
+                    receivedCryptoInput.value = String(payload.received_crypto_amount);
+                }
+                if (receivedFiatInput && payload.received_fiat_amount) {
+                    receivedFiatInput.value = String(payload.received_fiat_amount);
+                }
+
+                renderResult(
+                    'success',
+                    payload.title || '',
+                    payload.message || '',
+                    payload.tx_url || ''
+                );
+            }).catch(function () {
+                renderResult('danger', '', 'Unable to check blockchain right now.', '');
+            }).finally(function () {
+                button.disabled = false;
+                if (labelNode) {
+                    labelNode.textContent = originalLabel;
+                }
             });
         });
     }
@@ -3457,6 +4425,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 return numeric.toFixed(2);
             }
 
+            function roundCustomerCryptoFiatCredit(value) {
+                var numeric = parseNumeric(value);
+                if (!isFinite(numeric) || numeric <= 0) {
+                    return 0;
+                }
+                return Math.round(numeric * 2) / 2;
+            }
+
+            function formatRoundedFiatValue(value) {
+                return formatFiatValue(roundCustomerCryptoFiatCredit(value));
+            }
+
             function formatFiatLabelValue(value, payload) {
                 var amountLabel = formatFiatValue(value);
                 var symbol = payload ? String(payload.currency_symbol || '').trim() : '';
@@ -3663,7 +4643,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 var payload = state.payload || {};
                 var rate = parseNumeric(payload.exchange_rate);
                 var assetCode = String(payload.asset_code || payload.asset_name || 'Crypto').trim();
-                var currentCrypto = formatCryptoValue(cryptoInput.value);
                 var currentFiat;
                 var requestedFiat;
                 var requestedCrypto;
@@ -3675,9 +4654,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 var detectedFiatLabel;
                 var mismatchBaseText;
                 var expectedBaseText;
+                var requestedCryptoLabel;
+                var requestedFiatLabel;
 
                 if (!state.fiatManual && rate > 0) {
-                    fiatInput.value = formatFiatValue(parseNumeric(cryptoInput.value) * rate);
+                    fiatInput.value = formatRoundedFiatValue(parseNumeric(cryptoInput.value) * rate);
                 }
 
                 currentFiat = parseNumeric(fiatInput.value);
@@ -3686,9 +4667,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 candidateCrypto = parseNumeric(previewMeta.candidate_crypto_amount);
                 candidateFiat = parseNumeric(previewMeta.candidate_fiat_amount);
                 candidateMismatch = requestedCrypto > 0 && candidateCrypto > 0 && Math.abs(candidateCrypto - requestedCrypto) > 0.000000005;
+                requestedCryptoLabel = String(payload.requested_crypto_label || '').trim();
+                requestedFiatLabel = String(payload.requested_fiat_label || '').trim();
+                if (requestedCryptoLabel === '') {
+                    requestedCryptoLabel = formatCryptoValue(requestedCrypto) + (assetCode ? ' ' + assetCode : '');
+                }
+                if (requestedFiatLabel === '') {
+                    requestedFiatLabel = formatFiatLabelValue(requestedFiat, payload);
+                }
 
-                cryptoLabel.textContent = currentCrypto + (assetCode ? ' ' + assetCode : '');
-                fiatLabel.textContent = formatFiatLabelValue(currentFiat, payload);
+                cryptoLabel.textContent = requestedCryptoLabel;
+                fiatLabel.textContent = requestedFiatLabel;
 
                 if (timeNode) {
                     timeNode.textContent = String(payload.requested_at_label || '').trim();
@@ -3700,7 +4689,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (candidateFiat <= 0 && candidateCrypto > 0 && rate > 0) {
                         candidateFiat = candidateCrypto * rate;
                     }
-                    detectedFiatLabel = candidateFiat > 0 ? formatFiatLabelValue(candidateFiat, payload) : '';
+                    detectedFiatLabel = candidateFiat > 0 ? formatFiatLabelValue(roundCustomerCryptoFiatCredit(candidateFiat), payload) : '';
                     cryptoMismatchTextNode.textContent = candidateMismatch && detectedFiatLabel !== ''
                         ? (mismatchBaseText + ' = ' + detectedFiatLabel)
                         : mismatchBaseText;
@@ -3772,7 +4761,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 cryptoInput.value = receivedCrypto !== '' ? receivedCrypto : String(payload.requested_crypto_amount || '');
-                fiatInput.value = receivedFiat !== '' ? receivedFiat : String(payload.requested_fiat_amount || '');
+                fiatInput.value = receivedFiat !== '' ? formatRoundedFiatValue(receivedFiat) : String(payload.requested_fiat_amount || '');
                 updateComputedFields();
             }
 
@@ -3790,7 +4779,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             function submit() {
                 var cryptoValue = formatCryptoValue(cryptoInput.value);
-                var fiatValue = formatFiatValue(fiatInput.value);
+                var fiatValue = formatRoundedFiatValue(fiatInput.value);
                 var invalidCryptoText = modalNode.getAttribute('data-invalid-crypto-text') || 'Enter the amount of crypto you actually received.';
                 var invalidFiatText = modalNode.getAttribute('data-invalid-fiat-text') || 'Enter the FIAT amount you want to credit.';
                 var actionUrl;
@@ -4140,26 +5129,32 @@ document.addEventListener('DOMContentLoaded', function () {
             var openButtons = qa('[data-admin-converter-open]');
             var modal = q('[data-admin-converter-modal]', root);
             var fiatInput = q('[data-admin-converter-fiat-input]', root);
+            var sourceSelect = q('[data-admin-converter-source-select]', root);
             var assetSelect = q('[data-admin-converter-asset-select]', root);
             var result = q('[data-admin-converter-crypto-result]', root);
             var copyFeedback = q('[data-admin-converter-copy-feedback]', root);
             var rateHint = q('[data-admin-converter-rate-hint]', root);
+            var fiatSubline = q('[data-admin-converter-fiat-subline]', root);
+            var sourceLogo = q('[data-admin-converter-source-logo]', root);
             var assetLogo = q('[data-admin-converter-asset-logo]', root);
             var updatedLine = q('[data-admin-converter-updated-line]', root);
             var refreshButton = q('[data-admin-converter-refresh]', root);
             var assets = [];
             var assetsRaw = root.getAttribute('data-assets') || '[]';
             var currencyCode = root.getAttribute('data-currency-code') || 'USD';
+            var currencySymbol = root.getAttribute('data-currency-symbol') || '';
+            var currencyIcon = root.getAttribute('data-currency-icon') || currencySymbol || currencyCode.slice(0, 1);
             var csrfNode = q('input[name="_csrf"]');
             var csrfToken = csrfNode ? String(csrfNode.value || '') : '';
             var refreshBusy = false;
+            var ratesCheckedAt = 0;
             var copyFeedbackTimer = 0;
             var copyValue = '';
             var chatPanel = q('[data-admin-chat-panel]');
             var chatToggle = q('[data-admin-chat-toggle]');
             var restoreAdminChatAfterClose = false;
 
-            if (!openButtons.length || !modal || !fiatInput || !assetSelect || !result || !copyFeedback || !rateHint || !assetLogo || !updatedLine || !refreshButton) {
+            if (!openButtons.length || !modal || !fiatInput || !sourceSelect || !assetSelect || !result || !copyFeedback || !rateHint || !fiatSubline || !sourceLogo || !assetLogo || !updatedLine || !refreshButton) {
                 return;
             }
 
@@ -4168,10 +5163,6 @@ document.addEventListener('DOMContentLoaded', function () {
             } catch (error) {
                 assets = [];
             }
-
-            assetSelect.innerHTML = assets.map(function (item) {
-                return '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(item.code || item.name || 'Crypto') + '</option>';
-            }).join('');
 
             function closeConverter() {
                 setHidden(modal, true);
@@ -4193,18 +5184,52 @@ document.addEventListener('DOMContentLoaded', function () {
                 restoreAdminChatAfterClose = !!(trigger && closest(trigger, '[data-admin-chat-panel], .admin-chat-inbox__conversation-header') && chatPanel && !chatPanel.hasAttribute('hidden'));
                 setHidden(modal, false);
                 updateConverter();
-                window.setTimeout(function () {
-                    fiatInput.focus();
-                    fiatInput.select();
-                }, 20);
+                if (!refreshBusy && (Date.now() - ratesCheckedAt > 60000)
+                    && (assets.length < 2 || assets.some(function (item) { return !!item.is_stale; }))) {
+                    ratesCheckedAt = Date.now();
+                    refreshButton.click();
+                }
+            }
+
+            function itemSelectValue(item) {
+                if (!item) {
+                    return '';
+                }
+                if (item.key) {
+                    return String(item.key);
+                }
+                if (item.type === 'fiat') {
+                    return 'fiat:' + String(item.code || '');
+                }
+                return 'crypto:' + String(item.id || '');
             }
 
             function renderAssetLogo(item) {
+                if (item && item.type === 'fiat') {
+                    return '<span>' + escapeHtml(String(item.symbol || item.code || 'F')) + '</span>';
+                }
+
                 var text = item && item.code ? String(item.code).slice(0, 1) : 'C';
                 if (item && item.logo_url) {
                     return '<img src="' + escapeHtml(String(item.logo_url)) + '" alt="' + escapeHtml(text) + '">';
                 }
                 return '<span>' + escapeHtml(text) + '</span>';
+            }
+
+            function renderSourceLogo(item) {
+                if (item && item.type === 'fiat') {
+                    sourceLogo.classList.add('admin-topbar-converter__asset-icon--fiat');
+                    sourceLogo.innerHTML = renderAssetLogo(item);
+                    return;
+                }
+
+                sourceLogo.classList.remove('admin-topbar-converter__asset-icon--fiat');
+                sourceLogo.innerHTML = renderAssetLogo(item);
+            }
+
+            function renderTargetLogo(item) {
+                assetLogo.classList.toggle('admin-topbar-converter__asset-icon--fiat', !!(item && item.type === 'fiat'));
+                assetLogo.innerHTML = renderAssetLogo(item);
             }
 
             function renderUpdatedLine(item) {
@@ -4218,12 +5243,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 setHidden(refreshButton, !item.is_stale);
             }
 
-            function formatCryptoDisplay(value) {
+            function formatCryptoDisplay(value, assetCode) {
                 var numeric = parseFloat(value || '0');
                 var label = '';
+                var code = String(assetCode || '').toUpperCase();
 
                 if (!isFinite(numeric) || numeric <= 0) {
                     return '0';
+                }
+
+                if (code === 'USDT') {
+                    return numeric.toFixed(2).replace(/\.?0+$/, '');
                 }
 
                 label = numeric.toFixed(6).replace(/\.?0+$/, '');
@@ -4231,6 +5261,55 @@ document.addEventListener('DOMContentLoaded', function () {
                     label = numeric.toFixed(8).replace(/\.?0+$/, '');
                 }
                 return label;
+            }
+
+            function formatFiatDisplay(value, fiatItem) {
+                var numeric = parseFloat(value || '0');
+                var formatted = '';
+                var displayCode = fiatItem && fiatItem.code ? String(fiatItem.code) : currencyCode;
+                var displaySymbol = fiatItem && fiatItem.symbol ? String(fiatItem.symbol) : currencySymbol;
+
+                if (!isFinite(numeric) || numeric < 0) {
+                    numeric = 0;
+                }
+
+                formatted = numeric.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+
+                if (displaySymbol && displaySymbol !== displayCode) {
+                    return String(displaySymbol) + formatted;
+                }
+
+                return formatted + ' ' + displayCode;
+            }
+
+            function formatItemDisplay(value, item) {
+                if (item && item.type === 'fiat') {
+                    var numeric = parseFloat(value || '0');
+                    if (!isFinite(numeric) || numeric <= 0) {
+                        return '0.00';
+                    }
+                    return numeric.toFixed(2);
+                }
+
+                return formatCryptoDisplay(value, item ? item.code : '');
+            }
+
+            function findAssetById(assetId) {
+                var selectedAsset = null;
+                var requestedValue = String(assetId || '');
+
+                assets.forEach(function (item) {
+                    var itemValue = itemSelectValue(item);
+                    var legacyCryptoMatch = item.type !== 'fiat' && String(item.id) === requestedValue;
+                    if (itemValue === requestedValue || legacyCryptoMatch) {
+                        selectedAsset = item;
+                    }
+                });
+
+                return selectedAsset;
             }
 
             function hideCopyFeedback() {
@@ -4247,55 +5326,93 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             function replaceAssets(items) {
+                var previousSourceValue = String(sourceSelect.value || '');
                 var previousValue = String(assetSelect.value || '');
+                var fiatItems = [];
+                var cryptoItems = [];
+                var optionHtml = '';
+                var defaultTarget = '';
                 assets = Array.isArray(items) ? items : [];
-                assetSelect.innerHTML = assets.map(function (item) {
-                    return '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(item.code || item.name || 'Crypto') + '</option>';
+
+                assets.forEach(function (item) {
+                    if (item && item.type === 'fiat') {
+                        fiatItems.push(item);
+                    } else {
+                        cryptoItems.push(item);
+                    }
+                });
+
+                optionHtml = fiatItems.concat(cryptoItems).map(function (item) {
+                    return '<option value="' + escapeHtml(itemSelectValue(item)) + '">' + escapeHtml(item.code || item.name || 'Asset') + '</option>';
                 }).join('');
+
+                sourceSelect.innerHTML = optionHtml;
+                assetSelect.innerHTML = optionHtml;
+
+                if (previousSourceValue === 'fiat') {
+                    previousSourceValue = 'fiat:' + currencyCode;
+                }
+                if (previousSourceValue) {
+                    var previousSourceItem = findAssetById(previousSourceValue);
+                    sourceSelect.value = previousSourceItem ? itemSelectValue(previousSourceItem) : '';
+                }
+                if (!sourceSelect.value) {
+                    sourceSelect.value = 'fiat:' + currencyCode;
+                }
                 if (previousValue) {
-                    assetSelect.value = previousValue;
+                    var previousTargetItem = findAssetById(previousValue);
+                    assetSelect.value = previousTargetItem ? itemSelectValue(previousTargetItem) : '';
+                } else {
+                    assetSelect.value = '';
                 }
-                if (!assetSelect.value && assets.length) {
-                    assetSelect.value = String(assets[0].id);
+                if (!assetSelect.value) {
+                    if (cryptoItems.length) {
+                        defaultTarget = itemSelectValue(cryptoItems[0]);
+                    } else if (fiatItems.length) {
+                        defaultTarget = itemSelectValue(fiatItems[0]);
+                    }
+                    assetSelect.value = defaultTarget;
                 }
+            }
+
+            function currentSourceAsset() {
+                return findAssetById(String(sourceSelect.value || 'fiat:' + currencyCode));
             }
 
             function updateConverter() {
                 var amount = parseFloat(fiatInput.value || '0');
-                var selectedId = String(assetSelect.value || '');
-                var selectedAsset = null;
-
-                assets.forEach(function (item) {
-                    if (String(item.id) === selectedId) {
-                        selectedAsset = item;
-                    }
-                });
+                var sourceAsset = currentSourceAsset();
+                var sourceRate = sourceAsset ? parseFloat(sourceAsset.rate || '0') : 0;
+                var sourceFiatValue = isFinite(amount) && amount > 0 && sourceRate > 0 ? amount * sourceRate : 0;
+                var selectedAsset = findAssetById(assetSelect.value);
+                renderSourceLogo(sourceAsset);
+                fiatSubline.textContent = formatFiatDisplay(sourceFiatValue);
 
                 if (!selectedAsset) {
-                    result.textContent = '0.00000000';
+                    result.textContent = '0';
                     copyValue = '';
                     hideCopyFeedback();
                     rateHint.textContent = root.getAttribute('data-empty-text') || 'Choose a crypto asset to calculate the amount.';
-                    assetLogo.innerHTML = '<span>C</span>';
+                    renderTargetLogo(null);
                     renderUpdatedLine(null);
                     return;
                 }
 
-                assetLogo.innerHTML = renderAssetLogo(selectedAsset);
+                renderTargetLogo(selectedAsset);
                 renderUpdatedLine(selectedAsset);
 
-                if (!isFinite(amount) || amount <= 0 || !selectedAsset.rate || parseFloat(selectedAsset.rate) <= 0) {
-                    result.textContent = '0 ' + String(selectedAsset.code || '');
+                if (!isFinite(amount) || amount <= 0 || sourceRate <= 0 || !selectedAsset.rate || parseFloat(selectedAsset.rate) <= 0) {
+                    result.textContent = '0';
                     copyValue = '';
                     hideCopyFeedback();
-                    rateHint.textContent = (selectedAsset.rate_label || '') ? (selectedAsset.rate_label + ' / 1 ' + currencyCode) : '';
+                    rateHint.textContent = formatFiatDisplay(0);
                     return;
                 }
 
-                copyValue = formatCryptoDisplay(amount / parseFloat(selectedAsset.rate));
-                result.textContent = copyValue + ' ' + String(selectedAsset.code || '');
+                copyValue = formatItemDisplay(sourceFiatValue / parseFloat(selectedAsset.rate), selectedAsset);
+                result.textContent = copyValue;
                 hideCopyFeedback();
-                rateHint.textContent = '1 ' + String(selectedAsset.code || '') + ' ≈ ' + String(selectedAsset.rate_label || '') + ' · ' + currencyCode;
+                rateHint.textContent = formatFiatDisplay(sourceFiatValue);
             }
 
             openButtons.forEach(function (openButton) {
@@ -4314,6 +5431,7 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             fiatInput.addEventListener('input', updateConverter);
+            sourceSelect.addEventListener('change', updateConverter);
             assetSelect.addEventListener('change', updateConverter);
             result.addEventListener('click', function () {
                 if (!copyValue) {
@@ -4363,6 +5481,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     refreshButton.innerHTML = '<i class="bi bi-arrow-clockwise" aria-hidden="true"></i>';
                 });
             });
+            replaceAssets(assets);
             updateConverter();
 
             doc.addEventListener('keydown', function (event) {
@@ -4424,6 +5543,8 @@ document.addEventListener('DOMContentLoaded', function () {
         var voiceStatus = q('[data-admin-chat-voice-status]', root);
         var voiceTimerLabel = q('[data-admin-chat-voice-timer]', root);
         var ordersLinkButton = q('[data-admin-chat-orders-link]', root);
+        var headerMoreButton = q('[data-admin-chat-header-more]', root);
+        var headerActions = q('[data-admin-chat-header-actions]', root);
         var converterHeaderButton = q('.admin-chat-inbox__conversation-header [data-admin-converter-open]', root);
         var quickRepliesHeaderButton = q('[data-admin-chat-quick-open]', root);
         var cryptoOpenButton = q('[data-admin-chat-crypto-open]', root);
@@ -5246,11 +6367,15 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function adminChatPanelStateKey() {
-            return 'admin-chat:panel-open:' + String(window.location.pathname || '/admin/');
+            return 'admin-chat:panel-open';
         }
 
         function adminChatConversationStateKey() {
-            return 'admin-chat:active-conversation:' + String(window.location.pathname || '/admin/');
+            return 'admin-chat:active-conversation';
+        }
+
+        function isAdminChatDocked() {
+            return !!(window.matchMedia && window.matchMedia('(min-width: 1280px)').matches);
         }
 
         function refreshAdminChatViewportHeight() {
@@ -5262,7 +6387,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 viewportOffsetTop = window.visualViewport.offsetTop;
             }
 
-            document.documentElement.style.setProperty('--admin-chat-viewport-height', Math.max(320, Math.round(viewportHeight)) + 'px');
+            document.documentElement.style.setProperty('--admin-chat-viewport-height', Math.max(1, Math.round(viewportHeight)) + 'px');
             document.documentElement.style.setProperty('--admin-chat-viewport-offset-top', Math.max(0, Math.round(viewportOffsetTop)) + 'px');
             syncAdminChatBodyLock();
         }
@@ -5281,6 +6406,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            bodyNode.classList.toggle('admin-chat-docked-open', !!(panel && !panel.hasAttribute('hidden')));
             shouldLock = shouldLockAdminChatBody();
             if (shouldLock) {
                 if (!bodyNode.classList.contains('admin-chat-panel-open')) {
@@ -5451,14 +6577,31 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function restoreAdminChatPanelState() {
+            var defaultOpen = isAdminChatDocked();
             if (!adminChatStorageAvailable()) {
-                return false;
+                return defaultOpen;
             }
 
             try {
-                return window.localStorage.getItem(adminChatPanelStateKey()) === '1';
+                var stored = window.localStorage.getItem(adminChatPanelStateKey());
+                if (stored === null) {
+                    // Both admin entry URLs share the preference; retain a previous explicit choice.
+                    var legacyKeys = [
+                        'admin-chat:panel-open:' + String(window.location.pathname || '/admin/'),
+                        'admin-chat:panel-open:/admin/',
+                        'admin-chat:panel-open:/admin/index.php'
+                    ];
+                    for (var index = 0; index < legacyKeys.length; index += 1) {
+                        stored = window.localStorage.getItem(legacyKeys[index]);
+                        if (stored === '0' || stored === '1') {
+                            window.localStorage.setItem(adminChatPanelStateKey(), stored);
+                            break;
+                        }
+                    }
+                }
+                return stored === '0' ? false : (stored === '1' ? true : defaultOpen);
             } catch (error) {
-                return false;
+                return defaultOpen;
             }
         }
 
@@ -5484,7 +6627,8 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             try {
-                return parseInt(window.localStorage.getItem(adminChatConversationStateKey()) || '0', 10) || 0;
+                return parseInt(window.localStorage.getItem(adminChatConversationStateKey())
+                    || window.localStorage.getItem('admin-chat:active-conversation:' + String(window.location.pathname || '/admin/')) || '0', 10) || 0;
             } catch (error) {
                 return 0;
             }
@@ -5695,6 +6839,7 @@ document.addEventListener('DOMContentLoaded', function () {
             setHidden(modalState.wrap, true);
             modalState.payload = null;
             modalState.previewPayload = null;
+            modalState.requestVersion = (modalState.requestVersion || 0) + 1;
             if (modalState.info) {
                 modalState.info.textContent = '';
                 setHidden(modalState.info, true);
@@ -5772,7 +6917,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!trimmedAmount) {
                 return code ? code : '';
             }
-            return (symbol ? symbol : '') + trimmedAmount + (code ? ' ' + code : '');
+            return (symbol && symbol !== code ? symbol : '') + trimmedAmount + (code ? ' ' + code : '');
         }
 
         function populateAmountOptions(select, options, currency, preferredValue) {
@@ -5874,6 +7019,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            var requestVersion = (modalState.requestVersion || 0) + 1;
+            modalState.requestVersion = requestVersion;
+            modalState.previewPayload = null;
+            var requestConversationId = activeConversationId;
+            function isCurrentPreview() {
+                return modalState.requestVersion === requestVersion && activeConversationId === requestConversationId;
+            }
             params = {
                 action: 'payment_preview',
                 conversation_id: activeConversationId,
@@ -5907,6 +7059,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             jsonFetch(chatUrl + '?' + toQuery(params)).then(function (payload) {
+                if (!isCurrentPreview()) return;
                 if (!payload.ok) {
                     modalState.previewPayload = null;
                     setPaymentPreview(modalState, payload.preview_html || renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
@@ -5919,9 +7072,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 modalState.previewPayload = payload;
                 setPaymentPreview(modalState, payload.preview_html || '');
                 if (modalState.sendButton) {
-                    modalState.sendButton.disabled = false;
+                    modalState.sendButton.disabled = !!modalState.sendInFlight;
                 }
             }).catch(function () {
+                if (!isCurrentPreview()) return;
                 modalState.previewPayload = null;
                 setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
                 if (modalState.sendButton) {
@@ -5985,6 +7139,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            var requestConversationId = activeConversationId;
+            modalState.requestVersion = (modalState.requestVersion || 0) + 1;
+            var requestVersion = modalState.requestVersion;
+            function isCurrentModal() {
+                return activeConversationId === requestConversationId && modalState.requestVersion === requestVersion;
+            }
             closeQuickModal();
             closePaymentModal(type === 'crypto' ? 'bank' : 'crypto');
             setHidden(modalState.wrap, false);
@@ -5999,6 +7159,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 conversation_id: activeConversationId,
                 type: type
             })).then(function (payload) {
+                if (!isCurrentModal()) return;
                 if (!payload.ok) {
                     setPaymentPreview(modalState, renderPaymentStateHtml(payload.message || root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
                     return;
@@ -6006,6 +7167,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 hydratePaymentModal(type, payload);
             }).catch(function () {
+                if (!isCurrentModal()) return;
                 setPaymentPreview(modalState, renderPaymentStateHtml(root.getAttribute('data-chat-payment-preview-error') || 'Unable to prepare payment preview.', true));
             });
         }
@@ -6015,7 +7177,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var postBody;
             var errorMessage;
 
-            if (!modalState || !activeConversationId || !modalState.sendButton) {
+            if (!modalState || !activeConversationId || !modalState.sendButton || modalState.sendInFlight) {
                 return;
             }
 
@@ -6024,6 +7186,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            modalState.sendInFlight = true;
+            var requestConversationId = activeConversationId;
             modalState.sendButton.disabled = true;
             errorMessage = root.getAttribute('data-chat-payment-send-error') || 'Unable to create payment request.';
             postBody = {
@@ -6048,6 +7212,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
                     body: toQuery(postBody)
                 }).then(function (payload) {
+                if (activeConversationId !== requestConversationId) return;
                 var message = payload.message || errorMessage;
                 modalState.sendButton.disabled = false;
                 if (!payload.ok) {
@@ -6061,11 +7226,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     closePaymentModal(type);
                     showComposerAlert('', false);
-                    renderConversation(payload, { scrollToBottom: true });
+                    renderConversation(payload, { scrollToBottom: true, preserveTransientUi: true });
                 }).catch(function () {
+                if (activeConversationId !== requestConversationId) return;
                 modalState.sendButton.disabled = false;
                 setPaymentPreview(modalState, renderPaymentStateHtml(errorMessage, true));
                 showComposerAlert(errorMessage, true);
+            }).then(function () {
+                modalState.sendInFlight = false;
             });
         }
 
@@ -6730,6 +7898,36 @@ document.addEventListener('DOMContentLoaded', function () {
             }, 260);
         }
 
+        function closeConversationHeaderActions() {
+            setHidden(headerActions, true);
+            if (headerMoreButton) headerMoreButton.setAttribute('aria-expanded', 'false');
+        }
+
+        if (headerMoreButton && headerActions) {
+            headerMoreButton.addEventListener('click', function () {
+                var willOpen = headerActions.hasAttribute('hidden');
+                setHidden(headerActions, !willOpen);
+                headerMoreButton.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+            });
+            headerActions.addEventListener('click', function (event) {
+                if (closest(event.target, '.admin-chat-inbox__header-action')) {
+                    closeConversationHeaderActions();
+                }
+            });
+            doc.addEventListener('click', function (event) {
+                if (!closest(event.target, '[data-admin-chat-header-more], [data-admin-chat-header-actions]')) {
+                    closeConversationHeaderActions();
+                }
+            });
+            doc.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape' && !headerActions.hasAttribute('hidden')) {
+                    closeConversationHeaderActions();
+                    headerMoreButton.focus();
+                    event.preventDefault();
+                }
+            });
+        }
+
         function openPanel(focusSearch) {
             refreshAdminChatViewportHeight();
             if (panel) {
@@ -6760,6 +7958,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 toggle.classList.remove('is-open');
                 toggle.setAttribute('aria-expanded', 'false');
             }
+            closeConversationHeaderActions();
             saveAdminChatPanelState(false);
             syncAdminChatBodyLock();
             closeQuickModal();
@@ -7027,8 +8226,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 closeAllPaymentModals();
             }
             syncPaymentHeaderActions(payload);
+            if (previousConversationId !== activeConversationId) closeConversationHeaderActions();
+            if (headerMoreButton && headerActions) {
+                setHidden(headerMoreButton, !q('.admin-chat-inbox__header-action:not([hidden])', headerActions));
+            }
             showConversation();
-            openPanel(false);
+            // Rendering a late poll/send response must never reopen a dismissed panel.
             if (shouldReplaceBody) {
                 bindConversationScrollHandler();
                 animateNewConversationMessages(previousMessageIds, previousConversationId, options);
@@ -7086,7 +8289,9 @@ document.addEventListener('DOMContentLoaded', function () {
             conversationFetchInFlight = true;
             conversationRequestToken += 1;
             requestToken = conversationRequestToken;
-            openPanel(false);
+            if (!requestOptions.silent) {
+                openPanel(false);
+            }
             showComposerAlert('', false);
             if (!requestOptions.silent) {
                 setConversationPositioningState(!!requestOptions.scrollToBottom);
@@ -7769,7 +8974,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (composerInput) {
             composerInput.addEventListener('keydown', function (event) {
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
                     event.preventDefault();
                     q('[data-admin-chat-send]', root).click();
                 }
@@ -7795,8 +9000,10 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
 
+        var chatSendInFlight = false;
         if (q('[data-admin-chat-send]', root)) {
             q('[data-admin-chat-send]', root).addEventListener('click', function () {
+                if (chatSendInFlight) return;
                 var message = composerInput ? composerInput.value.trim() : '';
                 var detectedUrl = extractFirstUrl(message);
                 var previewUrl = linkPreviewData && linkPreviewUrl === detectedUrl && linkPreviewDismissedUrl !== detectedUrl ? linkPreviewUrl : '';
@@ -7809,25 +9016,33 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
 
+                var sentConversationId = activeConversationId;
+                var sentInputValue = composerInput ? composerInput.value : '';
+                chatSendInFlight = true;
                 postConversation('send', {
                     message: message,
                     reply_to_message_id: replyToMessageId || 0,
                     link_preview_url: previewUrl,
                     link_preview_removed: previewRemoved
                 }, false).then(function (payload) {
+                    if (activeConversationId !== sentConversationId) return;
                     if (!payload.ok) {
                         showComposerAlert(root.getAttribute('data-chat-send-error') || 'Unable to send the message.', true);
                         return;
                     }
-                    if (composerInput) {
+                    if (composerInput && composerInput.value === sentInputValue) {
                         composerInput.value = '';
+                        clearReplyTarget();
+                        resetLinkPreview();
                     }
-                    clearReplyTarget();
-                    resetLinkPreview();
                     showComposerAlert('', false);
-                    renderConversation(payload, { scrollToBottom: true });
+                    renderConversation(payload, { scrollToBottom: true, preserveTransientUi: true });
                 }).catch(function () {
-                    showComposerAlert(root.getAttribute('data-chat-send-error') || 'Unable to send the message.', true);
+                    if (activeConversationId === sentConversationId) {
+                        showComposerAlert(root.getAttribute('data-chat-send-error') || 'Unable to send the message.', true);
+                    }
+                }).then(function () {
+                    chatSendInFlight = false;
                 });
             });
         }
@@ -8464,7 +9679,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
 
-            if (panel && !panel.hasAttribute('hidden')) {
+            if (panel && !panel.hasAttribute('hidden') && !isAdminChatDocked()) {
                 if (
                     !closest(event.target, '[data-admin-chat-inbox]') &&
                     !closest(event.target, '[data-admin-chat-open]') &&
@@ -8523,8 +9738,59 @@ document.addEventListener('DOMContentLoaded', function () {
         }, { passive: true });
     }
 
+    function initCryptoNetworkStatus() {
+        var form = q('[data-admin-crypto-status-form]');
+        var results = q('[data-admin-crypto-status-results]');
+        var pane = q('#admin-settings-crypto-preview-pane');
+        if (!form || !results || !pane) return;
+        var button = q('[name="admin_refresh_crypto_preview_status"]', form);
+        var token = q('[name="_csrf"]', form);
+        var busy = false;
+        var checkedAt = (parseInt(form.getAttribute('data-checked-at') || '0', 10) || 0) * 1000;
+        var feedback = document.createElement('span');
+        feedback.className = 'small text-muted ms-2';
+        feedback.setAttribute('role', 'status');
+        if (button) button.insertAdjacentElement('afterend', feedback);
+        function refresh(force) {
+            if (busy || (!force && Date.now() - checkedAt < 300000)) return;
+            busy = true;
+            if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+            feedback.textContent = form.getAttribute('data-loading') || 'Checking...';
+            var controller = window.AbortController ? new window.AbortController() : null;
+            var timeout = controller ? window.setTimeout(function () { controller.abort(); }, 15000) : null;
+            jsonFetch(form.getAttribute('data-status-url'), {
+                signal: controller ? controller.signal : undefined,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: toQuery({ _csrf: token ? token.value : '' })
+            }).then(function (payload) {
+                if (!payload || !payload.ok || typeof payload.html !== 'string') throw new Error('Unable to refresh');
+                results.innerHTML = payload.html;
+                checkedAt = Date.now();
+                feedback.textContent = '';
+            }).catch(function () {
+                feedback.textContent = form.getAttribute('data-error') || 'Unable to refresh.';
+            }).then(function () {
+                if (timeout) window.clearTimeout(timeout);
+                busy = false;
+                if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+            });
+        }
+        form.addEventListener('submit', function (event) { event.preventDefault(); refresh(true); });
+        doc.addEventListener('shown.bs.tab', function (event) {
+            if (event.target && event.target.id === 'admin-settings-crypto-preview-tab') refresh(false);
+        });
+        if (pane.classList.contains('active')) refresh(false);
+    }
+
+    initCryptoNetworkStatus();
     initSensitiveRouteProtection();
     initTopbarTools();
+    initOrdersGuidanceToggle();
+    initOrdersTableViewToggle();
+    initCompletedOrdersExpirySort();
+    initPaymentReceivedFields();
+    initPaymentBlockchainCheck();
 
     if (!hasBootstrap) {
         return;
@@ -8545,10 +9811,12 @@ document.addEventListener('DOMContentLoaded', function () {
     initSidebarAndDropdowns();
     initDangerForms();
     initSettingsBackupGenerator();
+    initAdminPanelSubscriptionReminderModal();
     initProviderUrlReplacement();
     initProviderLogoManagers();
     initProductTypeForms();
     initOrderStatusForms();
+    initOrderExtendPreviews();
     initOrderCreateForms();
     initUserQuickOrderForms();
     initUserDetailCopy();
@@ -8558,6 +9826,927 @@ document.addEventListener('DOMContentLoaded', function () {
     initAdminPersonalNotesAutosave();
     initSearch();
     initPaymentsCustomerSearch();
-    initAdminHelpModal();
     initChat();
+});
+
+document.addEventListener('DOMContentLoaded', function () {
+    const root = document.querySelector('[data-admin-billing]');
+    if (!root) return;
+
+    let payload = {};
+    try { payload = JSON.parse(root.dataset.billingPayload || '{}'); } catch (error) { payload = {}; }
+    // Keep customer lookup and manual entry focused on one task at a time.
+    const buyerLookupPanel = root.querySelector('[data-billing-buyer-lookup-panel]');
+    const buyerFieldsPanel = root.querySelector('[data-billing-buyer-fields-panel]');
+    [buyerLookupPanel, buyerFieldsPanel].forEach(panel => {
+        panel?.addEventListener('toggle', () => {
+            if (!panel.open) return;
+            const other = panel === buyerLookupPanel ? buyerFieldsPanel : buyerLookupPanel;
+            if (other) other.open = false;
+        });
+    });
+    root.addEventListener('change', event => {
+        if (event.target.matches('[data-billing-customer-select], [data-billing-site-user-select]')
+            && Number(event.target.value) > 0 && buyerFieldsPanel) {
+            buyerFieldsPanel.open = true;
+            if (buyerLookupPanel) buyerLookupPanel.open = false;
+        }
+    });
+    // Native validation must always be able to focus fields inside disclosures.
+    root.addEventListener('invalid', event => {
+        let panel = event.target.closest('details');
+        while (panel) {
+            panel.open = true;
+            panel = panel.parentElement?.closest('details');
+        }
+    }, true);
+    const profileFilter = root.querySelector('[data-billing-profile-filter]');
+    profileFilter?.addEventListener('change', () => {
+        const tab = profileFilter.dataset.billingTab || 'create';
+        window.location.assign(`/admin/?page=billing&billing_tab=${encodeURIComponent(tab)}&billing_profile_id=${encodeURIComponent(profileFilter.value)}`);
+    });
+    const remoteSearch = (input, select, type, label) => {
+        if (!input || !select) return;
+        const lookup = input.closest('[data-billing-lookup]');
+        const results = lookup?.querySelector('[data-billing-lookup-results]');
+        let timer = 0;
+        let requestId = 0;
+        const hideResults = () => {
+            if (!results) return;
+            results.hidden = true;
+            results.replaceChildren();
+        };
+        const showState = (message, className = '') => {
+            if (!results) return;
+            const state = document.createElement('div');
+            state.className = `admin-billing-buyer-lookup__state ${className}`.trim();
+            state.textContent = message;
+            results.replaceChildren(state);
+            results.hidden = false;
+        };
+        const ensureOption = (row) => {
+            const value = String(row.id);
+            let option = Array.from(select.options).find((candidate) => candidate.value === value);
+            if (!option) {
+                option = new Option(label(row), value);
+                select.add(option);
+            }
+            option.textContent = label(row);
+            option.dataset.billingRow = JSON.stringify(row);
+            return option;
+        };
+        const showItems = (items) => {
+            items.forEach(ensureOption);
+            if (!results) return;
+            if (items.length === 0) {
+                showState(payload.searchUi?.empty || 'No results', 'is-empty');
+                return;
+            }
+            results.replaceChildren(...items.slice(0, 8).map((row) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'admin-billing-buyer-lookup__result';
+                const primary = type === 'billing_customer'
+                    ? (row.display_name || row.company_name || row.email || `#${row.id}`)
+                    : (`@${row.public_handle || row.email || row.id}`);
+                const secondary = type === 'billing_customer'
+                    ? [row.email, row.company_name].filter(Boolean).join(' · ')
+                    : [`#${row.id}`, row.email].filter(Boolean).join(' · ');
+                const strong = document.createElement('strong');
+                const small = document.createElement('small');
+                strong.textContent = primary;
+                small.textContent = secondary;
+                button.append(strong, small);
+                button.addEventListener('click', () => {
+                    ensureOption(row);
+                    select.value = String(row.id);
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.value = label(row);
+                    hideResults();
+                });
+                return button;
+            }));
+            results.hidden = false;
+        };
+        input.addEventListener('input', () => {
+            window.clearTimeout(timer);
+            const query = input.value.trim();
+            requestId += 1;
+            const currentRequestId = requestId;
+            if (query.length > 128 || (query.length < 2 && !(type === 'site_customer' && /^\d+$/.test(query)))) {
+                hideResults();
+                return;
+            }
+            showState(payload.searchUi?.loading || 'Loading...', 'is-loading');
+            timer = window.setTimeout(async () => {
+                try {
+                    const profileId = profileFilter?.value || payload.selectedProfileId || 0;
+                    const response = await fetch(`/admin/?page=billing&billing_search=1&type=${encodeURIComponent(type)}&q=${encodeURIComponent(query)}&profile_id=${encodeURIComponent(profileId)}`, { headers: { Accept: 'application/json' } });
+                    const data = await response.json();
+                    if (currentRequestId !== requestId) return;
+                    if (!response.ok || !data.ok || !Array.isArray(data.items)) {
+                        showState(payload.searchUi?.empty || 'No results', 'is-empty');
+                        return;
+                    }
+                    showItems(data.items);
+                } catch (error) {
+                    if (currentRequestId === requestId) showState(payload.searchUi?.empty || 'No results', 'is-empty');
+                }
+            }, 220);
+        });
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') { requestId += 1; window.clearTimeout(timer); hideResults(); }
+        });
+        document.addEventListener('click', (event) => {
+            if (lookup && !lookup.contains(event.target)) { requestId += 1; window.clearTimeout(timer); hideResults(); }
+        });
+    };
+    const directoryForm = root.querySelector('[data-billing-customer-form]');
+    if (directoryForm) {
+        const directoryUserSelect = directoryForm.querySelector('[data-billing-directory-user-select]');
+        const directoryCountry = directoryForm.querySelector('[data-billing-customer-country]');
+        const directoryCountryName = directoryForm.querySelector('[data-billing-customer-country-name]');
+        const syncDirectoryCountryName = () => {
+            if (!directoryCountryName) return;
+            const option = directoryCountry?.selectedOptions[0];
+            directoryCountryName.value = option?.dataset.countryName || (option?.textContent || '').replace(/\s*\([A-Z]{2}\)\s*$/, '').trim();
+        };
+        directoryCountry?.addEventListener('change', syncDirectoryCountryName);
+        remoteSearch(directoryForm.querySelector('[data-billing-directory-user-search]'), directoryUserSelect, 'site_customer', (row) => `#${row.id} · @${row.public_handle || ''} · ${row.email || ''}`);
+        directoryUserSelect?.addEventListener('change', () => {
+            const option = directoryUserSelect.selectedOptions[0];
+            let row = null;
+            try { row = JSON.parse(option?.dataset.billingRow || 'null'); } catch (error) { row = null; }
+            if (!row) row = (payload.siteCustomers || []).find((item) => String(item.id) === directoryUserSelect.value);
+            if (!row) return;
+            const name = directoryForm.querySelector('[name="billing_customer_display_name"]');
+            const email = directoryForm.querySelector('[name="billing_customer_email"]');
+            const country = directoryForm.querySelector('[name="billing_customer_country_code"]');
+            if (name && !name.value) name.value = row.public_handle || row.email || '';
+            if (email && !email.value) email.value = row.email || '';
+            if (country && !country.value) {
+                country.value = row.country_code || '';
+                syncDirectoryCountryName();
+            }
+        });
+    }
+
+    root.querySelectorAll('[data-billing-list-search]').forEach((input) => {
+        const listName = input.dataset.billingListSearch || '';
+        const rows = Array.from(root.querySelectorAll(`[data-billing-filter-row="${listName}"]`));
+        const emptyState = root.querySelector(`[data-billing-filter-empty="${listName}"]`);
+        const filterRows = () => {
+            const query = input.value.trim().toLocaleLowerCase();
+            let visible = 0;
+            rows.forEach((row) => {
+                const matches = query === '' || (row.textContent || '').toLocaleLowerCase().includes(query);
+                row.hidden = !matches;
+                if (matches) visible += 1;
+            });
+            if (emptyState) emptyState.hidden = visible > 0;
+        };
+        input.addEventListener('input', filterRows);
+        filterRows();
+    });
+
+    const logoInput = root.querySelector('[data-billing-logo-input]');
+    const logoPreview = root.querySelector('[data-billing-logo-preview]');
+    logoInput?.addEventListener('change', () => {
+        const file = logoInput.files?.[0];
+        if (!file || !logoPreview || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
+
+        const previousObjectUrl = logoPreview.dataset.objectUrl || '';
+        if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
+
+        const objectUrl = URL.createObjectURL(file);
+        logoPreview.src = objectUrl;
+        logoPreview.dataset.objectUrl = objectUrl;
+        const wrapper = logoPreview.closest('.admin-billing-logo-preview');
+        wrapper?.classList.remove('is-empty');
+        const removeLabel = wrapper?.querySelector('label');
+        if (removeLabel) removeLabel.hidden = false;
+    });
+
+    const companyForm = root.querySelector('[data-billing-company-form]');
+    const companyCountry = companyForm?.querySelector('[data-billing-profile-country]');
+    const companyActivity = companyForm?.querySelector('[data-billing-profile-activity]');
+    const companyVatStatus = companyForm?.querySelector('[data-billing-profile-vat-status]');
+    const profileGuidance = companyForm?.querySelector('[data-billing-profile-guidance]');
+    const ossCapability = companyForm?.querySelector('[name="eu_oss_enabled"]');
+    const medicalCapability = companyForm?.querySelector('[name="medical_exemption_enabled"]');
+    const marginCapability = companyForm?.querySelector('[name="margin_scheme_enabled"]');
+    const renderProfileGuidance = () => {
+        if (!profileGuidance) return;
+        const vatStatus = companyVatStatus?.value || 'manual';
+        const activity = companyActivity?.value || 'general';
+        const country = String(companyCountry?.value || '').toUpperCase();
+        const countryRules = payload.profileCapabilityRules?.[country] || {};
+        const availability = ['oss', 'medical', 'margin'].reduce((result, capability) => {
+            const rule = countryRules?.[capability] || {};
+            result[capability] = (rule.vat_statuses || []).includes(vatStatus)
+                && (rule.business_activities || []).includes(activity);
+            return result;
+        }, {});
+        const guidanceKey = ['healthcare', 'psychology'].includes(activity)
+            ? 'healthcare'
+            : (['digital_services', 'second_hand_goods'].includes(activity) ? activity : 'general');
+        const availableCount = Object.values(availability).filter(Boolean).length;
+        profileGuidance.textContent = vatStatus === 'manual'
+            ? (payload.profileGuidance?.status_manual || '')
+            : (availableCount > 0
+                ? (payload.profileGuidance?.[guidanceKey] || payload.profileGuidance?.general || '')
+                : (payload.profileGuidance?.no_special || payload.profileGuidance?.general || ''));
+        [[ossCapability, 'oss'], [medicalCapability, 'medical'], [marginCapability, 'margin']].forEach(([control, capability]) => {
+            if (!control) return;
+            const available = Boolean(availability[capability]);
+            control.disabled = !available;
+            const wrapper = control.closest('[data-billing-profile-capability]');
+            if (wrapper) wrapper.hidden = !available;
+            if (!available) control.checked = false;
+        });
+        const emptyState = companyForm?.querySelector('[data-billing-profile-capabilities-empty]');
+        if (emptyState) emptyState.hidden = availableCount > 0;
+    };
+    companyCountry?.addEventListener('change', () => {
+        const defaults = payload.countries?.[companyCountry.value];
+        if (defaults) {
+            const currency = companyForm.querySelector('[data-billing-profile-currency]');
+            const prefix = companyForm.querySelector('[data-billing-profile-prefix]');
+            const countryName = companyForm.querySelector('[name="country_name"]');
+            if (currency) currency.value = defaults.currency || 'EUR';
+            if (prefix) prefix.value = defaults.number_prefix || '';
+            if (countryName) countryName.value = defaults.name || companyCountry.selectedOptions[0]?.textContent?.trim() || '';
+        }
+        const preview = companyForm?.querySelector('[data-billing-profile-country-preview]');
+        if (preview) {
+            const code = String(companyCountry.value || '').toUpperCase();
+            const selectedLabel = companyCountry.selectedOptions[0]?.textContent?.replace(/\s*\([A-Z]{2}\)\s*$/, '').trim() || code;
+            const image = preview.querySelector('img');
+            const label = preview.querySelector('span');
+            if (image) image.src = `/img/flags/${/^[A-Z]{2}$/.test(code) ? code : 'noflag'}.gif`;
+            if (label) label.textContent = selectedLabel;
+        }
+        renderProfileGuidance();
+    });
+    companyActivity?.addEventListener('change', renderProfileGuidance);
+    companyVatStatus?.addEventListener('change', renderProfileGuidance);
+    renderProfileGuidance();
+
+    const ossRateCountry = root.querySelector('[data-billing-oss-rate-country]');
+    const renderOssRateCountry = () => {
+        const selectedCountry = String(ossRateCountry?.value || '').toUpperCase();
+        root.querySelectorAll('[data-billing-oss-rate-row]').forEach((row) => {
+            row.hidden = String(row.dataset.billingOssRateRow || '').toUpperCase() !== selectedCountry;
+        });
+    };
+    ossRateCountry?.addEventListener('change', renderOssRateCountry);
+    renderOssRateCountry();
+
+    root.querySelectorAll('label.form-label:not([for])').forEach((label, index) => {
+        const next = label.nextElementSibling;
+        const control = next?.matches('input, select, textarea') ? next : next?.querySelector('input:not([type="hidden"]), select, textarea');
+        if (!control || label.querySelector('input,select,textarea')) return;
+        if (!control.id) control.id = `billing-field-${index}`;
+        label.htmlFor = control.id;
+    });
+    const form = root.querySelector('[data-billing-document-form]');
+    const draftStoragePrefix = `adminBillingDraft:v3:admin-${Number(payload.adminUserId || 0)}`;
+    const draftStorageKey = (profileId, documentId) => `${draftStoragePrefix}:${Number(profileId || 0)}:${Number(documentId || 0) > 0 ? `doc-${Number(documentId)}` : 'new'}`;
+    if (Number(payload.savedProfileId || 0) > 0) {
+        try {
+            localStorage.removeItem(draftStorageKey(payload.savedProfileId, 0));
+            if (Number(payload.savedDocumentId || 0) > 0) localStorage.removeItem(draftStorageKey(payload.savedProfileId, payload.savedDocumentId));
+        } catch (error) { /* local cache is optional */ }
+    }
+    if (!form) return;
+    const currentDraftKey = draftStorageKey(payload.selectedProfileId, payload.documentId);
+    const serializableControls = () => Array.from(form.elements).filter((control) => {
+        if (!control.name || control.name === '_csrf' || control.disabled) return false;
+        return !['file', 'submit', 'button'].includes(String(control.type || '').toLowerCase());
+    });
+    const serializeDraft = () => ({
+        savedAt: Date.now(),
+        controls: serializableControls().map((control) => ({
+            name: control.name,
+            type: String(control.type || ''),
+            value: String(control.value ?? ''),
+            checked: Boolean(control.checked),
+        })),
+    });
+    const restoreDraft = () => {
+        if (payload.hasServerDraft) return false;
+        let draft = null;
+        try { draft = JSON.parse(localStorage.getItem(currentDraftKey) || 'null'); } catch (error) { draft = null; }
+        if (!draft || !Array.isArray(draft.controls) || !draft.controls.length || !Number.isFinite(draft.savedAt) || Date.now() - draft.savedAt > 7 * 86400000 || draft.savedAt > Date.now() + 60000) return false;
+        const itemCount = draft.controls.filter((control) => control.name === 'item_description[]').length;
+        const items = form.querySelector('[data-billing-items]');
+        const firstItem = items?.querySelector('[data-billing-item]');
+        while (items && firstItem && items.querySelectorAll('[data-billing-item]').length < itemCount) {
+            items.appendChild(firstItem.cloneNode(true));
+        }
+        const controlsByName = {};
+        serializableControls().forEach((control) => {
+            controlsByName[control.name] ||= [];
+            controlsByName[control.name].push(control);
+            if (['checkbox', 'radio'].includes(String(control.type || '').toLowerCase())) control.checked = false;
+        });
+        const offsets = {};
+        draft.controls.forEach((saved) => {
+            const index = offsets[saved.name] || 0;
+            offsets[saved.name] = index + 1;
+            const control = controlsByName[saved.name]?.[index];
+            if (!control) return;
+            if (['checkbox', 'radio'].includes(String(control.type || '').toLowerCase())) control.checked = Boolean(saved.checked);
+            else control.value = saved.value;
+        });
+        const notice = form.querySelector('[data-billing-draft-notice]');
+        if (notice) notice.hidden = false;
+        return true;
+    };
+    restoreDraft();
+    let draftSaveTimer = 0;
+    const saveDraftCache = () => {
+        window.clearTimeout(draftSaveTimer);
+        try { localStorage.setItem(currentDraftKey, JSON.stringify(serializeDraft())); } catch (error) { /* local cache is optional */ }
+    };
+    const queueDraftSave = () => {
+        window.clearTimeout(draftSaveTimer);
+        draftSaveTimer = window.setTimeout(saveDraftCache, 300);
+    };
+    form.addEventListener('input', queueDraftSave);
+    form.addEventListener('change', queueDraftSave);
+    form.addEventListener('submit', saveDraftCache);
+    const languageSelect = form.querySelector('[data-billing-language]');
+    const priceMode = form.querySelector('[data-billing-price-mode]');
+    let calculatedTotals = { subtotal: 0, tax: 0, gross: 0 };
+    let renderSourceAudit = () => {};
+    let renderIssueChecklist = () => {};
+
+    const money = (value) => {
+        const currency = form.querySelector('[data-billing-currency]')?.value || 'EUR';
+        return `${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+    };
+    const numeric = (value) => {
+        const parsed = Number(String(value ?? '').replace(',', '.'));
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const setBuyer = (row, overwrite = true) => {
+        if (!row) return;
+        const map = {
+            display_name: row.display_name || row.public_handle || '',
+            company_name: row.company_name || '', phone: row.phone || '',
+            email: row.email || '', tax_id: row.tax_id || '', address_line1: row.address_line1 || '',
+            address_line2: row.address_line2 || '', postal_code: row.postal_code || '', city: row.city || '',
+            country_name: row.country_name || '', country_code: row.country_code || ''
+        };
+        Object.entries(map).forEach(([key, value]) => {
+            const input = form.querySelector(`[data-billing-buyer="${key}"]`);
+            if (input && (overwrite || !input.value)) input.value = value;
+        });
+        const buyerTypeControl = form.querySelector('[data-billing-buyer-type]');
+        if (buyerTypeControl && (String(map.tax_id).trim() || String(map.company_name).trim())) buyerTypeControl.value = 'business';
+        const preferredLanguage = String(row.locale_code || row.linked_locale_code || '').toLowerCase();
+        if (languageSelect && ['pl', 'en', 'de'].includes(preferredLanguage)) {
+            languageSelect.value = preferredLanguage;
+            languageSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        form.querySelector('[data-billing-destination-country]')?.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const billingCustomerSelect = form.querySelector('[data-billing-customer-select]');
+    const siteUserSelect = form.querySelector('[data-billing-site-user-select]');
+    remoteSearch(form.querySelector('[data-billing-customer-search]'), billingCustomerSelect, 'billing_customer', (row) => `${row.display_name || ''} · ${row.email || ''}`);
+    remoteSearch(form.querySelector('[data-billing-site-user-search]'), siteUserSelect, 'site_customer', (row) => `#${row.id} · @${row.public_handle || ''} · ${row.email || ''}`);
+    billingCustomerSelect?.addEventListener('change', () => {
+        let row = (payload.billingCustomers || []).find((item) => String(item.id) === billingCustomerSelect.value);
+        if (!row) { try { row = JSON.parse(billingCustomerSelect.selectedOptions[0]?.dataset.billingRow || 'null'); } catch (error) { row = null; } }
+        if (row) {
+            setBuyer(row);
+            if (row.customer_id && siteUserSelect) siteUserSelect.value = String(row.customer_id);
+        }
+    });
+    siteUserSelect?.addEventListener('change', () => {
+        let row = (payload.siteCustomers || []).find((item) => String(item.id) === siteUserSelect.value);
+        if (!row) { try { row = JSON.parse(siteUserSelect.selectedOptions[0]?.dataset.billingRow || 'null'); } catch (error) { row = null; } }
+        if (row) setBuyer(row, false);
+    });
+
+    const sourceType = form.querySelector('[data-billing-source-type]');
+    const sourcePicker = form.querySelector('[data-billing-source-picker]');
+    const sourceSelect = form.querySelector('[data-billing-source-select]');
+    const sourceId = form.querySelector('[data-billing-source-id]');
+    const sourceHelp = form.querySelector('[data-billing-source-help]');
+    const sourceRows = (type) => {
+        const used = new Set(payload.usedSourceKeys || []);
+        if (type === 'order') return (payload.orders || []).filter((row) => !used.has(`order:${row.id}`));
+        const expected = type === 'payment_crypto' ? 'crypto' : type === 'payment_bank' ? 'bank' : '';
+        return (payload.payments || []).filter((row) => row.payment_type === expected
+            && !used.has(`${type}:${row.id}`));
+    };
+    const sourceLabel = (type, row) => {
+        const account = `#${row.id} · @${row.public_handle || ''} · ${row.email || ''}`;
+        if (type === 'order') return `${account} · ${row.product_name || ''} · ${row.total_amount || 0} ${row.currency_code || ''}`;
+        return `${account} · ${row.description || ''} · ${row.amount || 0} ${row.currency_code || ''}`;
+    };
+    const initialSourceId = sourceId?.value || '';
+    let isInitialSourceBuild = true;
+    const rebuildSources = () => {
+        if (!sourceType || !sourceSelect || !sourcePicker || !sourceId) return;
+        const type = sourceType.value;
+        if (sourceHelp) sourceHelp.textContent = payload.sourceHelp?.[type] || '';
+        sourcePicker.hidden = type === 'independent';
+        sourceSelect.innerHTML = '<option value="">—</option>';
+        sourceRows(type).forEach((row) => sourceSelect.add(new Option(sourceLabel(type, row), String(row.id))));
+        sourceId.value = type === 'independent' ? '0' : sourceId.value;
+        if (isInitialSourceBuild && initialSourceId && type !== 'independent' && Array.from(sourceSelect.options).some((option) => option.value === initialSourceId)) {
+            sourceSelect.value = initialSourceId;
+            sourceId.value = initialSourceId;
+        }
+        isInitialSourceBuild = false;
+        renderSourceAudit();
+        renderIssueChecklist();
+    };
+    sourceType?.addEventListener('change', () => {
+        if (sourceId) sourceId.value = '0';
+        rebuildSources();
+    });
+    sourceSelect?.addEventListener('change', () => {
+        if (!sourceId || !sourceType) return;
+        sourceId.value = sourceSelect.value;
+        const row = sourceRows(sourceType.value).find((item) => String(item.id) === sourceSelect.value);
+        if (!row) return;
+        if (siteUserSelect && row.customer_id) {
+            if (!Array.from(siteUserSelect.options).some((option) => option.value === String(row.customer_id))) {
+                siteUserSelect.add(new Option(`#${row.customer_id} · ${row.public_handle ? '@' + row.public_handle : row.email || ''}`, String(row.customer_id)));
+            }
+            siteUserSelect.value = String(row.customer_id);
+        }
+        form.querySelectorAll('[data-billing-buyer]').forEach((control) => { control.value = ''; });
+        const linkedBillingCustomer = (payload.billingCustomers || []).find((item) => Number(item.customer_id || 0) === Number(row.customer_id || 0));
+        const linkedSiteCustomer = (payload.siteCustomers || []).find((item) => Number(item.id || 0) === Number(row.customer_id || 0));
+        if (linkedBillingCustomer) {
+            if (billingCustomerSelect) billingCustomerSelect.value = String(linkedBillingCustomer.id);
+            setBuyer(linkedBillingCustomer);
+        } else {
+            if (billingCustomerSelect) billingCustomerSelect.value = '0';
+            setBuyer(linkedSiteCustomer || { display_name: row.public_handle || row.email, email: row.email || '' });
+        }
+        const sourceItems = Array.from(form.querySelectorAll('[data-billing-item]'));
+        sourceItems.slice(1).forEach((item) => item.remove());
+        const firstSourceItem = sourceItems[0];
+        const description = firstSourceItem?.querySelector('[name="item_description[]"]');
+        const quantity = firstSourceItem?.querySelector('[name="item_quantity[]"]');
+        const price = firstSourceItem?.querySelector('[name="item_unit_price[]"]');
+        const purchasePrice = firstSourceItem?.querySelector('[name="item_purchase_price[]"]');
+        if (description) description.value = row.product_name || row.description || '';
+        if (quantity) quantity.value = '1';
+        if (price) price.value = row.total_amount || row.amount || 0;
+        if (purchasePrice) purchasePrice.value = '';
+        if (priceMode) priceMode.value = 'gross';
+        const currency = form.querySelector('[data-billing-currency]');
+        if (currency && row.currency_code) currency.value = row.currency_code;
+        const paymentNotes = form.querySelector('[name="payment_notes"]');
+        if (paymentNotes) paymentNotes.value = payload.defaultPaymentNotes?.[languageSelect?.value]?.[sourceType.value] || '';
+        calculate();
+        renderSourceAudit();
+        renderIssueChecklist();
+    });
+    rebuildSources();
+
+    const itemsRoot = form.querySelector('[data-billing-items]');
+    const itemCatalogList = form.querySelector('[data-billing-item-catalog]');
+    let itemSearchTimer = 0;
+    itemsRoot?.addEventListener('input', (event) => {
+        const input = event.target.closest('[data-billing-item-description]');
+        if (!input || input.value.trim().length < 2) return;
+        window.clearTimeout(itemSearchTimer);
+        itemSearchTimer = window.setTimeout(async () => {
+            try {
+                const profileId = profileFilter?.value || payload.selectedProfileId || 0;
+                const response = await fetch(`/admin/?page=billing&billing_search=1&type=item&q=${encodeURIComponent(input.value.trim())}&profile_id=${encodeURIComponent(profileId)}`, { headers: { Accept: 'application/json' } });
+                const data = await response.json();
+                if (!data.ok || !Array.isArray(data.items)) return;
+                payload.itemCatalog = data.items;
+                if (itemCatalogList) itemCatalogList.replaceChildren(...data.items.map((row) => {
+                    const option = document.createElement('option');
+                    option.value = String(row.description || '');
+                    return option;
+                }));
+            } catch (error) { /* local catalog remains available */ }
+        }, 220);
+    });
+    const calculate = () => {
+        let subtotal = 0;
+        let tax = 0;
+        const isMarginScheme = form.querySelector('[data-billing-tax-treatment]')?.value === 'margin_scheme_second_hand';
+        itemsRoot?.querySelectorAll('[data-billing-item]').forEach((row) => {
+            const quantity = numeric(row.querySelector('[name="item_quantity[]"]')?.value);
+            const price = numeric(row.querySelector('[name="item_unit_price[]"]')?.value);
+            const purchasePrice = numeric(row.querySelector('[name="item_purchase_price[]"]')?.value);
+            const rate = numeric(row.querySelector('[name="item_tax_rate[]"]')?.value);
+            const enteredTotal = Math.round(quantity * price * 100) / 100;
+            const purchaseTotal = Math.round(quantity * purchasePrice * 100) / 100;
+            const marginTotal = Math.max(0, enteredTotal - purchaseTotal);
+            const net = isMarginScheme
+                ? Math.round((enteredTotal - (rate > 0 ? marginTotal * rate / (100 + rate) : 0)) * 100) / 100
+                : (priceMode?.value === 'gross' && rate > 0
+                    ? Math.round((enteredTotal / (1 + rate / 100)) * 100) / 100
+                    : enteredTotal);
+            const lineTax = isMarginScheme
+                ? Math.round((enteredTotal - net) * 100) / 100
+                : (priceMode?.value === 'gross'
+                    ? Math.round((enteredTotal - net) * 100) / 100
+                    : Math.round(net * rate) / 100);
+            subtotal += net;
+            tax += lineTax;
+            const output = row.querySelector('[data-billing-line-gross]');
+            if (output) output.textContent = money(isMarginScheme ? enteredTotal : net + lineTax);
+        });
+        const outputs = { '[data-billing-subtotal]': subtotal, '[data-billing-tax-total]': tax, '[data-billing-total]': subtotal + tax };
+        Object.entries(outputs).forEach(([selector, value]) => { const output = form.querySelector(selector); if (output) output.textContent = money(value); });
+        calculatedTotals = { subtotal, tax, gross: subtotal + tax };
+        renderSourceAudit();
+        renderIssueChecklist();
+    };
+    itemsRoot?.addEventListener('input', calculate);
+    itemsRoot?.addEventListener('change', (event) => {
+        const input = event.target.closest('[data-billing-item-description]');
+        if (!input) return;
+        const catalogRow = (payload.itemCatalog || []).find((row) => String(row.description).toLowerCase() === input.value.trim().toLowerCase());
+        const item = input.closest('[data-billing-item]');
+        if (!catalogRow || !item) return;
+        const unit = item.querySelector('[name="item_unit[]"]');
+        const price = item.querySelector('[name="item_unit_price[]"]');
+        const purchasePrice = item.querySelector('[name="item_purchase_price[]"]');
+        const tax = item.querySelector('[name="item_tax_rate[]"]');
+        if (unit) unit.value = catalogRow.unit_label || '';
+        const isMarginScheme = form.querySelector('[data-billing-tax-treatment]')?.value === 'margin_scheme_second_hand';
+        if (price) price.value = isMarginScheme
+            ? (catalogRow.default_unit_price_gross ?? catalogRow.default_unit_price_net ?? 0)
+            : (catalogRow.default_unit_price_net || 0);
+        if (purchasePrice) purchasePrice.value = isMarginScheme ? (catalogRow.default_purchase_price_gross ?? '') : '';
+        if (tax) tax.value = catalogRow.default_tax_rate_percent || 0;
+        if (priceMode) priceMode.value = isMarginScheme ? 'gross' : 'net';
+        calculate();
+    });
+    form.querySelector('[data-billing-currency]')?.addEventListener('change', calculate);
+    priceMode?.addEventListener('change', calculate);
+    languageSelect?.addEventListener('change', () => {
+        const translatedUnits = payload.units?.[languageSelect.value] || payload.units?.en || {};
+        itemsRoot?.querySelectorAll('[data-billing-item-unit]').forEach((select) => {
+            const selectedOption = select.selectedOptions[0];
+            const unitKey = selectedOption?.dataset.unitKey || 'piece';
+            const effectiveKey = translatedUnits[unitKey] ? unitKey : 'piece';
+            select.replaceChildren(...Object.entries(translatedUnits).map(([key, label]) => {
+                const option = new Option(String(label), String(label), false, key === effectiveKey);
+                option.dataset.unitKey = key;
+                return option;
+            }));
+        });
+        const selectedTreatment = form.querySelector('[data-billing-tax-treatment]')?.value || 'manual';
+        const note = form.querySelector('[data-billing-tax-note]');
+        const translatedNote = payload.defaultTaxNotesByLanguage?.[languageSelect.value]?.[selectedTreatment];
+        if (note && typeof translatedNote === 'string') note.value = translatedNote;
+        const paymentNote = form.querySelector('[name="payment_notes"]');
+        const defaultPaymentNoteValues = Object.values(payload.defaultPaymentNotes || {}).flatMap((row) => Object.values(row || {}));
+        if (paymentNote && sourceType?.value !== 'independent' && (paymentNote.value.trim() === '' || defaultPaymentNoteValues.includes(paymentNote.value))) {
+            paymentNote.value = payload.defaultPaymentNotes?.[languageSelect.value]?.[sourceType.value] || '';
+        }
+        queueDraftSave();
+    });
+    form.querySelector('[data-billing-add-item]')?.addEventListener('click', () => {
+        if (!itemsRoot) return;
+        const first = itemsRoot.querySelector('[data-billing-item]');
+        if (!first) return;
+        const row = first.cloneNode(true);
+        row.querySelectorAll('input').forEach((input) => {
+            if (input.name === 'item_quantity[]') input.value = '1';
+            else if (input.name === 'item_unit[]') input.value = first.querySelector('[name="item_unit[]"]')?.value || 'szt.';
+            else if (input.name === 'item_tax_rate[]') input.value = String(payload.defaultTax || 0);
+            else input.value = '';
+        });
+        itemsRoot.appendChild(row);
+        calculate();
+        queueDraftSave();
+    });
+    itemsRoot?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-billing-remove-item]');
+        if (!button) return;
+        if (itemsRoot.querySelectorAll('[data-billing-item]').length > 1) button.closest('[data-billing-item]')?.remove();
+        calculate();
+        queueDraftSave();
+    });
+    const taxNotes = Object.values(payload.defaultTaxNotes || {}).reduce((carry, row) => { carry[row.key] = row.value; return carry; }, {});
+    const taxNoteFor = (treatment) => payload.defaultTaxNotesByLanguage?.[languageSelect?.value]?.[treatment] ?? taxNotes[treatment] ?? '';
+    const supplyType = form.querySelector('[data-billing-supply-type]');
+    const buyerType = form.querySelector('[data-billing-buyer-type]');
+    const transactionRegion = form.querySelector('[data-billing-transaction-region]');
+    const transactionRegionDisplay = form.querySelector('[data-billing-transaction-region-display]');
+    const destinationCountry = form.querySelector('[data-billing-destination-country]');
+    const buyerCountryName = form.querySelector('[data-billing-buyer-country-name]');
+    const buyerTaxId = form.querySelector('[name="buyer_tax_id"]');
+    const buyerCompanyName = form.querySelector('[name="buyer_company_name"]');
+    const taxTreatment = form.querySelector('[data-billing-tax-treatment]');
+    const taxTreatmentHelp = form.querySelector('[data-billing-tax-treatment-help]');
+    const taxNote = form.querySelector('[data-billing-tax-note]');
+    const vatAssistant = form.querySelector('[data-billing-vat-assistant]');
+    const supplyHelp = form.querySelector('[data-billing-supply-help]');
+    const zeroRateTreatments = new Set([
+        'small_business_exempt', 'eu_b2b_reverse_charge', 'construction_reverse_charge', 'medical_exempt_entity',
+        'medical_exempt_professional', 'export_outside_eu',
+    ]);
+    const goodsSupplyTypes = new Set(payload.goodsSupplyTypes || ['goods', 'used_goods']);
+    const digitalSupplyTypes = new Set(payload.digitalSupplyTypes || ['digital_service']);
+    const deriveRegion = () => {
+        const seller = String(payload.profileCountry || '').toUpperCase();
+        const destination = String(destinationCountry?.value || '').toUpperCase();
+        let region = 'outside_eu';
+        if (!destination || destination === seller) region = 'domestic';
+        else if (destination === 'GB') region = 'uk';
+        else if ((payload.euCountries || []).includes(seller) && (payload.euCountries || []).includes(destination)) region = 'eu';
+        if (transactionRegion) transactionRegion.value = region;
+        if (transactionRegionDisplay) transactionRegionDisplay.value = region;
+        if (buyerCountryName) {
+            const selectedName = destinationCountry?.selectedOptions[0]?.dataset.countryName
+                || payload.customerCountries?.[destination]?.name || destination;
+            buyerCountryName.value = selectedName || '';
+        }
+        return region;
+    };
+    const defaultRateForCountry = (countryCode) => {
+        const country = String(countryCode || '').trim().toUpperCase();
+        const rows = (payload.taxRates || []).filter((row) => String(row.country_code || '').toUpperCase() === country && Number(row.is_active || 0) === 1);
+        const selected = rows.find((row) => Number(row.is_default || 0) === 1) || rows[0];
+        return selected ? numeric(selected.rate_percent) : null;
+    };
+    const allowedTaxTreatments = () => {
+        const supply = supplyType?.value || 'digital_service';
+        const buyer = buyerType?.value || 'consumer';
+        const region = transactionRegion?.value || 'domestic';
+        const vatStatus = String(payload.profileVatStatus || 'vat_registered');
+        const registered = vatStatus === 'vat_registered';
+        const activity = String(payload.profileBusinessActivity || 'general');
+        const ossEnabled = Boolean(payload.profileOssEnabled);
+        const medicalExemptionEnabled = Boolean(payload.profileMedicalExemptionEnabled);
+        const marginSchemeEnabled = Boolean(payload.profileMarginSchemeEnabled);
+        const allowed = ['manual'];
+        if (region === 'domestic') {
+            if (registered) allowed.unshift('domestic_vat');
+            else if (['small_business_exempt', 'not_vat_registered'].includes(vatStatus)) allowed.unshift('small_business_exempt');
+            if (medicalExemptionEnabled && ['healthcare_service', 'psychological_service'].includes(supply) && ['healthcare', 'psychology'].includes(activity)) {
+                allowed.unshift('medical_exempt_professional');
+                allowed.push('medical_exempt_entity');
+            }
+            if (registered && marginSchemeEnabled && supply === 'used_goods' && activity === 'second_hand_goods') allowed.unshift('margin_scheme_second_hand');
+        } else if (region === 'eu') {
+            if (buyer === 'business' && registered) allowed.unshift(supply === 'construction_service' ? 'construction_reverse_charge' : 'eu_b2b_reverse_charge');
+            else if (registered && ossEnabled && digitalSupplyTypes.has(supply)) allowed.unshift('eu_b2c_destination_oss');
+            else if (registered && ossEnabled && goodsSupplyTypes.has(supply)) allowed.unshift('eu_distance_goods_oss');
+        } else if (region === 'uk') {
+            allowed.unshift('uk_manual');
+        } else if (region === 'outside_eu' && goodsSupplyTypes.has(supply)) {
+            allowed.unshift('export_outside_eu');
+        }
+        return Array.from(new Set(allowed));
+    };
+    const vatRecommendation = () => {
+        const allowed = allowedTaxTreatments();
+        const treatment = allowed.find((value) => value !== 'manual') || 'manual';
+        let rate = null;
+        let guidanceKey = treatment;
+        const supply = supplyType?.value || 'digital_service';
+        const buyer = buyerType?.value || 'consumer';
+        const region = transactionRegion?.value || 'domestic';
+        if (treatment === 'manual' && region === 'eu' && buyer === 'consumer' && goodsSupplyTypes.has(supply)) guidanceKey = 'eu_goods_manual';
+        else if (treatment === 'manual' && region === 'eu' && buyer === 'consumer' && digitalSupplyTypes.has(supply) && !payload.profileOssEnabled) guidanceKey = 'oss_disabled';
+        else if (treatment === 'manual' && region === 'outside_eu' && !goodsSupplyTypes.has(supply)) guidanceKey = 'outside_service_manual';
+        let message = payload.taxTreatmentGuidance?.[guidanceKey] || payload.taxAssistant?.filtered || '';
+        if (zeroRateTreatments.has(treatment)) {
+            rate = 0;
+        } else if (treatment === 'domestic_vat') {
+            rate = defaultRateForCountry(payload.profileCountry);
+        } else if (['eu_b2c_destination_oss', 'eu_distance_goods_oss'].includes(treatment)) {
+            const destination = String(destinationCountry?.value || '').trim().toUpperCase();
+            if (!/^[A-Z]{2}$/.test(destination)) message = payload.taxAssistant?.destinationMissing || message;
+            else {
+                rate = defaultRateForCountry(destination);
+                if (rate === null) message = payload.taxAssistant?.noRate || message;
+            }
+        } else {
+            message = payload.taxTreatmentGuidance?.[guidanceKey] || payload.taxAssistant?.manual || message;
+        }
+        return { allowed, treatment, rate, message, automatic: !['manual', 'uk_manual'].includes(treatment) };
+    };
+    const renderVatAssistant = () => {
+        deriveRegion();
+        if (supplyHelp) supplyHelp.textContent = payload.supplyHelp?.[supplyType?.value] || '';
+        const recommendation = vatRecommendation();
+        if (taxTreatment) {
+            const previousTreatment = taxTreatment.value;
+            taxTreatment.replaceChildren(...recommendation.allowed.map((value) => new Option(String(payload.taxTreatments?.[value] || value), value)));
+            if (recommendation.allowed.includes(previousTreatment)) taxTreatment.value = previousTreatment;
+            else {
+                taxTreatment.value = recommendation.treatment;
+                if (taxNote) taxNote.value = taxNoteFor(taxTreatment.value);
+            }
+        }
+        if (taxTreatmentHelp) {
+            taxTreatmentHelp.textContent = payload.taxTreatmentGuidance?.[taxTreatment?.value || recommendation.treatment]
+                || payload.taxTreatmentGuidance?.manual
+                || '';
+        }
+        const marginSelected = (taxTreatment?.value || recommendation.treatment) === 'margin_scheme_second_hand';
+        if (marginSelected && priceMode) priceMode.value = 'gross';
+        itemsRoot?.querySelectorAll('[data-billing-item-purchase]').forEach((input) => {
+            input.hidden = !marginSelected;
+            const field = input.closest('.admin-billing-item__field');
+            if (field) field.hidden = !marginSelected;
+        });
+        const vatRatesList = form.querySelector('[data-billing-vat-rates]');
+        if (vatRatesList) {
+            const selectedTreatment = taxTreatment?.value || recommendation.treatment;
+            const rateCountry = ['eu_b2c_destination_oss', 'eu_distance_goods_oss'].includes(selectedTreatment)
+                ? String(destinationCountry?.value || '').trim().toUpperCase()
+                : String(payload.profileCountry || '').toUpperCase();
+            const rows = zeroRateTreatments.has(selectedTreatment)
+                ? [{ rate_percent: 0, label: '0%' }]
+                : (payload.taxRates || []).filter((row) => String(row.country_code || '').toUpperCase() === rateCountry && Number(row.is_active || 0) === 1);
+            vatRatesList.replaceChildren(...rows.map((row) => {
+                const option = document.createElement('option');
+                option.value = String(numeric(row.rate_percent));
+                option.label = String(row.label || `${option.value}%`);
+                return option;
+            }));
+        }
+        if (!vatAssistant) return;
+        const treatmentLabel = taxTreatment?.querySelector(`option[value="${recommendation.treatment}"]`)?.textContent?.trim() || recommendation.treatment;
+        const treatmentOutput = vatAssistant.querySelector('[data-billing-vat-treatment]');
+        const rateOutput = vatAssistant.querySelector('[data-billing-vat-rate]');
+        const messageOutput = vatAssistant.querySelector('[data-billing-vat-message]');
+        const stateOutput = vatAssistant.querySelector('[data-billing-vat-state]');
+        const contextOutput = vatAssistant.querySelector('[data-billing-vat-context]');
+        if (treatmentOutput) treatmentOutput.textContent = `${payload.taxAssistant?.recommended || ''}: ${treatmentLabel}`;
+        if (rateOutput) rateOutput.textContent = recommendation.rate === null ? '' : `${payload.taxAssistant?.rate || 'VAT'}: ${recommendation.rate.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+        if (messageOutput) messageOutput.textContent = recommendation.message;
+        vatAssistant.classList.toggle('is-manual', !recommendation.automatic);
+        if (stateOutput) {
+            stateOutput.textContent = recommendation.automatic ? (payload.taxAssistant?.automatic || '') : (payload.taxAssistant?.manualReview || '');
+            stateOutput.classList.toggle('is-manual', !recommendation.automatic);
+        }
+        if (contextOutput) {
+            const destination = String(destinationCountry?.value || '').toUpperCase() || '?';
+            const region = transactionRegion?.value || 'domestic';
+            contextOutput.textContent = `${payload.taxAssistant?.context || ''}: ${payload.taxAssistant?.seller || ''} ${payload.profileCountry || '?'} · ${payload.taxAssistant?.buyer || ''} ${destination} (${payload.buyerLabels?.[buyerType?.value || 'consumer'] || ''}) · ${payload.taxAssistant?.supply || ''} ${payload.supplyLabels?.[supplyType?.value || 'digital_service'] || ''} · ${payload.regionLabels?.[region] || region}`;
+        }
+        const rateButton = vatAssistant.querySelector('[data-billing-apply-vat-rate]');
+        if (rateButton) rateButton.disabled = recommendation.rate === null;
+        const vatIdReview = form.querySelector('[data-billing-vat-id-review]');
+        if (vatIdReview) vatIdReview.hidden = !['eu_b2b_reverse_charge', 'construction_reverse_charge'].includes(taxTreatment?.value || recommendation.treatment);
+        const ksefReview = form.querySelector('[data-billing-ksef-review]');
+        if (ksefReview) ksefReview.hidden = !(String(payload.profileCountry || '') === 'PL' && buyerType?.value === 'business');
+        renderIssueChecklist();
+    };
+    const applyRecommendedRate = () => {
+        const recommendation = vatRecommendation();
+        if (recommendation.rate === null) return;
+        itemsRoot?.querySelectorAll('[name="item_tax_rate[]"]').forEach((input) => { input.value = String(recommendation.rate); });
+        calculate();
+        queueDraftSave();
+    };
+    const selectedSourceRecord = () => {
+        if (!sourceType || sourceType.value === 'independent' || !sourceId?.value || sourceId.value === '0') return null;
+        return sourceRows(sourceType.value).find((row) => String(row.id) === String(sourceId.value)) || null;
+    };
+    renderSourceAudit = () => {
+        const wrapper = form.querySelector('[data-billing-source-audit]');
+        if (!wrapper) return;
+        const row = selectedSourceRecord();
+        wrapper.hidden = !row;
+        if (!row) return;
+        const expectedAmount = numeric(sourceType?.value === 'order' ? row.total_amount : row.amount);
+        const expectedCurrency = String(row.currency_code || '').toUpperCase();
+        const documentCurrency = String(form.querySelector('[data-billing-currency]')?.value || '').toUpperCase();
+        const mismatch = expectedCurrency !== documentCurrency || Math.abs(expectedAmount - calculatedTotals.gross) > 0.02;
+        wrapper.classList.toggle('is-mismatch', mismatch);
+        const expected = wrapper.querySelector('[data-billing-source-expected]');
+        const documentValue = wrapper.querySelector('[data-billing-source-document]');
+        const message = wrapper.querySelector('[data-billing-source-audit-message]');
+        const override = wrapper.querySelector('[data-billing-source-override]');
+        if (expected) expected.textContent = `${expectedAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${expectedCurrency}`;
+        if (documentValue) documentValue.textContent = money(calculatedTotals.gross);
+        if (message) message.textContent = mismatch
+            ? (payload.locale === 'pl' ? 'Dokument różni się od opłaconego źródła.' : 'The document differs from the paid source.')
+            : (payload.locale === 'pl' ? 'Kwota i waluta są zgodne ze źródłem.' : 'Amount and currency match the source.');
+        if (override) override.hidden = !mismatch;
+    };
+    renderIssueChecklist = () => {
+        const checklist = form.querySelector('[data-billing-checklist-items]');
+        if (!checklist) return;
+        const isPl = payload.locale === 'pl';
+        const source = selectedSourceRecord();
+        const sourceRequired = sourceType?.value !== 'independent';
+        const expectedAmount = source ? numeric(sourceType?.value === 'order' ? source.total_amount : source.amount) : 0;
+        const expectedCurrency = source ? String(source.currency_code || '').toUpperCase() : '';
+        const documentCurrency = String(form.querySelector('[data-billing-currency]')?.value || '').toUpperCase();
+        const sourceMismatch = Boolean(source) && (expectedCurrency !== documentCurrency || Math.abs(expectedAmount - calculatedTotals.gross) > 0.02);
+        const sourceOverrideChecked = Boolean(form.querySelector('[name="source_total_override_confirmed"]')?.checked);
+        const requiredBuyerFields = ['buyer_name', 'buyer_address_line1', 'buyer_postal_code', 'buyer_city', 'destination_country_code'];
+        const buyerReady = requiredBuyerFields.every((name) => String(form.querySelector(`[name="${name}"]`)?.value || '').trim() !== '');
+        const descriptionsReady = Array.from(form.querySelectorAll('[name="item_description[]"]')).some((input) => input.value.trim() !== '');
+        const issueDate = String(form.querySelector('[name="issue_date"]')?.value || '');
+        const serviceDate = String(form.querySelector('[name="service_date"]')?.value || '');
+        const dueDate = String(form.querySelector('[name="due_date"]')?.value || '');
+        const datesReady = Boolean(issueDate && serviceDate) && (sourceRequired || Boolean(dueDate && dueDate >= issueDate));
+        const itemRows = Array.from(form.querySelectorAll('[data-billing-item]'));
+        const numbersReady = itemRows.length <= 200 && itemRows.every((row) => {
+            if (!row.querySelector('[name="item_description[]"]')?.value.trim()) return true;
+            const quantity = numeric(row.querySelector('[name="item_quantity[]"]')?.value);
+            const price = numeric(row.querySelector('[name="item_unit_price[]"]')?.value);
+            const rate = numeric(row.querySelector('[name="item_tax_rate[]"]')?.value);
+            return [quantity, price, rate].every(Number.isFinite) && quantity > 0 && quantity < 1000000000 && price >= 0 && price < 100000000 && rate >= 0 && rate <= 100;
+        });
+        const selectedTreatment = taxTreatment?.value || '';
+        const itemRates = Array.from(form.querySelectorAll('[name="item_tax_rate[]"]')).map((input) => Math.round(numeric(input.value) * 100) / 100);
+        const applicableRateCountry = ['eu_b2c_destination_oss', 'eu_distance_goods_oss'].includes(selectedTreatment)
+            ? String(destinationCountry?.value || '').toUpperCase()
+            : String(payload.profileCountry || '').toUpperCase();
+        const activeRates = (payload.taxRates || [])
+            .filter((row) => String(row.country_code || '').toUpperCase() === applicableRateCountry && Number(row.is_active || 0) === 1)
+            .map((row) => Math.round(numeric(row.rate_percent) * 100) / 100);
+        const vatRatesReady = zeroRateTreatments.has(selectedTreatment)
+            ? itemRates.every((rate) => rate === 0)
+            : (!['domestic_vat', 'eu_b2c_destination_oss', 'eu_distance_goods_oss', 'margin_scheme_second_hand'].includes(selectedTreatment)
+                || itemRates.every((rate) => activeRates.includes(rate)));
+        const marginReady = selectedTreatment !== 'margin_scheme_second_hand' || (priceMode?.value === 'gross'
+            && Array.from(form.querySelectorAll('[data-billing-item]')).every((row) => {
+                const sale = numeric(row.querySelector('[name="item_unit_price[]"]')?.value);
+                const purchaseInput = row.querySelector('[name="item_purchase_price[]"]');
+                const purchase = numeric(purchaseInput?.value);
+                const rate = numeric(row.querySelector('[name="item_tax_rate[]"]')?.value);
+                return purchaseInput?.value !== '' && purchase >= 0 && purchase <= sale && rate > 0;
+            }));
+        const vatIdReady = !['eu_b2b_reverse_charge', 'construction_reverse_charge'].includes(selectedTreatment)
+            || (Boolean(buyerTaxId?.value.trim()) && Boolean(form.querySelector('[name="buyer_vat_id_verified"]')?.checked));
+        const foreignCurrencyRequired = calculatedTotals.tax > 0.005 && documentCurrency !== String(payload.profileDefaultCurrency || documentCurrency).toUpperCase();
+        const foreignReview = form.querySelector('[data-billing-foreign-currency-review]');
+        if (foreignReview) foreignReview.hidden = !foreignCurrencyRequired;
+        const foreignReady = !foreignCurrencyRequired || Boolean(form.querySelector('[name="foreign_currency_review_confirmed"]')?.checked);
+        const ksefRequired = String(payload.profileCountry || '') === 'PL' && buyerType?.value === 'business';
+        const ksefReady = !ksefRequired || Boolean(form.querySelector('[name="external_reference"]')?.value.trim()) || Boolean(form.querySelector('[name="pl_ksef_review_confirmed"]')?.checked);
+        const taxNoteReady = selectedTreatment !== '' && (selectedTreatment === 'domestic_vat' || Boolean(taxNote?.value.trim()));
+        const checks = [
+            [Boolean(payload.profileReadiness?.ready), isPl ? 'Profil wystawcy jest kompletny i aktywny.' : 'Issuer profile is complete and active.'],
+            [buyerReady, isPl ? 'Dane i kraj nabywcy są kompletne.' : 'Buyer details and country are complete.'],
+            [datesReady, isPl ? 'Daty wystawienia, sprzedaży i termin płatności są poprawne.' : 'Issue, supply and due dates are valid.'],
+            [descriptionsReady && numbersReady && Number.isFinite(calculatedTotals.gross) && calculatedTotals.gross >= 0 && calculatedTotals.gross <= 9999999999.99, isPl ? 'Pozycje i suma dokumentu są gotowe.' : 'Items and document total are ready.'],
+            sourceRequired ? [Boolean(source), isPl ? 'Wybrano właściwe źródło dokumentu.' : 'The document source is selected.'] : null,
+            source ? [!sourceMismatch || sourceOverrideChecked, isPl ? 'Kwota dokumentu jest zgodna ze źródłem albo różnica została potwierdzona.' : 'Source amount matches or the difference is confirmed.'] : null,
+            ['eu_b2b_reverse_charge', 'construction_reverse_charge'].includes(selectedTreatment) ? [vatIdReady, isPl ? 'VAT ID dla reverse charge został sprawdzony.' : 'Reverse-charge VAT ID is verified.'] : null,
+            [taxNoteReady, isPl ? 'Wybrano sposób opodatkowania i adnotację.' : 'Tax treatment and note are selected.'],
+            [vatRatesReady, isPl ? 'Stawki VAT pozycji pasują do wybranego wariantu i kraju.' : 'Item VAT rates match the selected treatment and country.'],
+            selectedTreatment === 'margin_scheme_second_hand' ? [marginReady, isPl ? 'Cena nabycia i kalkulacja marży są kompletne.' : 'Purchase cost and margin calculation are complete.'] : null,
+            foreignCurrencyRequired ? [foreignReady, isPl ? 'Rozliczenie VAT w obcej walucie zostało potwierdzone.' : 'Foreign-currency VAT reporting is confirmed.'] : null,
+        ].filter(Boolean);
+        if (ksefRequired) {
+            checks.push([ksefReady, isPl ? 'Obsługa KSeF została potwierdzona.' : 'The KSeF workflow is confirmed.']);
+        }
+        checks.push([Boolean(form.querySelector('[name="tax_review_confirmed"]')?.checked), isPl ? 'Końcowa kontrola dokumentu została potwierdzona.' : 'Final document review is confirmed.']);
+        checklist.replaceChildren(...checks.map(([ok, label]) => {
+            const item = document.createElement('div');
+            item.className = ok ? 'is-ok' : 'is-blocked';
+            item.innerHTML = `<i class="bi ${ok ? 'bi-check-circle-fill' : 'bi-circle'}" aria-hidden="true"></i><span></span>`;
+            item.querySelector('span').textContent = label;
+            return item;
+        }));
+        const issueButton = form.querySelector('[data-billing-issue-button]');
+        if (issueButton) issueButton.disabled = checks.some(([ok]) => !ok);
+    };
+    [supplyType, buyerType, destinationCountry].forEach((control) => {
+        control?.addEventListener('change', renderVatAssistant);
+    });
+    [buyerTaxId, buyerCompanyName].forEach((control) => control?.addEventListener('input', () => {
+        if (buyerType && (buyerTaxId?.value.trim() || buyerCompanyName?.value.trim())) buyerType.value = 'business';
+        renderVatAssistant();
+    }));
+    taxTreatment?.addEventListener('change', () => {
+        if (taxNote) taxNote.value = taxNoteFor(taxTreatment.value);
+        renderVatAssistant();
+        calculate();
+    });
+    vatAssistant?.querySelector('[data-billing-apply-vat]')?.addEventListener('click', () => {
+        const recommendation = vatRecommendation();
+        if (taxTreatment) taxTreatment.value = recommendation.treatment;
+        if (taxNote) taxNote.value = taxNoteFor(recommendation.treatment);
+        applyRecommendedRate();
+        renderVatAssistant();
+    });
+    vatAssistant?.querySelector('[data-billing-apply-vat-rate]')?.addEventListener('click', applyRecommendedRate);
+    form.querySelectorAll('[name="source_total_override_confirmed"], [name="buyer_vat_id_verified"], [name="foreign_currency_review_confirmed"], [name="pl_ksef_review_confirmed"], [name="tax_review_confirmed"], [name="external_reference"], [name="buyer_name"], [name="buyer_address_line1"], [name="buyer_postal_code"], [name="buyer_city"], [name="issue_date"], [name="service_date"], [name="due_date"]').forEach((control) => {
+        control.addEventListener('input', renderIssueChecklist);
+        control.addEventListener('change', renderIssueChecklist);
+    });
+    form.querySelector('[data-billing-currency]')?.addEventListener('change', () => { renderSourceAudit(); renderIssueChecklist(); });
+    renderVatAssistant();
+    calculate();
+    renderSourceAudit();
+    renderIssueChecklist();
 });

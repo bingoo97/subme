@@ -29,12 +29,13 @@ if (!function_exists('orders_payment_crypto_logo_by_code')) {
             'BNB' => 'bnb.png',
             'BUSD' => 'busd.png',
             'USDT' => 'tether.png',
-            'USDC' => 'tether.png',
+            'USDC' => 'usdc.png',
             'CRO' => 'cro.png',
             'ATOM' => 'atom.png',
             'SOL' => 'sol.png',
             'MATIC' => 'matic.png',
             'XRP' => 'xrp.png',
+            'TRX' => 'trx.png',
         ];
 
         if (isset($fileMap[$code])) {
@@ -98,6 +99,7 @@ if (!function_exists('orders_payment_default_coingecko_id')) {
             'USDC' => 'usd-coin',
             'MATIC' => 'matic-network',
             'XRP' => 'ripple',
+            'TRX' => 'tron',
         ];
 
         return $map[$assetCode] ?? '';
@@ -116,7 +118,7 @@ if (!function_exists('orders_payment_crypto_network_label')) {
             'ethereum' => 'Ethereum (ERC20)',
             'polygon' => 'Polygon',
             'bnb' => 'BNB Smart Chain',
-            'tron' => 'Tron (TRC20)',
+            'tron' => 'TRON',
             'cronos' => 'Cronos',
             'solana' => 'Solana',
             'ripple' => 'XRP Ledger',
@@ -129,156 +131,14 @@ if (!function_exists('orders_payment_crypto_network_label')) {
 if (!function_exists('orders_payment_http_json')) {
     function orders_payment_http_json(string $url): ?array
     {
-        if ($url === '') {
-            return null;
-        }
-
-        if (function_exists('curl_init')) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_CONNECTTIMEOUT => 10,
-                CURLOPT_TIMEOUT => 20,
-                CURLOPT_HTTPHEADER => [
-                    'Accept: application/json',
-                    'User-Agent: Reseller/1.0',
-                ],
-            ]);
-
-            $response = curl_exec($ch);
-            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-
-            if (!is_string($response) || $response === '' || $httpCode >= 400) {
-                return null;
-            }
-
-            $decoded = json_decode($response, true);
-            return is_array($decoded) ? $decoded : null;
-        }
-
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 20,
-                'header' => "Accept: application/json\r\nUser-Agent: Reseller/1.0\r\n",
-            ],
-        ]);
-
-        $response = @file_get_contents($url, false, $context);
-        if (!is_string($response) || $response === '') {
-            return null;
-        }
-
-        $decoded = json_decode($response, true);
-        return is_array($decoded) ? $decoded : null;
+        return app_http_json($url);
     }
 }
 
 if (!function_exists('orders_payment_refresh_crypto_rates')) {
     function orders_payment_refresh_crypto_rates($db, string $vsCurrency = 'USD', int $cacheTtl = 900): array
     {
-        if (!schema_object_exists($db, 'crypto_assets')) {
-            return [];
-        }
-
-        $vsCurrency = strtoupper(trim($vsCurrency));
-        if ($vsCurrency === '') {
-            $vsCurrency = 'USD';
-        }
-        $vsCurrencyLower = strtolower($vsCurrency);
-        $now = time();
-
-        $rows = $db->select_full_user(
-            "SELECT
-                id,
-                code,
-                name,
-                coingecko_id,
-                logo_url,
-                current_rate_fiat,
-                rate_currency_code,
-                rate_updated_at,
-                is_active
-             FROM crypto_assets
-             WHERE is_active = 1
-             ORDER BY id ASC"
-        );
-
-        if (!$rows) {
-            return [];
-        }
-
-        $needsRefresh = false;
-        $coingeckoIds = [];
-        foreach ($rows as $index => $row) {
-            $code = (string)($row['code'] ?? '');
-            $coingeckoId = trim((string)($row['coingecko_id'] ?? ''));
-            if ($coingeckoId === '') {
-                $coingeckoId = orders_payment_default_coingecko_id($code);
-                $rows[$index]['coingecko_id'] = $coingeckoId;
-            }
-
-            if ($coingeckoId !== '') {
-                $coingeckoIds[$coingeckoId] = true;
-            }
-
-            $rate = isset($row['current_rate_fiat']) ? (float)$row['current_rate_fiat'] : 0.0;
-            $rateCurrencyCode = strtoupper(trim((string)($row['rate_currency_code'] ?? '')));
-            $rateUpdatedAt = !empty($row['rate_updated_at']) ? app_timestamp_from_utc_datetime((string)$row['rate_updated_at']) : 0;
-
-            if ($coingeckoId === '' || $rate <= 0 || $rateCurrencyCode !== $vsCurrency || $rateUpdatedAt <= 0 || ($now - $rateUpdatedAt) >= $cacheTtl) {
-                $needsRefresh = true;
-            }
-        }
-
-        if ($needsRefresh && $coingeckoIds) {
-            $apiUrl = 'https://api.coingecko.com/api/v3/simple/price?ids='
-                . rawurlencode(implode(',', array_keys($coingeckoIds)))
-                . '&vs_currencies=' . rawurlencode($vsCurrencyLower)
-                . '&include_last_updated_at=true&precision=full';
-            $payload = orders_payment_http_json($apiUrl);
-
-            if (is_array($payload)) {
-                foreach ($rows as $index => $row) {
-                    $assetId = (int)($row['id'] ?? 0);
-                    $coingeckoId = (string)($row['coingecko_id'] ?? '');
-                    if ($assetId <= 0 || $coingeckoId === '' || empty($payload[$coingeckoId][$vsCurrencyLower])) {
-                        continue;
-                    }
-
-                    $price = (float)$payload[$coingeckoId][$vsCurrencyLower];
-                    $updatedAt = !empty($payload[$coingeckoId]['last_updated_at'])
-                        ? app_datetime_utc_from_unix_timestamp((int)$payload[$coingeckoId]['last_updated_at'])
-                        : app_datetime_utc_from_unix_timestamp($now);
-
-                    $db->update_using_id(
-                        ['coingecko_id', 'current_rate_fiat', 'rate_currency_code', 'rate_updated_at'],
-                        [$coingeckoId, $price, $vsCurrency, $updatedAt],
-                        'crypto_assets',
-                        $assetId
-                    );
-
-                    $rows[$index]['current_rate_fiat'] = $price;
-                    $rows[$index]['rate_currency_code'] = $vsCurrency;
-                    $rows[$index]['rate_updated_at'] = $updatedAt;
-                }
-            }
-        } else {
-            foreach ($rows as $row) {
-                $assetId = (int)($row['id'] ?? 0);
-                $coingeckoId = trim((string)($row['coingecko_id'] ?? ''));
-                if ($assetId > 0 && $coingeckoId === '') {
-                    $defaultCoingeckoId = orders_payment_default_coingecko_id((string)($row['code'] ?? ''));
-                    if ($defaultCoingeckoId !== '') {
-                        $db->update_using_id(['coingecko_id'], [$defaultCoingeckoId], 'crypto_assets', $assetId);
-                    }
-                }
-            }
-        }
-
-        return $rows;
+        return app_refresh_crypto_rates($db, $vsCurrency, $cacheTtl);
     }
 }
 
@@ -301,59 +161,9 @@ if (!function_exists('orders_payment_build_bank_reference')) {
 if (!function_exists('orders_payment_available_bank_account_rows')) {
     function orders_payment_available_bank_account_rows($db, string $currencyCode = ''): array
     {
-        if (!schema_object_exists($db, 'available_bank_account_pool')) {
-            return [];
-        }
-
-        $currencyCode = strtoupper(trim($currencyCode));
-        $currencyFilter = $currencyCode !== ''
-            ? " WHERE currency_code = '" . $db->escape($currencyCode) . "'"
-            : '';
-
-        $rows = $db->select_full_user(
-            "SELECT
-                id,
-                currency_code,
-                currency_name,
-                label,
-                account_holder_name,
-                bank_name,
-                bank_address,
-                country_code,
-                iban,
-                account_number,
-                routing_number,
-                swift_bic,
-                payment_reference_template,
-                transfer_instructions
-             FROM available_bank_account_pool
-             {$currencyFilter}
-             ORDER BY label ASC, bank_name ASC, id ASC"
-        );
-
-        if ($rows || $currencyCode === '') {
-            return $rows;
-        }
-
-        return $db->select_full_user(
-            "SELECT
-                id,
-                currency_code,
-                currency_name,
-                label,
-                account_holder_name,
-                bank_name,
-                bank_address,
-                country_code,
-                iban,
-                account_number,
-                routing_number,
-                swift_bic,
-                payment_reference_template,
-                transfer_instructions
-             FROM available_bank_account_pool
-             ORDER BY label ASC, bank_name ASC, id ASC"
-        );
+        return function_exists('app_available_bank_account_rows')
+            ? app_available_bank_account_rows($db, $currencyCode, app_fetch_settings($db))
+            : [];
     }
 }
 
@@ -976,7 +786,7 @@ if (app_uses_v2_schema($db)) {
 
                     if (!$isSameOrderRenewalFlow) {
                         $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
-                            ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                            ? app_subscription_expiry_from_base_timestamp($time_s, max(1, (int)$selectedProduct['duration']))
                             : null;
                         $db->update_using_id(
                             ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method'],
@@ -1157,7 +967,7 @@ if (app_uses_v2_schema($db)) {
 
                 if (!$isSameOrderRenewalFlow) {
                     $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
-                        ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                        ? app_subscription_expiry_from_base_timestamp($time_s, max(1, (int)$selectedProduct['duration']))
                         : null;
                     $db->update_using_id(
                         ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method'],
@@ -1360,7 +1170,7 @@ if (app_uses_v2_schema($db)) {
                                 }
                             } else {
                                 $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
-                                    ? date('Y-m-d H:i:s', $time_s + (3600 * max(1, (int)$selectedProduct['duration'])))
+                                    ? app_subscription_expiry_from_base_timestamp($time_s, max(1, (int)$selectedProduct['duration']))
                                     : null;
                                 $updated = $db->update_using_id(
                                     ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
