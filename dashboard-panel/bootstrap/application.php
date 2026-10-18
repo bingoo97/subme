@@ -3,6 +3,7 @@
 require_once __DIR__ . '/schema.php';
 require_once __DIR__ . '/crypto_runtime.php';
 require_once __DIR__ . '/read_maintenance.php';
+require_once __DIR__ . '/panel_subscription.php';
 
 if (!function_exists('app_runtime_timezone_name')) {
     function app_runtime_timezone_name() {
@@ -6007,8 +6008,12 @@ function app_apply_pending_order_renewal(
     string $actorType = 'system',
     int $adminUserId = 0,
     string $ipAddress = '',
-    bool $skipBalanceDebit = false
+    bool $skipBalanceDebit = false,
+    string $adminSupportNote = ''
 ): array {
+    $adminSupportNote=trim($adminSupportNote);
+    if($adminSupportNote!=='' && $actorType!=='admin') return ['ok'=>false,'message'=>'Only an administrator can add a support annotation.'];
+    if((function_exists('mb_strlen')?mb_strlen($adminSupportNote,'UTF-8'):strlen($adminSupportNote))>4000) return ['ok'=>false,'message'=>'Support annotation is too long.'];
     if ($renewalId <= 0 || !schema_object_exists($db, 'order_renewals') || !schema_object_exists($db, 'orders')) {
         return ['ok' => false, 'message' => 'Renewal record not found.'];
     }
@@ -6043,6 +6048,8 @@ function app_apply_pending_order_renewal(
     if (!is_array($order) || empty($order['id'])) {
         return ['ok' => false, 'message' => 'Order not found for this renewal.'];
     }
+
+    if($adminSupportNote!=='' && strlen((string)($order['support_note']??''))+1+strlen($adminSupportNote)>65535) return ['ok'=>false,'message'=>'Support note exceeds storage limit.'];
 
     if ((int)$renewal['customer_id'] !== (int)$order['customer_id']) {
         return ['ok' => false, 'message' => 'Renewal and order must belong to the same customer.'];
@@ -6131,6 +6138,10 @@ function app_apply_pending_order_renewal(
         }
     }
     $order = array_replace($order, $lockedOrder);
+    $combinedSupportNote=(string)($order['support_note']??'');
+    if($adminSupportNote!=='') $combinedSupportNote=rtrim($combinedSupportNote).($combinedSupportNote!==''?"\n":'').$adminSupportNote;
+    if(strlen($combinedSupportNote)>65535){$db->query('ROLLBACK');return ['ok'=>false,'message'=>'Support note exceeds storage limit.'];}
+
     $renewal = $lockedRenewal;
 
     $currentFulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
@@ -6142,7 +6153,7 @@ function app_apply_pending_order_renewal(
     $paidAt = trim((string)($order['paid_at'] ?? '')) !== '' ? (string)$order['paid_at'] : date('Y-m-d H:i:s');
 
     $updated = $db->update_using_id(
-        ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
+        ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_status', 'fulfillment_status', 'paid_at', 'status', 'support_note'],
         [
             (int)$product['id'],
             number_format((float)$renewalAmount, 2, '.', ''),
@@ -6152,6 +6163,7 @@ function app_apply_pending_order_renewal(
             $nextFulfillmentStatus,
             $paidAt,
             $nextStatus,
+            $combinedSupportNote,
         ],
         'orders',
         (int)$order['id']
@@ -6197,6 +6209,7 @@ function app_apply_pending_order_renewal(
         $ipAddress
     );
 
+    app_panel_tiers_capture($db, (int)$order['id']);
     app_queue_order_extended_notification($db, (int)$order['id']);
 
     return [
@@ -6825,74 +6838,11 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
         schema_forget_column_cache('app_settings', 'hinkal_private_send_notification_email');
     }
 
-    if (!schema_column_exists($db, 'app_settings', 'rango_converter_enabled')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_converter_enabled TINYINT(1) NOT NULL DEFAULT 0
-             AFTER hinkal_private_send_fee_wallet"
-        );
-        schema_forget_column_cache('app_settings', 'rango_converter_enabled');
-    }
-
-    if (!schema_column_exists($db, 'app_settings', 'rango_api_key')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_api_key VARCHAR(191) DEFAULT NULL
-             AFTER rango_converter_enabled"
-        );
-        schema_forget_column_cache('app_settings', 'rango_api_key');
-    }
-
-    if (!schema_column_exists($db, 'app_settings', 'rango_walletconnect_project_id')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_walletconnect_project_id VARCHAR(120) DEFAULT NULL
-             AFTER rango_api_key"
-        );
-        schema_forget_column_cache('app_settings', 'rango_walletconnect_project_id');
-    }
-
-    if (!schema_column_exists($db, 'app_settings', 'rango_affiliate_ref')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_affiliate_ref VARCHAR(120) DEFAULT NULL
-             AFTER rango_walletconnect_project_id"
-        );
-        schema_forget_column_cache('app_settings', 'rango_affiliate_ref');
-    }
-
-    if (!schema_column_exists($db, 'app_settings', 'rango_affiliate_fee_percent')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_affiliate_fee_percent DECIMAL(5,2) NOT NULL DEFAULT 1.00
-             AFTER rango_affiliate_ref"
-        );
-        schema_forget_column_cache('app_settings', 'rango_affiliate_fee_percent');
-    }
-
-    if (!schema_column_exists($db, 'app_settings', 'rango_affiliate_wallets')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_affiliate_wallets TEXT DEFAULT NULL
-             AFTER rango_affiliate_fee_percent"
-        );
-        schema_forget_column_cache('app_settings', 'rango_affiliate_wallets');
-    }
-
-    if (!schema_column_exists($db, 'app_settings', 'rango_enable_centralized_swappers')) {
-        @$db->query(
-            "ALTER TABLE app_settings
-             ADD COLUMN rango_enable_centralized_swappers TINYINT(1) NOT NULL DEFAULT 1
-             AFTER rango_affiliate_wallets"
-        );
-        schema_forget_column_cache('app_settings', 'rango_enable_centralized_swappers');
-    }
-
     if (!schema_column_exists($db, 'app_settings', 'mixer_enabled')) {
         @$db->query(
             "ALTER TABLE app_settings
              ADD COLUMN mixer_enabled TINYINT(1) NOT NULL DEFAULT 0
-             AFTER rango_enable_centralized_swappers"
+             AFTER hinkal_private_send_notification_email"
         );
         schema_forget_column_cache('app_settings', 'mixer_enabled');
     }
@@ -10859,6 +10809,8 @@ function app_queue_order_transition_notifications(Mysql_ks $db, array $beforeOrd
         return [];
     }
 
+    app_panel_tiers_capture($db, $orderId);
+
     $beforeStatus = strtolower(trim((string)($beforeOrder['status'] ?? '')));
     $afterStatus = strtolower(trim((string)($afterOrder['status'] ?? '')));
     $beforePaymentStatus = strtolower(trim((string)($beforeOrder['payment_status'] ?? '')));
@@ -12421,7 +12373,22 @@ function app_prune_expired_support_chat_audio_messages(Mysql_ks $db, ?string $no
     ];
 }
 
+/** A manual run and cron must not execute the same maintenance cycle concurrently. */
 function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
+{
+    $lockSql = "CONCAT('subme-maint:', LEFT(SHA2(DATABASE(),256),40))";
+    $lock = $db->select_user("SELECT GET_LOCK({$lockSql},0) AS acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) {
+        return ['ok' => true, 'busy' => true, 'steps' => [], 'summary' => [], 'message' => 'Maintenance is already running.'];
+    }
+    try {
+        return app_run_maintenance_cycle_locked($db, $options);
+    } finally {
+        $db->select_user("SELECT RELEASE_LOCK({$lockSql}) AS released");
+    }
+}
+
+function app_run_maintenance_cycle_locked(Mysql_ks $db, array $options = []): array
 {
     if (!function_exists('chat_expire_stale_group_invites') && is_file(__DIR__ . '/chat_groups.php')) {
         require_once __DIR__ . '/chat_groups.php';
@@ -12450,6 +12417,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $cryptoAutoAccept = function_exists('admin_crypto_auto_accept_recent_payments')
         ? admin_crypto_auto_accept_recent_payments($db, is_array($settings) ? $settings : [], ['limit' => 6, 'now' => $safeNow])
         : ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'message' => 'Crypto auto-accept skipped.'];
+    $panelSubscriptionPayment = app_panel_tiers_process($db);
     app_crypto_runtime_prune();
     $cryptoBackup = app_send_daily_crypto_backup_report($db, $safeNow);
     $expiryReminders = app_queue_upcoming_order_expiry_reminders($db, $safeNow, 5);
@@ -12472,6 +12440,7 @@ function app_run_maintenance_cycle(Mysql_ks $db, array $options = []): array
     $prune = app_prune_retained_data($db, $safeNow);
 
     $steps = [
+        'panel_subscription_payment' => $panelSubscriptionPayment,
         'email_queue' => $email,
         'swapper_auto_payout' => $swapperAutoPayout,
         'crypto_auto_accept' => $cryptoAutoAccept,
@@ -13744,4 +13713,18 @@ function app_insert_customer_registration(
     );
 
     return (int)$db->id();
+}
+
+/** Presentation data for a receipt; never changes or credits the request. */
+function app_crypto_request_receipt_labels(array $request): array
+{
+    $requested=round((float)($request['requested_fiat_amount']??0),2);
+    $received=round((float)($request['received_fiat_amount']??0),2);
+    $currency=trim((string)($request['currency_symbol']??$request['currency_code']??''));
+    return [
+        'receipt_requested_label'=>number_format($requested,2,'.','').' '.$currency,
+        'receipt_received_label'=>number_format($received,2,'.','').' '.$currency,
+        'receipt_shortfall_label'=>number_format(max(0,$requested-$received),2,'.','').' '.$currency,
+        'receipt_underpaid'=>$received>0&&$received+0.004<$requested,
+    ];
 }

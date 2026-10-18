@@ -1,0 +1,2 @@
+public_html/assets/js/admin-rango-converter.bundle.js
+dashboard-panel/scripts/admin-rango-converter-entry.jsx

@@ -443,6 +443,8 @@ switch ($site) {
                     crypto_deposit_requests.order_id,
                     crypto_deposit_requests.requested_fiat_amount,
                     crypto_deposit_requests.requested_crypto_amount,
+                    crypto_deposit_requests.received_crypto_amount,
+                    crypto_deposit_requests.received_fiat_amount,
                     crypto_deposit_requests.exchange_rate,
                     crypto_deposit_requests.requested_at,
                     crypto_deposit_requests.expires_at,
@@ -478,7 +480,7 @@ switch ($site) {
                     $statusRaw = strtolower(trim((string)($cryptoPayment['status'] ?? '')));
                     $statusValue = 1;
                     $statusLabelKey = 'payment_ticket_status_expired';
-                    if (in_array($statusRaw, ['pending', 'awaiting_confirmation', 'awaiting_review'], true) && $expiresTimestamp > $time_s) {
+                    if (in_array($statusRaw, ['pending', 'awaiting_confirmation', 'awaiting_review'], true) && ($expiresTimestamp > $time_s || $expiresTimestamp === 0)) {
                         $statusValue = 0;
                     } elseif (in_array($statusRaw, ['confirmed', 'approved'], true)) {
                         $statusValue = 2;
@@ -501,13 +503,15 @@ switch ($site) {
                         }
                     }
 
+                    $v2CryptoPayments[$index]['payment_detected'] = $statusRaw === 'awaiting_review' && (float)($cryptoPayment['received_crypto_amount'] ?? 0) > 0;
                     $v2CryptoPayments[$index]['status'] = $statusValue;
                     $v2CryptoPayments[$index]['status_raw'] = $statusRaw;
                     $v2CryptoPayments[$index]['status_label_key'] = $statusLabelKey;
                     $v2CryptoPayments[$index]['request_kind'] = 'v2';
-                    $v2CryptoPayments[$index]['discount_price'] = number_format((float)($cryptoPayment['requested_fiat_amount'] ?? 0), 2, '.', '');
+                    $v2CryptoPayments[$index]=array_merge($v2CryptoPayments[$index],app_crypto_request_receipt_labels($cryptoPayment));
+                    $v2CryptoPayments[$index]['discount_price'] = number_format((float)($statusValue===2?($cryptoPayment['received_fiat_amount']??$cryptoPayment['requested_fiat_amount']):$cryptoPayment['requested_fiat_amount']),2,'.','');
                     $v2CryptoPayments[$index]['package_price'] = number_format((float)($cryptoPayment['requested_fiat_amount'] ?? 0), 2, '.', '');
-                    $v2CryptoPayments[$index]['crypto_amount'] = number_format((float)($cryptoPayment['requested_crypto_amount'] ?? 0), 8, '.', '');
+                    $v2CryptoPayments[$index]['crypto_amount'] = number_format((float)($statusValue===2?($cryptoPayment['received_crypto_amount']??$cryptoPayment['requested_crypto_amount']):$cryptoPayment['requested_crypto_amount']),8,'.','');
                     $v2CryptoPayments[$index]['crypto_rate_formatted'] = app_format_crypto_rate($cryptoPayment['exchange_rate'] ?? null);
                     $v2CryptoPayments[$index]['date_end'] = $expiresTimestamp > 0 ? date('Y-m-d H:i:s', $expiresTimestamp) : '';
                     $v2CryptoPayments[$index]['date_end_s'] = $expiresTimestamp;
@@ -538,6 +542,9 @@ switch ($site) {
                 return (int)($right['date_s'] ?? 0) <=> (int)($left['date_s'] ?? 0);
             });
             $smarty->assign('crypto_payments', $cryptoPayments);
+            $latestReceipt=$cryptoPayments[0]??[];
+            $smarty->assign('crypto_latest_receipt',($latestReceipt['request_kind']??'')==='v2'&&(int)($latestReceipt['status']??0)===2?$latestReceipt:null);
+            $smarty->assign('crypto_has_cancelled',count(array_filter($cryptoPayments,static fn($p)=>($p['status_label_key']??'')==='payment_ticket_status_cancelled'))>0);
         }
 
         if ($v2CryptoRequestsEnabled) {
@@ -570,6 +577,8 @@ switch ($site) {
             );
 
             if ($activeV2CryptoRequest) {
+                $activeV2CryptoRequest=array_merge($activeV2CryptoRequest,app_crypto_request_receipt_labels($activeV2CryptoRequest));
+                $activeV2CryptoRequest['payment_detected'] = (string)($activeV2CryptoRequest['status'] ?? '') === 'awaiting_review' && (float)($activeV2CryptoRequest['received_crypto_amount'] ?? 0) > 0;
                 $activeV2CryptoRequest['crypto_logo_path'] = app_crypto_logo_by_code((string)($activeV2CryptoRequest['crypto_code'] ?? ''), (string)($activeV2CryptoRequest['crypto_logo_url'] ?? ''));
                 $activeV2CryptoRequest['qr_code_url'] = trim((string)($activeV2CryptoRequest['wallet_qr_url'] ?? ''));
                 if ($activeV2CryptoRequest['qr_code_url'] === '' && !empty($activeV2CryptoRequest['wallet_address'])) {

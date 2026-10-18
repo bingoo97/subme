@@ -5,6 +5,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
 {/if}
 
 {if $active_v2_crypto_request}
+<div data-customer-crypto-ticket="{$active_v2_crypto_request.id|escape:'html'}" data-ticket-status="{$active_v2_crypto_request.status|escape:'html'}" data-ticket-detected="{if $active_v2_crypto_request.payment_detected|default:false}1{else}0{/if}"></div>
+<script src="/assets/js/customer-crypto-ticket-status.js" defer></script>
+{if $active_v2_crypto_request.payment_detected|default:false}
+{include file='profil/crypto_detected.tpl' detected_request=$active_v2_crypto_request}
+{else}
 <div class="content-box payment-wizard">
     <div class="payment-wizard__section">
         {if $payment_test_mode_notice_enabled|default:false}
@@ -225,9 +230,12 @@ $(function () {
     });
 });
 </script>
+{/if}
 {else}
-<div class="col-md-12">
-	{if !$active_payment}
+<div class="col-md-12 customer-payment-history">
+	{if $crypto_latest_receipt|default:false}
+    <div class="alert alert-success" role="status"><strong>{$t.payment_crypto_approved_title|default:'Payment approved'}</strong><br>{$t.payment_crypto_received|default:'Received'}: {$crypto_latest_receipt.receipt_received_label|escape:'html'}<br>{$t.payment_crypto_approved_help|default:'Your payment has been approved. The history below shows the amount actually credited and the payment status.'}</div>
+    {elseif !$active_payment}
     <p>
 		{$t.payment_crypto_add_prompt_prefix|default:'Aby zapłacić kryptowalutami'}
 		<a href="/orders" class="pink"><strong>{$t.payment_crypto_add_prompt_link|default:'dodaj płatność'}</strong></a>.
@@ -246,14 +254,15 @@ $(function () {
           <i class="fa fa-minus-circle"></i> No payments.
         </div>
     {else}
-	<div class="alert alert-warning payment-crypto-history-warning">
+	{if $crypto_has_cancelled|default:false}<div class="alert alert-warning payment-crypto-history-warning">
 		<strong>{$t.payment_delete_warning_title|default:'Uwaga:'}</strong>
 		{$t.payment_delete_warning_text|default:'Usunięcie anulowanego requestu usuwa go całkowicie z bazy danych. Klikaj Usuń tylko wtedy, gdy na pewno nie dokonałeś żadnej wpłaty.'}
 	</div>
-	<p class="desc payment-crypto-history-intro">
-		{$t.payment_crypto_history_intro_line_1|default:'Poniżej znajdziesz historię swoich requestów płatności krypto i ich aktualne statusy.'}<br />
-		{$t.payment_crypto_history_intro_line_2|default:'Możesz tutaj szybko sprawdzić, które płatności zostały opłacone, anulowane albo wygasły.'}
-	</p>
+    {/if}
+    <div class="customer-payment-history__heading">
+        <h2>{$t.payment_crypto_history_title|default:'Payment history'}</h2>
+        <p>{$t.payment_crypto_history_intro_line_1|default:'Your crypto payments and their current status.'|escape:'html'}</p>
+    </div>
 	<div id="tickets">
 		{section name=i loop=$crypto_payments}
 		{if $crypto_payments[i].status == 0}
@@ -305,18 +314,25 @@ $(function () {
 					</button>
 				</form>
 				{/if}
-				<p class="amount"><i class="fa fa-long-arrow-right" aria-hidden="true"></i> {$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol} <span>{$crypto_payments[i].discount_price} {$crypto_payments[i].currency_symbol|default:$crypto_payments[i].currency_code|default:$reseller.currency_symbol|escape:'html'}</span></p>
-				<p class="desc">
+				<div class="customer-payment-history__topline">
+                    <div class="customer-payment-history__asset"><strong>{$crypto_payments[i].crypto_name|escape:'html'}</strong><span>{$crypto_payments[i].crypto_symbol|escape:'html'}</span></div>
+                    <p class="amount"><strong>{$crypto_payments[i].discount_price} {$crypto_payments[i].currency_symbol|default:$crypto_payments[i].currency_code|default:$reseller.currency_symbol|escape:'html'}</strong><span>{$crypto_payments[i].crypto_amount} {$crypto_payments[i].crypto_symbol|escape:'html'}</span></p>
+                </div>
+				<p class="desc"><i class="fa fa-calendar-o" aria-hidden="true"></i>
 					{$crypto_payments[i].date}
 					{if $crypto_payments[i].order_id|default:0 > 0}
 						&nbsp;&middot;&nbsp;{$t.payment_summary_order|default:'Order'}: #{$crypto_payments[i].order_id}
 					{/if}
 				</p>
-				<p class="status">
+				{if $crypto_payments[i].status == 2 && $crypto_payments[i].receipt_underpaid|default:false}
+                <div class="alert alert-warning customer-payment-history__shortfall" role="status"><strong>{$t.payment_crypto_received|default:'Received'}: {$crypto_payments[i].receipt_received_label|escape:'html'}</strong><br>{$t.payment_crypto_requested|default:'Requested'}: {$crypto_payments[i].receipt_requested_label|escape:'html'} · {$t.payment_crypto_shortfall|default:'Shortfall'}: {$crypto_payments[i].receipt_shortfall_label|escape:'html'}<br>{$t.payment_crypto_actual_credit|default:'Only the amount actually received was credited to your balance.'}</div>
+                {/if}
+                <p class="status">
+                    {if $crypto_payments[i].payment_detected|default:false}<span class="success"><i class="fa fa-check-circle" aria-hidden="true"></i> {$t.payment_crypto_detected_title|default:'Payment detected'} — {$t.payment_crypto_verification_pending|default:'Awaiting administrator verification'}</span>{/if}
 					{if $crypto_payments[i].status == 2}
-					<span class="success">{$t.payment_ticket_status_paid|default:'Paid'}</span>
+					<span class="success{if $crypto_payments[i].status_raw|default:'' == 'archived'} is-archived{/if}">{if $crypto_payments[i].status_raw|default:'' == 'archived'}{$t.payment_ticket_status_archived|default:'Archived'}{else}{$t.payment_ticket_status_paid|default:'Paid'}{/if}</span>
 					{if $crypto_payments[i].address_code}
-					<br />
+                    <span class="customer-payment-history__wallet">
 					{if $crypto_payments[i].explorer_url|default:''}
 						<a href="{$crypto_payments[i].explorer_url}" target="_blank" rel="noopener noreferrer" class="table-ticket__wallet-link">{$crypto_payments[i].address_code}</a>
 						<a href="{$crypto_payments[i].explorer_url}" target="_blank" rel="noopener noreferrer" class="table-ticket__explorer-link" aria-label="Open explorer">
@@ -325,10 +341,11 @@ $(function () {
 					{else}
 						<span class="table-ticket__wallet-link table-ticket__wallet-link--plain">{$crypto_payments[i].address_code}</span>
 					{/if}
+                    </span>
 					{/if}
 					{/if}
 					{if $crypto_payments[i].status == 1}
-					<span class="danger">
+					<span class="danger{if $crypto_payments[i].status_label_key|default:'payment_ticket_status_cancelled' == 'payment_ticket_status_cancelled'} is-cancelled{/if}">
 						{if $crypto_payments[i].status_label_key}
 							{$t[$crypto_payments[i].status_label_key]|default:'Cancelled'}
 						{else}

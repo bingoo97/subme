@@ -2587,6 +2587,8 @@ document.addEventListener('DOMContentLoaded', function () {
             var productField = q('[data-admin-order-extend-product]', form);
             var previewField = q('[data-admin-order-extend-preview]', form);
             var selectionSummary = q('[data-admin-order-extend-selection]', form);
+            var noteField = q('[data-admin-order-extend-note]', form);
+            var noteInput = noteField ? q('textarea', noteField) : null;
 
             if (!productField || !previewField) {
                 return;
@@ -2594,6 +2596,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
             var sync = function () {
                 var selected = productField.options[productField.selectedIndex];
+                var hasPackage = !!(selected && selected.value);
+                setHidden(noteField, !hasPackage);
+                if (noteInput) noteInput.disabled = !hasPackage;
                 if (selectionSummary) selectionSummary.textContent = selected ? selected.textContent.trim() : '';
                 var durationHours = selected ? parseInt(selected.getAttribute('data-duration-hours') || '0', 10) || 0 : 0;
                 var currentExpiry = parseSqlDateTime(form.getAttribute('data-current-expires-at') || '');
@@ -2623,6 +2628,14 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
+        var searchMedia = window.matchMedia('(max-width: 767px)');
+        var desktopPlaceholder = input.getAttribute('placeholder') || '';
+        function syncSearchPlaceholder() {
+            input.setAttribute('placeholder', searchMedia.matches ? (input.getAttribute('data-mobile-placeholder') || desktopPlaceholder) : desktopPlaceholder);
+        }
+        syncSearchPlaceholder();
+        searchMedia.addEventListener('change', syncSearchPlaceholder);
+
         var searchUrl = input.getAttribute('data-search-url') || '/admin/search.php';
         var loadingText = input.getAttribute('data-loading-text') || 'Loading results...';
         var errorTitle = input.getAttribute('data-error-title') || 'Search error';
@@ -2634,7 +2647,30 @@ document.addEventListener('DOMContentLoaded', function () {
         var searchTimer = null;
         var minimumHint = input.getAttribute('data-minimum-hint') || 'Enter at least 2 characters or a complete ID.';
 
+        var searchTooltips = [];
+        function clearSearchTooltips() {
+            searchTooltips.forEach(function (tooltip) { tooltip.dispose(); });
+            searchTooltips = [];
+        }
+        function initSearchTooltips() {
+            if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+            qa('[data-admin-search-help]', results).forEach(function (element) {
+                searchTooltips.push(new window.bootstrap.Tooltip(element, {
+                    container: doc.body, boundary: 'viewport', placement: 'top',
+                    trigger: 'hover focus', customClass: 'admin-orders-tooltip',
+                    html: false, delay: { show: 180, hide: 0 }
+                }));
+            });
+        }
+        if (window.bootstrap && window.bootstrap.Tooltip) {
+            function hideSearchTooltips() { searchTooltips.forEach(function (tooltip) { tooltip.hide(); }); }
+            window.addEventListener('resize', hideSearchTooltips);
+            doc.addEventListener('scroll', hideSearchTooltips, true);
+            doc.addEventListener('keydown', function (event) { if (event.key === 'Escape') hideSearchTooltips(); });
+        }
+
         function cancelRequest() {
+            clearSearchTooltips();
             if (controller) { controller.abort(); controller = null; }
             if (timeout) { window.clearTimeout(timeout); timeout = null; }
             results.removeAttribute('aria-busy');
@@ -2693,6 +2729,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 results.innerHTML = payload.html || '';
+                initSearchTooltips();
                 setHidden(results, !payload.html);
                 if (!payload.html) {
                     defaultContent.removeAttribute('hidden');
@@ -2721,7 +2758,7 @@ document.addEventListener('DOMContentLoaded', function () {
             else debouncedSearch();
         });
         input.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape') { event.preventDefault(); resetSearch(); }
+            if (event.key === 'Escape') { event.preventDefault(); resetSearch(); if (window.matchMedia('(max-width: 575px)').matches) input.blur(); }
             if (event.key === 'Enter') { event.preventDefault(); runSearch(); }
         });
         if (reset) {
@@ -4097,6 +4134,27 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function initPaymentStatusGuidance() {
+        var select = q('#payment_status');
+        var hint = q('[data-payment-status-hint]');
+        if (!select || !hint) return;
+        var guidance;
+        try { guidance = JSON.parse(hint.dataset.guidance); } catch (error) { return; }
+        function sync() {
+            var item = guidance[select.value];
+            if (!item) return;
+            hint.dataset.tone = item.tone;
+            hint.querySelector('[data-status-hint-title]').textContent = item.title;
+            hint.querySelector('[data-status-hint-text]').textContent = item.text;
+            hint.querySelector('i').className = 'bi ' + item.icon;
+            ['warning', 'info', 'success', 'danger', 'neutral'].forEach(function (tone) {
+                select.classList.toggle('admin-payment-status-select--' + tone, tone === item.tone);
+            });
+        }
+        select.addEventListener('change', sync);
+        sync();
+    }
+
     function initPaymentReceivedFields() {
         var statusSelect = q('#payment_status');
         var receivedFields = qa('[data-admin-payment-received-field]');
@@ -4433,6 +4491,11 @@ document.addEventListener('DOMContentLoaded', function () {
             var cryptoExpectedPrefixNode = modalNode ? q('[data-admin-crypto-accept-crypto-expected-prefix]', modalNode) : null;
             var cryptoExpectedValueNode = modalNode ? q('[data-admin-crypto-accept-crypto-expected-value]', modalNode) : null;
             var submitButton = modalNode ? q('[data-admin-crypto-accept-submit]', modalNode) : null;
+            var amountFields = modalNode ? q('[data-admin-crypto-accept-amount-fields]', modalNode) : null;
+            var cancelForm = modalNode ? q('[data-admin-crypto-accept-cancel]', modalNode) : null;
+            var cancelId = modalNode ? q('[data-admin-crypto-accept-cancel-id]', modalNode) : null;
+            var cancelTimer = null;
+            var amountHint = modalNode ? q('[data-admin-crypto-accept-amount-hint]', modalNode) : null;
             var previewUrl = modalNode ? String(modalNode.getAttribute('data-preview-url') || '').trim() : '';
             var loadingPreviewText = modalNode ? String(modalNode.getAttribute('data-loading-preview-text') || 'Loading recent transactions...') : 'Loading recent transactions...';
             var previewErrorText = modalNode ? String(modalNode.getAttribute('data-preview-error-text') || 'Unable to load recent transactions right now.') : 'Unable to load recent transactions right now.';
@@ -4516,7 +4579,31 @@ document.addEventListener('DOMContentLoaded', function () {
                 field.value = String(value == null ? '' : value);
             }
 
+            function syncAmountVisibility(previewUnavailable) {
+                var payload = state.payload || {};
+                var detected = parseNumeric((state.previewMeta || {}).candidate_crypto_amount) > 0;
+                var saved = parseNumeric(payload.received_crypto_amount) > 0;
+                // An unavailable preview is not evidence that no payment arrived:
+                // keep manual verification possible after a provider/network error.
+                var visible = !!previewUnavailable || detected || saved;
+                setHidden(amountFields, !visible);
+                setHidden(amountHint, !visible);
+                submitButton.disabled = !visible || state.submitting;
+            }
+
+            function syncCancelAvailability() {
+                var payload = state.payload || {};
+                var started = Number(payload.requested_at_timestamp) || 0;
+                var eligible = !!payload.can_cancel && started > 0 && Date.now() / 1000 - started > 3600;
+                setHidden(cancelForm, !eligible);
+                if (cancelId) cancelId.value = String(payload.payment_id || '');
+                var cancelButton = cancelForm ? q('button', cancelForm) : null;
+                if (cancelButton) cancelButton.disabled = state.submitting;
+            }
+
             function clearState() {
+                if (cancelTimer !== null) { window.clearInterval(cancelTimer); cancelTimer = null; }
+                setHidden(cancelForm, true);
                 state.button = null;
                 state.form = null;
                 state.ajax = false;
@@ -4617,6 +4704,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             function renderPreviewError(message, explorerUrl) {
+                syncAmountVisibility(true);
                 var html = ''
                     + '<div class="admin-crypto-preview admin-crypto-preview--fallback">'
                     + '<div class="admin-crypto-preview__empty">'
@@ -4675,6 +4763,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         return;
                     }
                     state.previewMeta = responsePayload.preview || null;
+                    syncAmountVisibility(false);
                     explorerPanel.innerHTML = String(responsePayload.html || '');
                     if (!state.cryptoManual && state.previewMeta && parseNumeric(state.previewMeta.candidate_crypto_amount) > 0) {
                         var candidateCrypto = parseNumeric(state.previewMeta.candidate_crypto_amount);
@@ -4779,6 +4868,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 var logoUrl = String(payload.asset_logo_url || '').trim();
 
                 state.payload = payload;
+                state.previewMeta = null;
+                if (cancelTimer !== null) window.clearInterval(cancelTimer);
+                syncCancelAvailability();
+                cancelTimer = window.setInterval(syncCancelAvailability, 1000);
                 state.fiatManual = receivedFiat !== '';
                 state.cryptoManual = false;
 
@@ -4804,6 +4897,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 fillIdentity(payload);
                 fillWalletAddress(payload);
+                syncAmountVisibility(false);
                 loadPreview();
 
                 if (step1Node) {
@@ -4856,6 +4950,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 state.submitting = true;
+                syncCancelAvailability();
                 submitButton.disabled = true;
 
                 if (state.ajax) {
@@ -4879,6 +4974,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         });
                     }).then(function (payload) {
                         state.submitting = false;
+                        syncCancelAvailability();
                         submitButton.disabled = false;
                         activeButton.disabled = false;
                         if (!payload || !payload.ok) {
@@ -4892,6 +4988,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         window.location.assign(resolveOrdersRedirectUrl(payload));
                     }).catch(function () {
                         state.submitting = false;
+                        syncCancelAvailability();
                         submitButton.disabled = false;
                         activeButton.disabled = false;
                         window.alert('Unable to accept payment.');
@@ -4954,7 +5051,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     showModal();
                     if (window.matchMedia('(min-width: 992px)').matches) {
                         window.setTimeout(function () {
-                            if (state.payload) {
+                            if (state.payload && (!amountFields || !amountFields.hidden)) {
                                 cryptoInput.focus();
                                 cryptoInput.select();
                             }
@@ -5161,6 +5258,18 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     });
                 }
+            }
+        });
+
+        // The quick payment list is rendered lazily, so its modal action is delegated.
+        doc.addEventListener('click', function (event) {
+            var button = closest(event.target, '[data-crypto-quick-accept]');
+            if (!button) return;
+            event.preventDefault();
+            var form = closest(button, 'form');
+            if (!form || !cryptoAcceptModalController) return;
+            if (cryptoAcceptModalController.open(button, form, { ajax: true, flyout: null })) {
+                closeFlyout(closest(button, '[data-admin-topbar-flyout]'));
             }
         });
 
@@ -9858,6 +9967,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initOrdersGuidanceToggle();
     initOrdersActionMenus();
     initCompletedOrdersExpirySort();
+    initPaymentStatusGuidance();
     initPaymentReceivedFields();
     initPaymentBlockchainCheck();
 

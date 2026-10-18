@@ -1116,6 +1116,8 @@ if (app_uses_v2_schema($db)) {
              LIMIT 1"
         );
         if ($cryptoRequest) {
+                $cryptoRequest=array_merge($cryptoRequest,app_crypto_request_receipt_labels($cryptoRequest));
+                $cryptoRequest['payment_detected'] = (string)($cryptoRequest['status'] ?? '') === 'awaiting_review' && (float)($cryptoRequest['received_crypto_amount'] ?? 0) > 0;
             $cryptoRequest['crypto_logo_path'] = orders_payment_crypto_logo_by_code((string)($cryptoRequest['crypto_code'] ?? ''), (string)($cryptoRequest['crypto_logo_url'] ?? ''));
             $cryptoRequest['qr_code_url'] = orders_payment_crypto_qr_url($cryptoRequest);
             $cryptoRequest['wallet_network_label'] = orders_payment_crypto_network_label((string)($cryptoRequest['wallet_network_code'] ?? ''));

@@ -1,0 +1,16 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync('public_html/assets/js/admin.js','utf8');
+const start=source.indexOf('            function syncCancelAvailability()'),end=source.indexOf('            function clearState()',start);
+let now=2000000;
+const state={payload:{payment_id:147,can_cancel:true,requested_at_timestamp:now/1000}},cancelForm={},cancelId={};
+const ctx={state,cancelForm,cancelId,q:()=>null,Date:{now:()=>now},setHidden:(e,v)=>{e.hidden=v;}};
+vm.createContext(ctx);vm.runInContext(source.slice(start,end),ctx);
+ctx.syncCancelAvailability();assert.equal(cancelForm.hidden,true);assert.equal(cancelId.value,'147');
+now+=3600000;ctx.syncCancelAvailability();assert.equal(cancelForm.hidden,true);
+now+=1000;ctx.syncCancelAvailability();assert.equal(cancelForm.hidden,false);
+state.payload.can_cancel=false;ctx.syncCancelAvailability();assert.equal(cancelForm.hidden,true);
+state.payload={payment_id:148,can_cancel:true,requested_at_timestamp:0};ctx.syncCancelAvailability();assert.equal(cancelForm.hidden,true);assert.equal(cancelId.value,'148');
+state.payload={};ctx.syncCancelAvailability();assert.equal(cancelForm.hidden,true);
+assert.ok(!/fetch\(|requestSubmit|\.submit\(/.test(source.slice(start,end)));
+console.log('PASS 9 crypto modal cancellation availability assertions');

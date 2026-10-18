@@ -1,4 +1,4 @@
-/* Dashboard-only refinement. Keep the existing cards, tabs and colour palette. */
+/* Dashboard-only refinement. Keep the existing cards and tabs. */
 .admin-dashboard-sales{
     --sales-ink:#202938;
     --sales-muted:#7a8495;
@@ -12,8 +12,9 @@
     min-width:0;
     padding:.8rem .9rem;
     border-radius:12px;
-    border:1px solid rgba(32,41,56,.035);
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 2px 8px rgba(24,39,63,.025);
+    border:1px solid #edf0f4;
+    background:linear-gradient(145deg,#fff 0%,#fcfcfd 100%);
+    box-shadow:0 2px 8px rgba(24,39,63,.018);
     gap:.35rem .55rem;
 }
 .admin-dashboard-period-grid .admin-metric-card__label{font-size:.7rem;font-weight:600;line-height:1.4;white-space:normal;overflow-wrap:anywhere;color:#687383;}
@@ -252,15 +253,30 @@ body.admin-app-page .admin-dashboard-change-log-card .admin-table tbody td{paddi
 .admin-panel-subscription-strip.is-expired .admin-panel-subscription-strip__icon{border-color:#f3d5da;background:#fff3f4;color:#dc3545;}
 .admin-panel-subscription-strip.is-expired{border-color:#f2d9de;}
 .admin-panel-subscription-strip.is-expired .admin-panel-subscription-strip__date{color:#dc3545;}
-@media(max-width:575px){
-    .admin-panel-subscription-strip{flex-wrap:wrap;gap:10px;padding:12px;border-radius:10px;}
+@media(max-width:767px){
+    .admin-panel-subscription-strip{flex-wrap:nowrap;gap:10px;margin-inline:16px;padding:12px;border-radius:10px;}
     .admin-panel-subscription-strip__icon{width:34px;height:34px;border-radius:9px;font-size:.9rem;}
     .admin-panel-subscription-strip__label{font-size:.66rem;}
     .admin-panel-subscription-strip__date{font-size:.86rem;}
-    .admin-panel-subscription-strip__link{flex-basis:100%;min-height:38px;}
+    .admin-panel-subscription-strip__link{flex:0 0 38px;width:38px;height:38px;min-height:38px;padding:0;gap:0;margin-left:auto;}
+    .admin-panel-subscription-strip__link-label{display:none;}
+    .admin-panel-subscription-strip__link .bi{font-size:17px;line-height:1;}
 }
 .admin-panel-subscription-strip__link.btn-danger{border-color:#dc3545;background:#dc3545;color:#fff;animation:admin-panel-renewal-pulse 2.6s ease-in-out infinite;}
 .admin-panel-subscription-strip__link.btn-danger:hover,
 .admin-panel-subscription-strip__link.btn-danger:focus-visible{border-color:#bb2d3b;background:#bb2d3b;color:#fff;animation:none;}
 .admin-panel-subscription-strip__link.btn-danger:focus-visible{outline-color:#dc3545;}
 @media(prefers-reduced-motion:reduce){.admin-panel-subscription-strip__link.btn-danger{animation:none;transform:none;}}
+
+.admin-dashboard-period-grid .admin-metric-card__value.is-positive{color:#258653;}
+
+.admin-dashboard-period-grid .admin-metric-card__value.is-zero{color:#dc3545;}
+
+.admin-dashboard-period-grid .admin-metric-card__value.is-positive.is-period-monthly{color:#2563c5;}
+.admin-dashboard-period-grid .admin-metric-card__value.is-positive.is-period-yearly{color:#8054bb;}
+
+.admin-dashboard-period-grid .admin-metric-card__value.is-positive.is-period-weekly{color:#b86c16;}
+
+.admin-dashboard-period-grid .admin-metric-card__meta strong{font-size:inherit;color:inherit;font-weight:700;}
+
+.admin-dashboard-period-grid .admin-metric-card__meta strong.is-zero{color:#dc3545;}

@@ -7496,3 +7496,51 @@ img.scan{
 
 .orders-view .orders-user-table .orders-user-table__actions-col:not(:has(a)){text-align:center;}
 .orders-view .orders-user-table__actions-col>.user-order-modal-trigger:only-child{margin-inline:0;}
+
+/* Customer crypto history: compact receipt cards with clear amount and status. */
+.customer-payment-history{color:#334155;min-width:0;}
+.customer-payment-history>hr{border-color:#e8edf2;margin:18px 0;opacity:1;}
+.customer-payment-history__heading{margin:20px 0 12px;}
+.customer-payment-history__heading h2{letter-spacing:0;margin:0 0 4px;padding:0;border:0;font-size:18px;font-weight:600;line-height:1.4;color:#25344a;}
+.customer-payment-history__heading p{margin:0;color:#8591a2;font-size:11px;line-height:1.6;}
+.customer-payment-history #tickets{display:grid;gap:10px;min-width:0;}
+.customer-payment-history #tickets .table_ticket{grid-template-columns:32px minmax(0,1fr);align-items:start;gap:12px;min-width:0;margin:0;padding:14px;border:1px solid #e4eaf0;border-radius:10px;background:#fff;box-shadow:0 2px 5px rgba(30,48,68,.02);}
+.customer-payment-history #tickets .table_ticket>.logo{padding-top:2px;}
+.customer-payment-history #tickets .table_ticket>.logo img{width:32px;height:32px;object-fit:contain;}
+.customer-payment-history #tickets .table_ticket>.content{min-width:0;}
+.customer-payment-history__topline{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;min-width:0;}
+.customer-payment-history__asset{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;}
+.customer-payment-history__asset>strong{font-size:12px;font-weight:600;line-height:1.5;overflow-wrap:anywhere;color:#304157;}
+.customer-payment-history__asset>span{padding:2px 5px;border:1px solid #e7ebf1;border-radius:5px;background:#f5f7fa;color:#7b889b;font-size:9px;font-weight:500;line-height:1.5;}
+.customer-payment-history #tickets .table_ticket .amount{display:flex;flex:0 1 auto;flex-direction:column;gap:2px;min-width:0;margin:0;text-align:right;color:#2e4056;}
+.customer-payment-history #tickets .table_ticket .amount>strong{font-size:13px;font-weight:650;line-height:1.5;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+.customer-payment-history #tickets .table_ticket .amount>span{margin:0;color:#8a96a6;font-size:10px;line-height:1.5;overflow-wrap:anywhere;}
+.customer-payment-history #tickets .table_ticket p.desc{display:flex;align-items:center;gap:5px;margin:5px 0 9px;color:#8b97a7;font-size:10px;line-height:1.5;}
+.customer-payment-history #tickets .table_ticket .status{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0;}
+.customer-payment-history #tickets .table_ticket .status>span:not(.customer-payment-history__wallet){display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid #dcece3;border-radius:5px;background:#edf7f1;color:#39815b;font-size:10px;font-weight:550;line-height:1.4;}
+.customer-payment-history #tickets .table_ticket .status>span.danger{border-color:#f0dce1;background:#fcf0f2;color:#b75c70;}
+.customer-payment-history #tickets .table_ticket .status>span.is-archived{border-color:#e4e8ee;background:#f3f5f8;color:#7a8799;}
+.customer-payment-history__wallet{display:flex;align-items:center;gap:7px;flex:1 1 100%;min-width:0;padding-top:9px;margin-top:3px;border-top:1px solid #edf1f5;}
+.customer-payment-history #tickets .table_ticket .table-ticket__wallet-link{display:block;flex:1;min-width:0;margin:0;color:#7a8a9f;font:500 10px/1.5 monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.customer-payment-history #tickets .table_ticket .table-ticket__explorer-link{display:inline-flex;align-items:center;justify-content:center;flex:0 0 26px;width:26px;height:26px;margin:0;border:1px solid #e5eaf0;border-radius:6px;background:#fafbfd;color:#7f8da0;text-decoration:none;}
+.customer-payment-history #tickets .table_ticket .payments-crypto-remove-form{position:absolute;right:0;top:0;margin:0;}
+.customer-payment-history #tickets .table_ticket .remove{position:static;float:none;margin:0;padding:4px 7px;border:1px solid #edcdd6;border-radius:6px;background:#fff;color:#b3667a;font-size:10px;line-height:1.5;}
+.customer-payment-history .table_ticket .content:has(.payments-crypto-remove-form) .customer-payment-history__topline{padding-right:58px;}
+.customer-payment-history #tickets .table_ticket .customer-payment-history__shortfall{margin:8px 0;padding:9px 10px;border:1px solid #eee1c1;border-radius:7px;background:#fff8e9;color:#977539;font-size:10px;line-height:1.6;}
+.customer-payment-history>.alert,.customer-payment-receipt .alert{padding:13px 14px;border-radius:9px;font-size:12px;line-height:1.7;}
+.customer-payment-history>.alert-success,.customer-payment-receipt .alert-success{border:1px solid #d9ece1;background:#eff8f3;color:#3f795b;}
+.customer-payment-receipt .alert p:last-child{margin-bottom:0;}
+.customer-payment-history .payment-crypto-history-warning{border:1px solid #eee2c9;background:#fff9ed;color:#9a7e4f;font-size:11px;}
+.customer-payment-history>.payment-request-actions{gap:8px;margin-top:16px;}
+.customer-payment-history>.payment-request-actions .btn{min-height:36px;border:1px solid #e1e7ef;border-radius:7px;background:#fff;color:#667991;font-size:11px;}
+@media(max-width:575px){
+ .customer-payment-history__heading h2{font-size:16px;}
+ .customer-payment-history #tickets .table_ticket{padding:12px;grid-template-columns:27px minmax(0,1fr);gap:9px;}
+ .customer-payment-history #tickets .table_ticket>.logo img{width:27px;height:27px;}
+ .customer-payment-history__topline{gap:8px;}
+ .customer-payment-history__asset>strong{font-size:11px;}
+ .customer-payment-history #tickets .table_ticket .amount>strong{font-size:12px;}
+ .customer-payment-history #tickets .table_ticket .amount>span{font-size:9px;}
+}
+
+.customer-payment-history #tickets .table_ticket .status>span.is-cancelled{border-color:#f2b9c1;background:#fff0f2;color:#dc3545;}

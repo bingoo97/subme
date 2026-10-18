@@ -10,6 +10,15 @@ if (($argv[1]??'')==='--maintenance') {
         usleep(100000);
     });exit;
 }
+if (($argv[1]??'')==='--asset-seed') {
+    $before=Mysql_ks::$licznik;admin_ensure_core_crypto_assets($db);
+    echo Mysql_ks::$licznik-$before;exit;
+}
+if (($argv[1]??'')==='--cycle-busy') {
+    $result=app_run_maintenance_cycle($db);
+    if (empty($result['ok']) || empty($result['busy']) || $result['steps']!==[]) exit(2);
+    echo "Skipped overlapping cycle";exit;
+}
 $checks=0;
 function ck(bool $v,string $m):void {global $checks;if(!$v)throw new RuntimeException($m);$checks++;}
 function sql(string $q):void {global $db;if(!$db->query($q))throw new RuntimeException($db->error.': '.$q);}
@@ -67,4 +76,44 @@ $before=Mysql_ks::$licznik;chat_purge_expired_messages($db,168);$second=Mysql_ks
 ck($second===0,'Duplicate retention cleanup performs zero SQL');echo "Retention: first {$first} / repeated {$second} queries\n";
 try {app_run_read_maintenance_once($db,'failure-test',60,static function():void{throw new RuntimeException('fixture');});}catch(RuntimeException $e){}
 ck(app_run_read_maintenance_once($db,'failure-test',60,static function():void{}),'A failed cleanup remains retryable and releases its lock');
+admin_ensure_core_crypto_assets($db);
+sql("UPDATE crypto_assets SET name='Custom Bitcoin',is_active=0,rate_currency_code='EUR' WHERE code='BTC'");
+$p=proc_open([PHP_BINARY,__FILE__,'--asset-seed'],[1=>['pipe','w'],2=>['pipe','w']],$pipes);
+$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $pipe)fclose($pipe);
+ck(proc_close($p)===0 && (int)$out<=2,'Configured core assets use one batch read plus schema check instead of nine upserts: '.$err);
+$asset=$db->select_user("SELECT name,is_active,rate_currency_code FROM crypto_assets WHERE code='BTC'");
+ck($asset['name']==='Custom Bitcoin' && (int)$asset['is_active']===0 && $asset['rate_currency_code']==='EUR','Asset seed preserves configured names, activation and quote currency');
+// An inbox must bound expensive group summaries before hydrating them.
+for($i=0;$i<25;$i++) {
+    sql("INSERT INTO support_conversations(conversation_type,group_name,subject,status) VALUES('group_chat','Performance fixture','Fixture','open')");
+    $groupId=(int)$db->id();
+    chat_add_group_member($db,$groupId,['participant_key'=>chat_participant_key_for_admin(1),'participant_type'=>'admin','customer_id'=>0,'admin_user_id'=>1],'accepted','member',0,1);
+}
+$allGroups=chat_admin_group_conversation_rows($db,1);
+$limitedGroups=chat_admin_group_conversation_rows($db,1,3);
+ck(count($allGroups)>=26 && count($limitedGroups)===3,'Inbox queries only the requested number of groups');
+ck((int)$limitedGroups[0]['id']===$id,'Pinned global group remains first in bounded inbox');
+$withoutGlobal=chat_admin_group_conversation_rows($db,1,3,false);
+ck(count($withoutGlobal)===3 && !in_array('global_group',array_column($withoutGlobal,'conversation_type'),true),'Disabled global group does not consume a visible inbox slot');
+
+// Large archived history must not be counted for a sidebar open badge.
+$values=[];
+foreach(array_merge(['pending','awaiting_review','awaiting_confirmation'],array_fill(0,3000,'archived')) as $i=>$status) {
+    $values[]="(1,1,".($i+1).",10,1,100,0.1,'{$status}')";
+}
+sql("INSERT INTO crypto_deposit_requests(customer_id,crypto_asset_id,wallet_address_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,status) VALUES".implode(',',$values));
+$old=admin_payment_summary($db,0,true)['open_total'];
+ck(admin_payment_open_count($db,true)===$old,'Lightweight sidebar count matches full summary including legacy requests');
+ck(admin_payment_open_count($db,false)===admin_payment_summary($db,0,false)['open_total'],'Disabled bank payments retain matching count');
+$plan=$db->select_user("EXPLAIN SELECT COUNT(*) FROM crypto_deposit_requests WHERE status IN ('pending','awaiting_review','awaiting_confirmation')");
+ck(in_array($plan['type'],['range','ref'],true) && (int)$plan['rows']<100,'Sidebar count uses selective index instead of archived history');
+echo 'Open count: '.(int)$old.'; index estimate '.(int)$plan['rows']." rows / 3003 fixture requests\n";
+
+// Hold the actual database lock in one connection and attempt a second cycle.
+sql("SELECT GET_LOCK(CONCAT('subme-maint:', LEFT(SHA2(DATABASE(),256),40)),0)");
+try {
+    $p=proc_open([PHP_BINARY,__FILE__,'--cycle-busy'],[1=>['pipe','w'],2=>['pipe','w']],$pipes);
+    $out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $pipe)fclose($pipe);
+    ck(proc_close($p)===0 && str_contains($out,'Skipped overlapping cycle'),'Overlapping maintenance skips without executing jobs: '.$err);
+} finally { sql("SELECT RELEASE_LOCK(CONCAT('subme-maint:', LEFT(SHA2(DATABASE(),256),40)))"); }
 echo "PASS {$checks} performance and cleanup assertions\n";

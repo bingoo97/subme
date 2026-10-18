@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
-const ADMIN_RANGO_DEFAULT_API_KEY = 'c6381a79-2817-4602-83bf-6a641a409e32';
 
 admin_send_security_headers();
 admin_start_session();
@@ -288,7 +287,15 @@ if (in_array($route, ['products', 'settings'], true) && admin_user_can_access_ro
     $appSettings = admin_app_settings($db);
 }
 if (in_array($route, ['billing', 'settings'], true) && admin_user_can_access_route($adminUser, $route)) admin_billing_ensure_runtime_schema($db);
-$settingsAdminMode = strtolower(trim((string)($_GET['admin'] ?? ''))) === 'true';
+$settingsAdminModeRequested = strtolower(trim((string)($_GET['admin'] ?? ''))) === 'true';
+if ($route === 'settings' && $settingsAdminModeRequested && !admin_user_can_use_admin_mode($adminUser)) {
+    http_response_code(403);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit('Admin Mode jest dostępny wyłącznie dla konta admin.');
+}
+$settingsAdminMode = $route === 'settings' && $settingsAdminModeRequested && admin_user_can_use_admin_mode($adminUser);
+if ($route === 'settings' && admin_user_can_access_route($adminUser, 'settings')) app_panel_tiers_ensure_schema($db);
+$panelTiersConfig = app_panel_tiers_config($db);
 $settingsAdminUrlSuffix = $settingsAdminMode ? '&admin=true' : '';
 $billingEnabled = admin_billing_enabled($appSettings);
 $billingSwitchCanManage = strtolower(trim((string)($adminUser['login_name'] ?? ''))) === 'admin';
@@ -311,15 +318,6 @@ $hinkalPrivateSendFeePercent = max(0.0, min(10.0, round((float)($appSettings['hi
 $hinkalPrivateSendShowFeeDetails = !array_key_exists('hinkal_private_send_show_fee_details', $appSettings)
     || !empty($appSettings['hinkal_private_send_show_fee_details']);
 $hinkalPrivateSendNotificationEmail = strtolower(trim((string)($appSettings['hinkal_private_send_notification_email'] ?? '')));
-$rangoConverterEnabled = admin_rango_converter_enabled($appSettings);
-$rangoApiKey = trim((string)($appSettings['rango_api_key'] ?? ''));
-$rangoApiKey = $rangoApiKey !== '' ? $rangoApiKey : ADMIN_RANGO_DEFAULT_API_KEY;
-$rangoWalletConnectProjectId = trim((string)($appSettings['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
-$rangoAffiliateRef = trim((string)($appSettings['rango_affiliate_ref'] ?? ''));
-$rangoAffiliateFeePercent = round((float)($appSettings['rango_affiliate_fee_percent'] ?? 1.00), 2);
-$rangoAffiliateFeePercent = max(0.0, min(3.0, $rangoAffiliateFeePercent));
-$rangoAffiliateWallets = trim((string)($appSettings['rango_affiliate_wallets'] ?? ''));
-$rangoCentralizedSwappersEnabled = admin_rango_centralized_swappers_enabled($appSettings);
 $mixerEnabled = admin_mixer_enabled($appSettings);
 $mixerInputAssetOptions = admin_mixer_input_asset_options();
 $mixerAllowedInputAssets = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
@@ -386,7 +384,7 @@ if ($mixerEnabled && in_array($route, ['settings', 'swap-converter'], true)) {
         );
     }
 }
-$swapConverterPageEnabled = $swapConverterEnabled || $hinkalPrivateSendEnabled || $rangoConverterEnabled || $mixerEnabled;
+$swapConverterPageEnabled = $swapConverterEnabled || $hinkalPrivateSendEnabled || $mixerEnabled;
 $pageAlert = '';
 $pageAlertHtml = '';
 $pageAlertType = 'success';
@@ -1086,7 +1084,7 @@ if ($route === 'settings' && isset($_POST['admin_create_admin_user'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_update_admin_user'])) {
-    if (!$settingsAdminMode) {
+    if (!admin_user_can_access_route($adminUser, 'settings')) {
         $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
         $pageAlertType = 'danger';
     } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
@@ -1113,7 +1111,7 @@ if ($route === 'settings' && isset($_POST['admin_update_admin_user'])) {
 }
 
 if ($route === 'settings' && isset($_POST['admin_delete_admin_user'])) {
-    if (!$settingsAdminMode) {
+    if (!admin_user_can_access_route($adminUser, 'settings')) {
         $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
         $pageAlertType = 'danger';
     } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
@@ -1138,38 +1136,15 @@ if ($route === 'settings' && isset($_POST['admin_delete_admin_user'])) {
     }
 }
 
-if ($route === 'settings' && isset($_POST['admin_change_password'])) {
+if (isset($_POST['admin_change_password'])) {
     if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
         $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
         $pageAlertType = 'danger';
     } else {
-        $currentPassword = (string)($_POST['current_password'] ?? '');
-        $newPassword = (string)($_POST['new_password'] ?? '');
-        $repeatPassword = (string)($_POST['repeat_password'] ?? '');
-
-        if (!admin_verify_password($adminUser, $currentPassword)) {
-            $pageAlert = admin_t($messages, 'settings_password_invalid', 'Current password is incorrect.');
-            $pageAlertType = 'danger';
-        } elseif ($newPassword === '') {
-            $pageAlert = admin_t($messages, 'settings_password_required', 'New password cannot be empty.');
-            $pageAlertType = 'danger';
-        } elseif (strlen($newPassword) > 72) {
-            $pageAlert = admin_t($messages, 'settings_password_too_long', 'New password cannot exceed 72 characters.');
-            $pageAlertType = 'danger';
-        } elseif ($newPassword !== $repeatPassword) {
-            $pageAlert = admin_t($messages, 'settings_password_mismatch', 'New passwords do not match.');
-            $pageAlertType = 'danger';
-        } else {
-            $db->update_using_id(
-                ['password_hash', 'password_hash_algorithm'],
-                [password_hash($newPassword, PASSWORD_DEFAULT), 'password_hash'],
-                'admin_users',
-                (int)$adminUser['id']
-            );
-            $pageAlert = admin_t($messages, 'settings_password_changed', 'Administrator password has been updated.');
-            $pageAlertType = 'success';
-            $adminUser = admin_load_session_user($db) ?? $adminUser;
-        }
+        $passwordResult = admin_change_own_password($db, (int)$adminUser['id'], $_POST);
+        $pageAlert = admin_t($messages, $passwordResult['message'], !empty($passwordResult['ok']) ? 'Password updated.' : 'Unable to change password. Check the current password and repeat the new password.');
+        $pageAlertType = !empty($passwordResult['ok']) ? 'success' : 'danger';
+        $adminUser = admin_load_session_user($db) ?? $adminUser;
     }
 }
 
@@ -1184,8 +1159,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $bankTransfersEnabled = isset($_POST['bank_transfers_enabled']) ? 1 : 0;
         $cryptoWalletSharedAssignmentsEnabled = isset($_POST['crypto_wallet_shared_assignments_enabled']) ? 1 : 0;
         $bankAccountSharedAssignmentsEnabled = isset($_POST['bank_account_shared_assignments_enabled']) ? 1 : 0;
-        $providerRemoteLoginEnabled = isset($_POST['provider_remote_login_enabled']) ? 1 : 0;
-        $providerRemoteSubscriptionsEnabled = isset($_POST['provider_remote_subscriptions_enabled']) ? 1 : 0;
+        $providerRemoteLoginEnabled = $settingsAdminMode ? (isset($_POST['provider_remote_login_enabled']) ? 1 : 0) : (!empty($appSettings['provider_remote_login_enabled']) ? 1 : 0);
+        $providerRemoteSubscriptionsEnabled = $settingsAdminMode ? (isset($_POST['provider_remote_subscriptions_enabled']) ? 1 : 0) : (!empty($appSettings['provider_remote_subscriptions_enabled']) ? 1 : 0);
         $billingEnabledInput = $billingSwitchCanManage
             ? (isset($_POST['billing_enabled']) ? 1 : 0)
             : (admin_billing_enabled($appSettings) ? 1 : 0);
@@ -1253,16 +1228,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $hinkalPrivateSendFeePercentInput = round((float)str_replace(',', '.', (string)($_POST['hinkal_private_send_fee_percent'] ?? '1.00')), 2);
         $hinkalPrivateSendShowFeeDetailsInput = isset($_POST['hinkal_private_send_show_fee_details']) ? 1 : 0;
         $hinkalPrivateSendNotificationEmailInput = strtolower(trim((string)($_POST['hinkal_private_send_notification_email'] ?? '')));
-        $rangoConverterEnabledInput = isset($_POST['rango_converter_enabled']) ? 1 : 0;
-        $rangoApiKeyInput = trim((string)($_POST['rango_api_key'] ?? ADMIN_RANGO_DEFAULT_API_KEY));
-        if ($rangoApiKeyInput === '' && $rangoConverterEnabledInput === 1) {
-            $rangoApiKeyInput = ADMIN_RANGO_DEFAULT_API_KEY;
-        }
-        $rangoWalletConnectProjectIdInput = trim((string)($_POST['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
-        $rangoAffiliateRefInput = trim((string)($_POST['rango_affiliate_ref'] ?? ''));
-        $rangoAffiliateFeePercentInput = round((float)($_POST['rango_affiliate_fee_percent'] ?? 1.0), 2);
-        $rangoAffiliateWalletsInput = trim((string)($_POST['rango_affiliate_wallets'] ?? ''));
-        $rangoCentralizedSwappersEnabledInput = isset($_POST['rango_enable_centralized_swappers']) ? 1 : 0;
         $mixerEnabledInput = isset($_POST['mixer_enabled']) ? 1 : 0;
         $mixerAllowedInputAssetsInput = admin_mixer_allowed_input_assets($_POST['mixer_allowed_input_assets'] ?? [], false);
         $mixerAllowedOutputAssetsInput = admin_mixer_allowed_output_assets($_POST['mixer_allowed_output_assets'] ?? [], false);
@@ -1322,7 +1287,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $customerTypeSwitchEnabled = admin_customer_type_switch_enabled($appSettings) ? 1 : 0;
             $pageGuidanceEnabled = admin_page_guidance_enabled($appSettings) ? 1 : 0;
             $paymentTestModeNoticeEnabled = admin_payment_test_mode_notice_enabled($appSettings) ? 1 : 0;
-            $cryptoAutoAcceptEnabled = !empty($appSettings['crypto_auto_accept_enabled']) ? 1 : 0;
             $cryptoAutoAcceptWindowMinutes = max(5, min(240, (int)($appSettings['crypto_auto_accept_window_minutes'] ?? 60)));
             $cryptoAutoAcceptMinAmountPercent = max(50, min(100, (int)($appSettings['crypto_auto_accept_min_amount_percent'] ?? 80)));
             $swapConverterEnabledInput = admin_swap_converter_enabled($appSettings) ? 1 : 0;
@@ -1338,14 +1302,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $hinkalPrivateSendFeePercentInput = max(0.0, min(10.0, round((float)($appSettings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
             $hinkalPrivateSendShowFeeDetailsInput = !array_key_exists('hinkal_private_send_show_fee_details', $appSettings) || !empty($appSettings['hinkal_private_send_show_fee_details']) ? 1 : 0;
             $hinkalPrivateSendNotificationEmailInput = strtolower(trim((string)($appSettings['hinkal_private_send_notification_email'] ?? '')));
-            $rangoConverterEnabledInput = admin_rango_converter_enabled($appSettings) ? 1 : 0;
-            $rangoApiKeyInput = trim((string)($appSettings['rango_api_key'] ?? ''));
-            $rangoApiKeyInput = $rangoApiKeyInput !== '' ? $rangoApiKeyInput : ADMIN_RANGO_DEFAULT_API_KEY;
-            $rangoWalletConnectProjectIdInput = trim((string)($appSettings['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
-            $rangoAffiliateRefInput = trim((string)($appSettings['rango_affiliate_ref'] ?? ''));
-            $rangoAffiliateFeePercentInput = round((float)($appSettings['rango_affiliate_fee_percent'] ?? 1.0), 2);
-            $rangoAffiliateWalletsInput = trim((string)($appSettings['rango_affiliate_wallets'] ?? ''));
-            $rangoCentralizedSwappersEnabledInput = admin_rango_centralized_swappers_enabled($appSettings) ? 1 : 0;
             $mixerEnabledInput = admin_mixer_enabled($appSettings) ? 1 : 0;
             $mixerAllowedInputAssetsInput = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
             $mixerAllowedOutputAssetsInput = admin_mixer_allowed_output_assets($appSettings['mixer_allowed_output_assets'] ?? 'POLYGON_POL');
@@ -1400,13 +1356,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $hinkalPrivateSendFeePercent = max(0.0, min(10.0, $hinkalPrivateSendFeePercentInput));
         $hinkalPrivateSendShowFeeDetails = $hinkalPrivateSendShowFeeDetailsInput === 1;
         $hinkalPrivateSendNotificationEmail = $hinkalPrivateSendNotificationEmailInput;
-        $rangoConverterEnabled = $rangoConverterEnabledInput === 1;
-        $rangoApiKey = $rangoApiKeyInput;
-        $rangoWalletConnectProjectId = $rangoWalletConnectProjectIdInput;
-        $rangoAffiliateRef = $rangoAffiliateRefInput;
-        $rangoAffiliateFeePercent = max(0.0, min(3.0, $rangoAffiliateFeePercentInput));
-        $rangoAffiliateWallets = $rangoAffiliateWalletsInput;
-        $rangoCentralizedSwappersEnabled = $rangoCentralizedSwappersEnabledInput === 1;
         $mixerEnabled = $mixerEnabledInput === 1;
         $mixerInputAssetOptions = admin_mixer_input_asset_options();
         $mixerAllowedInputAssets = $mixerAllowedInputAssetsInput;
@@ -1458,13 +1407,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             }
         }
 
-        $rangoAffiliateWalletsDecoded = null;
-        if ($rangoAffiliateWalletsInput !== '') {
-            $rangoAffiliateWalletsDecoded = json_decode($rangoAffiliateWalletsInput, true);
-        }
-        $rangoAffiliateWalletsIsList = is_array($rangoAffiliateWalletsDecoded)
-            && trim($rangoAffiliateWalletsInput)[0] === '['
-            && ($rangoAffiliateWalletsDecoded === [] || array_keys($rangoAffiliateWalletsDecoded) === range(0, count($rangoAffiliateWalletsDecoded) - 1));
         $mixerBtcDepositAddressValid = $mixerBtcDepositAddressInput === ''
             || preg_match('/^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,39})$/i', $mixerBtcDepositAddressInput) === 1;
         $mixerDogeDepositAddressValid = $mixerDogeDepositAddressInput === ''
@@ -1527,15 +1469,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
             $pageAlertType = 'danger';
         } elseif ($hinkalPrivateSendNotificationEmailInput !== '' && filter_var($hinkalPrivateSendNotificationEmailInput, FILTER_VALIDATE_EMAIL) === false) {
             $pageAlert = admin_t($messages, 'settings_hinkal_private_send_notification_email_invalid', 'Hinkal notification email must be a valid email address.');
-            $pageAlertType = 'danger';
-        } elseif ($rangoAffiliateFeePercentInput < 0 || $rangoAffiliateFeePercentInput > 3) {
-            $pageAlert = admin_t($messages, 'settings_rango_fee_invalid', 'Rango affiliate fee must be between 0 and 3.');
-            $pageAlertType = 'danger';
-        } elseif ($rangoConverterEnabledInput === 1 && $rangoApiKeyInput === '') {
-            $pageAlert = admin_t($messages, 'settings_rango_api_key_required', 'Provide the Rango API key to enable BTC/DOGE Converter.');
-            $pageAlertType = 'danger';
-        } elseif ($rangoAffiliateWalletsInput !== '' && (!is_array($rangoAffiliateWalletsDecoded) || $rangoAffiliateWalletsIsList)) {
-            $pageAlert = admin_t($messages, 'settings_rango_affiliate_wallets_invalid', 'Rango affiliate wallets must be a JSON object.');
             $pageAlertType = 'danger';
         } elseif ($mixerFeePercentInput < 0 || $mixerFeePercentInput > 5) {
             $pageAlert = admin_t($messages, 'settings_mixer_fee_invalid', 'Swapper fee must be between 0 and 5.');
@@ -1669,13 +1602,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'hinkal_private_send_fee_percent',
                     'hinkal_private_send_show_fee_details',
                     'hinkal_private_send_notification_email',
-                    'rango_converter_enabled',
-                    'rango_api_key',
-                    'rango_walletconnect_project_id',
-                    'rango_affiliate_ref',
-                    'rango_affiliate_fee_percent',
-                    'rango_affiliate_wallets',
-                    'rango_enable_centralized_swappers',
                     'mixer_enabled',
                     'mixer_allowed_input_assets',
                     'mixer_allowed_output_assets',
@@ -1764,13 +1690,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $hinkalPrivateSendFeePercentInput,
                     $hinkalPrivateSendShowFeeDetailsInput,
                     $hinkalPrivateSendNotificationEmailInput !== '' ? $hinkalPrivateSendNotificationEmailInput : null,
-                    $rangoConverterEnabledInput,
-                    $rangoApiKeyInput !== '' ? $rangoApiKeyInput : null,
-                    $rangoWalletConnectProjectIdInput !== '' ? $rangoWalletConnectProjectIdInput : null,
-                    $rangoAffiliateRefInput !== '' ? $rangoAffiliateRefInput : null,
-                    $rangoAffiliateFeePercentInput,
-                    $rangoAffiliateWalletsInput !== '' ? $rangoAffiliateWalletsInput : null,
-                    $rangoCentralizedSwappersEnabledInput,
                     $mixerEnabledInput,
                     implode(',', $mixerAllowedInputAssetsInput),
                     implode(',', $mixerAllowedOutputAssetsInput),
@@ -1851,15 +1770,6 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                 $hinkalPrivateSendFeePercent = max(0.0, min(10.0, round((float)($appSettings['hinkal_private_send_fee_percent'] ?? 1.00), 2)));
                 $hinkalPrivateSendShowFeeDetails = !array_key_exists('hinkal_private_send_show_fee_details', $appSettings) || !empty($appSettings['hinkal_private_send_show_fee_details']);
                 $hinkalPrivateSendNotificationEmail = strtolower(trim((string)($appSettings['hinkal_private_send_notification_email'] ?? '')));
-                $rangoConverterEnabled = admin_rango_converter_enabled($appSettings);
-                $rangoApiKey = trim((string)($appSettings['rango_api_key'] ?? ''));
-                $rangoApiKey = $rangoApiKey !== '' ? $rangoApiKey : ADMIN_RANGO_DEFAULT_API_KEY;
-                $rangoWalletConnectProjectId = trim((string)($appSettings['rango_walletconnect_project_id'] ?? '5432e3507d41270bee46b7b85bbc2ef8'));
-                $rangoAffiliateRef = trim((string)($appSettings['rango_affiliate_ref'] ?? ''));
-                $rangoAffiliateFeePercent = round((float)($appSettings['rango_affiliate_fee_percent'] ?? 1.00), 2);
-                $rangoAffiliateFeePercent = max(0.0, min(3.0, $rangoAffiliateFeePercent));
-                $rangoAffiliateWallets = trim((string)($appSettings['rango_affiliate_wallets'] ?? ''));
-                $rangoCentralizedSwappersEnabled = admin_rango_centralized_swappers_enabled($appSettings);
                 $mixerEnabled = admin_mixer_enabled($appSettings);
                 $mixerInputAssetOptions = admin_mixer_input_asset_options();
                 $mixerAllowedInputAssets = admin_mixer_allowed_input_assets($appSettings['mixer_allowed_input_assets'] ?? 'BTC,DOGE');
@@ -1926,7 +1836,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                         );
                     }
                 }
-                $swapConverterPageEnabled = $swapConverterEnabled || $hinkalPrivateSendEnabled || $rangoConverterEnabled || $mixerEnabled;
+                $swapConverterPageEnabled = $swapConverterEnabled || $hinkalPrivateSendEnabled || $mixerEnabled;
             } else {
                 $pageAlert = admin_t($messages, 'settings_features_save_error', 'Unable to save feature settings.');
                 $pageAlertType = 'danger';
@@ -2429,65 +2339,32 @@ if ($route === 'settings' && isset($_POST['admin_download_database_backup'])) {
     }
 }
 
+if ($route === 'settings' && isset($_POST['admin_panel_close_review'])) {
+    if ($settingsAdminMode && admin_user_can_access_route($adminUser,'settings') && admin_csrf_is_valid($_POST['_csrf']??'')) {
+        try {
+            app_panel_tiers_close_review($db,(int)filter_var($_POST['admin_panel_close_review'],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]));
+            $pageAlert=admin_panel_tiers_text('review_closed');$pageAlertType='success';
+        } catch (DomainException $e) {$pageAlert=admin_panel_tiers_text($e->getMessage());$pageAlertType='warning';}
+        catch (Throwable $e) {$pageAlert=admin_panel_tiers_text('storage');$pageAlertType='danger';}
+    } else {$pageAlert=admin_panel_tiers_text('session');$pageAlertType='danger';}
+}
+
 if ($route === 'settings' && isset($_POST['admin_save_panel_subscription_settings'])) {
-    if (!$settingsAdminMode) {
-        $pageAlert = admin_t($messages, 'settings_admin_mode_required', 'This action is available only in admin mode: /admin/?page=settings&admin=true.');
-        $pageAlertType = 'danger';
-    } elseif (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
-        $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
-        $pageAlertType = 'danger';
-    } elseif (!schema_object_exists($db, 'app_settings')) {
-        $pageAlert = admin_t($messages, 'settings_panel_subscription_save_error', 'Unable to save admin panel subscription settings.');
-        $pageAlertType = 'danger';
+    if (!$settingsAdminMode || !admin_user_can_access_route($adminUser, 'settings') || !admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
+        $pageAlert = admin_panel_tiers_text('session'); $pageAlertType = 'danger';
     } else {
-        $panelSubscriptionPaidUntil = trim((string)($_POST['admin_panel_subscription_paid_until'] ?? ''));
-        $panelSubscriptionRenewalUrl = trim((string)($_POST['admin_panel_subscription_renewal_url'] ?? ''));
-        $panelSubscriptionDateValid = true;
-        if ($panelSubscriptionPaidUntil !== '') {
-            $panelSubscriptionDate = DateTimeImmutable::createFromFormat('!Y-m-d', $panelSubscriptionPaidUntil);
-            $panelSubscriptionDateErrors = DateTimeImmutable::getLastErrors();
-            if ($panelSubscriptionDateErrors === false) {
-                $panelSubscriptionDateErrors = ['warning_count' => 0, 'error_count' => 0];
-            }
-            $panelSubscriptionDateValid = $panelSubscriptionDate instanceof DateTimeImmutable
-                && $panelSubscriptionDate->format('Y-m-d') === $panelSubscriptionPaidUntil
-                && (int)($panelSubscriptionDateErrors['warning_count'] ?? 0) === 0
-                && (int)($panelSubscriptionDateErrors['error_count'] ?? 0) === 0;
-        }
-        $panelSubscriptionUrlValid = $panelSubscriptionRenewalUrl === ''
-            || filter_var($panelSubscriptionRenewalUrl, FILTER_VALIDATE_URL) !== false;
-
-        if (!$panelSubscriptionDateValid) {
-            $pageAlert = admin_t($messages, 'settings_panel_subscription_date_invalid', 'Admin panel subscription date must be a valid date.');
-            $pageAlertType = 'danger';
-        } elseif (!$panelSubscriptionUrlValid) {
-            $pageAlert = admin_t($messages, 'settings_panel_subscription_url_invalid', 'Payment renewal URL must be a valid URL.');
-            $pageAlertType = 'danger';
-        } else {
-            $panelSubscriptionFields = [];
-            $panelSubscriptionValues = [];
-            if (schema_column_exists($db, 'app_settings', 'admin_panel_subscription_paid_until')) {
-                $panelSubscriptionFields[] = 'admin_panel_subscription_paid_until';
-                $panelSubscriptionValues[] = $panelSubscriptionPaidUntil !== '' ? $panelSubscriptionPaidUntil : null;
-            }
-            if (schema_column_exists($db, 'app_settings', 'admin_panel_subscription_renewal_url')) {
-                $panelSubscriptionFields[] = 'admin_panel_subscription_renewal_url';
-                $panelSubscriptionValues[] = $panelSubscriptionRenewalUrl !== '' ? $panelSubscriptionRenewalUrl : null;
-            }
-
-            $updated = $panelSubscriptionFields !== []
-                ? $db->update_using_id($panelSubscriptionFields, $panelSubscriptionValues, 'app_settings', 1)
-                : false;
-
-            if ($updated) {
-                $pageAlert = admin_t($messages, 'settings_panel_subscription_saved', 'Admin panel subscription settings have been saved.');
-                $pageAlertType = 'success';
-                $appSettings = admin_app_settings($db);
-            } else {
-                $pageAlert = admin_t($messages, 'settings_panel_subscription_save_error', 'Unable to save admin panel subscription settings.');
-                $pageAlertType = 'danger';
-            }
-        }
+        try {
+            foreach ($_POST as $postedValue) if (!is_string($postedValue)) throw new DomainException('storage');
+            $date = trim((string)($_POST['admin_panel_subscription_paid_until'] ?? ''));
+            $url = trim((string)($_POST['admin_panel_subscription_renewal_url'] ?? ''));
+            if ($date !== '' && (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/D', $date, $parts) || !checkdate((int)$parts[2],(int)$parts[3],(int)$parts[1]))) throw new DomainException('settings_panel_subscription_date_invalid');
+            if ($url !== '' && (!filter_var($url,FILTER_VALIDATE_URL) || !in_array(strtolower((string)parse_url($url,PHP_URL_SCHEME)),['http','https'],true))) throw new DomainException('settings_panel_subscription_url_invalid');
+            app_panel_tiers_save_config($db,$_POST,$adminDefaultCurrencyCode,['date'=>$date,'url'=>$url]);
+            $appSettings=admin_app_settings($db);$panelTiersConfig=app_panel_tiers_config($db);
+            $pageAlert=admin_t($messages,'settings_panel_subscription_saved','Admin panel subscription settings have been saved.');$pageAlertType='success';
+        } catch (DomainException $e) {
+            $pageAlert=isset($messages[$e->getMessage()])?admin_t($messages,$e->getMessage(),$e->getMessage()):admin_panel_tiers_text($e->getMessage());$pageAlertType='danger';
+        } catch (Throwable $e) {$pageAlert=admin_panel_tiers_text('storage');$pageAlertType='danger';}
     }
 }
 
@@ -3108,7 +2985,8 @@ if ($route === 'orders') {
                 (string)($_POST['extend_charge_balance'] ?? '1') !== '0',
                 $requestedExtendedExpiry,
                 (string)$_POST['extend_expected_expires_at'],
-                (int)$_POST['extend_expected_renewal_id']
+                (int)$_POST['extend_expected_renewal_id'],
+                is_string($_POST['extend_support_note'] ?? null) ? $_POST['extend_support_note'] : ''
             );
             $extendMessageKey = trim((string)($extendResult['message_key'] ?? ''));
             $pageAlert = $extendMessageKey !== '' ? admin_t($messages, $extendMessageKey, (string)($extendResult['message'] ?? '')) : (string)($extendResult['message'] ?? admin_t($messages, 'order_extend_error', 'Unable to extend subscription.'));
@@ -4856,9 +4734,27 @@ if ($route === 'payments') {
             $redirectUrl = '/admin/?page=orders&customer_id=' . $acceptedCustomerId;
         }
 
+        $cryptoQuickView = null;
+        if (!empty($_POST['crypto_quick_inline']) && $paymentEditorType === 'crypto') {
+            require_once __DIR__ . '/crypto_quick.php';
+            $cryptoQuickFilter = (string)($_POST['crypto_quick_filter'] ?? 'new');
+            if (in_array($cryptoQuickFilter, ['new', 'expired', 'cancelled', 'payout'], true)) {
+                try {
+                    $cryptoQuickView = [
+                        'filter' => $cryptoQuickFilter,
+                        'counts' => admin_crypto_quick_counts($db),
+                        'html' => admin_crypto_quick_html(admin_crypto_quick_rows($db, $cryptoQuickFilter), $cryptoQuickFilter, admin_crypto_quick_labels(), admin_csrf_token(), $messages),
+                    ];
+                } catch (Throwable $e) {
+                    // The action succeeded; the flyout can retry its read independently.
+                }
+            }
+        }
+
         echo json_encode([
             'ok' => true,
             'message' => (string)($quickActionResult['message'] ?? admin_t($messages, 'payment_save_success', 'Payment request saved successfully.')),
+            'crypto_quick' => $cryptoQuickView,
             'payment_id' => $paymentEditorId,
             'order' => $orderPayload,
             'redirect_url' => $redirectUrl,
@@ -5241,7 +5137,7 @@ $pageIntroMap = [
 $adminTopbarPayments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($appSettings), 8);
 $adminCanViewOrderTasks = admin_user_can_access_route($adminUser, 'orders');
 $adminTopbarOrders = $adminCanViewOrderTasks ? admin_topbar_notification_order_rows($db, 8) : [];
-$adminSidebarPaymentAlertCount = (int)(admin_payment_summary($db, 0, admin_bank_transfers_enabled($appSettings))['open_total'] ?? 0);
+$adminSidebarPaymentAlertCount = admin_payment_open_count($db, admin_bank_transfers_enabled($appSettings));
 $adminSidebarOrderAlertCount = $adminCanViewOrderTasks ? admin_topbar_notification_order_count($db) : 0;
 $adminTopbarAutoAcceptedPayments = admin_topbar_notification_auto_accepted_crypto_payment_rows($db, 5, 24);
 $adminTopbarNewCustomers = admin_topbar_notification_new_customer_rows($db, 5);
@@ -5399,6 +5295,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <i class="bi bi-search"></i>
                         <input
                             type="search"
+                            data-mobile-placeholder="<?php echo admin_e(admin_current_locale()==='pl'?'Wyszukaj...':'Search...'); ?>"
                             placeholder="<?php echo admin_e(admin_t($messages, 'top_search_placeholder', 'Search order ID, customer email or crypto wallet')); ?>"
                             autocomplete="off"
                             spellcheck="false"
@@ -6018,6 +5915,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         </div>
                     </div>
 
+                    <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')) require __DIR__.'/views/crypto_quick.php'; ?>
                     <div class="admin-topbar-tool" data-admin-converter-root data-currency-code="<?php echo admin_e($adminDefaultCurrencyCode); ?>" data-currency-symbol="<?php echo admin_e($adminDefaultCurrencySymbol); ?>" data-currency-icon="<?php echo admin_e($adminTopbarConverterFiatIcon); ?>" data-assets="<?php echo admin_e($adminTopbarConverterAssetsJson); ?>" data-empty-text="<?php echo admin_e(admin_t($messages, 'topbar_converter_rate_hint', 'Choose a crypto asset to calculate the amount.')); ?>">
                         <button
                             type="button"
@@ -6732,15 +6630,46 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         </div>
                     </div>
 
-                    <div class="admin-user-chip">
+                    <button type="button" class="admin-user-chip" data-bs-toggle="modal" data-bs-target="#adminOwnPasswordModal" aria-label="<?php echo admin_e(admin_current_locale()==='pl'?'Zmień swoje hasło':'Change your password'); ?>" title="<?php echo admin_e(admin_current_locale()==='pl'?'Zmień swoje hasło':'Change your password'); ?>">
                         <img src="/img/admin_avatar.png" alt="admin avatar">
-                        <div>
+                        <span class="admin-user-chip__text">
                             <strong><?php echo admin_e((string)$adminUser['login_name']); ?></strong>
                             <span><?php echo admin_e((string)($adminUser['role_name'] ?? '')); ?></span>
-                        </div>
-                    </div>
+                        </span>
+                    </button>
                 </div>
             </header>
+
+
+            <div class="modal fade" id="adminOwnPasswordModal" tabindex="-1" aria-labelledby="adminOwnPasswordTitle" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content">
+                    <div class="modal-header"><h5 class="modal-title" id="adminOwnPasswordTitle"><?php echo admin_e(admin_t($messages, 'settings_access_title', 'Administrator access')); ?></h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+                    <div class="modal-body"><form method="post" class="admin-settings-access__form">
+                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                            <div class="row g-3">
+                                                <div class="col-12">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></label>
+                                                    <input type="text" class="form-control form-control-lg" value="<?php echo admin_e((string)$adminUser['login_name']); ?>" readonly>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_current_password', 'Current password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" name="current_password" autocomplete="current-password" required>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_new_password', 'New password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" name="new_password" autocomplete="new-password" required>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_repeat_password', 'Repeat new password')); ?></label>
+                                                    <input type="password" class="form-control form-control-lg" name="repeat_password" autocomplete="new-password" required>
+                                                </div>
+                                            </div>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_change_password"><?php echo admin_e(admin_t($messages, 'settings_save_password', 'Save new password')); ?></button>
+                                            </div>
+                                        </form></div>
+                </div></div>
+            </div>
 
             <div
                 class="modal fade"
@@ -6814,7 +6743,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php echo admin_e(admin_t($messages, 'payment_accept_modal_underpaid_warning', 'Warning: if the customer paid less and you credit less balance, they may not have enough funds to buy the selected order.')); ?>
                                     </div>
 
-                                    <div class="admin-crypto-accept-modal__fields">
+                                    <div class="admin-crypto-accept-modal__fields" data-admin-crypto-accept-amount-fields hidden>
                                         <label class="admin-crypto-accept-modal__field">
                                             <span class="admin-crypto-accept-modal__field-label" data-admin-crypto-accept-crypto-input-label><?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_crypto_label', 'Received {asset}', ['asset' => 'Crypto'])); ?></span>
                                             <input type="number" min="0.00000001" step="0.00000001" class="form-control form-control-lg" data-admin-crypto-accept-crypto-input inputmode="decimal">
@@ -6829,7 +6758,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </label>
                                     </div>
 
-                                    <div class="admin-crypto-accept-modal__hint"><?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?></div>
+                                    <div class="admin-crypto-accept-modal__hint" data-admin-crypto-accept-amount-hint hidden><?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?></div>
                                 </div>
 
                                 <aside class="admin-crypto-accept-modal__explorer-col">
@@ -6842,7 +6771,16 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             </div>
                         </div>
                         <div class="modal-footer admin-crypto-accept-modal__footer">
-                            <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal"><?php echo admin_e(admin_t($messages, 'close', 'Close')); ?></button>
+                            <form method="post" action="/admin/?page=payments" class="admin-crypto-accept-modal__cancel" data-admin-crypto-accept-cancel hidden>
+                                <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+                                <input type="hidden" name="admin_payment_quick_action" value="1">
+                                <input type="hidden" name="payment_type" value="crypto">
+                                <input type="hidden" name="payment_id" data-admin-crypto-accept-cancel-id>
+                                <input type="hidden" name="quick_action" value="cancel">
+                                <input type="hidden" name="payment_type_filter" value="crypto">
+                                <input type="hidden" name="payment_scope" value="cancelled">
+                                <button type="submit" class="btn btn-danger"><i class="bi bi-x-circle" aria-hidden="true"></i> <?php echo admin_e(admin_t($messages, 'payment_accept_modal_cancel_payment', 'Cancel payment')); ?></button>
+                            </form>
                             <button type="button" class="btn btn-success btn-lg admin-crypto-accept-modal__submit" data-admin-crypto-accept-submit><?php echo admin_e(admin_t($messages, 'payment_accept_modal_submit', 'Accept payment')); ?></button>
                         </div>
                     </div>
@@ -6905,26 +6843,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         ?>
                             <article class="admin-metric-card admin-metric-card--<?php echo admin_e($card['tone']); ?>">
                                 <span class="admin-metric-card__label"><?php echo admin_e($card['label']); ?></span>
-                                <strong class="admin-metric-card__value"><?php echo admin_e($periodRevenueLabel); ?></strong>
+                                <strong class="admin-metric-card__value<?php echo (float)($periodMetric['paid_revenue'] ?? 0) > 0 ? ' is-positive is-period-' . admin_e($card['key']) : ((float)($periodMetric['paid_revenue'] ?? 0) == 0 ? ' is-zero' : ''); ?>"><?php echo admin_e($periodRevenueLabel); ?></strong>
                                 <span class="admin-metric-card__meta">
-                                    <?php echo admin_e(admin_t($messages, 'dashboard_period_orders_meta', '{count} paid orders', [
-                                        'count' => (string)((int)($periodMetric['paid_orders'] ?? 0)),
-                                    ])); ?>
+                                    <?php echo str_replace(
+                                        '{count}',
+                                        '<strong' . ((int)($periodMetric['paid_orders'] ?? 0) === 0 ? ' class="is-zero"' : '') . '>' . (int)($periodMetric['paid_orders'] ?? 0) . '</strong>',
+                                        admin_e(admin_t($messages, 'dashboard_period_orders_meta', '{count} paid orders'))
+                                    ); ?>
                                 </span>
                             </article>
                         <?php endforeach; ?>
                     </section>
 
-                    <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')) !== ''): ?>
+                    <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')) !== '' || !empty($panelTiersConfig['enabled'])): ?>
                     <aside class="admin-panel-subscription-strip<?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['is_expired']) ? ' is-expired' : (!empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? ' is-due' : ''); ?>">
                         <span class="admin-panel-subscription-strip__icon" aria-hidden="true"><i class="bi <?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['is_expired']) ? 'bi-calendar-x' : (!empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? 'bi-exclamation-triangle' : 'bi-calendar2-check'); ?>"></i></span>
                         <div class="admin-panel-subscription-strip__content">
                             <span class="admin-panel-subscription-strip__label"><?php echo admin_e(admin_t($messages, 'admin_panel_subscription_strip_label', 'Panel Admina opłacony do')); ?></span>
-                            <time class="admin-panel-subscription-strip__date" datetime="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until'] ?? '')); ?>"><?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['paid_until_label']); ?></time>
+                            <time class="admin-panel-subscription-strip__date" datetime="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until'] ?? '')); ?>"><?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?: admin_panel_tiers_text('no_date'))); ?></time>
                         </div>
                         <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['renewal_url'] ?? '')) !== ''): ?>
-                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn admin-panel-subscription-strip__link<?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? ' btn-danger is-urgent' : ''; ?>">
-                                <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?>
+                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn admin-panel-subscription-strip__link<?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? ' btn-danger is-urgent' : ''; ?>" aria-label="<?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?>" title="<?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?>">
+                                <span class="admin-panel-subscription-strip__link-label"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?></span>
                                 <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
                             </a>
                         <?php endif; ?>
@@ -6974,17 +6914,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         <ul class="nav nav-tabs admin-dashboard-tabs" role="tablist">
                             <li class="nav-item" role="presentation">
                                 <button class="nav-link<?php echo $dashboardSalesView === 'trend' ? ' active' : ''; ?>" id="adminDashboardTrendTab" data-bs-toggle="tab" data-bs-target="#adminDashboardTrendPane" type="button" role="tab" aria-controls="adminDashboardTrendPane" aria-selected="<?php echo $dashboardSalesView === 'trend' ? 'true' : 'false'; ?>">
-                                    <?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_trend', 'Trend sprzedaży')); ?>
+                                    <span class="d-none d-md-inline"><?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_trend', 'Trend sprzedaży')); ?></span><span class="d-md-none"><?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_trend_short', 'Trend')); ?></span>
                                 </button>
                             </li>
                             <li class="nav-item" role="presentation">
                                 <button class="nav-link<?php echo $dashboardSalesView === 'monthly' ? ' active' : ''; ?>" id="adminDashboardMonthlyTab" data-bs-toggle="tab" data-bs-target="#adminDashboardMonthlyPane" type="button" role="tab" aria-controls="adminDashboardMonthlyPane" aria-selected="<?php echo $dashboardSalesView === 'monthly' ? 'true' : 'false'; ?>">
-                                    <?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_monthly', 'Statystyki miesięczne')); ?>
+                                    <span class="d-none d-md-inline"><?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_monthly', 'Statystyki miesięczne')); ?></span><span class="d-md-none"><?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_monthly_short', 'Statystyki')); ?></span>
                                 </button>
                             </li>
                             <li class="nav-item" role="presentation">
                                 <button class="nav-link<?php echo $dashboardSalesView === 'summary' ? ' active' : ''; ?>" id="adminDashboardSummaryTab" data-bs-toggle="tab" data-bs-target="#adminDashboardSummaryPane" type="button" role="tab" aria-controls="adminDashboardSummaryPane" aria-selected="<?php echo $dashboardSalesView === 'summary' ? 'true' : 'false'; ?>">
-                                    <?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_summary', 'Podsumowanie sprzedaży')); ?>
+                                    <span class="d-none d-md-inline"><?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_summary', 'Podsumowanie sprzedaży')); ?></span><span class="d-md-none"><?php echo admin_e(admin_t($messages, 'dashboard_sales_tab_summary_short', 'Podsumowanie')); ?></span>
                                 </button>
                             </li>
                         </ul>
@@ -7816,7 +7756,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             'Dogecoin',
                                             'Bitcoina',
                                             'Bitcoin',
-                                            'Rango',
                                             'Polygon',
                                             'Solana',
                                             'USDT',
@@ -7833,10 +7772,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             return '<strong class="admin-swap-help__asset">' . $matches[1] . '</strong>';
                                         }, $escaped) ?? $escaped;
                                     };
-                                    $swapModeCount = ($swapConverterEnabled ? 1 : 0) + ($hinkalPrivateSendEnabled ? 1 : 0) + ($rangoConverterEnabled ? 1 : 0) + ($mixerEnabled ? 1 : 0);
+                                    $swapModeCount = ($swapConverterEnabled ? 1 : 0) + ($hinkalPrivateSendEnabled ? 1 : 0) + ($mixerEnabled ? 1 : 0);
                                     $swapDefaultMode = $mixerEnabled
                                         ? 'mixer'
-                                        : ($swapConverterEnabled ? 'lifi' : ($hinkalPrivateSendEnabled ? 'private' : ($rangoConverterEnabled ? 'rango' : '')));
+                                        : ($swapConverterEnabled ? 'lifi' : ($hinkalPrivateSendEnabled ? 'private' : ''));
                                     $mixerInputAssetLabels = [];
                                     foreach ($mixerAllowedInputAssets as $assetKey) {
                                         $mixerInputAssetLabels[] = (string)($mixerInputAssetOptions[$assetKey]['label'] ?? $assetKey);
@@ -7977,11 +7916,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php echo admin_e(admin_t($messages, 'swap_converter_mode_private', 'Wyślij prywatnie')); ?>
                                                         </button>
                                                     <?php endif; ?>
-                                                    <?php if ($rangoConverterEnabled): ?>
-                                                        <button type="button" class="admin-swap-mode__option<?php echo $swapDefaultMode === 'rango' ? ' is-active' : ''; ?>" data-admin-swap-mode="rango" role="tab" aria-selected="<?php echo $swapDefaultMode === 'rango' ? 'true' : 'false'; ?>">
-                                                            <?php echo admin_e(admin_t($messages, 'swap_converter_mode_rango', 'BTC/DOGE')); ?>
-                                                        </button>
-                                                    <?php endif; ?>
+
                                                 </div>
                                             </div>
                                         <?php endif; ?>
@@ -8506,32 +8441,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
                                         <?php endif; ?>
 
-                                        <?php if ($rangoConverterEnabled): ?>
-                                            <div class="admin-swap-view" data-admin-swap-view="rango"<?php echo $swapDefaultMode !== 'rango' ? ' hidden' : ''; ?>>
-                                                <?php if ($rangoApiKey === ''): ?>
-                                                    <div class="alert alert-warning mb-0">
-                                                        <?php echo admin_e(admin_t($messages, 'rango_converter_missing_api_key', 'Rango API key is missing. Fill it in Settings (admin mode).')); ?>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <div
-                                                        class="admin-rango-widget"
-                                                        id="adminRangoConverterMount"
-                                                        data-api-key="<?php echo admin_e($rangoApiKey); ?>"
-                                                        data-walletconnect-project-id="<?php echo admin_e($rangoWalletConnectProjectId); ?>"
-                                                        data-affiliate-ref="<?php echo admin_e($rangoAffiliateRef); ?>"
-                                                        data-affiliate-percent="<?php echo admin_e(number_format($rangoAffiliateFeePercent, 2, '.', '')); ?>"
-                                                        data-affiliate-wallets="<?php echo admin_e($rangoAffiliateWallets); ?>"
-                                                        data-enable-centralized-swappers="<?php echo $rangoCentralizedSwappersEnabled ? '1' : '0'; ?>"
-                                                        data-loading-label="<?php echo admin_e(admin_t($messages, 'rango_converter_loading', 'Loading Rango widget...')); ?>"
-                                                        data-error-label="<?php echo admin_e(admin_t($messages, 'rango_converter_error', 'Unable to load Rango widget. Check your API key and configuration.')); ?>">
-                                                        <div class="admin-swap-loader" role="status" aria-live="polite">
-                                                            <span class="admin-swap-loader__spinner" aria-hidden="true"></span>
-                                                            <span><?php echo admin_e(admin_t($messages, 'rango_converter_loading', 'Loading Rango widget...')); ?></span>
-                                                        </div>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </div>
-                                        <?php endif; ?>
+
                                     </section>
                                     <?php
                                     break;
@@ -8911,7 +8821,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
 		                                                                <div class="admin-orders-simple-table__actions">
 			                                                                    <button type="button" class="admin-orders-details admin-orders-simple-table__icon-btn <?php echo admin_e($orderDetailsButtonClass); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>">
-			                                                                        <i class="bi bi-eye" aria-hidden="true"></i>
+			                                                                        <i class="bi bi-search" aria-hidden="true"></i>
 			                                                                    </button>
                                                                         <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-expanded="false" aria-controls="adminOrderActions<?php echo (int)$orderId; ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_row_more_actions', 'More actions for order') . ' #' . $orderId); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
                                                                         <div id="adminOrderActions<?php echo (int)$orderId; ?>" class="admin-orders-menu" data-admin-orders-menu hidden>
@@ -9113,7 +9023,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
 	                                                                <div class="admin-orders-simple-table__actions">
 		                                                                    <button type="button" class="admin-orders-details admin-orders-simple-table__icon-btn <?php echo admin_e($orderDetailsButtonClass); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>">
-		                                                                        <i class="bi bi-eye" aria-hidden="true"></i>
+		                                                                        <i class="bi bi-search" aria-hidden="true"></i>
 		                                                                    </button>
                                                                         <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-expanded="false" aria-controls="adminOrderActions<?php echo (int)$orderId; ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_row_more_actions', 'More actions for order') . ' #' . $orderId); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
                                                                         <div id="adminOrderActions<?php echo (int)$orderId; ?>" class="admin-orders-menu" data-admin-orders-menu hidden>
@@ -9753,6 +9663,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <?php echo admin_e(admin_t($messages, 'order_extend_no_packages', 'No eligible extension packages are available for this provider. Trial products and packages up to 24 hours are hidden here.')); ?>
                                                                                     </div>
                                                                                 <?php endif; ?>
+                                                                            </div>
+                                                                            <div class="admin-order-extend__note" data-admin-order-extend-note hidden>
+                                                                                <label class="form-label" for="extendSupportNote<?php echo (int)$row['id']; ?>"><?php echo admin_e(admin_t($messages, 'order_support_note', 'Support note (visible only to administrators)')); ?></label>
+                                                                                <textarea id="extendSupportNote<?php echo (int)$row['id']; ?>" class="form-control" name="extend_support_note" rows="3" maxlength="4000" disabled></textarea>
+                                                                                <div class="form-text"><?php echo admin_e(admin_t($messages, 'order_extend_support_note_help', 'Optional. This annotation will be appended to the existing support note when the extension is saved.')); ?></div>
                                                                             </div>
                                                                             <div class="admin-order-extend__balance">
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_label', 'Charge customer balance')); ?></label>
@@ -12444,7 +12359,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
 
                                             <div class="admin-payments-inline-actions">
-                                                <span class="admin-payments-inline-actions__label"><?php echo admin_e(admin_t($messages, 'payment_quick_actions_label', 'Quick actions')); ?></span>
+                                                <span class="admin-payments-inline-actions__label"><i class="bi bi-lightning-charge" aria-hidden="true"></i><?php echo admin_e(admin_t($messages, 'payment_quick_actions_label', 'Quick actions')); ?></span>
                                                 <form method="post" class="admin-payments-inline-actions__form">
                                                     <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                     <input type="hidden" name="admin_payment_quick_action" value="1">
@@ -12462,29 +12377,32 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         'saved_payment' => 1,
                                                     ])); ?>">
                                                     <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
-                                                        <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_accept', '')); ?>"<?php if ($paymentEditorType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentEditorAcceptPayloadJson); ?>"<?php endif; ?>>
+                                                        <button type="submit" class="btn btn-success btn-sm admin-payment-accept-cta" name="quick_action" value="accept" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_accept', '')); ?>"<?php if ($paymentEditorType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentEditorAcceptPayloadJson); ?>"<?php endif; ?>>
                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
+                                                            <i class="bi bi-chevron-double-right" aria-hidden="true"></i>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
                                                         <button type="submit" class="btn btn-danger btn-sm" name="quick_action" value="cancel" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_cancel', '')); ?>">
-                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
+                                                            <i class="bi bi-x-circle" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && (string)($paymentEditor['status'] ?? '') === 'expired'): ?>
                                                         <button type="submit" class="btn btn-warning btn-sm" name="quick_action" value="renew" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_renew', '')); ?>">
-                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
+                                                            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorCanBlockchainCheck): ?>
                                                         <button type="button" class="btn btn-outline-dark btn-sm" data-admin-payment-blockchain-check data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_check', '')); ?>" data-loading-label="<?php echo admin_e(admin_t($messages, 'payment_blockchain_check_loading', 'Checking...')); ?>" data-explorer-label="<?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?>">
                                                             <i class="bi bi-search" aria-hidden="true"></i>
-                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_check_blockchain', 'Check Blockchain')); ?></span>
+                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_check_blockchain', 'Check explorer')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true)): ?>
-                                                        <button type="submit" class="btn btn-dark btn-sm" name="quick_action" value="archive" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_archive', '')); ?>">
-                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                        <?php $paymentArchiveNeedsWithdrawal = $paymentEditorType === 'crypto' && in_array((string)($paymentEditor['status'] ?? ''), ['confirmed','approved','paid','completed'], true); ?>
+                                                        <button type="submit" class="btn btn-dark btn-sm<?php echo $paymentArchiveNeedsWithdrawal ? ' admin-payment-archive-cta' : ''; ?>" name="quick_action" value="archive" data-admin-action-help title="<?php echo admin_e($paymentArchiveNeedsWithdrawal ? (admin_current_locale()==='pl'?'Przenieś płatność do archiwum dopiero po wypłacie środków na swój główny portfel.':'Archive this payment only after transferring the funds to your main wallet.') : admin_t($messages, 'payment_action_help_archive', '')); ?>">
+                                                            <span><?php echo admin_e($paymentArchiveNeedsWithdrawal ? (admin_current_locale()==='pl'?'Przenieś do Archiwum':'Move to archive') : admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
+                                                            <?php if ($paymentArchiveNeedsWithdrawal): ?><i class="bi bi-chevron-double-right" aria-hidden="true"></i><?php endif; ?>
                                                         </button>
                                                     <?php endif; ?>
                                                 </form>
@@ -12516,7 +12434,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>:
                                                             <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$paymentEditorOrderId); ?>" class="admin-payments-summary-card__order-link">#<?php echo admin_e((string)$paymentEditorOrderId); ?></a>
                                                         <?php else: ?>
-                                                            <span class="badge bg-info text-dark admin-payments-summary-card__topup-badge"><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Top-up')); ?></span>
+                                                            <span class="admin-payments-summary-card__topup-badge"><i class="bi bi-wallet2" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Top-up')); ?></span></span>
                                                         <?php endif; ?>
                                                     </small>
                                                     <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="admin-payments-summary-card__handle"><?php echo admin_e($paymentEditorCustomerLabel); ?></a>
@@ -12528,14 +12446,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                                             <?php
                                             $paymentEditorStatusRaw = strtolower(trim((string)($paymentEditor['status'] ?? '')));
-                                            $paymentEditorStatusSelectClass = 'admin-payment-status-select--warning';
-                                            if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed', 'expired'], true)) {
-                                                $paymentEditorStatusSelectClass = 'admin-payment-status-select--danger';
-                                            } elseif (in_array($paymentEditorStatusRaw, ['awaiting_confirmation', 'awaiting_review'], true)) {
-                                                $paymentEditorStatusSelectClass = 'admin-payment-status-select--info';
-                                            } elseif (in_array($paymentEditorStatusRaw, ['confirmed', 'approved', 'paid', 'completed'], true)) {
-                                                $paymentEditorStatusSelectClass = 'admin-payment-status-select--success';
+                                            $paymentStatusGuidance = [];
+                                            foreach (admin_payment_status_options($paymentEditorType, $paymentEditorStatusRaw) as $status) {
+                                                $paymentStatusGuidance[$status] = admin_payment_status_guidance($paymentEditorType, $status);
                                             }
+                                            $paymentStatusHint = admin_payment_status_guidance($paymentEditorType, $paymentEditorStatusRaw);
+                                            $paymentEditorStatusSelectClass = 'admin-payment-status-select--' . $paymentStatusHint['tone'];
                                             ?>
                                             <form method="post" class="admin-editor-form">
                                                 <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
@@ -12547,13 +12463,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-12" data-admin-payment-blockchain-check-result hidden></div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="payment_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
-                                                        <select class="form-select admin-payment-status-select <?php echo admin_e($paymentEditorStatusSelectClass); ?>" id="payment_status" name="status">
+                                                        <select class="form-select admin-payment-status-select <?php echo admin_e($paymentEditorStatusSelectClass); ?>" id="payment_status" name="status" aria-describedby="payment_status_help">
                                                             <?php foreach (admin_payment_status_options($paymentEditorType, (string)($paymentEditor['status'] ?? '')) as $paymentStatusOption): ?>
                                                                 <option value="<?php echo admin_e($paymentStatusOption); ?>"<?php echo (string)($paymentEditor['status'] ?? '') === $paymentStatusOption ? ' selected' : ''; ?>>
                                                                     <?php echo admin_e(admin_t($messages, 'enum_' . $paymentStatusOption, ucfirst(str_replace('_', ' ', $paymentStatusOption)))); ?>
                                                                 </option>
                                                             <?php endforeach; ?>
                                                         </select>
+                                                        <div class="admin-payment-status-hint" data-payment-status-hint data-tone="<?php echo admin_e($paymentStatusHint['tone']); ?>" data-guidance="<?php echo admin_e(json_encode($paymentStatusGuidance, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)); ?>" id="payment_status_help" aria-live="polite" aria-atomic="true">
+                                                            <span class="admin-payment-status-hint__icon" aria-hidden="true"><i class="bi <?php echo admin_e($paymentStatusHint['icon']); ?>"></i></span>
+                                                            <div>
+                                                                <strong data-status-hint-title><?php echo admin_e($paymentStatusHint['title']); ?></strong>
+                                                                <p data-status-hint-text><?php echo admin_e($paymentStatusHint['text']); ?></p>
+                                                            </div>
+                                                        </div>
                                                         <?php if ($paymentAmountsMismatch): ?>
                                                             <div class="alert alert-warning admin-payment-mismatch-alert mb-0">
                                                                 <?php echo admin_e(admin_t($messages, 'payment_amount_mismatch_warning', 'The credited amount differs from the requested amount. Check the payment carefully before saving or approving it.')); ?>
@@ -15843,7 +15766,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $settingsProtectedFeatureDisabledAttr = !$settingsProtectedFeatureEditEnabled ? ' disabled' : '';
                                     $settingsProtectedSiteFieldDisabledAttr = !$settingsAdminMode ? ' disabled' : '';
                                     $settingsAdminModeUrl = '/admin/?page=settings&admin=true';
-                                    $settingsAdminModeHintVisible = strtolower(trim((string)($adminUser['login_name'] ?? ''))) === 'admin';
+                                    $settingsAdminModeHintVisible = admin_user_can_use_admin_mode($adminUser);
                                     $mixerActiveCryptoCodes = [];
                                     foreach (admin_crypto_asset_rows($db, true) as $cryptoAssetRow) {
                                         $cryptoAssetCode = strtoupper(trim((string)($cryptoAssetRow['code'] ?? '')));
@@ -16035,6 +15958,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <ul class="nav nav-tabs admin-settings-tabs" id="adminSettingsTabs" role="tablist">
                                                 <li class="nav-item" role="presentation"><button class="nav-link active" id="admin-settings-site-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-site-pane" type="button" role="tab" aria-controls="admin-settings-site-pane" aria-selected="true"><?php echo admin_e(admin_t($messages, 'settings_site_title', 'Site identity and page data')); ?></button></li>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-features-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-features-pane" type="button" role="tab" aria-controls="admin-settings-features-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_features_title', 'Payments and assignment rules')); ?></button></li>
+                                                <?php if ($settingsAdminMode): ?><li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-crypto-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-crypto-pane" type="button" role="tab" aria-controls="admin-settings-crypto-pane" aria-selected="false">Crypto</button></li><?php endif; ?>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-crypto-preview-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-crypto-preview-pane" type="button" role="tab" aria-controls="admin-settings-crypto-preview-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_crypto_preview_status_title', 'Crypto preview status')); ?></button></li>
                                                 <?php if ($settingsAdminMode): ?>
                                                 <li class="nav-item" role="presentation"><button class="nav-link" id="admin-settings-smtp-tab" data-bs-toggle="tab" data-bs-target="#admin-settings-smtp-pane" type="button" role="tab" aria-controls="admin-settings-smtp-pane" aria-selected="false"><?php echo admin_e(admin_t($messages, 'settings_smtp_title', 'SMTP connection')); ?></button></li>
@@ -16233,7 +16157,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             <p><?php echo admin_e(admin_t($messages, 'settings_features_intro', 'Control maintenance mode, payments and assignment rules from one place.')); ?></p>
                                         </div>
 
-                                        <form method="post" class="admin-settings-access__form">
+                                        <form method="post" id="adminSettingsFeaturesForm" class="admin-settings-access__form">
                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                             <div class="row g-4">
                                                 <div class="col-12">
@@ -16389,6 +16313,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_apps_page_enabled_help', 'If OFF, the Apps page and Apps button are hidden for users.')); ?></small>
                                                 </div>
+                                                <?php if ($settingsAdminMode): ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="customer_type_switch_enabled" name="customer_type_switch_enabled"<?php echo admin_customer_type_switch_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
@@ -16396,6 +16321,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_customer_type_switch_enabled_help', 'If OFF, the user test switch for changing account mode between client and reseller is hidden on the homepage.')); ?></small>
                                                 </div>
+                                                <?php endif; ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="application_instructions_enabled" name="application_instructions_enabled"<?php echo admin_application_instructions_enabled($appSettings) ? ' checked' : ''; ?>>
@@ -16403,6 +16329,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_application_instructions_enabled_help', 'If OFF, Smart IPTV, OTT Player and NewLook guides are hidden. Payment instructions stay visible.')); ?></small>
                                                 </div>
+                                                <?php if ($settingsAdminMode): ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="page_guidance_enabled" name="page_guidance_enabled"<?php echo admin_page_guidance_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
@@ -16410,6 +16337,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_page_guidance_enabled_help', 'If OFF, the blue help box under pages and the large homepage overview for guests are hidden.')); ?></small>
                                                 </div>
+                                                <?php endif; ?>
+                                                <?php if ($settingsAdminMode): ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="payment_test_mode_notice_enabled" name="payment_test_mode_notice_enabled"<?php echo admin_payment_test_mode_notice_enabled($appSettings) ? ' checked' : ''; ?><?php echo $settingsProtectedFeatureDisabledAttr; ?>>
@@ -16417,7 +16346,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled_help', 'If ON, users still can generate bank and crypto payment requests, but a yellow warning says the service is in test mode and they should not send any money.')); ?></small>
                                                 </div>
-                                                <?php if ($settingsAdminMode): ?>
+                                                <?php endif; ?>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
                                                             <input class="form-check-input" type="checkbox" role="switch" id="crypto_auto_accept_enabled" name="crypto_auto_accept_enabled"<?php echo admin_crypto_auto_accept_enabled($appSettings) ? ' checked' : ''; ?>>
@@ -16425,6 +16354,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_enabled_help', 'If ON, maintenance can automatically accept clear crypto payments that arrive shortly after the request, match the configured amount threshold and use an unambiguous wallet.')); ?></small>
                                                     </div>
+                                                <?php if ($settingsAdminMode): ?>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="crypto_auto_accept_window_minutes"><?php echo admin_e(admin_t($messages, 'settings_crypto_auto_accept_window_minutes', 'Auto-accept window')); ?></label>
                                                         <div class="input-group">
@@ -16454,7 +16384,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <input type="email" class="form-control" id="crypto_daily_backup_email" name="crypto_daily_backup_email" value="<?php echo admin_e((string)($appSettings['crypto_daily_backup_email'] ?? '')); ?>" placeholder="<?php echo admin_e((string)($appSettings['support_email'] ?? 'support@example.com')); ?>">
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_daily_backup_email_help', 'Leave empty to use the main support/admin email from site settings.')); ?></small>
                                                 </div>
-                                                <?php admin_provider_remote_render_settings($appSettings, $currentLocale); ?>
+                                                <?php if ($settingsAdminMode) admin_provider_remote_render_settings($appSettings, $currentLocale); ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="history_cleanup_enabled" name="history_cleanup_enabled"<?php echo !empty($appSettings['history_cleanup_enabled']) ? ' checked' : ''; ?>>
@@ -16524,10 +16454,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_billing_auto_issue_email_enabled_help', 'When ON, order approval shows an optional checkbox for issuing and emailing a paid document. The checkbox remains OFF by default.')); ?></small>
                                                     </div>
                                                 <?php endif; ?>
-                                                <?php if ($settingsAdminMode): ?>
+                                                                                            </div>
+                                            <hr>
+                                            <div class="admin-settings-access__actions">
+                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_feature_settings"><?php echo admin_e(admin_t($messages, 'settings_save_features', 'Save service settings')); ?></button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                            </div>
+                                            <?php if ($settingsAdminMode): ?>
+                                            <div class="tab-pane fade" id="admin-settings-crypto-pane" role="tabpanel" aria-labelledby="admin-settings-crypto-tab" tabindex="0">
+                                                <div class="admin-settings-access">
+                                                    <div class="admin-settings-access__copy"><h3>Crypto</h3><p>LI.FI · Swapper · Hinkal</p></div>
+                                                    <div class="row g-3">
+<?php if ($settingsAdminMode): ?>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="swap_converter_enabled" name="swap_converter_enabled" data-admin-feature-settings-toggle aria-controls="settingsSwapConverterBody"<?php echo $swapConverterEnabled ? ' checked' : ''; ?>>
+                                                            <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="swap_converter_enabled" name="swap_converter_enabled" data-admin-feature-settings-toggle aria-controls="settingsSwapConverterBody"<?php echo $swapConverterEnabled ? ' checked' : ''; ?>>
                                                             <label class="form-check-label" for="swap_converter_enabled"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_enabled', 'Swap Converter (LI.FI)')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_enabled_help', 'If OFF, only the LI.FI exchange mode is hidden from the Swap Converter page. The sidebar entry stays visible while any swap module is ON.')); ?></small>
@@ -16536,7 +16480,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div class="row g-3">
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="swap_converter_integrator"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_integrator', 'Integrator (LI.FI)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="text"
                                                             class="form-control"
                                                             id="swap_converter_integrator"
@@ -16547,7 +16491,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="swap_converter_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_fee_percent', 'Integrator fee (%)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="0"
                                                             max="10"
@@ -16560,7 +16504,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="swap_converter_api_key"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_api_key', 'API key (LI.FI)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="text"
                                                             class="form-control"
                                                             id="swap_converter_api_key"
@@ -16571,7 +16515,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="swap_converter_default_from_asset"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_default_from_asset', 'Bridge default Asset A')); ?></label>
-                                                        <select class="form-select" id="swap_converter_default_from_asset" name="swap_converter_default_from_asset">
+                                                        <select form="adminSettingsFeaturesForm" class="form-select" id="swap_converter_default_from_asset" name="swap_converter_default_from_asset">
                                                             <?php foreach ($swapConverterDefaultAssetOptions as $assetKey => $assetOption): ?>
                                                                 <option value="<?php echo admin_e((string)$assetKey); ?>"<?php echo $swapConverterDefaultFromAsset === (string)$assetKey ? ' selected' : ''; ?>>
                                                                     <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
@@ -16582,7 +16526,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="swap_converter_default_to_asset"><?php echo admin_e(admin_t($messages, 'settings_swap_converter_default_to_asset', 'Bridge default Asset B')); ?></label>
-                                                        <select class="form-select" id="swap_converter_default_to_asset" name="swap_converter_default_to_asset">
+                                                        <select form="adminSettingsFeaturesForm" class="form-select" id="swap_converter_default_to_asset" name="swap_converter_default_to_asset">
                                                             <?php foreach ($swapConverterDefaultAssetOptions as $assetKey => $assetOption): ?>
                                                                 <option value="<?php echo admin_e((string)$assetKey); ?>"<?php echo $swapConverterDefaultToAsset === (string)$assetKey ? ' selected' : ''; ?>>
                                                                     <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
@@ -16602,7 +16546,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 ?>
                                                                 <div class="col-sm-6 col-xl-4">
                                                                     <div class="form-check">
-                                                                        <input
+                                                                        <input form="adminSettingsFeaturesForm"
                                                                             class="form-check-input"
                                                                             type="checkbox"
                                                                             id="<?php echo admin_e($chainInputId); ?>"
@@ -16626,7 +16570,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="hinkal_private_send_enabled" name="hinkal_private_send_enabled" data-admin-feature-settings-toggle aria-controls="settingsHinkalPrivateSendBody"<?php echo $hinkalPrivateSendEnabled ? ' checked' : ''; ?>>
+                                                            <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="hinkal_private_send_enabled" name="hinkal_private_send_enabled" data-admin-feature-settings-toggle aria-controls="settingsHinkalPrivateSendBody"<?php echo $hinkalPrivateSendEnabled ? ' checked' : ''; ?>>
                                                             <label class="form-check-label" for="hinkal_private_send_enabled"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_enabled', 'Private Send (Hinkal)')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_enabled_help', 'If OFF, the Private Send mode is hidden from the Swap Converter page.')); ?></small>
@@ -16635,7 +16579,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <div class="row g-3">
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="hinkal_private_send_input_asset"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_input_asset', 'Asset A (sender pays)')); ?></label>
-                                                        <select class="form-select" id="hinkal_private_send_input_asset" name="hinkal_private_send_input_asset">
+                                                        <select form="adminSettingsFeaturesForm" class="form-select" id="hinkal_private_send_input_asset" name="hinkal_private_send_input_asset">
                                                             <option value="POL"<?php echo $hinkalPrivateSendInputAsset === 'POL' ? ' selected' : ''; ?>>POL (Polygon)</option>
                                                             <option value="USDT"<?php echo $hinkalPrivateSendInputAsset === 'USDT' ? ' selected' : ''; ?>>USDT (Polygon)</option>
                                                         </select>
@@ -16643,12 +16587,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_output_asset', 'Asset B (recipient gets)')); ?></label>
-                                                        <input type="text" class="form-control" value="USDT (Polygon)" disabled>
+                                                        <input form="adminSettingsFeaturesForm" type="text" class="form-control" value="USDT (Polygon)" disabled>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_output_asset_help', 'The private payout asset is always USDT on Polygon.')); ?></small>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="hinkal_private_send_fee_wallet"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_wallet', 'Hinkal fee wallet (Polygon)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="text"
                                                             class="form-control"
                                                             id="hinkal_private_send_fee_wallet"
@@ -16659,7 +16603,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="hinkal_private_send_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_fee_percent', 'Hinkal fee (%)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             class="form-control"
                                                             id="hinkal_private_send_fee_percent"
@@ -16672,7 +16616,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="hinkal_private_send_notification_email"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_notification_email', 'Hinkal notification email')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="email"
                                                             class="form-control"
                                                             id="hinkal_private_send_notification_email"
@@ -16684,7 +16628,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-6 d-flex align-items-center">
                                                         <div>
                                                             <div class="form-check form-switch">
-                                                                <input class="form-check-input" type="checkbox" role="switch" id="hinkal_private_send_show_fee_details" name="hinkal_private_send_show_fee_details"<?php echo $hinkalPrivateSendShowFeeDetails ? ' checked' : ''; ?>>
+                                                                <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="hinkal_private_send_show_fee_details" name="hinkal_private_send_show_fee_details"<?php echo $hinkalPrivateSendShowFeeDetails ? ' checked' : ''; ?>>
                                                                 <label class="form-check-label" for="hinkal_private_send_show_fee_details"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_show_fee_details', 'Show Hinkal fee details')); ?></label>
                                                             </div>
                                                             <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_hinkal_private_send_show_fee_details_help', 'If OFF, the sender sees only the recipient amount and its approximate USD value.')); ?></small>
@@ -16694,84 +16638,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="rango_converter_enabled" name="rango_converter_enabled" data-admin-feature-settings-toggle aria-controls="settingsRangoConverterBody"<?php echo $rangoConverterEnabled ? ' checked' : ''; ?>>
-                                                            <label class="form-check-label" for="rango_converter_enabled"><?php echo admin_e(admin_t($messages, 'settings_rango_converter_enabled', 'BTC/DOGE Converter (Rango)')); ?></label>
-                                                        </div>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_converter_enabled_help', 'If OFF, the BTC/DOGE tab is hidden from the Swap Converter page.')); ?></small>
-                                                    </div>
-                                                    <div class="col-12 admin-feature-settings__body" id="settingsRangoConverterBody" data-admin-feature-settings-body="rango_converter_enabled"<?php echo $rangoConverterEnabled ? '' : ' hidden'; ?>>
-                                                        <div class="row g-3">
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="rango_api_key"><?php echo admin_e(admin_t($messages, 'settings_rango_api_key', 'API key (Rango)')); ?></label>
-                                                        <input
-                                                            type="text"
-                                                            class="form-control"
-                                                            id="rango_api_key"
-                                                            name="rango_api_key"
-                                                            value="<?php echo admin_e($rangoApiKey); ?>"
-                                                            placeholder="Rango API key">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_api_key_help', 'Required when BTC/DOGE Converter is enabled.')); ?></small>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="rango_walletconnect_project_id"><?php echo admin_e(admin_t($messages, 'settings_rango_walletconnect_project_id', 'WalletConnect project ID')); ?></label>
-                                                        <input
-                                                            type="text"
-                                                            class="form-control"
-                                                            id="rango_walletconnect_project_id"
-                                                            name="rango_walletconnect_project_id"
-                                                            value="<?php echo admin_e($rangoWalletConnectProjectId); ?>"
-                                                            placeholder="WalletConnect Cloud project ID">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_walletconnect_project_id_help', 'Used by mobile wallets and WalletConnect connections.')); ?></small>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="rango_affiliate_ref"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_ref', 'Affiliate ref (Rango)')); ?></label>
-                                                        <input
-                                                            type="text"
-                                                            class="form-control"
-                                                            id="rango_affiliate_ref"
-                                                            name="rango_affiliate_ref"
-                                                            value="<?php echo admin_e($rangoAffiliateRef); ?>"
-                                                            placeholder="your-rango-ref">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_ref_help', 'Referral code from the Rango affiliate panel.')); ?></small>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <label class="form-label" for="rango_affiliate_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_fee_percent', 'Affiliate fee (%)')); ?></label>
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            max="3"
-                                                            step="0.01"
-                                                            class="form-control"
-                                                            id="rango_affiliate_fee_percent"
-                                                            name="rango_affiliate_fee_percent"
-                                                            value="<?php echo admin_e(number_format($rangoAffiliateFeePercent, 2, '.', '')); ?>">
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_fee_percent_help', 'Default 1%. Rango accepts the fee only when the affiliate ref and wallets are configured correctly.')); ?></small>
-                                                    </div>
-                                                    <div class="col-12">
-                                                        <label class="form-label" for="rango_affiliate_wallets"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_wallets', 'Affiliate wallets JSON (Rango)')); ?></label>
-                                                        <textarea
-                                                            class="form-control"
-                                                            id="rango_affiliate_wallets"
-                                                            name="rango_affiliate_wallets"
-                                                            rows="4"
-                                                            placeholder='{"BTC":"bc1...","DOGE":"D...","POLYGON":"0x...","BSC":"0x..."}'><?php echo admin_e($rangoAffiliateWallets); ?></textarea>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_affiliate_wallets_help', 'JSON object mapping route blockchain names to your fee wallet addresses, for example BTC, DOGE, POLYGON, BSC, ETH.')); ?></small>
-                                                    </div>
-                                                    <div class="col-12">
-                                                        <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="rango_enable_centralized_swappers" name="rango_enable_centralized_swappers"<?php echo $rangoCentralizedSwappersEnabled ? ' checked' : ''; ?>>
-                                                            <label class="form-check-label" for="rango_enable_centralized_swappers"><?php echo admin_e(admin_t($messages, 'settings_rango_enable_centralized_swappers', 'Enable centralized Rango routes')); ?></label>
-                                                        </div>
-                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_rango_enable_centralized_swappers_help', 'Recommended for BTC and DOGE routes because they often require providers such as SWFT/XO-style routing.')); ?></small>
-                                                    </div>
-                                                        </div>
-                                                    </div>
-                                                    <div class="col-12">
-                                                        <hr class="my-2">
-                                                    </div>
-                                                    <div class="col-12">
-                                                        <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="mixer_enabled" name="mixer_enabled" data-admin-feature-settings-toggle aria-controls="settingsMixerBody"<?php echo $mixerEnabled ? ' checked' : ''; ?>>
+                                                            <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="mixer_enabled" name="mixer_enabled" data-admin-feature-settings-toggle aria-controls="settingsMixerBody"<?php echo $mixerEnabled ? ' checked' : ''; ?>>
                                                             <label class="form-check-label" for="mixer_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled', 'Swapper (BTC/DOGE/SOL -> EVM vault)')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_enabled_help', 'If OFF, the internal Swapper tab is hidden from the Swap Converter page.')); ?></small>
@@ -16847,7 +16714,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <?php $mixerInputId = 'mixer_input_asset_' . strtolower((string)$assetKey); ?>
                                                                 <div class="col-sm-6">
                                                                     <div class="form-check">
-                                                                        <input
+                                                                        <input form="adminSettingsFeaturesForm"
                                                                             class="form-check-input"
                                                                             type="checkbox"
                                                                             id="<?php echo admin_e($mixerInputId); ?>"
@@ -16872,7 +16739,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 ?>
                                                                 <div class="col-sm-6">
                                                                     <div class="form-check">
-                                                                        <input
+                                                                        <input form="adminSettingsFeaturesForm"
                                                                             class="form-check-input"
                                                                             type="checkbox"
                                                                             id="<?php echo admin_e($mixerOutputId); ?>"
@@ -16893,7 +16760,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="mixer_default_input_asset"><?php echo admin_e(admin_t($messages, 'settings_mixer_default_input_asset', 'Swapper default Asset A')); ?></label>
-                                                        <select class="form-select" id="mixer_default_input_asset" name="mixer_default_input_asset">
+                                                        <select form="adminSettingsFeaturesForm" class="form-select" id="mixer_default_input_asset" name="mixer_default_input_asset">
                                                             <?php foreach ($mixerInputAssetOptions as $assetKey => $assetOption): ?>
                                                                 <option value="<?php echo admin_e((string)$assetKey); ?>"<?php echo $mixerDefaultInputAsset === (string)$assetKey ? ' selected' : ''; ?>>
                                                                     <?php echo admin_e((string)($assetOption['label'] ?? $assetKey)); ?>
@@ -16904,7 +16771,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="mixer_default_output_asset"><?php echo admin_e(admin_t($messages, 'settings_mixer_default_output_asset', 'Swapper default Asset B')); ?></label>
-                                                        <select class="form-select" id="mixer_default_output_asset" name="mixer_default_output_asset">
+                                                        <select form="adminSettingsFeaturesForm" class="form-select" id="mixer_default_output_asset" name="mixer_default_output_asset">
                                                             <?php foreach ($mixerOutputAssetOptions as $assetKey => $assetOption): ?>
                                                                 <?php $mixerDefaultOutputAvailable = !empty($assetOption['available']); ?>
                                                                 <option
@@ -16926,7 +16793,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                             </div>
                                                             <div class="form-check form-switch admin-mixer-settings-networks__visibility">
-                                                                <input class="form-check-input" type="checkbox" role="switch" id="mixer_show_pool_liquidity" name="mixer_show_pool_liquidity"<?php echo $mixerShowPoolLiquidity ? ' checked' : ''; ?>>
+                                                                <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="mixer_show_pool_liquidity" name="mixer_show_pool_liquidity"<?php echo $mixerShowPoolLiquidity ? ' checked' : ''; ?>>
                                                                 <label class="form-check-label" for="mixer_show_pool_liquidity"><?php echo admin_e(admin_t($messages, 'settings_mixer_show_pool_liquidity', 'Show pool balance in Swapper')); ?></label>
                                                             </div>
                                                             <ul class="nav nav-pills admin-mixer-settings-networks__tabs" role="tablist">
@@ -16991,7 +16858,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <div class="admin-mixer-settings-network">
                                                                             <div class="admin-mixer-settings-network__top">
                                                                                 <div class="form-check">
-                                                                                    <input
+                                                                                    <input form="adminSettingsFeaturesForm"
                                                                                         class="form-check-input"
                                                                                         type="checkbox"
                                                                                         id="<?php echo admin_e($networkInputId); ?>"
@@ -17027,7 +16894,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         $modeKeyString = (string)$modeKey;
                                                                                         $modeInputId = $networkModeName . '_' . $modeKeyString;
                                                                                         ?>
-                                                                                        <input
+                                                                                        <input form="adminSettingsFeaturesForm"
                                                                                             type="radio"
                                                                                             class="btn-check"
                                                                                             id="<?php echo admin_e($modeInputId); ?>"
@@ -17062,7 +16929,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <label class="form-label" for="<?php echo admin_e($envVaultName); ?>">
                                                                                         <?php echo admin_e($networkKeyString === 'bsc' ? admin_t($messages, 'settings_mixer_bsc_vault_contract', 'BSC vault contract') : admin_t($messages, 'settings_mixer_polygon_vault_contract', 'Polygon vault contract')); ?>
                                                                                     </label>
-                                                                                    <input
+                                                                                    <input form="adminSettingsFeaturesForm"
                                                                                         type="text"
                                                                                         class="form-control"
                                                                                         id="<?php echo admin_e($envVaultName); ?>"
@@ -17072,7 +16939,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <label class="form-label" for="<?php echo admin_e($envRpcName); ?>">
                                                                                         <?php echo admin_e($networkKeyString === 'bsc' ? admin_t($messages, 'settings_mixer_bsc_rpc_url', 'BSC RPC URL') : admin_t($messages, 'settings_mixer_polygon_rpc_url', 'Polygon RPC URL')); ?>
                                                                                     </label>
-                                                                                    <input
+                                                                                    <input form="adminSettingsFeaturesForm"
                                                                                         type="url"
                                                                                         class="form-control"
                                                                                         id="<?php echo admin_e($envRpcName); ?>"
@@ -17102,7 +16969,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                                 <div class="admin-mixer-owner-tools__wallet-picker">
                                                                     <label class="form-label" for="admin_vault_wallet_provider"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_wallet_provider', 'Wallet provider')); ?></label>
-                                                                    <select class="form-select form-select-sm" id="admin_vault_wallet_provider" data-admin-vault-wallet-provider>
+                                                                    <select form="adminSettingsFeaturesForm" class="form-select form-select-sm" id="admin_vault_wallet_provider" data-admin-vault-wallet-provider>
                                                                         <option value=""><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_detecting_wallets', 'Detecting wallets...')); ?></option>
                                                                     </select>
                                                                     <div class="admin-mixer-owner-tools__wallet-actions">
@@ -17123,11 +16990,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <div class="admin-mixer-owner-tools__grid">
                                                                 <div>
                                                                     <label class="form-label" for="admin_vault_network"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_network', 'Vault network')); ?></label>
-                                                                    <select class="form-select" id="admin_vault_network" data-admin-vault-network></select>
+                                                                    <select form="adminSettingsFeaturesForm" class="form-select" id="admin_vault_network" data-admin-vault-network></select>
                                                                 </div>
                                                                 <div>
                                                                     <label class="form-label" for="admin_vault_asset"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset', 'Asset')); ?></label>
-                                                                    <select class="form-select" id="admin_vault_asset" data-admin-vault-asset></select>
+                                                                    <select form="adminSettingsFeaturesForm" class="form-select" id="admin_vault_asset" data-admin-vault-asset></select>
                                                                 </div>
                                                             </div>
                                                             <div class="admin-mixer-owner-tools__metrics">
@@ -17186,7 +17053,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <div class="admin-mixer-owner-tools__box">
                                                                     <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_deposit_title', 'Add liquidity')); ?></h5>
                                                                     <label class="form-label" for="admin_vault_deposit_amount"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_amount', 'Amount')); ?></label>
-                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_deposit_amount" data-admin-vault-deposit-amount placeholder="0.00">
+                                                                    <input form="adminSettingsFeaturesForm" type="text" inputmode="decimal" class="form-control" id="admin_vault_deposit_amount" data-admin-vault-deposit-amount placeholder="0.00">
                                                                     <button type="button" class="btn btn-success w-100" data-admin-vault-deposit data-owner-action disabled>
                                                                         <i class="bi bi-arrow-down-circle" aria-hidden="true"></i>
                                                                         <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_deposit', 'Deposit to vault')); ?>
@@ -17195,9 +17062,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <div class="admin-mixer-owner-tools__box">
                                                                     <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_withdraw_title', 'Withdraw liquidity')); ?></h5>
                                                                     <label class="form-label" for="admin_vault_withdraw_recipient"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_recipient', 'Recipient')); ?></label>
-                                                                    <input type="text" class="form-control" id="admin_vault_withdraw_recipient" data-admin-vault-recipient placeholder="0x...">
+                                                                    <input form="adminSettingsFeaturesForm" type="text" class="form-control" id="admin_vault_withdraw_recipient" data-admin-vault-recipient placeholder="0x...">
                                                                     <label class="form-label" for="admin_vault_withdraw_amount"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_amount', 'Amount')); ?></label>
-                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_withdraw_amount" data-admin-vault-withdraw-amount placeholder="0.00">
+                                                                    <input form="adminSettingsFeaturesForm" type="text" inputmode="decimal" class="form-control" id="admin_vault_withdraw_amount" data-admin-vault-withdraw-amount placeholder="0.00">
                                                                     <div class="admin-mixer-owner-tools__split-actions">
                                                                         <button type="button" class="btn btn-dark" data-admin-vault-withdraw data-owner-action disabled>
                                                                             <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_withdraw', 'Withdraw')); ?>
@@ -17213,13 +17080,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_config_info', 'These are on-chain limits for the selected asset. Backend USD limits below block large orders in the panel; on-chain limits protect the vault even if someone calls the contract directly.')); ?>
                                                                     </div>
                                                                     <div class="form-check form-switch mb-2">
-                                                                        <input class="form-check-input" type="checkbox" role="switch" id="admin_vault_asset_enabled" data-admin-vault-asset-enabled checked>
+                                                                        <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="admin_vault_asset_enabled" data-admin-vault-asset-enabled checked>
                                                                         <label class="form-check-label" for="admin_vault_asset_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_asset_enabled', 'Enable selected asset for payouts')); ?></label>
                                                                     </div>
                                                                     <label class="form-label" for="admin_vault_max_payout"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_max_payout', 'Max payout')); ?></label>
-                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_max_payout" data-admin-vault-max-payout placeholder="0.00">
+                                                                    <input form="adminSettingsFeaturesForm" type="text" inputmode="decimal" class="form-control" id="admin_vault_max_payout" data-admin-vault-max-payout placeholder="0.00">
                                                                     <label class="form-label" for="admin_vault_daily_limit"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_daily_limit', 'Daily limit')); ?></label>
-                                                                    <input type="text" inputmode="decimal" class="form-control" id="admin_vault_daily_limit" data-admin-vault-daily-limit placeholder="0.00">
+                                                                    <input form="adminSettingsFeaturesForm" type="text" inputmode="decimal" class="form-control" id="admin_vault_daily_limit" data-admin-vault-daily-limit placeholder="0.00">
                                                                     <button type="button" class="btn btn-success w-100" data-admin-vault-set-asset data-owner-action disabled>
                                                                         <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_save_asset_config', 'Save asset config')); ?>
                                                                     </button>
@@ -17227,7 +17094,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <div class="admin-mixer-owner-tools__box">
                                                                     <h5><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_signer_title', 'Payout signer')); ?></h5>
                                                                     <label class="form-label" for="mixer_payout_secret_storage_mode"><?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_mode', 'Private key storage')); ?></label>
-                                                                    <select class="form-select" id="mixer_payout_secret_storage_mode" name="mixer_payout_secret_storage_mode" data-admin-mixer-secret-mode<?php echo $settingsProtectedFeatureDisabledAttr; ?>>
+                                                                    <select form="adminSettingsFeaturesForm" class="form-select" id="mixer_payout_secret_storage_mode" name="mixer_payout_secret_storage_mode" data-admin-mixer-secret-mode<?php echo $settingsProtectedFeatureDisabledAttr; ?>>
                                                                         <option value="file"<?php echo $mixerPayoutSecretStorageMode === 'file' ? ' selected' : ''; ?>>
                                                                             <?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_file', 'Server env/file secret (recommended)')); ?>
                                                                         </option>
@@ -17238,7 +17105,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <small class="text-muted d-block mb-2"><?php echo admin_e(admin_t($messages, 'settings_mixer_secret_storage_help', 'Recommended mode keeps the key outside SQL. Encrypted panel mode is useful for local tests and frequent signer changes.')); ?></small>
                                                                     <div data-admin-mixer-secret-db-fields<?php echo $mixerPayoutSecretStorageMode !== 'database_encrypted' ? ' hidden' : ''; ?>>
                                                                         <label class="form-label" for="mixer_payout_signer_private_key"><?php echo admin_e(admin_t($messages, 'settings_mixer_signer_private_key', 'Signer private key')); ?></label>
-                                                                        <input
+                                                                        <input form="adminSettingsFeaturesForm"
                                                                             type="password"
                                                                             class="form-control"
                                                                             id="mixer_payout_signer_private_key"
@@ -17255,7 +17122,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </small>
                                                                     </div>
                                                                     <label class="form-label" for="admin_vault_payout_signer"><?php echo admin_e(admin_t($messages, 'settings_mixer_owner_signer_address', 'New signer address')); ?></label>
-                                                                    <input type="text" class="form-control" id="admin_vault_payout_signer" data-admin-vault-payout-signer placeholder="0x...">
+                                                                    <input form="adminSettingsFeaturesForm" type="text" class="form-control" id="admin_vault_payout_signer" data-admin-vault-payout-signer placeholder="0x...">
                                                                     <button type="button" class="btn btn-success w-100" data-admin-vault-set-signer data-owner-action disabled>
                                                                         <?php echo admin_e(admin_t($messages, 'settings_mixer_owner_set_signer', 'Set payout signer')); ?>
                                                                     </button>
@@ -17269,7 +17136,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <?php endif; ?>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_fee_percent"><?php echo admin_e(admin_t($messages, 'settings_mixer_fee_percent', 'Swapper fee (%)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="0"
                                                             max="5"
@@ -17282,14 +17149,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="mixer_show_fee_breakdown" name="mixer_show_fee_breakdown"<?php echo $mixerShowFeeBreakdown ? ' checked' : ''; ?>>
+                                                            <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="mixer_show_fee_breakdown" name="mixer_show_fee_breakdown"<?php echo $mixerShowFeeBreakdown ? ' checked' : ''; ?>>
                                                             <label class="form-check-label" for="mixer_show_fee_breakdown"><?php echo admin_e(admin_t($messages, 'settings_mixer_show_fee_breakdown', 'Show fee details in Swapper')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_show_fee_breakdown_help', 'When disabled, the estimate shows only the output amount and its USD value. The configured fee is still applied.')); ?></small>
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_min_order_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_min_order_usd', 'Minimum order (USD)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="0.01"
                                                             max="1000"
@@ -17302,7 +17169,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_max_payout_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_max_payout_usd', 'Max payout per order (USD)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="1"
                                                             max="5000"
@@ -17314,7 +17181,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_daily_payout_limit_usd"><?php echo admin_e(admin_t($messages, 'settings_mixer_daily_payout_limit_usd', 'Daily payout limit (USD)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="1"
                                                             max="50000"
@@ -17326,7 +17193,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_btc_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_confirmations_required', 'BTC confirmations')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="1"
                                                             max="12"
@@ -17338,7 +17205,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_doge_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_confirmations_required', 'DOGE confirmations')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="1"
                                                             max="120"
@@ -17350,7 +17217,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_sol_confirmations_required"><?php echo admin_e(admin_t($messages, 'settings_mixer_sol_confirmations_required', 'SOL confirmations')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="1"
                                                             max="32"
@@ -17363,7 +17230,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_quote_lifetime_minutes"><?php echo admin_e(admin_t($messages, 'settings_mixer_quote_lifetime_minutes', 'Quote lifetime (minutes)')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="number"
                                                             min="1"
                                                             max="240"
@@ -17375,7 +17242,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_detection_provider"><?php echo admin_e(admin_t($messages, 'settings_mixer_detection_provider', 'Deposit watcher provider')); ?></label>
-                                                        <select class="form-select" id="mixer_detection_provider" name="mixer_detection_provider">
+                                                        <select form="adminSettingsFeaturesForm" class="form-select" id="mixer_detection_provider" name="mixer_detection_provider">
                                                             <?php foreach ($mixerDetectionProviderOptions as $providerKey => $providerLabel): ?>
                                                                 <option value="<?php echo admin_e((string)$providerKey); ?>"<?php echo (string)$providerKey === $mixerDetectionProvider ? ' selected' : ''; ?>>
                                                                     <?php echo admin_e((string)$providerLabel); ?>
@@ -17385,7 +17252,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="mixer_notification_email"><?php echo admin_e(admin_t($messages, 'settings_mixer_notification_email', 'Swapper notification email')); ?></label>
-                                                        <input
+                                                        <input form="adminSettingsFeaturesForm"
                                                             type="email"
                                                             class="form-control"
                                                             id="mixer_notification_email"
@@ -17403,7 +17270,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </div>
                                                             <div class="admin-mixer-deposit-addresses__field">
                                                                 <label class="form-label" for="mixer_btc_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_btc_deposit_address', 'BTC public deposit address')); ?></label>
-                                                                <input
+                                                                <input form="adminSettingsFeaturesForm"
                                                                     type="text"
                                                                     class="form-control w-100"
                                                                     id="mixer_btc_deposit_address"
@@ -17414,7 +17281,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </div>
                                                             <div class="admin-mixer-deposit-addresses__field">
                                                                 <label class="form-label" for="mixer_doge_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_doge_deposit_address', 'DOGE public deposit address')); ?></label>
-                                                                <input
+                                                                <input form="adminSettingsFeaturesForm"
                                                                     type="text"
                                                                     class="form-control w-100"
                                                                     id="mixer_doge_deposit_address"
@@ -17425,7 +17292,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             </div>
                                                             <div class="admin-mixer-deposit-addresses__field">
                                                                 <label class="form-label" for="mixer_sol_deposit_address"><?php echo admin_e(admin_t($messages, 'settings_mixer_sol_deposit_address', 'SOL public deposit address')); ?></label>
-                                                                <input
+                                                                <input form="adminSettingsFeaturesForm"
                                                                     type="text"
                                                                     class="form-control w-100"
                                                                     id="mixer_sol_deposit_address"
@@ -17438,7 +17305,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </div>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" role="switch" id="mixer_auto_payout_enabled" name="mixer_auto_payout_enabled"<?php echo $mixerAutoPayoutEnabled ? ' checked' : ''; ?>>
+                                                            <input form="adminSettingsFeaturesForm" class="form-check-input" type="checkbox" role="switch" id="mixer_auto_payout_enabled" name="mixer_auto_payout_enabled"<?php echo $mixerAutoPayoutEnabled ? ' checked' : ''; ?>>
                                                             <label class="form-check-label" for="mixer_auto_payout_enabled"><?php echo admin_e(admin_t($messages, 'settings_mixer_auto_payout_enabled', 'Enable automatic payouts')); ?></label>
                                                         </div>
                                                         <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_mixer_auto_payout_enabled_help', 'Keep OFF until the watcher, vault contract and payout executor are deployed and tested.')); ?></small>
@@ -17619,15 +17486,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                     </div>
                                                 <?php endif; ?>
-                                            </div>
-                                            <hr>
-                                            <div class="admin-settings-access__actions">
-                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_feature_settings"><?php echo admin_e(admin_t($messages, 'settings_save_features', 'Save service settings')); ?></button>
-                                            </div>
-                                        </form>
-                                    </div>
 
+                                                    </div>
+                                                    <hr>
+                                                    <div class="admin-settings-access__actions"><button type="submit" form="adminSettingsFeaturesForm" class="btn btn-dark btn-lg" name="admin_save_feature_settings"><?php echo admin_e(admin_t($messages, 'settings_save_features', 'Save service settings')); ?></button></div>
+                                                </div>
                                             </div>
+                                            <?php endif; ?>
                                             <div class="tab-pane fade" id="admin-settings-crypto-preview-pane" role="tabpanel" aria-labelledby="admin-settings-crypto-preview-tab" tabindex="0">
                                     <div class="admin-settings-access">
                                         <div class="admin-settings-access__copy">
@@ -17726,6 +17591,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
 	                                        <form method="post" class="admin-settings-access__form mb-4" autocomplete="off">
 	                                            <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
+	                                            <?php require __DIR__ . '/views/panel_tiers_settings.php'; ?>
 	                                            <div class="row g-3">
 	                                                <div class="col-md-4">
 	                                                    <label class="form-label" for="admin_panel_subscription_paid_until"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_paid_until', 'Data opłacenia subskrypcji')); ?></label>
@@ -17742,6 +17608,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                                <button type="submit" class="btn btn-dark btn-lg" name="admin_save_panel_subscription_settings"><?php echo admin_e(admin_t($messages, 'settings_panel_subscription_save_button', 'Zapisz płatność panelu')); ?></button>
 	                                            </div>
 	                                        </form>
+                                        <?php require __DIR__ . '/views/panel_tiers_history.php'; ?>
                                     </div>
 
                                             </div>
@@ -18027,7 +17894,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php echo admin_e(trim((string)($adminRow['last_login_at'] ?? '')) !== '' ? admin_format_last_login_date((string)$adminRow['last_login_at']) : '----'); ?>
                                                                 </td>
                                                                 <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>" class="text-end">
-                                                                    <?php if ($settingsAdminMode): ?>
+                                                                    <?php if (admin_user_can_manage_admin($adminUser, $adminRow)): ?>
                                                                         <div class="d-flex justify-content-end gap-2 flex-wrap">
                                                                             <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#adminEditModal<?php echo admin_e((string)$adminRow['id']); ?>">
                                                                                 <?php echo admin_e(admin_t($messages, 'admin_edit_button', 'Edit')); ?>
@@ -18046,8 +17913,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </table>
                                             </div>
 
-                                            <?php if ($settingsAdminMode): ?>
+                                            <?php if (admin_user_can_access_route($adminUser, 'settings')): ?>
                                             <?php foreach ($adminUserRows as $adminRow): ?>
+                                                <?php if (!admin_user_can_manage_admin($adminUser, $adminRow)) continue; ?>
                                                 <?php
                                                 $adminRowIsFullBoss = (int)($adminRow['role_access_level'] ?? 0) >= 1000 && (string)($adminRow['status'] ?? 'active') === 'active';
                                                 $adminRowIsCurrentSession = (int)($adminRow['id'] ?? 0) === (int)($adminUser['id'] ?? 0);
@@ -18067,7 +17935,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <div class="row g-3">
                                                                         <div class="col-md-6">
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'settings_login_name', 'Login name')); ?></label>
-                                                                            <input type="text" class="form-control" name="login_name" value="<?php echo admin_e((string)($adminRow['login_name'] ?? '')); ?>" required>
+                                                                            <input type="text" class="form-control" name="login_name" value="<?php echo admin_e((string)($adminRow['login_name'] ?? '')); ?>" required<?php echo ($adminRow['login_name'] ?? '') === 'admin' ? ' readonly' : ''; ?>>
                                                                         </div>
                                                                         <div class="col-md-6">
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_email', 'Email')); ?></label>
@@ -18081,6 +17949,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_role_label', 'Role')); ?></label>
                                                                             <select class="form-select" name="role_id" required>
                                                                                 <?php foreach ($adminRoleOptions as $roleOption): ?>
+                                                                                    <?php if (($adminRowIsCurrentSession && (int)$roleOption['id'] !== (int)$adminRow['role_id']) || (!$adminRowIsCurrentSession && (int)$roleOption['access_level'] >= admin_user_access_level($adminUser))) continue; ?>
                                                                                     <option value="<?php echo admin_e((string)($roleOption['id'] ?? 0)); ?>"<?php echo (int)($adminRow['role_id'] ?? 0) === (int)($roleOption['id'] ?? 0) ? ' selected' : ''; ?>>
                                                                                         <?php echo admin_e((string)($roleOption['name'] ?? '')); ?>
                                                                                     </option>
@@ -18091,12 +17960,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
                                                                             <select class="form-select" name="status" required>
                                                                                 <?php foreach ($adminStatusOptions as $adminStatusOption): ?>
+                                                                                    <?php if ($adminRowIsCurrentSession && $adminStatusOption !== $adminRow['status']) continue; ?>
                                                                                     <option value="<?php echo admin_e($adminStatusOption); ?>"<?php echo (string)($adminRow['status'] ?? 'active') === $adminStatusOption ? ' selected' : ''; ?>>
                                                                                         <?php echo admin_e(ucfirst($adminStatusOption)); ?>
                                                                                     </option>
                                                                                 <?php endforeach; ?>
                                                                             </select>
                                                                         </div>
+                                                                        <?php if (!$adminRowIsCurrentSession): ?>
                                                                         <div class="col-md-6">
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_edit_password_label', 'New password (optional)')); ?></label>
                                                                             <input type="password" class="form-control" name="password" autocomplete="new-password">
@@ -18105,6 +17976,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <label class="form-label"><?php echo admin_e(admin_t($messages, 'admin_edit_password_repeat_label', 'Repeat new password')); ?></label>
                                                                             <input type="password" class="form-control" name="repeat_password" autocomplete="new-password">
                                                                         </div>
+                                                                        <?php endif; ?>
                                                                     </div>
                                                                 </div>
                                                                 <div class="modal-footer">
@@ -18174,6 +18046,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <select class="form-select form-select-lg" id="new_admin_role" name="role_id" required>
                                                         <option value=""><?php echo admin_e(admin_t($messages, 'admin_role_select', 'Select role')); ?></option>
                                                         <?php foreach ($adminRoleOptions as $roleOption): ?>
+                                                            <?php if ((int)$roleOption['access_level'] > admin_user_access_level($adminUser) || ((int)$roleOption['access_level'] === admin_user_access_level($adminUser) && !admin_user_can_use_admin_mode($adminUser))) continue; ?>
                                                             <option value="<?php echo admin_e((string)($roleOption['id'] ?? 0)); ?>"<?php echo (int)($adminCreateFormState['role_id'] ?? 0) === (int)($roleOption['id'] ?? 0) ? ' selected' : ''; ?>>
                                                                 <?php echo admin_e((string)($roleOption['name'] ?? '')); ?>
                                                             </option>
@@ -18273,6 +18146,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             storedTabId = '';
                         }
 
+                        if (window.location.hash === '#crypto_auto_accept_enabled') storedTabId = 'admin-settings-features-tab';
                         if (storedTabId === '') {
                             return;
                         }
@@ -18307,6 +18181,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     };
 
                     activateStoredTab();
+                    if (window.location.hash === '#crypto_auto_accept_enabled') {
+                        const target = document.getElementById('crypto_auto_accept_enabled');
+                        if (target) requestAnimationFrame(() => {
+                            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                            target.focus({ preventScroll: true });
+                        });
+                    }
                     tabButtons.forEach((button) => {
                         button.addEventListener('shown.bs.tab', () => {
                             try {
@@ -19274,9 +19155,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     <?php if ($route === 'swap-converter' && $hinkalPrivateSendEnabled): ?>
         <script src="/assets/js/admin-hinkal-private-send.bundle.js?v=<?php echo admin_public_asset_version('assets/js/admin-hinkal-private-send.bundle.js'); ?>"></script>
     <?php endif; ?>
-    <?php if ($route === 'swap-converter' && $rangoConverterEnabled && $rangoApiKey !== ''): ?>
-        <script src="/assets/js/admin-rango-converter.bundle.js?v=<?php echo admin_public_asset_version('assets/js/admin-rango-converter.bundle.js'); ?>"></script>
-    <?php endif; ?>
+
     <?php if ($route === 'swap-converter'): ?>
         <script>
             (() => {
@@ -19372,14 +19251,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     }
                 };
 
-                const renderRangoWidget = async () => {
-                    const mount = document.getElementById('adminRangoConverterMount');
                     if (!mount || mount.dataset.rendered === '1' || mount.dataset.rendering === '1') {
                         return;
                     }
 
-                    const loadingLabel = mount.dataset.loadingLabel || 'Loading Rango widget...';
-                    const errorLabel = mount.dataset.errorLabel || 'Unable to load Rango widget.';
                     const apiKey = (mount.dataset.apiKey || '').trim();
                     const walletConnectProjectId = (mount.dataset.walletconnectProjectId || '').trim();
                     const affiliateRef = (mount.dataset.affiliateRef || '').trim();
@@ -19392,20 +19267,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     try {
                         if (!apiKey) {
-                            throw new Error('Missing Rango API key.');
                         }
-                        const accessResponse = await fetch('https://api.rango.exchange/meta/dapp/config?apiKey=' + encodeURIComponent(apiKey), {
                             method: 'GET',
                             cache: 'no-store'
                         });
                         if (!accessResponse.ok) {
-                            throw new Error('Rango API rejected this domain.');
                         }
-                        if (!window.AdminRangoConverter || typeof window.AdminRangoConverter.render !== 'function') {
-                            throw new Error('Local Rango bundle is unavailable.');
                         }
 
-                        window.AdminRangoConverter.render(mount, {
                             apiKey,
                             walletConnectProjectId,
                             affiliateRef,
@@ -19420,7 +19289,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         const errorText = (error && (error.message || error.toString())) ? String(error.message || error.toString()) : '';
                         const isAccessError = /failed to fetch|cors|rejected this domain/i.test(errorText);
                         const message = isAccessError
-                            ? 'Rango BTC/DOGE wymaga API key z odblokowaną domeną dla CORS. Ten darmowy klucz może działać lokalnie, ale na domenie/subdomenie musi zostać zatwierdzony przez Rango.'
                             : errorLabel;
                         mount.innerHTML = '<div class="alert alert-warning mb-0">' + message + (errorText && !isAccessError ? '<br><small>' + errorText + '</small>' : '') + '</div>';
                     }
@@ -21255,8 +21123,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
                     if (nextMode === 'private') {
                         renderPrivateSend();
-                    } else if (nextMode === 'rango') {
-                        renderRangoWidget();
                     } else if (nextMode === 'lifi') {
                         renderLifiWidget();
                     } else if (nextMode === 'mixer') {
@@ -21336,8 +21202,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         </div>
     <?php endif; ?>
 
+    <?php if (!empty($panelTiersConfig['enabled'])) require __DIR__ . '/views/panel_tiers_modal.php'; ?>
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
+    <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')): ?><script src="/assets/js/admin-crypto-quick.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-quick.js'); ?>"></script><?php endif; ?>
     <script src="/assets/js/provider-browser.js?v=<?php echo admin_public_asset_version('assets/js/provider-browser.js'); ?>"></script>
     <?php if ($route === 'dashboard'): ?>
         <script src="/assets/js/admin-dashboard.js?v=<?php echo admin_public_asset_version('assets/js/admin-dashboard.js'); ?>"></script>

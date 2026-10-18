@@ -4,6 +4,14 @@ declare(strict_types=1);
 if (strpos((string)getenv('DB_NAME'), '_test_') === false) throw new RuntimeException('Separate _test_ database required.');
 require_once dirname(__DIR__) . '/admin/bootstrap.php';
 $db=Mysql_ks::get_instance();
+if (($argv[1]??'')==='--ticket-status') {
+    $request=json_decode(base64_decode($argv[2]),true);
+    app_start_session();$_SESSION=['id'=>$request['customer']??0];
+    if(!empty($request['throttle']))$_SESSION['crypto_ticket_status_checked']=microtime(true);
+    $_SERVER['REQUEST_METHOD']='GET';$_GET=['ticket_status'=>$request['ticket']??201];
+    ob_start();register_shutdown_function(static function(){echo json_encode(['status'=>http_response_code()?:200,'data'=>json_decode(ob_get_clean(),true)]);});
+    require dirname(__DIR__).'/check_payment.php';exit;
+}
 if (($argv[1]??'')==='--balance') {
     echo json_encode(app_apply_customer_balance_runtime_event($db,101,1,'credit','audit-crypto',$argv[2],'Concurrent test'));exit;
 }
@@ -55,6 +63,9 @@ function finish(array $child) {
     if($code!==0 || json_decode($out,true)===null)throw new RuntimeException('Child failed: '.$out.$err);
     return json_decode($out,true);
 }
+require_once dirname(__DIR__).'/vendor/autoload.php';
+$templateCheck=new \Smarty\Smarty();$templateCheck->setTemplateDir(dirname(__DIR__).'/templates');$templateCheck->setCompileDir(app_crypto_runtime_dir());
+foreach(['profil/orders_payment.tpl','profil/payments_crypto.tpl','profil/crypto_detected.tpl','top_page.tpl'] as $templateName){$templateCheck->createTemplate($templateName)->compileTemplateSource();}
 admin_app_settings($db);app_ensure_customer_runtime_columns($db);app_ensure_customer_balance_runtime_table($db);app_ensure_payment_request_runtime_columns($db);
 sql("INSERT INTO admin_users(id,role_id,login_name,email,password_hash) VALUES(1,1,'audit-owner','crypto-owner@example.invalid','unused') ON DUPLICATE KEY UPDATE role_id=1");
 sql("INSERT INTO customers(id,email,password_hash,status) VALUES(101,'crypto-one@example.invalid','unused','active'),(102,'crypto-two@example.invalid','unused','active') ON DUPLICATE KEY UPDATE balance_amount=0");
@@ -126,6 +137,40 @@ $result=admin_payment_apply_quick_action($db,'crypto',200,'accept',1,'audit',['r
 ck(!empty($result['ok']),'Approval remains retryable/idempotent after concurrent requests');
 ck((float)$db->select_user('SELECT balance_amount FROM customers WHERE id=101')['balance_amount']===108.0,'Concurrent approval credits one payment once');
 ck((int)$db->select_user("SELECT COUNT(*) n FROM customer_balance_runtime_events WHERE source_type='payment_approval' AND source_key='crypto:200'")['n']===1,'Exactly one journal event for the payment');
+// Detection and acceptance are separate: OFF records a verified transfer without crediting.
+sql("UPDATE crypto_deposit_requests SET blockchain_checked_at=NOW() WHERE id BETWEEN 200 AND 207");
+sql("UPDATE crypto_deposit_requests SET status='pending',blockchain_checked_at=NULL WHERE id=201");
+$manualHash=str_repeat('f',64);
+sql("INSERT INTO crypto_deposit_transactions(wallet_address_id,crypto_asset_id,transaction_hash,amount_crypto,amount_fiat,confirmations,received_at) VALUES(201,{$btc},'{$manualHash}',.002,100,2,DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE))");
+$manualBefore=(float)$db->select_user('SELECT balance_amount FROM customers WHERE id=102')['balance_amount'];
+$manual=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>0]),['limit'=>1]);
+$review=$db->select_user('SELECT status,received_crypto_amount,expires_at FROM crypto_deposit_requests WHERE id=201');
+ck($manual['detected']===1&&$manual['accepted']===0&&$review['status']==='awaiting_review','OFF detects payment and queues administrator verification');
+ck((float)$review['received_crypto_amount']===.002&&$review['expires_at']===null,'Detected ticket has actual amount and no further send deadline');
+ck((float)$db->select_user('SELECT balance_amount FROM customers WHERE id=102')['balance_amount']===$manualBefore,'OFF does not credit customer balance');
+$ticketStatus=finish(child('--ticket-status',base64_encode(json_encode(['customer'=>102]))));
+ck($ticketStatus['status']===200&&$ticketStatus['data']['detected']===true,'Authenticated customer can poll detected status');
+ck(finish(child('--ticket-status',base64_encode(json_encode(['customer'=>101]))))['status']===404,'Customer cannot poll another customer ticket');
+ck(finish(child('--ticket-status',base64_encode(json_encode(['customer'=>0]))))['status']===401,'Ticket status rejects anonymous requests');
+ck(finish(child('--ticket-status',base64_encode(json_encode(['customer'=>102,'ticket'=>'invalid']))))['status']===422,'Ticket status validates identifier');
+ck(finish(child('--ticket-status',base64_encode(json_encode(['customer'=>102,'throttle'=>true]))))['status']===429,'Ticket status limits rapid requests');
+require_once dirname(__DIR__).'/admin/crypto_quick.php';
+$detectedRows=admin_crypto_quick_rows($db,'new');$detectedRows=array_values(array_filter($detectedRows,fn($r)=>(int)$r['id']===201));
+$detectedHtml=admin_crypto_quick_html($detectedRows,'new',admin_crypto_quick_labels('pl'));
+ck(str_contains($detectedHtml,'Wykryto wpłatę')&&!str_contains($detectedHtml,'data-crypto-quick-expires='),'Admin sees detected payment without a misleading send deadline');
+$manualPage=finish(child('--customer-page'));
+file_put_contents('/tmp/subme-detected-customer-ui.html',$manualPage['html']);
+ck(str_contains($manualPage['html'],'Payment detected')&&str_contains($manualPage['html'],'awaiting verification')&&!str_contains($manualPage['html'],'data-copy-text'),'Customer sees receipt pending verification instead of payment instructions');
+sql("UPDATE crypto_deposit_requests SET blockchain_checked_at=NULL WHERE id=201");
+$manualAgain=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>0]),['limit'=>1]);
+ck($manualAgain['checked']===0,'OFF does not repeatedly scan an already detected ticket');
+$automatic=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>1]),['limit'=>1]);
+ck($automatic['accepted']===1&&$db->select_user('SELECT status FROM crypto_deposit_requests WHERE id=201')['status']==='approved','ON accepts the previously detected verified transfer');
+ck((float)$db->select_user('SELECT balance_amount FROM customers WHERE id=102')['balance_amount']===$manualBefore+100,'ON credits the actual locked-rate payment exactly once');
+sql("UPDATE crypto_deposit_requests SET blockchain_checked_at=NULL WHERE id=201");
+$automaticAgain=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>1]),['limit'=>1]);
+ck($automaticAgain['accepted']===0&&(float)$db->select_user('SELECT balance_amount FROM customers WHERE id=102')['balance_amount']===$manualBefore+100,'Repeated scanner never credits an approved request twice');
+
 // Clear only this suite's remaining pending requests to exercise fair queue rotation.
 sql('UPDATE crypto_deposit_requests SET blockchain_checked_at=NULL WHERE id BETWEEN 201 AND 207');
 $first=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>1]),['limit'=>2]);

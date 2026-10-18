@@ -12,8 +12,10 @@ if ($adminUser === null) {
     echo json_encode(['ok' => false, 'message' => 'Unauthorized.']);
     exit;
 }
-$appSettings = app_fetch_settings($db);
 $messages = admin_load_messages(admin_current_locale());
+// Read-only work must not hold the session lock while querying notifications.
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+$appSettings = app_fetch_settings($db);
 $canViewOrders = admin_user_can_access_route($adminUser, 'orders');
 $taskRows = $canViewOrders ? admin_topbar_notification_order_rows($db, 8) : [];
 $taskTotal = $canViewOrders ? admin_topbar_notification_order_count($db) : 0;
@@ -24,8 +26,6 @@ if (admin_bank_transfers_enabled($appSettings)) {
     $currency = admin_default_currency_row($db);
     if (!app_available_bank_account_rows($db, (string)($currency['code'] ?? 'USD'), $appSettings)) $badgeCount++;
 }
-// The refresh is read-only; leave the session available to other admin requests.
-if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 echo json_encode([
     'ok' => true,
     'badge_count' => $badgeCount,

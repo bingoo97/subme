@@ -4228,13 +4228,15 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         );
     }
 
-    function chat_admin_group_conversation_rows(Mysql_ks $db, int $adminUserId): array
+    function chat_admin_group_conversation_rows(Mysql_ks $db, int $adminUserId, int $limit = 0, bool $includeGlobalGroup = true): array
     {
         chat_ensure_group_chat_runtime($db);
         if ($adminUserId <= 0 || !schema_object_exists($db, 'support_conversation_members') || !schema_object_exists($db, 'support_messages')) {
             return [];
         }
 
+        $globalFilter = $includeGlobalGroup ? '' : " AND support_conversations.conversation_type <> 'global_group'";
+        $limitSql = $limit > 0 ? ' LIMIT ' . max(1, min(20, $limit)) : '';
         $participantKey = $db->escape(chat_participant_key_for_admin($adminUserId));
         return $db->select_full_user(
             "SELECT
@@ -4293,8 +4295,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 ON support_conversation_members.conversation_id = support_conversations.id
              WHERE support_conversations.conversation_type IN ('group_chat', 'global_group')
                AND support_conversation_members.participant_key = '{$participantKey}'
-               AND support_conversation_members.invite_status = 'accepted'
-             ORDER BY COALESCE(support_conversations.updated_at, support_conversations.created_at) DESC, support_conversations.id DESC"
+               AND support_conversation_members.invite_status = 'accepted'{$globalFilter}
+             ORDER BY (support_conversations.conversation_type = 'global_group') DESC, COALESCE(support_conversations.updated_at, support_conversations.created_at) DESC, support_conversations.id DESC{$limitSql}"
         );
     }
 

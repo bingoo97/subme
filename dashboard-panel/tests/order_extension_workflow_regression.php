@@ -58,15 +58,18 @@ ck($r['status'] === 'paid_pending_activation' && admin_order_renewal_balance_res
 $context = admin_order_pending_renewal_context($db,admin_order_find($db,$id));
 ck($context['balance_reserved'] === true, 'UI uses settled state for the correct renewal.');
 ck(!empty(admin_finalize_successful_payment($db,'bank',10)['ok']) && balance($customer) === 0.0, 'Repeated approval does not add or debit money again.');
-$result = admin_extend_order($db,$id,2,false,'',$expiry,10);
+sql("UPDATE orders SET support_note='Existing private note' WHERE id={$id}");
+$result = admin_extend_order($db,$id,2,false,'',$expiry,10,'Provider extended manually');
+ck($db->select_user("SELECT support_note FROM orders WHERE id={$id}")['support_note']==="Existing private note\nProvider extended manually",'Paid renewal appends the private support annotation');
 ck(!empty($result['ok']) && balance($customer) === 0.0, 'Settled renewal applies with zero balance and no second debit.');
 ck((int)$db->select_user("SELECT COUNT(*) n FROM customer_balance_runtime_events WHERE customer_id={$customer} AND direction='debit'")['n']===1,'Exactly one renewal debit exists.');
-ck(!empty(admin_extend_order($db,$id,2,false,'',$expiry,10)['already_applied']), 'Repeated form submission returns already applied.');
+ck(!empty(admin_extend_order($db,$id,2,false,'',$expiry,10,'Provider extended manually')['already_applied']), 'Repeated form submission returns already applied.');
 ck((int)$db->select_user("SELECT COUNT(*) n FROM order_renewals WHERE order_id={$id}")['n']===1,'Repeat does not create a new renewal.');
+ck(substr_count($db->select_user("SELECT support_note FROM orders WHERE id={$id}")['support_note'],'Provider extended manually')===1,'Repeated paid renewal does not duplicate the private note');
 // Unrelated top-up is available balance, not proof that an extension was settled.
 [$id,$expiry,$customer] = fixture(20);
 ck(!empty(app_apply_customer_balance_runtime_event($db,$customer,100,'credit','payment_approval','topup:20','Fixture')['ok']), 'Top-up succeeds.');
-ck(!empty(admin_extend_order($db,$id,2,true,'',$expiry)['ok']) && balance($customer)===70.0, 'Ordinary top-up pays the extension once from balance.');
+ck(!empty(admin_extend_order($db,$id,2,true,'',$expiry,0,'Private ordinary annotation')['ok']) && balance($customer)===70.0, 'Ordinary top-up pays the extension once from balance.');
 ck(empty(admin_extend_order($db,$id,2,true,'',$expiry)['ok']) && balance($customer)===70.0, 'Stale ordinary form cannot pay or extend twice.');
 // Low balance must never silently turn into a free extension.
 [$id,$expiry,$customer] = fixture(30,10);
@@ -112,4 +115,15 @@ sql("INSERT INTO customer_balance_runtime_events(customer_id,source_type,source_
 race($id,$expiry,90);
 ck(balance($customer)===0.0,'Concurrent paid requests do not debit again.');
 ck((int)$db->select_user("SELECT COUNT(*) n FROM order_renewals WHERE order_id={$id}")['n']===1,'Concurrent paid requests do not create another renewal.');
+// Optional support annotation commits with the extension, never on a failure.
+[$id,$expiry,$customer]=fixture(95,100);
+sql("UPDATE orders SET support_note='Earlier annotation' WHERE id={$id}");
+ck(!empty(admin_extend_order($db,$id,2,true,'',$expiry,0,"New private line\nSecond line")['ok']),'Ordinary extension saves annotation');
+ck($db->select_user("SELECT support_note FROM orders WHERE id={$id}")['support_note']==="Earlier annotation\nNew private line\nSecond line",'Existing private note and multiline annotation are preserved');
+ck(!str_contains((string)$db->select_user("SELECT renewal_note FROM order_renewals WHERE order_id={$id}")['renewal_note'],'New private line'),'Private annotation is not copied into renewal history');
+[$id,$expiry,$customer]=fixture(96,0);
+ck(empty(admin_extend_order($db,$id,2,true,'',$expiry,0,'Should not save')['ok']),'Insufficient balance rejects extension with annotation');
+ck(trim((string)$db->select_user("SELECT support_note FROM orders WHERE id={$id}")['support_note'])==='','Failed extension does not write annotation');
+[$id,$expiry,$customer]=fixture(97,100);
+ck(empty(admin_extend_order($db,$id,2,true,'',$expiry,0,str_repeat('a',4001))['ok'])&&balance($customer)===100.0,'Oversized annotation is rejected before any debit');
 echo "PASS: {$checks} order extension workflow checks\n";

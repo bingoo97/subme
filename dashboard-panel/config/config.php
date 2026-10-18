@@ -329,12 +329,11 @@ if (!empty($user['logged']) && app_uses_v2_schema($db) && isset($user['id'])) {
         "SELECT
             crypto_deposit_requests.id,
             crypto_deposit_requests.order_id,
-            crypto_deposit_requests.expires_at
+            crypto_deposit_requests.expires_at,crypto_deposit_requests.status,crypto_deposit_requests.received_crypto_amount
          FROM crypto_deposit_requests
          WHERE crypto_deposit_requests.customer_id = " . (int)$user['id'] . "
            AND crypto_deposit_requests.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
-           AND crypto_deposit_requests.expires_at IS NOT NULL
-           AND crypto_deposit_requests.expires_at > '{$safeNow}'
+           AND (crypto_deposit_requests.expires_at > '{$safeNow}' OR (crypto_deposit_requests.status='awaiting_review' AND crypto_deposit_requests.received_crypto_amount>0))
          ORDER BY crypto_deposit_requests.id DESC
          LIMIT 1"
     );
@@ -343,6 +342,7 @@ if (!empty($user['logged']) && app_uses_v2_schema($db) && isset($user['id'])) {
         $remainingSeconds = max(0, strtotime((string)$pendingCryptoRequest['expires_at']) - $currentTimestamp);
         $topbarPaymentBanner = [
             'mode' => 'pending_crypto',
+            'detected' => $pendingCryptoRequest['status']==='awaiting_review' && (float)$pendingCryptoRequest['received_crypto_amount']>0,
             'url' => !empty($pendingCryptoRequest['order_id'])
                 ? '/order-payment-' . (int)$pendingCryptoRequest['order_id']
                 : '/cryptocurrency',

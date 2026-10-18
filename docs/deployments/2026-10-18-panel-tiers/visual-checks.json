@@ -1,0 +1,318 @@
+{
+  "viewports": [
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 1080,
+      "helpCentered": "start",
+      "overflow": false,
+      "qrWidth": 206,
+      "width": 1920
+    },
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 768,
+      "helpCentered": "start",
+      "overflow": false,
+      "qrWidth": 206,
+      "width": 1366
+    },
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 768,
+      "helpCentered": "start",
+      "overflow": false,
+      "qrWidth": 174,
+      "width": 1024
+    },
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 1024,
+      "helpCentered": "center",
+      "overflow": false,
+      "qrWidth": 174,
+      "width": 768
+    },
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 844,
+      "helpCentered": "center",
+      "overflow": false,
+      "qrWidth": 246,
+      "width": 390
+    },
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 740,
+      "helpCentered": "center",
+      "overflow": false,
+      "qrWidth": 234,
+      "width": 320
+    },
+    {
+      "clock": "47:59:59",
+      "clockBesideDate": true,
+      "height": 390,
+      "helpCentered": "start",
+      "overflow": false,
+      "qrWidth": 174,
+      "width": 844
+    }
+  ],
+  "states": [
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": false,
+      "lastCardFull": true,
+      "notice": "Oczekujemy na wpłatę...",
+      "overflow": false,
+      "stage": "pending",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": false,
+      "lastCardFull": true,
+      "notice": "Oczekujemy na wpłatę...",
+      "overflow": false,
+      "stage": "pending",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": false,
+      "lastCardFull": true,
+      "notice": "Czas minął — sprawdzamy wpłatę...",
+      "overflow": false,
+      "stage": "confirming",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": false,
+      "lastCardFull": true,
+      "notice": "Czas minął — sprawdzamy wpłatę...",
+      "overflow": false,
+      "stage": "confirming",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": true,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Płatność potwierdzona. Dostęp przedłużony. Dostęp opłacony do: 18.01.2027.",
+      "overflow": false,
+      "stage": "paid",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": true,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Płatność potwierdzona. Dostęp przedłużony. Dostęp opłacony do: 18.01.2027.",
+      "overflow": false,
+      "stage": "paid",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Wpłata wykryta — wymaga weryfikacji. Wpłata jest w weryfikacji. Nie wykonuj ponownej płatności.",
+      "overflow": false,
+      "stage": "review",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Wpłata wykryta — wymaga weryfikacji. Wpłata jest w weryfikacji. Nie wykonuj ponownej płatności.",
+      "overflow": false,
+      "stage": "review",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Wpłata do anulowanej płatności — wymaga weryfikacji. Wpłata jest w weryfikacji. Nie wykonuj ponownej płatności.",
+      "overflow": false,
+      "stage": "cancelled_review",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Wpłata do anulowanej płatności — wymaga weryfikacji. Wpłata jest w weryfikacji. Nie wykonuj ponownej płatności.",
+      "overflow": false,
+      "stage": "cancelled_review",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": false,
+      "notice": "Anulowano przygotowaną płatność. Wybierz kryptowalutę, którą chcesz opłacić dostęp do panelu. Możesz też wrócić do poprzedniej — przywrócimy wtedy tę samą płatność z zachowaniem kwoty, kursu i wybranego okresu.",
+      "overflow": false,
+      "stage": "cancelled",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": false,
+      "notice": "Anulowano przygotowaną płatność. Wybierz kryptowalutę, którą chcesz opłacić dostęp do panelu. Możesz też wrócić do poprzedniej — przywrócimy wtedy tę samą płatność z zachowaniem kwoty, kursu i wybranego okresu.",
+      "overflow": false,
+      "stage": "cancelled",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": false,
+      "notice": "Płatność wygasła. Możesz wygenerować nową.",
+      "overflow": false,
+      "stage": "expired",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": false,
+      "notice": "Płatność wygasła. Możesz wygenerować nową.",
+      "overflow": false,
+      "stage": "expired",
+      "width": 320
+    },
+    {
+      "assetCards": 3,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Zbliżasz się do wyższego tieru. Dostępne przedłużenie: 1 miesiąc.",
+      "overflow": false,
+      "stage": "near",
+      "width": 1280
+    },
+    {
+      "assetCards": 3,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Zbliżasz się do wyższego tieru. Dostępne przedłużenie: 1 miesiąc.",
+      "overflow": false,
+      "stage": "near",
+      "width": 320
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": true,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Przedłużenie jest dostępne, gdy zostaje najwyżej 30 dni dostępu.",
+      "overflow": false,
+      "stage": "too_early",
+      "width": 1280
+    },
+    {
+      "assetCards": 4,
+      "formHidden": true,
+      "generateDisabled": true,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "Przedłużenie jest dostępne, gdy zostaje najwyżej 30 dni dostępu.",
+      "overflow": false,
+      "stage": "too_early",
+      "width": 320
+    },
+    {
+      "assetCards": 1,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "",
+      "overflow": false,
+      "stage": "choose",
+      "width": 1280
+    },
+    {
+      "assetCards": 1,
+      "formHidden": false,
+      "generateDisabled": false,
+      "invoiceHidden": true,
+      "lastCardFull": true,
+      "notice": "",
+      "overflow": false,
+      "stage": "choose",
+      "width": 320
+    },
+    {
+      "assetCards": 0,
+      "formHidden": false,
+      "generateDisabled": true,
+      "invoiceHidden": true,
+      "lastCardFull": null,
+      "notice": "Płatność jest chwilowo niedostępna. Skontaktuj się z administratorem.",
+      "overflow": false,
+      "stage": "choose",
+      "width": 1280
+    },
+    {
+      "assetCards": 0,
+      "formHidden": false,
+      "generateDisabled": true,
+      "invoiceHidden": true,
+      "lastCardFull": null,
+      "notice": "Płatność jest chwilowo niedostępna. Skontaktuj się z administratorem.",
+      "overflow": false,
+      "stage": "choose",
+      "width": 320
+    }
+  ],
+  "settings": {
+    "phoneWidth": 390,
+    "desktopWidth": 1366,
+    "horizontalOverflow": false,
+    "automaticModeLocksDate": true,
+    "manualModeUnlocksDate": true
+  }
+}

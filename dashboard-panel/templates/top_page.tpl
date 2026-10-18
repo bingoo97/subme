@@ -7,15 +7,16 @@
     data-topbar-payment-link
   >
     <span class="top-instruction-bar__logo top-instruction-bar__logo--scan">
-      <img src="/img/scan.gif" alt="Scan" />
+      {if $topbar_payment_banner.detected|default:false}<i class="fa fa-check-circle text-success" aria-hidden="true"></i>{else}<img src="/img/scan.gif" alt="Scan" />{/if}
     </span>
     <span class="top-instruction-bar__content">
-      <span class="top-instruction-bar__text">{$t.topbar_pending_payment|default:'Pending payment'}</span>
+      <span class="top-instruction-bar__text">{if $topbar_payment_banner.detected|default:false}{$t.payment_crypto_detected_title|default:'Payment detected'}{else}{$t.topbar_pending_payment|default:'Pending payment'}{/if}</span>
+      {if $topbar_payment_banner.detected|default:false}<span class="text-success">{$t.payment_crypto_verification_pending|default:'Awaiting administrator verification'}</span>{else}
       <span
         class="top-instruction-bar__countdown"
         data-topbar-countdown="{$topbar_payment_banner.remaining_seconds|default:0}"
         data-topbar-expired-label="{$t.payment_countdown_expired|default:'Payment cancelled'}"
-      >60:00</span>
+      >60:00</span>{/if}
     </span>
     <span class="top-instruction-bar__arrow" aria-hidden="true">
       <i class="fa fa-angle-double-right"></i>

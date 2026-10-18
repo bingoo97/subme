@@ -9,6 +9,7 @@ require_once dirname(__DIR__) . '/bootstrap/application.php';
 require_once dirname(__DIR__) . '/bootstrap/chat.php';
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/crypto_safety.php';
+require_once __DIR__ . '/panel_subscription.php';
 require_once __DIR__ . '/provider_remote.php';
 require_once __DIR__ . '/provider_browser.php';
 
@@ -258,7 +259,19 @@ function admin_ensure_core_crypto_assets(Mysql_ks $db): void
 
     $done = true;
 
-    foreach (admin_core_crypto_asset_definitions() as $code => $asset) {
+    $definitions = admin_core_crypto_asset_definitions();
+    $codes = implode(',', array_map(static fn(string $code): string => "'" . $db->escape($code) . "'", array_keys($definitions)));
+    $existing = [];
+    foreach ($db->select_full_user("SELECT code,name,coingecko_id,rate_currency_code FROM crypto_assets WHERE code IN ({$codes})") as $row) {
+        $existing[strtoupper((string)$row['code'])] = $row;
+    }
+    foreach ($definitions as $code => $asset) {
+        $current = $existing[$code] ?? null;
+        if ($current && trim((string)$current['name']) !== '' && trim((string)$current['coingecko_id']) !== ''
+            && trim((string)$current['rate_currency_code']) !== ''
+            && (!in_array($code, ['BNB','POL'], true) || $current['coingecko_id'] === $asset['coingecko_id'])) {
+            continue;
+        }
         $codeSql = $db->escape($code);
         $nameSql = $db->escape((string)$asset['name']);
         $coingeckoSql = $db->escape((string)$asset['coingecko_id']);
@@ -573,16 +586,6 @@ function admin_hinkal_private_send_input_asset(array $settings): string
 {
     $asset = strtoupper(trim((string)($settings['hinkal_private_send_input_asset'] ?? 'POL')));
     return in_array($asset, ['POL', 'USDT'], true) ? $asset : 'POL';
-}
-
-function admin_rango_converter_enabled(array $settings): bool
-{
-    return admin_setting_is_enabled($settings, 'rango_converter_enabled', false);
-}
-
-function admin_rango_centralized_swappers_enabled(array $settings): bool
-{
-    return admin_setting_is_enabled($settings, 'rango_enable_centralized_swappers', true);
 }
 
 function admin_mixer_enabled(array $settings): bool
@@ -4945,6 +4948,38 @@ function admin_user_access_level(array $adminUser): int
     return (int)($adminUser['role_access_level'] ?? 0);
 }
 
+function admin_user_can_use_admin_mode(array $user): bool
+{
+    return ($user['login_name'] ?? '') === 'admin'
+        && ($user['status'] ?? '') === 'active'
+        && admin_user_access_level($user) >= 1000;
+}
+
+/** Peers cannot change identity, role, recovery email or password to take over each other. */
+function admin_user_can_manage_admin(array $actor, array $target): bool
+{
+    return ($actor['status'] ?? '') === 'active'
+        && admin_user_access_level($actor) >= 1000
+        && (((int)($actor['id'] ?? 0) > 0 && (int)$actor['id'] === (int)($target['id'] ?? 0))
+            || (($target['login_name'] ?? '') !== 'admin' && admin_user_access_level($actor) > admin_user_access_level($target)));
+}
+
+function admin_change_own_password(Mysql_ks $db, int $actorId, array $input): array
+{
+    // No target ID comes from the submitted form. Always verify the current stored password.
+    $user = $actorId > 0 ? $db->select_user('SELECT * FROM admin_users WHERE id=' . $actorId) : null;
+    if (!$user || ($user['status'] ?? '') !== 'active') return ['ok'=>false,'message'=>'settings_password_invalid'];
+    foreach (['current_password','new_password','repeat_password'] as $key) {
+        if (!is_string($input[$key] ?? null)) return ['ok'=>false,'message'=>'settings_password_invalid'];
+    }
+    if (!admin_verify_password($user, $input['current_password'])) return ['ok'=>false,'message'=>'settings_password_invalid'];
+    if ($input['new_password'] === '') return ['ok'=>false,'message'=>'settings_password_required'];
+    if (strlen($input['new_password']) > 72) return ['ok'=>false,'message'=>'settings_password_too_long'];
+    if ($input['new_password'] !== $input['repeat_password']) return ['ok'=>false,'message'=>'settings_password_mismatch'];
+    $ok = $db->update_using_id(['password_hash','password_hash_algorithm'], [password_hash($input['new_password'], PASSWORD_DEFAULT),'password_hash'], 'admin_users', $actorId);
+    return ['ok'=>(bool)$ok,'message'=>$ok?'settings_password_changed':'settings_password_invalid'];
+}
+
 function admin_route_minimum_access_level(string $route): int
 {
     $restrictedRoutes = ['settings', 'email-templates', 'faq', 'pages'];
@@ -5122,6 +5157,11 @@ function admin_create_admin_user(Mysql_ks $db, array $input, int $createdByAdmin
 {
     admin_ensure_user_runtime_columns($db);
 
+    $actor = admin_admin_user_find($db, $createdByAdminUserId);
+    if (!$actor || ($actor['status'] ?? '') !== 'active' || admin_user_access_level($actor) < 1000) {
+        return ['ok' => false, 'message' => 'Insufficient permissions to create administrator accounts.'];
+    }
+
     if (!schema_object_exists($db, 'admin_users')) {
         return ['ok' => false, 'message' => 'Administrator storage is not available.'];
     }
@@ -5132,7 +5172,15 @@ function admin_create_admin_user(Mysql_ks $db, array $input, int $createdByAdmin
         return ['ok' => false, 'message' => 'Select a valid administrator role.'];
     }
 
+    if ((int)$role['access_level'] > admin_user_access_level($actor)
+        || ((int)$role['access_level'] === admin_user_access_level($actor) && !admin_user_can_use_admin_mode($actor))) {
+        return ['ok' => false, 'message' => 'You can only assign a lower administrator role.'];
+    }
+
     $loginName = trim((string)($input['login_name'] ?? ''));
+    if (strcasecmp($loginName, 'admin') === 0) {
+        return ['ok' => false, 'message' => 'The login admin is reserved and cannot be assigned.'];
+    }
     $email = strtolower(trim((string)($input['email'] ?? '')));
     $password = (string)($input['password'] ?? '');
     $repeatPassword = (string)($input['repeat_password'] ?? '');
@@ -5223,6 +5271,7 @@ function admin_update_admin_user(
     array $currentAdminUser,
     string $ipAddress = ''
 ): array {
+    $currentAdminUser = admin_admin_user_find($db, (int)($currentAdminUser['id'] ?? 0)) ?? [];
     if (admin_user_access_level($currentAdminUser) < 1000) {
         return ['ok' => false, 'message' => 'Only the main administrator can edit administrator accounts.'];
     }
@@ -5232,17 +5281,33 @@ function admin_update_admin_user(
         return ['ok' => false, 'message' => 'Administrator account not found.'];
     }
 
+    if (!admin_user_can_manage_admin($currentAdminUser, $targetAdmin)) {
+        return ['ok' => false, 'message' => 'You can only edit administrators with a lower role. Change your own password in your account settings.'];
+    }
+
     $roleId = (int)($input['role_id'] ?? 0);
     $role = admin_role_find($db, $roleId);
     if (!$role) {
         return ['ok' => false, 'message' => 'Select a valid administrator role.'];
     }
 
+    $editingSelf = (int)$currentAdminUser['id'] === $targetAdminUserId;
+    if (!$editingSelf && (int)$role['access_level'] >= admin_user_access_level($currentAdminUser)) {
+        return ['ok' => false, 'message' => 'You can only assign a lower administrator role.'];
+    }
+
     $loginName = trim((string)($input['login_name'] ?? ''));
+    if (($targetAdmin['login_name'] === 'admin' && $loginName !== 'admin')
+        || (strcasecmp($loginName, 'admin') === 0 && $targetAdmin['login_name'] !== 'admin')) {
+        return ['ok' => false, 'message' => 'The login admin is reserved and cannot be assigned.'];
+    }
     $email = strtolower(trim((string)($input['email'] ?? '')));
     $status = strtolower(trim((string)($input['status'] ?? (string)($targetAdmin['status'] ?? 'active'))));
     $password = (string)($input['password'] ?? '');
     $repeatPassword = (string)($input['repeat_password'] ?? '');
+    if ($editingSelf && ($password !== '' || $repeatPassword !== '')) {
+        return ['ok' => false, 'message' => 'Change your own password using the current-password form.'];
+    }
     $handleResult = admin_resolve_public_handle($db, (string)($input['public_handle'] ?? ''), $targetAdminUserId);
 
     if ($loginName === '') {
@@ -5361,6 +5426,7 @@ function admin_delete_admin_user(
     array $currentAdminUser,
     string $ipAddress = ''
 ): array {
+    $currentAdminUser = admin_admin_user_find($db, (int)($currentAdminUser['id'] ?? 0)) ?? [];
     if (admin_user_access_level($currentAdminUser) < 1000) {
         return ['ok' => false, 'message' => 'Only the main administrator can delete administrator accounts.'];
     }
@@ -5368,6 +5434,10 @@ function admin_delete_admin_user(
     $targetAdmin = admin_admin_user_find($db, $targetAdminUserId);
     if (!$targetAdmin) {
         return ['ok' => false, 'message' => 'Administrator account not found.'];
+    }
+
+    if (!admin_user_can_manage_admin($currentAdminUser, $targetAdmin)) {
+        return ['ok' => false, 'message' => 'You can only delete administrators with a lower role.'];
     }
 
     $currentAdminId = (int)($currentAdminUser['id'] ?? 0);
@@ -7328,6 +7398,31 @@ function admin_remaining_time_label(int $seconds): string
     }
 
     return max(1, $minutes) . 'm left';
+}
+
+function admin_search_order_status_badge(array $order, array $messages): array
+{
+    $status = strtolower(trim((string)($order['status'] ?? '')));
+    $payment = strtolower(trim((string)($order['payment_status'] ?? '')));
+    $fulfillment = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
+    if ($status === 'cancelled' || $fulfillment === 'cancelled') {
+        $tone='danger'; $key='enum_cancelled'; $fallback='Cancelled';
+    } elseif ($status === 'refunded' || $payment === 'refunded') {
+        $tone='danger'; $key='enum_refunded'; $fallback='Refunded';
+    } elseif (in_array($status,['failed','inactive','archived'],true)) {
+        $tone=$status==='failed'?'danger':'neutral'; $key='enum_'.$status; $fallback=ucfirst($status);
+    } elseif ($status === 'expired' || (admin_product_type_uses_expiry($order['product_type'] ?? 'subscription') && (admin_order_progress_data($order)['tone'] ?? '') === 'expired')) {
+        $tone='danger'; $key='enum_expired'; $fallback='Expired';
+    } elseif (!empty($order['has_paid_pending_renewal']) || ($payment === 'paid' && !in_array($fulfillment,['delivered','fulfilled','completed','shipped','sent'],true))) {
+        $tone='warning'; $key='search_order_status_activation'; $fallback='Awaiting activation';
+    } elseif ($payment === 'paid' && in_array($fulfillment,['delivered','fulfilled','completed','shipped','sent'],true)) {
+        $tone='success'; $key='search_order_status_fulfilled'; $fallback='Fulfilled';
+    } elseif ($status === 'pending_payment' || $payment === 'unpaid') {
+        $tone='warning'; $key='search_order_status_unpaid'; $fallback='Awaiting payment';
+    } else {
+        $tone='info'; $key='enum_'.($status ?: 'pending'); $fallback=ucfirst($status ?: 'pending');
+    }
+    return ['tone'=>$tone, 'label'=>admin_t($messages,$key,$fallback)];
 }
 
 function admin_order_status_visual(array $order): array
@@ -9578,6 +9673,28 @@ function admin_payment_summary(Mysql_ks $db, int $customerId = 0, bool $includeB
     return $summary;
 }
 
+/** Sidebar count needs only open statuses, not aggregate history totals. */
+function admin_payment_open_count(Mysql_ks $db, bool $includeBankTransfers = true): int
+{
+    $total = 0;
+    foreach ([
+        ['crypto_deposit_requests', "status IN ('pending','awaiting_review','awaiting_confirmation')", true],
+        ['bank_transfer_requests', "status IN ('pending_payment','awaiting_review')", $includeBankTransfers],
+    ] as [$table, $where, $enabled]) {
+        if ($enabled && schema_object_exists($db, $table)) {
+            $row = $db->select_user("SELECT COUNT(*) AS total FROM {$table} WHERE {$where}");
+            $total += (int)($row['total'] ?? 0);
+        }
+    }
+    if (schema_object_exists($db, 'crypto_topups')) {
+        $table = schema_read_target($db, 'crypto_topups');
+        $status = schema_read_column($db, 'crypto_topups', 'is_active', 'status');
+        $row = $db->select_user("SELECT COUNT(*) AS total FROM {$table} WHERE {$status}=0");
+        $total += (int)($row['total'] ?? 0);
+    }
+    return $total;
+}
+
 function admin_topbar_notification_payment_rows(Mysql_ks $db, bool $includeBankTransfers = true, int $limit = 8): array
 {
     return admin_payment_rows($db, max(1, min(20, $limit)), 0, 'open', '', $includeBankTransfers);
@@ -10008,6 +10125,8 @@ function admin_topbar_admin_panel_subscription_notice(array $settings, int $warn
 {
     $paidUntil = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
     $renewalUrl = trim((string)($settings['admin_panel_subscription_renewal_url'] ?? ''));
+    $tiersConfig = app_panel_tiers_config(Mysql_ks::get_instance());
+    if (!empty($tiersConfig['enabled'])) $renewalUrl = '#adminPanelTierPaymentModal';
     $paidUntilTimestamp = app_panel_subscription_paid_until_timestamp($settings);
     $warningDays = max(1, $warningDays);
 
@@ -10186,6 +10305,34 @@ function admin_delete_cancelled_payments(
             ? 'Cancelled payment requests deleted successfully.'
             : 'There are no cancelled payment requests to delete.',
     ];
+}
+
+/** Status guidance is presentation only; it never changes or confirms a payment. */
+function admin_payment_status_guidance(string $paymentType, string $status, ?string $locale = null): array
+{
+    $pl = ($locale ?? admin_current_locale()) === 'pl';
+    $crypto = $paymentType === 'crypto';
+    $items = [
+        'pending' => ['warning', 'bi-clock-history', 'Oczekuje na wpłatę', 'Awaiting payment', 'Wybierz, gdy czekasz na przelew klienta i wpłata nie została jeszcze potwierdzona. Ten status nie oznacza otrzymania środków.', 'Use while waiting for the customer transfer, before payment is verified. This status does not mean funds have been received.'],
+        'awaiting_review' => ['info', 'bi-search', 'Wymaga weryfikacji', 'Needs review', 'Wpłata wymaga sprawdzenia. Zweryfikuj kwotę, odbiorcę i datę przed akceptacją. Wybierz, gdy płatność wymaga ręcznej oceny.', 'Check the amount, recipient and date before accepting. Use when the payment needs manual review.'],
+        'awaiting_confirmation' => ['info', 'bi-hourglass-split', 'Oczekuje na potwierdzenie', 'Awaiting confirmation', 'Wybierz, gdy zgłoszona wpłata czeka jeszcze na potwierdzenie. Przed akceptacją upewnij się, że środki dotarły; przy krypto sprawdź też potwierdzenia sieci.', 'Use when a reported transfer still needs confirmation. Verify receipt before accepting; for crypto also check network confirmations.'],
+        'expired' => ['danger', 'bi-exclamation-circle-fill', 'Termin płatności minął', 'Payment deadline passed', 'Termin prośby o wpłatę upłynął. Sprawdź także spóźnione przelewy, zanim poprosisz klienta o ponowną płatność. Wybierz, gdy termin minął i wpłata nie jest potwierdzona.', 'The request deadline has passed. Check for late transfers before asking the customer to pay again. Use when the deadline has passed without verified payment.'],
+        'approved' => ['success', 'bi-check-circle-fill', 'Płatność zatwierdzona', 'Payment approved', $crypto ? 'Wybierz dopiero po otrzymaniu wpłaty. Środki są na portfelu, na który wpłacił klient; przenieś płatność do archiwum po wypłacie na swój główny portfel.' : 'Wybierz dopiero po sprawdzeniu, że wpłata klienta dotarła i ma prawidłową kwotę. Realizację lub przedłużenie zamówienia dokończ w Zamówieniach.', $crypto ? 'Use only after receiving the payment. The funds are in the wallet used by the customer; archive the payment after transferring the funds to your main wallet.' : 'Use only after verifying receipt and the correct amount. Complete order fulfilment or renewal in Orders.'],
+        'archived' => ['neutral', 'bi-archive', 'Płatność w archiwum', 'Payment archived', $crypto ? 'Wybierz po rozliczeniu płatności i wypłacie środków na swój główny portfel. Archiwizacja zachowuje historię, ale sama nie wykonuje przelewu.' : 'Wybierz po zakończeniu obsługi i rozliczeniu płatności. Archiwizacja zachowuje historię; nie wykonuje przelewu ani zwrotu.', $crypto ? 'Use after reconciliation and withdrawal to your main wallet. Archiving preserves history but does not transfer funds.' : 'Use after processing and reconciling the payment. Archiving preserves history and does not transfer or refund funds.'],
+        'cancelled' => ['danger', 'bi-x-circle-fill', 'Płatność anulowana', 'Payment cancelled', 'Wybierz, gdy prośba o wpłatę nie będzie dalej realizowana. Anulowanie nie zwraca środków. Jeśli klient zdążył zapłacić, zweryfikuj wpłatę przed wystawieniem kolejnej prośby.', 'Use when the payment request will not proceed. Cancellation does not refund funds. Check any transfer already sent before creating another request.'],
+        'failed' => ['danger', 'bi-exclamation-triangle-fill', 'Płatność nieudana', 'Payment failed', 'Wybierz po potwierdzeniu, że próba płatności się nie powiodła. Sprawdź rzeczywisty stan wpłaty, zanim poprosisz klienta o ponowienie.', 'Use after confirming the payment attempt failed. Verify the actual transfer before requesting another payment.'],
+        'rejected' => ['danger', 'bi-x-circle-fill', 'Płatność odrzucona', 'Payment rejected', 'Wybierz po weryfikacji, gdy wpłata nie może zostać zaakceptowana. Odrzucenie samo nie wykonuje zwrotu środków.', 'Use after review when the payment cannot be accepted. Rejection does not itself refund funds.'],
+    ];
+    $items['pending_payment'] = $items['pending'];
+    foreach (['confirmed', 'paid', 'completed'] as $alias) {
+        $items[$alias] = $items['approved'];
+    }
+    if ($paymentType === 'crypto_topup') {
+        $items['pending'] = ['warning', 'bi-clock-history', 'Doładowanie oczekuje na obsługę', 'Top-up awaiting processing', 'To starszy zapis doładowania krypto, który nie został zarchiwizowany. Zweryfikuj wpłatę i rozliczenie przed zmianą statusu.', 'This legacy crypto top-up has not been archived. Verify receipt and reconciliation before changing its status.'];
+        $items['archived'] = ['neutral', 'bi-archive', 'Doładowanie w archiwum', 'Top-up archived', 'Wybierz po sprawdzeniu i zakończeniu obsługi doładowania. Zmiana tego statusu porządkuje zapis; sama nie potwierdza transakcji ani nie wykonuje wypłaty.', 'Use after verifying and processing the top-up. This status organises the record; it does not verify a transaction or withdraw funds.'];
+    }
+    $item = $items[strtolower(trim($status))] ?? ['neutral', 'bi-info-circle-fill', 'Status niestandardowy', 'Custom status', 'To status ze starszego lub niestandardowego zapisu. Sprawdź historię płatności przed zmianą. Sam wybór opcji nie zapisuje zmian.', 'This is a legacy or custom status. Review payment history before changing it. Selecting an option does not save changes.'];
+    return ['tone' => $item[0], 'icon' => $item[1], 'title' => $item[$pl ? 2 : 3], 'text' => $item[$pl ? 4 : 5]];
 }
 
 function admin_payment_status_options(string $paymentType, string $current = ''): array
@@ -10387,6 +10534,7 @@ function admin_sync_order_after_payment_reversal(Mysql_ks $db, array $previous, 
     $paymentId = (int)($previous['id'] ?? 0);
     if ($orderId <= 0 || $paymentId <= 0 || !in_array($type, ['crypto', 'bank'], true)
         || in_array(strtolower((string)($current['status'] ?? '')), admin_payment_success_statuses($type), true)) return true;
+    app_panel_tiers_capture($db, $orderId);
     $safeType = $db->escape($type);
     $renewal = $db->select_user("SELECT id, status FROM order_renewals
         WHERE order_id = {$orderId} AND payment_request_type = '{$safeType}' AND payment_request_id = {$paymentId}
@@ -11088,6 +11236,7 @@ function admin_finalize_successful_payment(
             if (!$orderPaymentUpdated) {
                 return ['ok' => false, 'message' => 'Unable to record renewal payment.'];
             }
+            app_panel_tiers_capture($db, $orderId);
 
             return [
                 'ok' => true,
@@ -11159,7 +11308,9 @@ function admin_delete_payment(
     }
 
     $paymentType = strtolower((string)$payment['payment_type']);
-    if ($paymentType === 'crypto_topup') {
+    if ($paymentType === 'crypto') {
+        $tableName = 'crypto_deposit_requests';
+    } elseif ($paymentType === 'crypto_topup') {
         $tableName = schema_write_target('crypto_topups');
     } else {
         if (!in_array(strtolower(trim((string)($payment['status'] ?? ''))), admin_payment_cancelled_statuses($paymentType), true)) {
@@ -11168,7 +11319,18 @@ function admin_delete_payment(
         $tableName = $paymentType === 'crypto' ? 'crypto_deposit_requests' : 'bank_transfer_requests';
     }
 
-    $deleted = $db->delete_using_id($tableName, $paymentId);
+    if ($paymentType === 'crypto') {
+        // Recheck eligibility in the DELETE itself, so a newly approved payment survives.
+        $creditGuard = schema_object_exists($db, 'customer_balance_runtime_events')
+            ? " AND NOT EXISTS (SELECT 1 FROM customer_balance_runtime_events e WHERE e.source_type='payment_approval' AND e.source_key='crypto:{$paymentId}' AND e.direction='credit')"
+            : '';
+        $result = $db->query("DELETE FROM crypto_deposit_requests WHERE id={$paymentId}
+            AND (status IN ('cancelled','rejected','failed','expired')
+                 OR (status IN ('pending','awaiting_confirmation','awaiting_review') AND expires_at IS NOT NULL AND expires_at<=NOW())){$creditGuard}");
+        $deleted = $result && (int)$db->affected_rows > 0;
+    } else {
+        $deleted = $db->delete_using_id($tableName, $paymentId);
+    }
 
     if ($deleted) {
         if (!empty($payment['order_id']) && in_array($paymentType, ['crypto', 'bank'], true)) {
@@ -11576,6 +11738,8 @@ function admin_build_crypto_accept_payload(array $paymentRow, array $messages): 
         'received_fiat_amount' => $receivedFiatRaw !== null ? number_format($receivedFiatRaw, 2, '.', '') : '',
         'exchange_rate' => $exchangeRate > 0 ? number_format($exchangeRate, 8, '.', '') : '',
         'requested_at_label' => admin_compact_datetime_label((string)($paymentRow['requested_at'] ?? '')),
+        'requested_at_timestamp' => app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? '')),
+        'can_cancel' => in_array((string)($paymentRow['status'] ?? ''), ['pending','pending_payment','awaiting_confirmation','awaiting_review','expired'], true),
         'is_topup' => (int)($paymentRow['order_id'] ?? 0) <= 0 ? 1 : 0,
     ];
 }
@@ -13713,10 +13877,10 @@ function admin_crypto_auto_accept_transaction_is_unused(Mysql_ks $db, string $tx
     return $linkedRequestId <= 0 || $linkedRequestId === $paymentId;
 }
 
-function admin_crypto_auto_accept_candidate(Mysql_ks $db, array $payment, array $settings): ?array
+function admin_crypto_auto_accept_candidate(Mysql_ks $db, array $payment, array $settings, bool $detectPartial = false): ?array
 {
     $windowMinutes = max(5, min(240, (int)($settings['crypto_auto_accept_window_minutes'] ?? 60)));
-    $minAmountPercent = max(50, min(100, (int)($settings['crypto_auto_accept_min_amount_percent'] ?? 80)));
+    $minAmountPercent = $detectPartial ? 0 : max(50, min(100, (int)($settings['crypto_auto_accept_min_amount_percent'] ?? 80)));
     $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
         ? app_timestamp_from_runtime_datetime((string)($payment['requested_at'] ?? ''))
         : strtotime((string)($payment['requested_at'] ?? ''));
@@ -13966,7 +14130,7 @@ function admin_crypto_auto_accept_store_transaction(Mysql_ks $db, array $payment
 
 function admin_crypto_auto_accept_recent_payments(Mysql_ks $db, array $settings, array $options = []): array
 {
-    if (empty($settings['crypto_auto_accept_enabled'])) return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0];
+    if (isset($settings['crypto_payments_enabled']) && empty($settings['crypto_payments_enabled'])) return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0];
     $key = 'crypto-scan:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 32);
     $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
     if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'busy' => true];
@@ -13979,9 +14143,7 @@ function admin_crypto_auto_accept_recent_payments(Mysql_ks $db, array $settings,
 
 function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $settings, array $options = []): array
 {
-    if (empty($settings['crypto_auto_accept_enabled'])) {
-        return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'message' => 'Crypto auto-accept is disabled.'];
-    }
+    $autoAccept = !empty($settings['crypto_auto_accept_enabled']);
     if (!schema_object_exists($db, 'crypto_deposit_requests')) {
         return ['ok' => true, 'checked' => 0, 'accepted' => 0, 'skipped' => 0, 'message' => 'Crypto payments table is unavailable.'];
     }
@@ -13995,12 +14157,14 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
     }
     $safeNowSql = $db->escape($safeNow);
     // Each status uses the complete queue index order; only a bounded union is sorted.
+    $manualQueueFilter = $autoAccept ? '' : "AND NOT (status='awaiting_review' AND COALESCE(received_crypto_amount,0)>0)";
     $queues = [];
     foreach (app_payment_open_crypto_statuses() as $status) {
         $safeStatus = $db->escape($status);
         $queues[] = "(SELECT id, blockchain_checked_at, requested_at
             FROM crypto_deposit_requests
             WHERE status = '{$safeStatus}'
+              {$manualQueueFilter}
               AND (blockchain_checked_at IS NULL OR blockchain_checked_at < DATE_SUB('{$safeNowSql}', INTERVAL 120 SECOND))
               AND requested_at <= '{$safeNowSql}'
               AND requested_at >= DATE_SUB('{$safeNowSql}', INTERVAL {$scanBackMinutes} MINUTE)
@@ -14014,6 +14178,7 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
     );
 
     $checked = 0;
+    $detected = 0;
     $accepted = 0;
     $skipped = 0;
     $errors = [];
@@ -14036,7 +14201,7 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
             continue;
         }
 
-        $candidate = admin_crypto_auto_accept_candidate($db, $payment, $settings);
+        $candidate = admin_crypto_auto_accept_candidate($db, $payment, $settings, true);
         if (!is_array($candidate)) {
             $skipped++;
             continue;
@@ -14050,6 +14215,17 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
         }
 
         if (!admin_crypto_auto_accept_store_transaction($db, $payment, $candidate)) { $skipped++; continue; }
+        $meetsAutoThreshold = (float)($candidate['amount_percent'] ?? 0) + 0.0001 >= max(50,min(100,(int)($settings['crypto_auto_accept_min_amount_percent']??80)));
+        if (!$autoAccept || !$meetsAutoThreshold) {
+            // Detection reserves the received transfer but never credits balance or fulfils an order.
+            // Once paid, the ticket no longer has a send-payment deadline.
+            $saved = $db->query("UPDATE crypto_deposit_requests SET status='awaiting_review',
+                received_crypto_amount='" . $db->escape(admin_decimal_input_value($amountCrypto,8)) . "',
+                received_fiat_amount='" . $db->escape(number_format($amountFiat,2,'.','')) . "', expires_at=NULL
+                WHERE id={$paymentId} AND status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review')");
+            if ($saved && $db->affected_rows > 0) $detected++; else $skipped++;
+            continue;
+        }
         $result = admin_payment_apply_quick_action(
             $db,
             'crypto',
@@ -14089,6 +14265,7 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
         'ok' => $errors === [],
         'checked' => $checked,
         'accepted' => $accepted,
+        'detected' => $detected,
         'skipped' => $skipped,
         'errors' => $errors,
         'message' => $errors === []
@@ -14513,7 +14690,7 @@ function admin_render_crypto_accept_explorer_panel(array $preview): string
                     <?php endif; ?>
                     <?php if ($explorerUrl !== ''): ?>
                         <a href="<?php echo admin_e($explorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger btn-sm admin-crypto-preview__open-link">
-                            <?php echo admin_e((string)($preview['open_explorer_label'] ?? 'Open explorer')); ?>
+                            <?php echo admin_e((string)($preview['open_explorer_label'] ?? 'Open explorer')); ?> <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
                         </a>
                     <?php endif; ?>
                 </div>
@@ -17725,6 +17902,7 @@ function admin_save_order_info(
     string $ipAddress = ''
 ): array
 {
+    app_panel_tiers_capture($db, $orderId);
     $order = admin_order_find($db, $orderId);
     if (!$order) {
         return ['ok' => false, 'message' => 'Order not found.'];
@@ -18060,6 +18238,7 @@ function admin_delete_order(
     string $ipAddress = ''
 ): array
 {
+    app_panel_tiers_capture($db, $orderId);
     $order = admin_order_find($db, $orderId);
     if (!$order) {
         return ['ok' => false, 'message' => 'Order not found.'];
@@ -18160,7 +18339,8 @@ function admin_extend_order(
     bool $chargeCustomerBalance = true,
     string $overrideExpiresAt = '',
     ?string $expectedExpiresAt = null,
-    int $expectedRenewalId = 0
+    int $expectedRenewalId = 0,
+    string $supportNote = ''
 ): array {
     $order = admin_order_find($db, $orderId);
     if (!$order) return ['ok' => false, 'message' => 'Order not found.'];
@@ -18169,7 +18349,7 @@ function admin_extend_order(
     $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
     if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => false, 'message' => 'Another payment operation is in progress. Please retry shortly.'];
     try {
-        $result = admin_extend_order_locked($db, $orderId, $productId, $chargeCustomerBalance, $overrideExpiresAt, $expectedExpiresAt, $expectedRenewalId);
+        $result = admin_extend_order_locked($db, $orderId, $productId, $chargeCustomerBalance, $overrideExpiresAt, $expectedExpiresAt, $expectedRenewalId, $supportNote);
         $messageKeys = [
             'This renewal has already been applied.' => 'order_extend_already_applied',
             'The order changed after this form was opened. Refresh before extending it again.' => 'order_extend_changed',
@@ -18191,9 +18371,13 @@ function admin_extend_order_locked(
     bool $chargeCustomerBalance = true,
     string $overrideExpiresAt = '',
     ?string $expectedExpiresAt = null,
-    int $expectedRenewalId = 0
+    int $expectedRenewalId = 0,
+    string $supportNote = ''
 ): array
 {
+    $supportNote = trim($supportNote);
+    if ((function_exists('mb_strlen') ? mb_strlen($supportNote,'UTF-8') : strlen($supportNote)) > 4000) return ['ok'=>false,'message'=>'Support annotation is too long.','message_key'=>'order_extend_support_note_too_long'];
+    app_panel_tiers_capture($db, $orderId);
     $order = admin_order_find($db, $orderId);
     $product = admin_product_basic_row($db, $productId);
     $adminUserId = isset($_SESSION['admin_user_id']) ? (int)$_SESSION['admin_user_id'] : 0;
@@ -18274,7 +18458,8 @@ function admin_extend_order_locked(
             'admin',
             $adminUserId,
             $ipAddress,
-            $reservationState === 'reserved'
+            $reservationState === 'reserved',
+            $supportNote
         );
         if (empty($applyResult['ok'])) {
             return $applyResult;
@@ -18313,12 +18498,15 @@ function admin_extend_order_locked(
     app_ensure_customer_balance_runtime_table($db);
     if (!$db->query('START TRANSACTION')) return ['ok' => false, 'message' => 'Unable to start extension.'];
     try {
-        $lockedOrder = $db->select_user("SELECT expires_at, status, payment_status FROM orders WHERE id = {$orderId} FOR UPDATE");
+        $lockedOrder = $db->select_user("SELECT expires_at, status, payment_status, support_note FROM orders WHERE id = {$orderId} FOR UPDATE");
         if (!is_array($lockedOrder) || (string)($lockedOrder['expires_at'] ?? '') !== (string)($order['expires_at'] ?? '')
             || !in_array((string)$lockedOrder['status'], ['active', 'expired'], true) || (string)$lockedOrder['payment_status'] !== 'paid') {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => 'The order changed after this form was opened. Refresh before extending it again.'];
         }
+        $combinedSupportNote = (string)($lockedOrder['support_note'] ?? '');
+        if ($supportNote !== '') $combinedSupportNote = rtrim($combinedSupportNote) . ($combinedSupportNote !== '' ? "\n" : '') . $supportNote;
+        if (strlen($combinedSupportNote) > 65535) throw new RuntimeException('Support note exceeds storage limit.');
         app_preserve_initial_order_sale($db, $orderId);
 
         if ($chargeCustomerBalance && $extensionAmount > 0) {
@@ -18341,13 +18529,14 @@ function admin_extend_order_locked(
         }
 
         $updated = $db->update_using_id(
-            ['product_id', 'total_amount', 'currency_id', 'expires_at', 'status'],
+            ['product_id', 'total_amount', 'currency_id', 'expires_at', 'status', 'support_note'],
             [
                 $productId,
                 number_format((float)($product['price_amount'] ?? 0), 2, '.', ''),
                 (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
                 $newExpiry,
                 $nextStatus,
+                $combinedSupportNote,
             ],
             'orders',
             $orderId
@@ -18806,6 +18995,8 @@ function admin_delete_customer_account(Mysql_ks $db, int $customerId, int $admin
     if (!$customer) {
         return ['ok' => false, 'message' => 'Customer not found.'];
     }
+
+    app_panel_tiers_capture($db, 0, $customerId);
 
     $customerEmail = (string)($customer['email'] ?? '');
 
@@ -21045,6 +21236,13 @@ function admin_save_crypto_wallet(Mysql_ks $db, int $walletId, array $payload, i
 
     $cryptoAssetId = (int)($payload['crypto_asset_id'] ?? 0);
     $address = trim((string)($payload['address'] ?? ''));
+    if ($address !== '' && app_panel_tiers_installed($db)) {
+        $panelConfig=app_panel_tiers_config($db);
+        foreach(app_panel_tiers_assets() as $code=>$spec){
+            $reserved=trim((string)($panelConfig[$spec['wallet']]??''));
+            if($reserved!=='' && ($address===$reserved || (in_array($code,['USDT','BTC'],true) && strtolower($address)===strtolower($reserved)))) return ['ok'=>false,'message'=>admin_panel_tiers_text('receivers')];
+        }
+    }
     $label = trim((string)($payload['label'] ?? ''));
     $ownerFullName = trim((string)($payload['owner_full_name'] ?? ''));
     $memoTag = trim((string)($payload['memo_tag'] ?? ''));
@@ -22624,7 +22822,7 @@ function admin_chat_inbox_rows(Mysql_ks $db, int $limit = 12, int $adminUserId =
     );
 
     if ($adminUserId > 0) {
-        $groupRows = chat_admin_group_conversation_rows($db, $adminUserId);
+        $groupRows = chat_admin_group_conversation_rows($db, $adminUserId, $limit, $globalGroupEnabled);
         if (!$globalGroupEnabled) {
             $groupRows = array_values(array_filter($groupRows, static function (array $groupRow): bool {
                 return trim((string)($groupRow['conversation_type'] ?? '')) !== 'global_group';
@@ -27458,13 +27656,13 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                             <?php echo admin_e($publicHandle !== '' ? '@' . ltrim($publicHandle, '@') : (string)($row['email'] ?? '')); ?>
                                         </a>
                                         <?php if ($deliveryUrlCount > 0): ?>
-                                            <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--url admin-search-user-card__delivery-indicator" title="<?php echo admin_e($deliveryUrlLabel); ?>" aria-label="<?php echo admin_e($deliveryUrlLabel); ?>">
+                                            <span data-admin-search-help tabindex="0" class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--url admin-search-user-card__delivery-indicator" title="<?php echo admin_e($deliveryUrlLabel); ?>" aria-label="<?php echo admin_e($deliveryUrlLabel); ?>">
                                                 <i class="bi bi-link-45deg" aria-hidden="true"></i>
                                                 <?php if ($showDeliveryCounts): ?><span aria-hidden="true"><?php echo admin_e($deliveryUrlCount . '/' . $subscriptionCount); ?></span><?php endif; ?>
                                             </span>
                                         <?php endif; ?>
                                         <?php if ($deliveryCredentialsCount > 0): ?>
-                                            <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--credentials admin-search-user-card__delivery-indicator" title="<?php echo admin_e($deliveryCredentialsLabel); ?>" aria-label="<?php echo admin_e($deliveryCredentialsLabel); ?>">
+                                            <span data-admin-search-help tabindex="0" class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--credentials admin-search-user-card__delivery-indicator" title="<?php echo admin_e($deliveryCredentialsLabel); ?>" aria-label="<?php echo admin_e($deliveryCredentialsLabel); ?>">
                                                 <i class="bi bi-key" aria-hidden="true"></i>
                                                 <?php if ($showDeliveryCounts): ?><span aria-hidden="true"><?php echo admin_e($deliveryCredentialsCount . '/' . $subscriptionCount); ?></span><?php endif; ?>
                                             </span>
@@ -27486,7 +27684,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     <i class="bi bi-clock" aria-hidden="true"></i>
                                     <?php echo admin_e($lastLoginLabel !== '' ? $lastLoginLabel : '—'); ?>
                                 </span>
-                                <span class="admin-search-user-card__locale" title="<?php echo admin_e(admin_t($messages, 'col_locale', 'Language') . ': ' . $localeFlagAlt); ?>">
+                                <span data-admin-search-help tabindex="0" class="admin-search-user-card__locale" title="<?php echo admin_e(admin_t($messages, 'col_locale', 'Language') . ': ' . $localeFlagAlt); ?>">
                                     <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
                                 </span>
                             </article>
@@ -27549,6 +27747,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? ''));
                                 $orderNeedsAction = $orderPaymentStatusRaw === 'paid' && !$isCompletedPaidOrder
                                     && !in_array($orderRowStatus, ['cancelled','refunded','failed','inactive','archived','expired'], true);
+                                $orderSearchStatus=admin_search_order_status_badge($row,$messages);
                                 $orderDetailsButtonClass = $orderNeedsAction ? 'btn-warning admin-orders-details--awaiting' : '';
                                 $orderDetailsLabel = admin_t($messages, $orderNeedsAction ? 'order_details_complete' : 'order_details_toggle', 'Show details');
                                 $orderDeliveryLinkMode = admin_order_delivery_link_mode($row);
@@ -27565,15 +27764,11 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                             <div class="admin-order-summary__title-row">
                                                 <a class="admin-orders-title <?php echo admin_e($orderProductClass); ?>" href="<?php echo admin_e($orderUrl); ?>" title="<?php echo admin_e($orderTitle); ?>"><?php echo admin_e($orderTitle); ?></a>
                                                 <?php if ($orderDeliveryLinkMode !== ''): ?>
-                                                    <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
+                                                    <span data-admin-search-help tabindex="0" class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
                                                         <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
                                                     </span>
                                                 <?php endif; ?>
-                                                <?php if ($isAwaitingActivationOrder): ?>
-                                                    <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
-                                                <?php elseif ($isPendingOrder): ?>
-                                                    <span class="admin-order-new-badge">NEW</span>
-                                                <?php endif; ?>
+
                                             </div>
                                             <div class="admin-order-summary__customer-row">
                                                 <a class="admin-inline-link admin-order-summary__customer admin-search-table__primary-link" href="<?php echo admin_e($orderCustomerProfileUrl); ?>">
@@ -27594,42 +27789,14 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                         </div>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?>">
-                                        <?php if ($isCompletedPaidOrder && $isOrderExpired && $usesSubscriptionTiming && !empty($row['expires_at'])): ?>
-                                            <span class="btn btn-danger btn-xs admin-orders-simple-table__provider-btn admin-orders-simple-table__expired-btn">
-                                                <i class="bi bi-calendar-x" aria-hidden="true"></i>
-                                                <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
-                                            </span>
-                                        <?php elseif ($isCompletedPaidOrder && $usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
-                                            <div class="admin-order-progress">
-                                                <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
-                                                    <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
-                                                </div>
-                                                <div class="admin-order-progress__track">
-                                                    <div class="admin-order-progress__meta">
-                                                        <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
-                                                        <?php if (!empty($row['expires_at'])): ?>
-                                                            <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
-                                                        <?php else: ?>
-                                                            <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                    <div class="admin-order-progress__bar">
-                                                        <span style="width: <?php echo admin_e((string)($orderProgress['percent'] ?? 0)); ?>%; background: <?php echo admin_e((string)($orderProgress['color'] ?? '#9ca3af')); ?>;"></span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        <?php elseif (!$isCompletedPaidOrder && $usesSubscriptionTiming && !empty($row['expires_at'])): ?>
-                                            <span class="admin-orders-simple-table__expire-date"><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
-                                        <?php else: ?>
-                                            <span class="admin-orders-simple-table__empty">-</span>
-                                        <?php endif; ?>
+                                        <span class="admin-search-order-expiry<?php echo $isOrderExpired?' is-expired':''; ?>"><i class="bi bi-calendar3" aria-hidden="true"></i><?php echo admin_e($usesSubscriptionTiming && !empty($row['expires_at']) ? app_format_runtime_datetime_local((string)$row['expires_at'], 'd.m.Y') : admin_t($messages,'order_no_expiry','No expiry')); ?><?php if ($isAwaitingActivationOrder): ?><span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'enum_paid', 'Paid')); ?></span><?php endif; ?><span class="admin-search-order-status is-<?php echo admin_e($orderSearchStatus['tone']); ?>"><?php echo admin_e($orderSearchStatus['label']); ?></span></span>
                                     </td>
                                     <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_amount', 'Amount')); ?>">
                                         <strong class="<?php echo admin_e($orderAmountClass); ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
                                     </td>
-                                    <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
+                                    <td class="admin-search-order-notes<?php echo $orderVisibleSupportNote===''?' is-empty':''; ?>" data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
                                         <div class="admin-orders-simple-table__notes">
-                                            <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : '<span class="admin-orders-simple-table__empty">-</span>'; ?></div>
+                                            <div class="admin-orders-simple-table__support-note"><?php if($orderVisibleSupportNote!==''): ?><span class="admin-search-order-note"><i class="bi bi-sticky" aria-hidden="true"></i><span><?php echo nl2br(admin_e($orderVisibleSupportNote)); ?></span></span><?php endif; ?></div>
                                         </div>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">

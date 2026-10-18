@@ -332,6 +332,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
     {/if}
 
     {if $payment_active_request_method eq 'crypto' && $payment_crypto_request}
+        <div data-customer-crypto-ticket="{$payment_crypto_request.id|escape:'html'}" data-ticket-status="{$payment_crypto_request.status|escape:'html'}" data-ticket-detected="{if $payment_crypto_request.payment_detected|default:false}1{else}0{/if}"></div>
+        <script src="/assets/js/customer-crypto-ticket-status.js" defer></script>
+        {if $payment_crypto_request.payment_detected|default:false}
+        {include file='profil/crypto_detected.tpl' detected_request=$payment_crypto_request}
+        {else}
         <div class="payment-wizard__section">
             <div class="payment-wizard__header payment-wizard__header--inline-title">
                 <h1><a href="orders"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.payment_crypto_details_title|default:'Pending payment'} <i class="fa fa-circle-o-notch fa-spin pull-right" style="margin-top: 5px;" aria-hidden="true"></i></h1>
@@ -443,6 +448,8 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                 </div>
             </div>
         </div>
+    {/if}
+
     {/if}
 
     {if $payment_active_request_method eq 'bank_transfer' && $payment_bank_request}
