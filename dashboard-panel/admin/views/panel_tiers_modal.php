@@ -1,6 +1,6 @@
 <?php
 $panelTierLabels=[];
-foreach(['title','intro','usage','month','quarter','near','too_early','unavailable','generate','pending','confirming','review','review_help','paid','expired','check','checking','scan_help','refresh','error','network','amount','address','rate_label','until','copy','per_month','partial','remaining','received','invoice_amount','partial_help','confirming_help','period_label','crypto_label','access_until','invoice_label','copy_error','cancel','cancelled','cancelled_review','send_network','scan_confirm','time_left'] as $key)$panelTierLabels[$key]=admin_panel_tiers_text($key);
+foreach(['title','intro','usage','month','quarter','near','too_early','unavailable','generate','pending','confirming','review','review_help','paid','expired','check','checking','scan_help','refresh','error','network','amount','address','rate_label','until','copy','per_month','partial','remaining','received','invoice_amount','partial_help','confirming_help','period_label','crypto_label','access_until','invoice_label','copy_error','cancel','cancel_expired','cancelled','cancelled_review','send_network','scan_confirm','time_left'] as $key)$panelTierLabels[$key]=admin_panel_tiers_text($key);
 ?>
 <div class="modal fade admin-panel-tier-modal" id="adminPanelTierPaymentModal" tabindex="-1" aria-labelledby="adminPanelTierPaymentTitle" aria-hidden="true" data-panel-tiers data-csrf="<?php echo admin_e($csrfToken); ?>" data-labels="<?php echo admin_e(json_encode($panelTierLabels,JSON_UNESCAPED_UNICODE)); ?>">
 <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
@@ -14,7 +14,7 @@ foreach(['title','intro','usage','month','quarter','near','too_early','unavailab
         </form>
         <section data-panel-invoice hidden aria-label="<?php echo admin_e(admin_panel_tiers_text('invoice_label')); ?>">
             <div class="admin-panel-tier-modal__payment-head" data-panel-payment-head></div>
-            <div class="admin-panel-tier-modal__payment-body">
+            <div class="admin-panel-tier-modal__payment-body" data-panel-payment-body>
                 <div class="admin-panel-tier-modal__qr-wrap"><div data-panel-qr class="admin-panel-tier-modal__qr"></div><p class="admin-panel-tier-modal__qr-help"><?php echo admin_e(admin_panel_tiers_text('qr_help')); ?></p></div>
                 <div class="admin-panel-tier-modal__payment-details">
                     <dl data-panel-invoice-details></dl>
@@ -22,9 +22,12 @@ foreach(['title','intro','usage','month','quarter','near','too_early','unavailab
                     <p class="admin-panel-tier-modal__network-reminder" data-panel-network-reminder></p>
                 </div>
             </div>
+            <div class="admin-panel-tier-modal__ended" data-panel-ended hidden></div>
             <div data-panel-notice-payment></div>
+            <div class="admin-panel-tier-modal__actions">
             <button class="btn btn-dark w-100" type="button" data-panel-check><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> <?php echo admin_e(admin_panel_tiers_text('check')); ?></button>
-            <button class="btn btn-link w-100 mt-2" type="button" data-panel-cancel hidden><i class="bi bi-arrow-left" aria-hidden="true"></i> <?php echo admin_e(admin_panel_tiers_text('cancel')); ?></button>
+            <button class="btn admin-panel-tier-modal__back w-100" type="button" data-panel-cancel hidden><i class="bi bi-arrow-left" aria-hidden="true"></i> <span data-panel-cancel-label><?php echo admin_e(admin_panel_tiers_text('cancel')); ?></span></button>
+            </div>
         </section>
         <a href="/admin/?page=dashboard" class="btn btn-dark w-100" data-panel-refresh hidden><?php echo admin_e(admin_panel_tiers_text('refresh')); ?></a>
     </div>

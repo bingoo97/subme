@@ -250,23 +250,26 @@ function app_panel_tiers_create(Mysql_ks $db, int $adminId, string $asset, int $
     $config=app_panel_tiers_config($db);
     if(empty($config['enabled']))throw new DomainException('disabled');
     $currencyRow=$db->select_user('SELECT c.code,s.admin_panel_subscription_paid_until FROM app_settings s JOIN currencies c ON c.id=s.default_currency_id WHERE s.id=1');
+    $unresolved=$db->select_user("SELECT id FROM panel_subscription_requests WHERE status='cancelled_review' AND received_crypto>0 LIMIT 1");
+    if($db->error)throw new RuntimeException('storage');
+    if($unresolved)throw new DomainException('cannot_cancel');
     if($existing=app_panel_tiers_pending($db))return $existing;
     if(!app_panel_tiers_policy($config,0,is_array($currencyRow)?$currencyRow:[])['can_renew'])throw new DomainException('too_early');
     if(($currencyRow['code']??'')!==$config['currency_code'])throw new DomainException('currency');
     $receivers=app_panel_tiers_receivers($db,$config);
     if(!isset($receivers[$asset]))throw new DomainException('receivers');
-    $restorable=$db->select_user("SELECT id FROM panel_subscription_requests WHERE wallet_address='".$db->escape($receivers[$asset]['address'])."' AND network_code='".$db->escape($receivers[$asset]['network'])."' AND status IN ('cancelled','cancelled_review') AND check_until>=UTC_TIMESTAMP() LIMIT 1");
-    $rate=0.0;
-    if(!$restorable){
-        $rates=admin_refresh_crypto_asset_rates($db,$config['currency_code'],900,[$asset],true,true);
-        $rateRow=null;foreach($rates as $r)if(strtoupper((string)$r['code'])===$asset)$rateRow=$r;
-        if(!$rateRow||!app_crypto_rate_is_usable($rateRow,$config['currency_code'],1800))throw new DomainException('rate');
-        $rate=(float)$rateRow['current_rate_fiat'];
-    }
+    // A conscious cancellation ends this quote. Always issue a fresh quote and deadline.
+    $rates=admin_refresh_crypto_asset_rates($db,$config['currency_code'],900,[$asset],true,true);
+    $rateRow=null;foreach($rates as $r)if(strtoupper((string)$r['code'])===$asset)$rateRow=$r;
+    if(!$rateRow||!app_crypto_rate_is_usable($rateRow,$config['currency_code'],1800))throw new DomainException('rate');
+    $rate=(float)$rateRow['current_rate_fiat'];
     $db->start();
     try{
         $fresh=$db->select_user('SELECT * FROM panel_subscription_config WHERE id=1 FOR UPDATE');
         if(!$fresh||array_diff_assoc(array_diff_key($fresh,['last_scan_at'=>true]),array_diff_key($config,['last_scan_at'=>true])))throw new DomainException('changed');
+        $unresolved=$db->select_user("SELECT id FROM panel_subscription_requests WHERE status='cancelled_review' AND received_crypto>0 LIMIT 1");
+        if($db->error)throw new RuntimeException('storage');
+        if($unresolved)throw new DomainException('cannot_cancel');
         $pending=app_panel_tiers_pending($db);if($pending){$db->query('COMMIT');return $pending;}
         if(!isset(app_panel_tiers_receivers($db,$fresh)[$asset]))throw new DomainException('receivers');
         $settings=$db->select_user('SELECT * FROM app_settings WHERE id=1 FOR UPDATE');
@@ -274,19 +277,6 @@ function app_panel_tiers_create(Mysql_ks $db, int $adminId, string $asset, int $
         $policy=app_panel_tiers_policy($config,app_panel_tiers_usage($db),$settings);
         if(!$policy['can_renew'])throw new DomainException('too_early');
         if(!in_array($months,$policy['allowed_months'],true))throw new DomainException('period');
-        // Restore the same receiver's cancelled quote instead of creating overlapping payment windows.
-        $old=$db->select_user("SELECT * FROM panel_subscription_requests WHERE wallet_address='".$db->escape($receivers[$asset]['address'])."' AND network_code='".$db->escape($receivers[$asset]['network'])."' AND status IN ('cancelled','cancelled_review') AND check_until>=UTC_TIMESTAMP() ORDER BY id DESC LIMIT 1 FOR UPDATE");
-        if($old){
-            if($old['status']==='cancelled_review'||(float)$old['received_crypto']>0)throw new DomainException('cannot_cancel');
-            if($policy['tier']>(int)$old['tier'])throw new DomainException('changed');
-            if(!in_array((int)$old['months'],$policy['allowed_months'],true))throw new DomainException('period');
-            $oldId=(int)$old['id'];
-            // Returning to the same quote must not reset its payment or finality deadline.
-            if(!$db->query("UPDATE panel_subscription_requests SET status=IF(pay_before>UTC_TIMESTAMP(),'pending','confirming'),open_slot=1 WHERE id={$oldId}"))throw new RuntimeException('storage');
-            $restored=app_panel_tiers_pending($db);
-            if(!$restored||!$db->query('COMMIT'))throw new RuntimeException('storage');
-            return $restored;
-        }
         if($rate<=0)throw new DomainException('changed');
         $total=round((float)$policy['price']*$months,2);$decimals=$receivers[$asset]['decimals'];$factor=10**$decimals;
         // Tiny identifying amount: no reused amount on this receiver, including expired invoices.
@@ -318,7 +308,9 @@ function app_panel_tiers_cancel(Mysql_ks $db, int $requestId): void
         if(empty($config['enabled']))throw new DomainException('disabled');
         if(!$row||!(int)$row['open_slot']||!in_array($row['status'],['pending','confirming'],true))throw new DomainException('cannot_cancel');
         $transfer=$db->select_user('SELECT id FROM panel_subscription_transfers WHERE request_id='.$requestId.' LIMIT 1');
-        if((float)$row['received_crypto']>0||$transfer)throw new DomainException('cannot_cancel');
+        $observed=$db->select_user('SELECT request_id FROM panel_subscription_observations WHERE request_id='.$requestId.' LIMIT 1');
+        if($db->error)throw new RuntimeException('storage');
+        if((float)$row['received_crypto']>0||$transfer||$observed)throw new DomainException('cannot_cancel');
         if(!$db->query("UPDATE panel_subscription_requests SET status='cancelled',open_slot=NULL WHERE id={$requestId}"))throw new RuntimeException('storage');
         if(!$db->query('COMMIT'))throw new RuntimeException('storage');
     } catch(Throwable $e) {$db->query('ROLLBACK');throw $e;}
@@ -362,11 +354,22 @@ function app_panel_tiers_observe(Mysql_ks $db, array $request, array $rows): arr
 {
     $now=time();$start=app_timestamp_from_utc_datetime($request['created_at']);$end=app_timestamp_from_utc_datetime($request['pay_before']);
     $seen=app_panel_tiers_observations($db,$request);
-    if($now<$start||$now>$end)return $seen;
+    if($now<$start||$now>$end||in_array($request['status'],['cancelled','cancelled_review'],true))return $seen;
+    $decimals=app_panel_tiers_assets()[$request['asset_code']]['decimals'];$amounts=[];
+    foreach(array_slice($rows,0,100) as $item){$hash=trim((string)($item['hash']??''));if($request['asset_code']!=='SOL')$hash=strtolower($hash);if(isset($seen[$hash]))continue;$units=app_panel_tiers_amount_units($item['amount_crypto']??null,$decimals);if($units!==null&&$units>0)$amounts[$units]="'".app_panel_tiers_units_amount($units,$decimals)."'";}
+    $owners=[];
+    if($amounts){
+        $asset=$db->escape($request['asset_code']);$wallet=$db->escape($request['wallet_address']);
+        $quoted=implode(',',$amounts);
+        foreach($db->select_full_user("SELECT id,amount_crypto FROM panel_subscription_requests WHERE asset_code='{$asset}' AND wallet_address='{$wallet}' AND amount_crypto IN ({$quoted})") as $owner){$owners[app_panel_tiers_amount_units($owner['amount_crypto'],$decimals)]=(int)$owner['id'];}
+        if($db->error)throw new RuntimeException('storage');
+    }
     $values=[];
     foreach(array_slice($rows,0,100) as $row){
         $hash=trim((string)($row['hash']??''));if($request['asset_code']!=='SOL')$hash=strtolower($hash);
         if(isset($seen[$hash]))continue;
+        $units=app_panel_tiers_amount_units($row['amount_crypto']??null,$decimals);
+        if(isset($owners[$units])&&$owners[$units]!== (int)$request['id'])continue;
         $timestamp=(int)($row['timestamp']??0);$amount=(float)($row['amount_crypto']??0);
         if(!preg_match('/^[a-zA-Z0-9]{32,100}$/D',$hash)||($row['direction']??'')!=='incoming'||!is_finite($amount)||$amount<=0||$timestamp<$start||$timestamp>min($now,$end))continue;
         $values[$hash]='('.(int)$request['id'].",'".$db->escape($request['network_code'])."','".$db->escape($hash)."',UTC_TIMESTAMP())";
@@ -427,6 +430,21 @@ function app_panel_tiers_candidates(array $request, array $rows, ?callable $veri
     return array_values($matches);
 }
 
+/** Exact unique invoice amounts take precedence; ambiguous partials need review. */
+function app_panel_tiers_transfer_assignment(Mysql_ks $db, array $request, int $units, int $timestamp): string
+{
+    $asset=$db->escape($request['asset_code']);$wallet=$db->escape($request['wallet_address']);
+    $network=$db->escape($request['network_code']);$id=(int)$request['id'];
+    $amount=app_panel_tiers_units_amount($units,app_panel_tiers_assets()[$request['asset_code']]['decimals']);
+    $owner=$db->select_user("SELECT id FROM panel_subscription_requests WHERE asset_code='{$asset}' AND wallet_address='{$wallet}' AND amount_crypto='{$amount}' LIMIT 1");
+    if($db->error)throw new RuntimeException('storage');
+    if($owner)return (int)$owner['id']===$id?'own':'other';
+    $at=gmdate('Y-m-d H:i:s',$timestamp);
+    $overlap=$db->select_user("SELECT id FROM panel_subscription_requests WHERE asset_code='{$asset}' AND wallet_address='{$wallet}' AND network_code='{$network}' AND id<>{$id} AND created_at<='{$at}' AND check_until>='{$at}' AND status IN ('pending','confirming','partial','cancelled','cancelled_review','review') LIMIT 1");
+    if($db->error)throw new RuntimeException('storage');
+    return $overlap?'ambiguous':'own';
+}
+
 function app_panel_tiers_apply(Mysql_ks $db, array $request, array $candidates): bool
 {
     $id=(int)$request['id'];$db->start();
@@ -446,6 +464,9 @@ function app_panel_tiers_apply(Mysql_ks $db, array $request, array $candidates):
             if($row['asset_code']!=='SOL')$hash=strtolower($hash);
             if($hash===''||($candidate['direction']??'')!=='incoming'||$units===null||$units<=0
                 ||$timestamp<app_timestamp_from_utc_datetime($row['created_at'])||$timestamp>min(time(),app_timestamp_from_utc_datetime($row['check_until'])))continue;
+            $assignment=app_panel_tiers_transfer_assignment($db,$row,$units,$timestamp);
+            if($assignment==='other')continue;
+            if($assignment==='ambiguous')$timingReview=true;
             $safeHash=$db->escape($hash);
             $used=$db->select_user("SELECT id FROM panel_subscription_transfers WHERE network_code='{$network}' AND transaction_hash='{$safeHash}' LIMIT 1");
             $customerUsed=$db->select_user("SELECT id FROM crypto_deposit_transactions WHERE transaction_hash='{$safeHash}' LIMIT 1");
@@ -499,6 +520,14 @@ function app_panel_tiers_apply(Mysql_ks $db, array $request, array $candidates):
 }
 
 /** At most one invoice / 60 seconds per installation, shared by cron and the modal. */
+/** Preserve an observed on-time transfer for review instead of inviting another payment. */
+function app_panel_tiers_close_window(Mysql_ks $db, int $id): bool
+{
+    $evidence = "(received_crypto>0 OR EXISTS (SELECT 1 FROM panel_subscription_observations o WHERE o.request_id={$id}))";
+    return (bool)$db->query("UPDATE panel_subscription_requests SET status=IF({$evidence},'review','expired'),
+        open_slot=IF({$evidence},1,NULL) WHERE id={$id} AND check_until<UTC_TIMESTAMP() AND status IN ('pending','confirming','partial')");
+}
+
 function app_panel_tiers_process(Mysql_ks $db): array
 {
     $result=['ok'=>true,'checked'=>0,'accepted'=>0];
@@ -520,7 +549,7 @@ function app_panel_tiers_process(Mysql_ks $db): array
     }catch(Throwable $e){$db->query('ROLLBACK');return ['ok'=>false,'checked'=>0,'accepted'=>0];}
     $result['checked']=1;
     if(app_timestamp_from_utc_datetime($request['check_until'])<time()){
-        $db->query("UPDATE panel_subscription_requests SET status=IF(received_crypto>0,'review','expired'),open_slot=IF(received_crypto>0,1,NULL) WHERE id={$id} AND status IN ('pending','confirming','partial')");
+        if (!app_panel_tiers_close_window($db, $id)) $result['ok']=false;
         return $result;
     }
     app_crypto_network_budget(12,8);
@@ -535,7 +564,7 @@ function app_panel_tiers_process(Mysql_ks $db): array
         if(!$request||!in_array($request['status'],['pending','confirming','partial'],true))return $result;
         if(app_timestamp_from_utc_datetime($request['check_until'])<time()){
             // No auto-credit after the finality window. Old payments are never reused by a new quote.
-            $db->query("UPDATE panel_subscription_requests SET status=IF(received_crypto>0,'review','expired'),open_slot=IF(received_crypto>0,1,NULL) WHERE id={$id} AND status IN ('pending','confirming','partial')");
+            if (!app_panel_tiers_close_window($db, $id)) $result['ok']=false;
         }elseif(app_timestamp_from_utc_datetime($request['pay_before'])<time()){
             $db->query("UPDATE panel_subscription_requests SET status='confirming' WHERE id={$id} AND status='pending'");
         }

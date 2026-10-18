@@ -21069,3 +21069,23 @@ body.admin-app-page .admin-content--users .admin-user-detail .alert-info{border:
 @media(min-width:1200px){
  .admin-topbar__right{gap:12px;}
 }
+
+.admin-panel-tier-modal__ended{display:flex;flex-direction:column;align-items:center;gap:13px;padding:30px 22px;border:1px solid #e5e9ef;border-radius:12px;background:#fafbfd;text-align:center;color:#354257;}
+.admin-panel-tier-modal__ended-icon{display:grid;place-items:center;width:54px;height:54px;border:1px solid #e1e7ee;border-radius:16px;background:#f1f4f8;color:#718199;font-size:24px;}
+.admin-panel-tier-modal__ended>strong{font-size:14px;font-weight:650;line-height:1.5;}
+.admin-panel-tier-modal__ended>p{margin:0;max-width:42ch;color:#788397;font-size:12px;line-height:1.8;}
+.admin-panel-tier-modal__ended>small{color:#566b60;font-size:11px;line-height:1.6;}
+.admin-panel-tier-modal [data-panel-ended][hidden],.admin-panel-tier-modal [data-panel-payment-body][hidden],.admin-panel-tier-modal [data-panel-payment-head][hidden]{display:none;}
+.admin-panel-tier-modal__back{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:10px 14px;border:1px solid #e3e7ed;border-radius:9px;background:#f4f6f8;color:#647184;font-size:12px;font-weight:550;text-decoration:none;}
+.admin-panel-tier-modal__back:hover,.admin-panel-tier-modal__back:focus-visible{background:#eaf0f5;border-color:#d6dee8;color:#35465b;}
+@media(min-width:768px){.admin-panel-tier-modal__detail.is-address dd{font-size:12px;line-height:1.7;}}
+@media(min-width:1200px){.admin-panel-tier-modal__detail.is-address dd{font-size:13px;}}
+
+.admin-panel-tier-modal__actions{display:grid;gap:10px;margin-top:16px;}
+.admin-panel-tier-modal__actions>.btn{margin:0;min-height:42px;}
+.admin-panel-tier-modal__actions>[hidden]{display:none!important;}
+.admin-panel-tier-modal__back.is-expired{background:#fff;border-color:#bcc5d0;color:#3f4a5b;}
+.admin-panel-tier-modal__back.is-expired:hover{background:#f1f3f6;border-color:#909eaf;color:#263244;}
+
+.admin-panel-tier-modal [data-panel-notice-top] .admin-panel-tier-notice{margin-top:12px;}
+.admin-panel-tier-modal [data-panel-notice-payment] .admin-panel-tier-notice{margin-top:12px;}

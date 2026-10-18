@@ -1,0 +1,5 @@
+dashboard-panel/bootstrap/panel_subscription.php
+dashboard-panel/admin/panel_subscription.php
+dashboard-panel/admin/views/panel_tiers_modal.php
+public_html/assets/js/panel-subscription.js
+public_html/assets/css/admin.css

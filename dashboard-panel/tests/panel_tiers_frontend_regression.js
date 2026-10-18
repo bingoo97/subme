@@ -139,18 +139,30 @@ function harness() {
     c.state.pending = true; c.invoice.hidden = true; sync(); ck(intervals.size === 0, 'Review state has no countdown interval');
     ck(vm.runInContext("countdownText(NaN, Date.now())", c) === '00:00', 'Invalid deadline fails closed to zero');
     ck(vm.runInContext('countdownText(Date.now()+172800000, Date.now())', c) === '48:00:00', 'Long top-up deadlines use readable hours instead of thousands of minutes');
-    const expiredNodes = { 'payment-help': { replaceChildren: (...nodes) => { expiredNodes.help = nodes.map(n => n.textContent); } }, 'network-reminder': { hidden: false } };
+    const expiredNodes = Object.fromEntries(['payment-body','payment-head','qr','invoice-details','cancel','cancel-label','ended'].map(key=>[key,{hidden:false,classList:{add(){}},replaceChildren(...children){this.children=children;}}]));
     const expiredNotices = [];
-    const expiryContext = { state: { pending: true, scan_ok: true }, invoice: { hidden: false },
+    const expiryContext = { state: { pending: true, scan_ok: true, request: {pay_before:'2000-01-01 00:00:00',can_cancel:false} }, serverClockOffset: 0, invoice: { hidden: false }, invoiceDetailsRevision: 'old',
+        stopCountdown() {}, clearCopyFeedback() {},
         labels: { confirming: 'Checking sent payment', confirming_help: 'Wait; do not pay again', scan_confirm: 'Automatic confirmation' },
-        find: key => expiredNodes[key], text: (tag, value) => ({ textContent: value }), showNotice: (...args) => expiredNotices.push(args) };
+        find: key => expiredNodes[key], text: (tag, value, className) => ({ tag, textContent: value, className }), showNotice: (...args) => expiredNotices.push(args) };
     vm.createContext(expiryContext);
-    vm.runInContext(source.slice(source.indexOf('    const showPaymentWindowEnded ='), source.indexOf('    const coinLogo =')), expiryContext);
+    vm.runInContext(source.slice(source.indexOf('    const canReturnAfterExpiry ='), source.indexOf('    const coinLogo =')), expiryContext);
     vm.runInContext('showPaymentWindowEnded()', expiryContext);
-    ck(expiredNotices[0][0] === 'Checking sent payment' && expiredNotices[0][2] === true, 'Expired window has a clear active-checking status and waiting icon');
-    ck(expiredNodes.help[0] === 'Wait; do not pay again' && expiredNodes['network-reminder'].hidden, 'Expiry replaces send instructions and prevents prompting another transfer');
+    ck(expiredNodes['payment-body'].hidden && expiredNodes['payment-head'].hidden, 'Expired view hides the QR, send amount and wallet header');
+    ck(expiredNodes.qr.children.length === 0 && expiredNodes['invoice-details'].children.length === 0, 'Expired QR and copyable payment data are removed');
+    ck(!expiredNodes.ended.hidden && expiredNodes.ended.children[2].textContent === 'Wait; do not pay again', 'Separate expiry screen explains the pending receipt');
+    ck(expiredNodes.cancel.hidden && expiredNotices[0][0] === '', 'Expiry removes the payment-method shortcut and spinner notice');
     ck(expiryContext.state.pending, 'Local countdown expiry never cancels server payment monitoring');
+    expiryContext.state.request.can_cancel = true; vm.runInContext('showPaymentWindowEnded()', expiryContext);
+    ck(!expiredNodes.cancel.hidden, 'After expiry an invoice without receipt evidence offers cancel and return');
+    expiryContext.state.request.received_crypto = '0.1'; vm.runInContext('showPaymentWindowEnded()', expiryContext);
+    ck(expiredNodes.cancel.hidden, 'A received payment never offers expiry cancellation');
     expiryContext.state.pending = false; vm.runInContext('showPaymentWindowEnded()', expiryContext);
-    ck(expiredNotices.length === 1, 'Expiry notice cannot overwrite payment success');
+    ck(expiredNotices.length === 3, 'Expiry notice cannot overwrite payment success');
+    const eligibility = { Date: {parse:Date.parse,now:()=>3600000},serverClockOffset:0 };
+    vm.createContext(eligibility);vm.runInContext(source.slice(source.indexOf('    const canReturnAfterExpiry ='), source.indexOf('    const showPaymentWindowEnded =')),eligibility);
+    ck(vm.runInContext("canReturnAfterExpiry({pay_before:'1970-01-01 01:00:00',can_cancel:true})",eligibility),'Return becomes available at the payment deadline');
+    ck(!vm.runInContext("canReturnAfterExpiry({pay_before:'1970-01-01 01:00:01',can_cancel:true})",eligibility),'Return remains hidden before the payment deadline');
+    ck(!vm.runInContext("canReturnAfterExpiry({pay_before:'invalid',can_cancel:true})",eligibility),'Unknown payment deadline fails closed');
     console.log(`PASS ${assertions} automatic panel-payment polling, countdown, backoff, visibility and race assertions`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

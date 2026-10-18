@@ -52,11 +52,32 @@
         notice.replaceChildren(text('i', '', waiting ? 'admin-panel-tier-notice__spinner' : `bi ${icon}`), text('span', value));
         notice.className = `admin-panel-tier-notice ${tone}`; notice.hidden = !value;
     };
+    const canReturnAfterExpiry = request => {
+        const deadline = Date.parse(String(request?.pay_before || '').replace(' ', 'T') + 'Z');
+        return !!request?.can_cancel && Number(request.received_crypto || 0) === 0
+            && Number.isFinite(deadline) && Date.now() + serverClockOffset >= deadline;
+    };
     const showPaymentWindowEnded = () => {
         if (!state?.pending || invoice.hidden) return;
-        if (state.scan_ok !== false) showNotice(labels.confirming, 'info', true);
-        find('payment-help').replaceChildren(text('span', labels.confirming_help), text('span', labels.scan_confirm));
-        find('network-reminder').hidden = true;
+        stopCountdown(); clearCopyFeedback();
+        find('payment-body').hidden = true;
+        find('payment-head').hidden = true;
+        find('qr').replaceChildren();
+        find('invoice-details').replaceChildren();
+        invoiceDetailsRevision = null;
+        find('cancel').hidden = !canReturnAfterExpiry(state.request);
+        find('cancel').classList.add('is-expired');
+        find('cancel-label').textContent = labels.cancel_expired;
+        const ended = find('ended');
+        ended.hidden = false;
+        ended.replaceChildren(
+            text('i', '', 'bi bi-shield-check admin-panel-tier-modal__ended-icon'),
+            text('strong', labels.confirming),
+            text('p', labels.confirming_help),
+            text('small', labels.scan_confirm)
+        );
+        // Waiting for finality is a separate view, never another invitation to send funds.
+        if (state.scan_ok !== false) showNotice('');
     };
     const coinLogo = code => {
         const image = document.createElement('img'); image.src = assetInfo[code].logo;
@@ -131,6 +152,13 @@
         if (pending) {
             showNotice(r.status === 'review' ? `${labels.review}. ${labels.review_help}` : labels[r.status] || labels.pending, ['review', 'partial'].includes(r.status) ? 'warning' : 'info', ['pending', 'confirming'].includes(r.status));
             if (!invoice.hidden) {
+                const windowEnded = Date.parse(r.pay_before.replace(' ', 'T') + 'Z') <= Date.now() + serverClockOffset;
+                find('ended').hidden = !windowEnded;
+                find('payment-body').hidden = windowEnded;
+                find('payment-head').hidden = windowEnded;
+                if (windowEnded) {
+                    showPaymentWindowEnded();
+                } else {
                 find('payment-help').replaceChildren(text('span', labels[r.status === 'partial' ? 'partial_help' : r.status === 'confirming' ? 'confirming_help' : 'scan_help']), text('span', labels.scan_confirm));
                 find('network-reminder').hidden = false;
                 const reminder = text('strong', `${labels.send_network} `);
@@ -153,10 +181,13 @@
                 if (Number(r.received_crypto) > 0) details.append(detail(labels.received, `${cryptoAmount(r.received_crypto, r.asset_code)} ${r.asset_code}`));
                 }
                 find('cancel').hidden = !r.can_cancel;
+                find('cancel').classList.remove('is-expired');
+                find('cancel-label').textContent = labels.cancel;
                 const qr = qrcode(0, 'M'); qr.addData(r.wallet_address); qr.make();
                 find('qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 16, scalable: true });
                 find('qr').querySelector('svg').setAttribute('aria-label', labels.address);
                 find('qr').querySelector('svg').setAttribute('role', 'img');
+                }
             }
         } else if (r && r.status === 'paid') showNotice(`${labels.paid} ${labels.access_until}: ${calendarDate(r.new_paid_until)}.`, 'success');
         else if (!p.can_renew) showNotice(labels.too_early, 'info');

@@ -32,19 +32,20 @@ function admin_panel_tiers_text(string $key): string
         'days'=>['Dodane dni','Days added'],
         'review_closed'=>['Weryfikacja zamknięta. Data dostępu nie została zmieniona.','Review closed. Access date was not changed.'],
         'close_review'=>['Zamknij weryfikację bez dodawania dni','Close review without granting days'],
-        'cancel'=>['Wstecz — zmień kryptowalutę','Back — change cryptocurrency'],
-        'cancelled'=>['Anulowano przygotowaną płatność. Wybierz kryptowalutę, którą chcesz opłacić dostęp do panelu. Możesz też wrócić do poprzedniej — przywrócimy wtedy tę samą płatność z zachowaniem kwoty, kursu i wybranego okresu.','The prepared payment has been cancelled. Choose the cryptocurrency you would like to use to renew panel access. You can also return to the previous one — we will restore the same payment with its original amount, exchange rate and access period.'],
+        'cancel_expired'=>['Anuluj płatność i wróć','Cancel payment and go back'],
+        'cancel'=>['Wstecz - zmień sposób płatności','Back - change payment method'],
+        'cancelled'=>['Płatność anulowana. Wybierz okres i sposób płatności — także tę samą kryptowalutę. Wygenerujemy nową kwotę według aktualnego kursu i nowy czas na wpłatę. Jeśli środki zostały już wysłane, nie płać ponownie; poprzednia płatność pozostaje sprawdzana.','Payment cancelled. Choose an access period and payment method, including the same cryptocurrency. A new amount and payment deadline will be generated. If you already sent funds, do not pay again; the previous invoice remains monitored.'],
         'cancelled_expired'=>['Anulowana płatność — zamknięta','Cancelled payment — closed'],
         'cancelled_review'=>['Wpłata do anulowanej płatności — wymaga weryfikacji','Transfer to a cancelled invoice — review required'],
         'cannot_cancel'=>['Ta płatność ma już wpłatę lub zmienił się jej status. Sprawdź płatność i kontynuuj jej rozliczenie.','This payment has received funds or its status changed. Check the payment and continue settling it.'],
         'receiver_wait'=>['Poprzednia płatność w tej kryptowalucie jest jeszcze sprawdzana. Wybierz inną kryptowalutę.','The previous payment in this cryptocurrency is still being checked. Choose another cryptocurrency.'],
         'pending'=>['Oczekujemy na wpłatę...','Waiting for payment...'],
-        'confirming'=>['Czas minął — sprawdzamy wpłatę...','Time is up — checking your payment...'],
-        'confirming_help'=>['Czas na wysłanie wpłaty minął. Jeśli środki zostały już wysłane, poczekaj na potwierdzenie sieci — nadal sprawdzamy płatność. Nie wysyłaj jej ponownie.','The payment window has ended. If funds were already sent, wait for network confirmation — we are still checking your payment. Do not send it again.'],
+        'confirming'=>['Czas minął — sprawdzamy wysłaną wpłatę','Time is up — checking the sent payment'],
+        'confirming_help'=>['Czas na wysłanie wpłaty minął. Jeśli środki zostały już wysłane, poczekaj na potwierdzenie sieci — nadal sprawdzamy płatność. Nie wysyłaj jej ponownie. Po zakończeniu weryfikacji bez wykrytej wpłaty wrócisz do wyboru okresu i sposobu płatności.','The payment window has ended. If funds were already sent, wait for network confirmation — we are still checking your payment. Do not send it again. If no payment is detected by the end of verification, you will return to the access period and payment method selection.'],
         'review'=>['Wpłata wykryta — wymaga weryfikacji','Payment detected — review required'],
         'review_help'=>['Wpłata jest w weryfikacji. Nie wykonuj ponownej płatności.','Your payment is under review. Do not pay again.'],
         'paid'=>['Płatność potwierdzona. Dostęp przedłużony.','Payment confirmed. Access renewed.'],
-        'expired'=>['Płatność wygasła. Możesz wygenerować nową.','Payment expired. You can generate a new one.'],
+        'expired'=>['Weryfikacja zakończona — nie wykryto wpłaty. Wybierz okres i sposób płatności. Jeśli środki zostały wysłane, skontaktuj się z obsługą przed kolejną wpłatą.','Verification ended — no payment was detected. Choose an access period and payment method. If you sent funds, contact support before sending another payment.'],
         'check'=>['Odśwież status','Refresh status'],
         'checking'=>['Sprawdzanie…','Checking…'],
         'send_network'=>['Prosimy wysłać środki w sieci:','Please send funds on the network:'],
@@ -85,8 +86,11 @@ function admin_panel_tiers_state(Mysql_ks $db): array
     $usage=app_panel_tiers_usage($db);
     $assets=[];foreach(app_panel_tiers_receivers($db,$config) as $code=>$spec)$assets[]=['code'=>$code,'label'=>$spec['label'],'name'=>['BTC'=>'Bitcoin','SOL'=>'Solana','DOGE'=>'Dogecoin','USDT'=>'Tether'][$code],'logo'=>app_crypto_logo_by_code($code)];
     $pending=app_panel_tiers_pending($db);
-    $latest=$pending??$db->select_user('SELECT * FROM panel_subscription_requests ORDER BY id DESC LIMIT 1');
+    $unresolved=$db->select_user("SELECT * FROM panel_subscription_requests WHERE status='cancelled_review' AND received_crypto>0 ORDER BY id DESC LIMIT 1");
+    if($db->error)throw new RuntimeException('storage');
+    if($unresolved)$pending=null;
+    $latest=$unresolved??$pending??$db->select_user('SELECT * FROM panel_subscription_requests ORDER BY id DESC LIMIT 1');
     $request=null;
-    if($latest){$keys=['id','status','tier','months','amount_fiat','currency_code','asset_code','network_code','wallet_address','amount_crypto','received_crypto','quoted_days','granted_days','exchange_rate','pay_before','new_paid_until'];$request=array_intersect_key($latest,array_flip($keys));$request['remaining_crypto']=app_panel_tiers_remaining($latest);$request['can_cancel']=(bool)$pending&&in_array($latest['status'],['pending','confirming'],true)&&(float)$latest['received_crypto']===0.0;}
+    if($latest){$keys=['id','status','tier','months','amount_fiat','currency_code','asset_code','network_code','wallet_address','amount_crypto','received_crypto','quoted_days','granted_days','exchange_rate','created_at','pay_before','new_paid_until'];$request=array_intersect_key($latest,array_flip($keys));$request['remaining_crypto']=app_panel_tiers_remaining($latest);$request['can_cancel']=(bool)$pending&&in_array($latest['status'],['pending','confirming'],true)&&(float)$latest['received_crypto']===0.0;if($request['can_cancel']){$observed=$db->select_user('SELECT request_id FROM panel_subscription_observations WHERE request_id='.(int)$latest['id'].' LIMIT 1');if($db->error)throw new RuntimeException('storage');$request['can_cancel']=!$observed;}}
     return ['ok'=>true,'server_time_ms'=>(int)floor(microtime(true)*1000),'policy'=>app_panel_tiers_policy($config,$usage,is_array($settings)?$settings:[]),'assets'=>$assets,'request'=>$request,'pending'=>(bool)$pending];
 }
