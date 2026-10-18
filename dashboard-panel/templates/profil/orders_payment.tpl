@@ -252,6 +252,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             <input type="hidden" name="id" value="{$selected.id}" />
                             <input type="hidden" name="payment" value="{$selected.id}" />
                             <input type="hidden" name="payment_method" value="balance" />
+                            <input type="hidden" name="payment_expected_expires_at" value="{$selected.date_end|default:''|escape:'html'}" />
 
                             <div class="payment-step">
                                 <div class="payment-step__head">
@@ -294,7 +295,9 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
         <div class="payment-wizard__section">
             <div class="payment-request-card">
                 <div class="alert {if $payment_state_notice eq 'paid_pending_activation' || $payment_state_notice eq 'renewal_approved_waiting_extension'}alert-success{elseif $payment_state_notice eq 'already_paid'}alert-info{else}alert-warning{/if}">
-                    {if $payment_state_notice eq 'paid_pending_activation'}
+                    {if $payment_state_notice eq 'packages_unavailable'}
+                        {$t.payment_packages_unavailable|default:'No packages are currently available for this provider. Contact support.'}
+                    {elseif $payment_state_notice eq 'paid_pending_activation'}
                         <strong>{$t.payment_paid_pending_activation_title|default:'Payment confirmed.'}</strong><br />
                         {$t.payment_paid_pending_activation_text|default:'Your payment has already been marked as paid. The subscription is now waiting for activation by the admin. You do not need to generate a new payment request.'}
                     {elseif $payment_state_notice eq 'renewal_not_ready'}

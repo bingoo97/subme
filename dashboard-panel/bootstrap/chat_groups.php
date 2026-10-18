@@ -268,7 +268,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
     function chat_customer_global_group_enabled(array $customer, array $settings = []): bool
     {
         return chat_customer_messenger_enabled($customer, $settings)
-            && (!empty($settings['customer_global_group_enabled']) || chat_demo_showcase_enabled($settings));
+            && !empty($settings['customer_global_group_enabled']);
     }
 
     function chat_customer_can_edit_messenger_identity(array $customer, array $settings = []): bool
@@ -1812,7 +1812,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         string $ipAddress = ''
     ): array {
         chat_ensure_group_chat_runtime($db);
-        if ($customerId <= 0 || !chat_demo_showcase_enabled($settings) && empty($settings['customer_global_group_enabled'])) {
+        if ($customerId <= 0 || empty($settings['customer_global_group_enabled'])) {
             return ['ok' => false, 'message' => 'Global chat is disabled.'];
         }
 
@@ -2066,6 +2066,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             return true;
         }
 
+        if ($lastSeenTimestamp !== false) return false;
+
         if ($customerId > 0 && schema_object_exists($db, 'user_online')) {
             $onlineEntry = $db->select_user(
                 "SELECT id
@@ -2116,6 +2118,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         $deleteIds = [];
+        $timestampsChanged = false;
         foreach ($rows as $row) {
             $messageId = (int)($row['id'] ?? 0);
             $body = chat_system_notice_text((string)($row['message_body'] ?? ''));
@@ -2150,6 +2153,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             }
 
             if (abs($existingTimestamp - $targetTimestamp) > 300) {
+                $timestampsChanged = true;
                 $db->update_using_id(
                     ['created_at'],
                     [$expectedTimestamp],
@@ -2163,6 +2167,8 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             $db->query("DELETE FROM support_messages WHERE id IN (" . implode(',', array_map('intval', $deleteIds)) . ")");
         }
 
+        if (!$deleteIds && !$timestampsChanged) return;
+
         $db->query(
             "UPDATE support_conversations AS conversation
              LEFT JOIN (
@@ -2172,6 +2178,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     MAX(CASE WHEN sender_type = 'customer' THEN created_at ELSE NULL END) AS latest_customer_message_at,
                     MAX(CASE WHEN sender_type = 'admin' THEN created_at ELSE NULL END) AS latest_admin_message_at
                 FROM support_messages
+                WHERE conversation_id = {$conversationId}
                 GROUP BY conversation_id
              ) AS message_state
                ON message_state.conversation_id = conversation.id
@@ -2208,7 +2215,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
     function chat_ensure_global_group_conversation(Mysql_ks $db, array $settings = []): ?array
     {
-        if (!chat_demo_showcase_enabled($settings) && empty($settings['customer_global_group_enabled'])) {
+        if (empty($settings['customer_global_group_enabled'])) {
             return null;
         }
 
@@ -2242,7 +2249,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
     function chat_sync_global_group_members(Mysql_ks $db, array $settings = []): ?array
     {
-        if (!chat_demo_showcase_enabled($settings) && empty($settings['customer_global_group_enabled'])) {
+        if (empty($settings['customer_global_group_enabled'])) {
             return null;
         }
 
@@ -2258,6 +2265,22 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
 
         $seedAdminUserId = chat_global_group_admin_seed_id($db);
         $desiredParticipantKeys = [];
+        $existingMembers = [];
+        foreach ($db->select_full_user("SELECT * FROM support_conversation_members WHERE conversation_id = {$conversationId}") as $member) {
+            $existingMembers[(string)$member['participant_key']] = $member;
+        }
+        // Only new or changed memberships need the write path. Preserve join/read state.
+        $syncParticipant = static function (array $participant) use ($db, $conversationId, $seedAdminUserId, $existingMembers): void {
+            $member = $existingMembers[(string)$participant['participant_key']] ?? null;
+            $canPost = !empty($member['global_chat_blocked']) ? 0 : 1;
+            if ($member && (string)$member['invite_status'] === 'accepted'
+                && (string)$member['participant_type'] === (string)$participant['participant_type']
+                && (int)$member['customer_id'] === (int)$participant['customer_id']
+                && (int)$member['admin_user_id'] === (int)$participant['admin_user_id']
+                && (string)$member['role_code'] === 'member' && (int)$member['can_post'] === $canPost
+                && empty($member['left_at'])) return;
+            chat_add_group_member($db, $conversationId, $participant, 'accepted', 'member', 0, $seedAdminUserId);
+        };
 
         foreach (chat_eligible_global_group_admins($db) as $adminRow) {
             $adminUserId = (int)($adminRow['id'] ?? 0);
@@ -2270,12 +2293,18 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 'customer_id' => 0,
                 'admin_user_id' => $adminUserId,
             ];
-            chat_add_group_member($db, $conversationId, $participant, 'accepted', 'member', 0, $seedAdminUserId);
+            $syncParticipant($participant);
             $desiredParticipantKeys[$participant['participant_key']] = true;
         }
 
         $eligibleCustomers = chat_eligible_global_group_customers($db, $settings);
         chat_global_group_repair_join_notices($db, $conversationId, $eligibleCustomers, 24);
+        $joinNotices = [];
+        foreach ($db->select_full_user("SELECT message_body, created_at FROM support_messages
+            WHERE conversation_id = {$conversationId} AND sender_type = 'admin'
+              AND message_body LIKE '[system_notice]%dołączył do nas!'") as $notice) {
+            $joinNotices[(string)$notice['message_body']][] = strtotime((string)$notice['created_at']);
+        }
 
         foreach ($eligibleCustomers as $customerRow) {
             $customerId = (int)($customerRow['id'] ?? 0);
@@ -2284,7 +2313,7 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             }
 
             $participantKey = chat_participant_key_for_customer($customerId);
-            $existingMember = chat_group_member_row($db, $conversationId, $participantKey);
+            $existingMember = $existingMembers[$participantKey] ?? null;
             $isNewMember = !$existingMember || trim((string)($existingMember['invite_status'] ?? '')) !== 'accepted';
             $participant = [
                 'participant_key' => $participantKey,
@@ -2292,14 +2321,21 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                 'customer_id' => $customerId,
                 'admin_user_id' => 0,
             ];
-            chat_add_group_member($db, $conversationId, $participant, 'accepted', 'member', 0, $seedAdminUserId);
+            $syncParticipant($participant);
             $desiredParticipantKeys[$participantKey] = true;
 
             $label = chat_customer_display_label_from_row($customerRow);
             $joinedAt = chat_global_group_recent_join_notice_timestamp($customerRow, 24);
             if ($label !== '' && $joinedAt !== '' && chat_global_group_customer_recently_present($db, $customerRow, chat_global_group_join_notice_grace_minutes())) {
-                $shouldInsertJoinNotice = $isNewMember
-                    || !chat_global_group_has_join_notice($db, $conversationId, $label, $joinedAt, 5);
+                $hasJoinNotice = false;
+                $joinedTimestamp = strtotime($joinedAt);
+                foreach ($joinNotices['[system_notice]' . $label . ' dołączył do nas!'] ?? [] as $noticeTimestamp) {
+                    if ($noticeTimestamp !== false && (int)(abs($noticeTimestamp - $joinedTimestamp) / 60) <= 5) {
+                        $hasJoinNotice = true;
+                        break;
+                    }
+                }
+                $shouldInsertJoinNotice = $isNewMember || !$hasJoinNotice;
                 if ($shouldInsertJoinNotice) {
                     chat_insert_group_system_notice($db, $conversationId, $label . ' dołączył do nas!', $seedAdminUserId, $joinedAt);
                 }
@@ -2307,14 +2343,10 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         }
 
         if (schema_object_exists($db, 'support_conversation_members')) {
-            $rows = $db->select_full_user(
-                "SELECT id, participant_key
-                 FROM support_conversation_members
-                 WHERE conversation_id = {$conversationId}"
-            );
-            foreach ($rows as $row) {
+            foreach ($existingMembers as $row) {
                 $participantKey = (string)($row['participant_key'] ?? '');
-                if ($participantKey === '' || isset($desiredParticipantKeys[$participantKey])) {
+                if ($participantKey === '' || isset($desiredParticipantKeys[$participantKey])
+                    || ((string)$row['invite_status'] === 'left' && (int)$row['can_post'] === 0)) {
                     continue;
                 }
                 $db->update_using_id(
@@ -4457,6 +4489,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
         if (chat_customer_can_use_groups($customer, $settings)) {
             $seenDirectCounterpartIds = [];
             foreach (chat_customer_group_conversation_rows($db, $customerId) as $row) {
+                $isGlobalGroup = chat_is_global_group_conversation_type((string)($row['conversation_type'] ?? ''));
+                if ($isGlobalGroup && !chat_customer_global_group_enabled($customer, $settings)) {
+                    continue;
+                }
+
                 $summary = chat_group_conversation_summary(
                     $db,
                     (int)($row['id'] ?? 0),
@@ -4489,11 +4526,11 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
                     'updated_at' => (string)($row['updated_at'] ?? $row['created_at'] ?? ''),
                     'is_group' => true,
                     'is_read_only' => !empty($row['is_group_read_only']),
-                    'can_leave' => !chat_is_global_group_conversation_type((string)($row['conversation_type'] ?? '')),
+                    'can_leave' => !$isGlobalGroup,
                     'is_owned' => (int)($row['group_created_by_customer_id'] ?? 0) === $customerId,
                     'is_direct' => !empty($summary['is_direct']),
                     'has_pending_invite' => !empty($summary['has_pending_invite']),
-                    'is_global_group' => chat_is_global_group_conversation_type((string)($row['conversation_type'] ?? '')),
+                    'is_global_group' => $isGlobalGroup,
                     'avatar_url' => (string)($summary['avatar_url'] ?? ''),
                     'avatar_text' => (string)($summary['avatar_text'] ?? 'G'),
                     'avatar_theme' => (string)($summary['avatar_theme'] ?? 'theme-6'),
@@ -4554,6 +4591,15 @@ if (!function_exists('chat_ensure_group_chat_runtime')) {
             }
 
             $groupConversation = chat_group_accessible_for_customer($db, $customerId, $conversationId);
+            if ($groupConversation) {
+                if (
+                    chat_is_global_group_conversation_type((string)($groupConversation['conversation_type'] ?? ''))
+                    && !chat_customer_global_group_enabled($customer, $settings)
+                ) {
+                    $groupConversation = null;
+                }
+            }
+
             if ($groupConversation) {
                 if (!empty($groupConversation['is_direct_conversation'])) {
                     $summary = chat_group_conversation_summary(

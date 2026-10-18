@@ -21,6 +21,10 @@ function chat_json_response(array $payload): void
 
 function chat_require_csrf(array $messages = []): void
 {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        http_response_code(405);
+        chat_json_response(['ok' => false, 'message' => 'POST required.']);
+    }
     $token = $_POST['_csrf'] ?? $_GET['_csrf'] ?? null;
     if (app_csrf_is_valid($token)) {
         return;
@@ -117,6 +121,7 @@ if ($action === 'voice_file') {
         exit;
     }
 
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
     $absolutePath = app_chat_attachment_absolute_path($audioPath, true);
     chat_stream_audio_response($absolutePath, $audioMimeType !== '' ? $audioMimeType : 'audio/webm');
 }
@@ -180,11 +185,17 @@ function chat_insert_customer_message(Mysql_ks $db, int $customerId, string $mes
         $messageType = $audioPath !== '' ? 'audio' : 'text';
     }
 
-    $db->insert(
+    $inserted = $db->insert(
         ['conversation_id', 'sender_type', 'customer_id', 'message_body', 'attachment_path', 'reply_to_message_id', 'message_type', 'audio_path', 'audio_mime_type', 'audio_duration_seconds', 'expires_at', 'is_read', 'created_at'],
         [$conversationId, 'customer', $customerId, $messageBody, $attachmentPath, $replyToMessageId, $messageType, $audioPath !== '' ? $audioPath : null, $audioMimeType !== '' ? $audioMimeType : null, $audioDurationSeconds > 0 ? $audioDurationSeconds : null, $expiresAt !== '' ? $expiresAt : null, 0, $currentTime],
         'support_messages'
     );
+    if (!$inserted) {
+        chat_delete_uploaded_file($attachmentPath);
+        if ($audioPath !== '') chat_delete_uploaded_file($audioPath);
+        http_response_code(500);
+        chat_json_response(['ok' => false, 'message' => 'Unable to save the message. Please try again.']);
+    }
 
     $db->update_using_id(
         ['status', 'last_customer_message_at', 'updated_at'],
@@ -747,7 +758,24 @@ if (
     chat_require_csrf(isset($t) && is_array($t) ? $t : []);
 }
 
+// Match the admin endpoint's text limit and reject empty uploads instead of
+// returning a successful conversation refresh for a message that was not sent.
+if ($action === 'send' || isset($_POST['id_usera'], $_POST['tresc'])) {
+    $plainMessage = trim((string)($_POST['tresc'] ?? ''));
+    if ($plainMessage === '' || strlen($plainMessage) > 40000) {
+        http_response_code(422);
+        chat_json_response(['ok' => false, 'message' => localization_translate($t, 'chat_invalid_message', 'Enter a message of up to 40 kB.')]);
+    }
+}
+if (($action === 'upload' && empty($_FILES['file']['tmp_name']))
+    || ($action === 'voice_upload' && empty($_FILES['voice_file']['tmp_name']))) {
+    http_response_code(422);
+    chat_json_response(['ok' => false, 'message' => localization_translate($t, 'chat_missing_attachment', 'Choose a file before sending.')]);
+}
+
 if ($action === 'link_preview') {
+    // A slow external preview must not queue every other request from this customer.
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
     $previewUrl = trim((string)($_POST['url'] ?? $_GET['url'] ?? ''));
     $preview = $previewUrl !== '' ? chat_fetch_link_preview($previewUrl) : null;
     chat_json_response([
@@ -759,6 +787,16 @@ if ($action === 'link_preview') {
 $requestedGroupConversation = null;
 if ($requestedConversationId > 0 && function_exists('chat_group_accessible_for_customer')) {
     $requestedGroupConversation = chat_group_accessible_for_customer($db, $currentCustomerId, $requestedConversationId);
+}
+if ($requestedConversationId > 0 && (!$requestedGroupConversation || !$customerHasFullMessenger)
+    && in_array($action, ['fetch','read','send','upload','voice_upload','delete_message','toggle_reaction'], true)) {
+    $ownSupport = $db->select_user("SELECT id FROM support_conversations
+        WHERE id = {$requestedConversationId} AND conversation_type = 'live_chat'
+          AND customer_id = {$currentCustomerId} LIMIT 1");
+    if (!$ownSupport) {
+        http_response_code(403);
+        chat_json_response(['ok' => false, 'message' => 'Conversation not found.']);
+    }
 }
 
 $requestedGlobalGroupDisabled = $requestedGroupConversation

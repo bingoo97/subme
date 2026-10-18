@@ -1,0 +1,53 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../../public_html/assets/js/admin.js'),'utf8');
+let checks=0;const ck=(v,m)=>{assert.ok(v,m);checks++;};
+async function run(){
+ let timers=new Map(),requests=[],n=0,replacements=0,focusCount=0,badge=0;
+ const newLink={getAttribute(){return '/order/1';},focus(){focusCount++;}};
+ const activeLink={tagName:'A',getAttribute(){return '/order/1';}};
+ let current={contains(el){return el===activeLink;},replaceWith(el){current=el;replacements++;}};
+ const next={contains(){return false;},links:[newLink],replaceWith(el){current=el;replacements++;}};
+ const flyout={attrs:{},getAttribute(k){return this.attrs[k];},setAttribute(k,v){this.attrs[k]=v;}};
+ const document={activeElement:activeLink,createElement(){return {innerHTML:''};}};
+ const context={document,window:{AbortController,setTimeout(f){let id=++n;timers.set(id,f);return id;},clearTimeout(id){timers.delete(id);}},doc:{hidden:false},flyout,toggle:{},fallbackStateUrls:['/state','/fallback'],stateUrl:'/state',stateUrlIndex:0,pollInFlight:false,
+ q(selector,el){if(el===flyout)return current;if(el.innerHTML?.includes('data-admin-topbar-orders-section'))return next;return null;},qa(selector,el){return el.links||[];},
+ updateToggleBadge(t,count){badge=count;},jsonFetch(url,opts){return new Promise((resolve,reject)=>{opts.signal.addEventListener('abort',()=>reject(new Error('timeout')));requests.push({url,resolve,reject});});}};
+ vm.createContext(context);
+ const a=source.indexOf('        function syncTopbarOrderTasks('),b=source.indexOf('        function resolveOrdersRedirectUrl(',a);vm.runInContext(source.slice(a,b),context);
+ const payload={orders_html:'<section data-admin-topbar-orders-section>new</section>',orders_revision:'one',badge_count:3,ok:true};
+ context.syncTopbarOrderTasks(flyout,payload);ck(replacements===1&&focusCount===1,'A changed task list refreshes while preserving the focused order link');
+ context.syncTopbarOrderTasks(flyout,payload);ck(replacements===1,'Unchanged revision does not replace DOM or steal focus');
+ context.syncTopbarOrderTasks(flyout,{orders_html:'invalid',orders_revision:'invalid'});ck(replacements===1,'Invalid fragment leaves the current tasks intact');
+ const p=source.indexOf('            function pollTopbarState(force)'),e=source.indexOf('            if (stateUrl) {',p);vm.runInContext(source.slice(p,e),context);
+ context.pollTopbarState(false);context.pollTopbarState(true);ck(requests.length===1,'Opening and timer cannot stack refreshes');
+ requests[0].resolve({...payload,orders_revision:'two'});await new Promise(setImmediate);ck(badge===3&&replacements===2&&!context.pollInFlight&&timers.size===0,'Refresh updates tasks and count, then releases request state');
+ context.doc.hidden=true;context.pollTopbarState(false);ck(requests.length===1,'Hidden tab does not generate refresh traffic');
+ context.doc.hidden=false;context.pollTopbarState(true);requests[1].resolve({__status:404});await new Promise(setImmediate);ck(context.stateUrlIndex===1&&!context.pollInFlight,'Missing route selects a fallback without a recursive busy request');
+ context.pollTopbarState(false);ck(requests[2].url==='/fallback','Next poll uses the selected fallback');[...timers.values()][0]();await new Promise(setImmediate);ck(!context.pollInFlight&&timers.size===0,'A stalled refresh times out and unlocks the next attempt');
+ const empty={contains(){return false;},links:[],replaceWith(el){current=el;replacements++;}};
+ const oldQuery=context.q;context.q=(selector,el)=>el.innerHTML?.includes('data-task-total="0"')?empty:oldQuery(selector,el);
+ context.pollTopbarState(true);requests[3].resolve({...payload,orders_html:'<section data-admin-topbar-orders-section data-task-total="0" hidden></section>',orders_revision:'completed',badge_count:0});await new Promise(setImmediate);
+ ck(current===empty&&badge===0,'Live refresh removes completed task actions and their pulsing buttons, including the last task');
+ const nodes={};const makeNode=(value='')=>({value,hidden:false,listeners:{},classList:{values:new Set(),remove(...v){v.forEach(x=>this.values.delete(x));},add(v){this.values.add(v);}},addEventListener(k,fn){this.listeners[k]=fn;}});
+ const status=nodes['[data-admin-order-main-status]']=makeNode('pending_payment');
+ const payment=nodes['[data-admin-order-payment-status]']=makeNode('paid');
+ const fulfillment=nodes['[data-admin-order-fulfillment-status]']=makeNode('pending');
+ const hint=nodes['[data-admin-order-status-hint]']=makeNode();
+ const form={getAttribute(){return null;}};
+ const statusContext={q(selector){return nodes[selector]||null;},qa(){return [form];},setHidden(el,value){el.hidden=value;}};vm.createContext(statusContext);
+ const statusStart=source.indexOf('    function initOrderStatusForms()'),statusEnd=source.indexOf('    function initOrderExtendPreviews()',statusStart);
+ vm.runInContext(source.slice(statusStart,statusEnd),statusContext);statusContext.initOrderStatusForms();
+ ck(status.classList.values.has('is-pending')&&!hint.hidden,'Awaiting order shows status attention and the animated direction hint');
+ status.value='active';status.listeners.change();
+ ck(status.classList.values.has('is-success')&&!status.classList.values.has('is-pending')&&hint.hidden&&payment.value==='paid'&&fulfillment.value==='delivered','Selecting Active stops pending status attention, hides the arrow and synchronizes fulfillment');
+ status.value='pending_payment';status.listeners.change();
+ ck(status.classList.values.has('is-action-required')&&!hint.hidden,'Returning to an approved pending order restores attention');
+ status.value='cancelled';status.listeners.change();
+ ck(!status.classList.values.has('is-action-required')&&status.classList.values.has('is-danger')&&hint.hidden,'Cancelling removes status attention and the moving hint');
+ status.value='pending_payment';status.listeners.change();payment.value='unpaid';payment.listeners.change();
+ ck(!status.classList.values.has('is-action-required')&&hint.hidden,'Removing payment approval stops pending-status attention and hides the hint');
+ payment.value='paid';payment.listeners.change();ck(status.classList.values.has('is-action-required')&&!hint.hidden,'Restored payment approval restores attention only for a pending order');
+ console.log(`PASS ${checks} notification live-refresh/focus/concurrency assertions`);
+}
+run().catch(e=>{console.error(e);process.exitCode=1;});

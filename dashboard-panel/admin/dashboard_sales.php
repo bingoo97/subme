@@ -203,9 +203,15 @@ function admin_dashboard_period_metrics(Mysql_ks $db, ?DateTimeImmutable $asOf =
     return $result;
 }
 
+/** Keep user-controlled chart ranges bounded, including malformed query parameters. */
+function admin_dashboard_sales_chart_days($value = null): int
+{
+    return is_scalar($value) && in_array((string)$value, ['30', '90', '365'], true) ? (int)$value : 30;
+}
+
 function admin_dashboard_sales_series(Mysql_ks $db, int $days = 30, ?DateTimeImmutable $asOf = null): array
 {
-    $days = max(7, min(90, $days));
+    $days = max(7, min(365, $days));
     $asOf = admin_dashboard_sales_now($asOf);
     $start = $asOf->setTime(0, 0)->modify('-' . ($days - 1) . ' days');
     $mapped = admin_dashboard_sales_buckets($db, 'day', $start->format('Y-m-d'), null, $asOf);

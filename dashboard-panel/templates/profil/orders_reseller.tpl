@@ -3,28 +3,28 @@
     <p>{$t.orders_empty|default:'No available packages.'}</p>
 {else}
     <hr />
-    <div class="table-responsive">
+    <div class="table-responsive orders-table-scroll" tabindex="0" role="region" aria-label="{$t.orders|default:'Orders'}">
         <table id="orders" class="table table-bordered table-striped orders-history-table">
         <thead>
             <tr class="center">
-                <td>#</td>
-                <td class="text-left">{$t.orders_product|default:'Product'}</td>
-                <td>{$t.history_column_date|default:'Date'}</td>
-                <td>{$t.orders_amount|default:'Amount'}</td>
-                <td class="orders-payment-col">{$t.payment_title|default:'Payment'}</td>
-                <td class="orders-delivery-col">Wysyłka</td>
-                <td></td>
+                <th scope="col">#</th>
+                <th scope="col" class="text-left">{$t.orders_product|default:'Product'}</th>
+                <th scope="col">{$t.history_column_date|default:'Date'}</th>
+                <th scope="col">{$t.orders_amount|default:'Amount'}</th>
+                <th scope="col" class="orders-payment-col">{$t.payment_title|default:'Payment'}</th>
+                <th scope="col" class="orders-delivery-col">Wysyłka</th>
+                <th scope="col"></th>
             </tr>
         </thead>
         <tbody>
         {section name=i loop=$wygrane}
-            {assign var="can_pending_payment_actions" value=($wygrane[i].status == 0 and $wygrane[i].shipment == 0 and not $wygrane[i].payment_waiting_activation and ($wygrane[i].id <> $id_zamowienia_zaplac))}
+            {assign var="can_pending_payment_actions" value=($order_sales_available && $wygrane[i].status == 0 and $wygrane[i].shipment == 0 and not $wygrane[i].payment_waiting_activation and ($wygrane[i].id <> $id_zamowienia_zaplac))}
             <tr align="center">
                 <td data-label="#">#{$wygrane[i].id}</td>
                 <td class="text-left" data-label="{$t.orders_product|default:'Product'}">
                     <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
                     {if $wygrane[i].note neq ''}
-                        <br><span class="text-muted">{$wygrane[i].note}</span>
+                        <br><span class="text-muted">{$wygrane[i].note|escape:'html'}</span>
                     {/if}
                     <div class="orders-product-badges">
                         <span class="badge badge-secondary">#{$wygrane[i].id}</span>

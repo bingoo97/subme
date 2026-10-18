@@ -10,11 +10,19 @@
 		return;
 	}
 
+	// Bound network waits so a disconnected request cannot permanently lock the composer.
+	function messengerAjax(options) {
+		return $.ajax($.extend({ timeout: options.processData === false ? 120000 : 20000 }, options));
+	}
+
 	var MessengerUI = {
 		pollTimer: null,
 		pollIntervalOpen: 8000,
 		pollIntervalClosed: 20000,
 		fetchInFlight: false,
+		fetchRequest: null,
+		conversationRevision: 0,
+		groupSubmitInFlight: false,
 		sendInFlight: false,
 		uploadInFlight: false,
 		voiceRecording: false,
@@ -37,6 +45,7 @@
 		cooldownTimer: null,
 		noticeTimer: null,
 		lastUnreadCount: 0,
+		currentUnreadCount: -1,
 		lastKnownScrollTop: 0,
 		userBrowsingHistory: false,
 		linkPreviewTimer: null,
@@ -64,6 +73,7 @@
 		scrollToBottomTimers: [],
 		scrollToBottomFrame: null,
 		suppressAutoOpenOnce: false,
+		desktopCollapsed: false,
 		restoreOpenScrollToBottomPending: false,
 		messagePageSize: 10,
 		loadOlderBatchSize: 5,
@@ -104,6 +114,80 @@
 
 		toggleButton: function () {
 			return $('[data-messenger-toggle-button]');
+		},
+
+		readUnreadCountFromDom: function () {
+			var $toggleCount = this.toggleButton().find('.messenger-toggle-count.messenger-unread-badge--mobile').first();
+			var rawToggleCount = parseInt($toggleCount.attr('data-count') || $toggleCount.text() || '0', 10);
+			var $desktopBadge = $('.messenger-unread-pill--desktop.messenger-unread-badge').first();
+			var rawDesktopCount = parseInt($desktopBadge.text() || '0', 10);
+
+			if (!isNaN(rawToggleCount)) {
+				return Math.max(0, rawToggleCount);
+			}
+
+			if (!isNaN(rawDesktopCount)) {
+				return Math.max(0, rawDesktopCount);
+			}
+
+			return 0;
+		},
+
+		getCurrentUnreadCount: function () {
+			var unread = parseInt(this.currentUnreadCount || 0, 10);
+
+			if (!isNaN(unread) && unread >= 0) {
+				return unread;
+			}
+
+			return this.readUnreadCountFromDom();
+		},
+
+		ensureToggleUnreadElements: function () {
+			var $button = this.toggleButton();
+			var $count;
+			var $icon;
+			var shouldShowInboxIcon;
+
+			if (!$button.length) {
+				return {
+					button: $button,
+					count: $(),
+					icon: $()
+				};
+			}
+
+			$icon = $button.find('.messenger-toggle-icon').first();
+			if (!$icon.length) {
+				$icon = $('<i class="fa fa-angle-down messenger-toggle-icon" aria-hidden="true"></i>');
+				$button.append($icon);
+			}
+			$icon.removeClass('is-hidden');
+
+			$count = $button.find('.messenger-toggle-count.messenger-unread-badge--mobile').first();
+			if (!$count.length) {
+				$button.find('.badge.messenger-unread-badge--mobile').remove();
+				$count = $('<span class="messenger-toggle-count messenger-unread-badge messenger-unread-badge--mobile" data-count="0" style="display:none;">0</span>');
+				$count.insertBefore($icon);
+			}
+
+			shouldShowInboxIcon = this.isOpen() && this.hasResellerInboxLayout() && this.getCurrentUnreadCount() > 0;
+
+			if (this.isOpen()) {
+				if (shouldShowInboxIcon) {
+					$icon.removeClass('bi bi-x-lg fa-angle-down fa-times').addClass('fa fa-envelope-o');
+				} else {
+					$icon.removeClass('fa fa-angle-down fa-envelope-o fa-times').addClass('bi bi-x-lg');
+				}
+			} else {
+				$icon.removeClass('bi bi-x-lg fa-envelope-o fa-times').addClass('fa fa-angle-down');
+			}
+
+			return {
+				button: $button,
+				count: $count,
+				icon: $icon
+			};
 		},
 
 		input: function () {
@@ -586,7 +670,7 @@
 				this.widget().removeClass('is-open');
 				this.heading().attr('aria-expanded', 'false');
 				this.panel().attr('aria-hidden', 'true').removeClass('in is-visible').stop(true, true).hide();
-				this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
+				this.icon().removeClass('bi bi-x-lg fa-envelope-o fa-times').addClass('fa fa-angle-down');
 			}
 		},
 
@@ -690,21 +774,21 @@
 			$widget.toggleClass('messenger-desktop-docked', docked);
 
 			if (!docked) {
-				if (!this.isOpen()) {
-					this.heading().attr('aria-expanded', 'false');
-					$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
-					this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
-				}
+					if (!this.isOpen()) {
+						this.heading().attr('aria-expanded', 'false');
+						$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
+						this.icon().removeClass('bi bi-x-lg fa-envelope-o fa-times').addClass('fa fa-angle-down');
+					}
 				return;
 			}
 
-			if (this.suppressAutoOpenOnce) {
-				$widget.removeClass('is-open');
-				this.heading().attr('aria-expanded', 'false');
-				$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
-				this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
-				return;
-			}
+			if (this.suppressAutoOpenOnce || this.desktopCollapsed) {
+					$widget.removeClass('is-open');
+					this.heading().attr('aria-expanded', 'false');
+					$panel.attr('aria-hidden', 'true').removeClass('in is-visible').hide();
+					this.icon().removeClass('bi bi-x-lg fa-envelope-o fa-times').addClass('fa fa-angle-down');
+					return;
+				}
 
 			if (this.hasResellerInboxLayout()) {
 				if (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection()) {
@@ -714,10 +798,10 @@
 				}
 			}
 
-			$widget.addClass('is-open');
-			this.heading().attr('aria-expanded', 'true');
-			$panel.attr('aria-hidden', 'false').addClass('in is-visible').show();
-			this.icon().removeClass('fa-angle-down').addClass('fa-angle-up');
+				$widget.addClass('is-open');
+				this.heading().attr('aria-expanded', 'true');
+				$panel.attr('aria-hidden', 'false').addClass('in is-visible').show();
+				this.ensureToggleUnreadElements();
 		},
 
 		refreshOpenLayout: function (stickToBottom) {
@@ -743,17 +827,34 @@
 		},
 
 		updateUnreadBadge: function (count) {
-			var $badge = $('.messenger-unread-badge');
+			var $desktopBadge = $('.messenger-unread-pill--desktop.messenger-unread-badge');
+			var toggleParts = this.ensureToggleUnreadElements();
+			var $toggleButton = toggleParts.button;
+			var $toggleCount = toggleParts.count;
 			var $backButton = $('.admin-chat-inbox__back');
 			var $backUnread = $backButton.find('.messenger-unread-badge-back');
 			var total = parseInt(count || 0, 10);
 
-			if ($badge.length) {
+			this.currentUnreadCount = isNaN(total) ? 0 : Math.max(0, total);
+
+			if ($desktopBadge.length) {
 				if (total > 0) {
-					$badge.text(total).show();
+					$desktopBadge.text(total).show();
 				} else {
-					$badge.text('0').hide();
+					$desktopBadge.text('0').hide();
 				}
+			}
+
+			if ($toggleCount.length) {
+				if (total > 0) {
+					$toggleCount.text(total).attr('data-count', total).show();
+				} else {
+					$toggleCount.text('0').attr('data-count', 0).hide();
+				}
+			}
+
+			if ($toggleButton.length) {
+				$toggleButton.toggleClass('has-unread-count', total > 0);
 			}
 
 			if ($backButton.length && $backUnread.length) {
@@ -771,7 +872,8 @@
 
 		updateToggleAttention: function (count) {
 			var total = parseInt(count || 0, 10);
-			var $button = this.toggleButton();
+			var parts = this.ensureToggleUnreadElements();
+			var $button = parts.button;
 			var hasNewUnread = total > this.lastUnreadCount && !this.isOpen();
 
 			if (!$button.length) {
@@ -1135,7 +1237,7 @@
 			this.renderComposerLinkPreview();
 
 			this.linkPreviewTimer = window.setTimeout(function () {
-				$.ajax({
+				messengerAjax({
 					type: 'POST',
 					url: cfg.endpoint,
 					dataType: 'json',
@@ -1445,6 +1547,8 @@
 
 		toggleReaction: function (messageId, reactionCode) {
 			var self = this;
+			var revision = this.conversationRevision;
+			var conversationId = this.activeConversationId;
 			var cfg = this.config();
 			var safeMessageId = parseInt(messageId || 0, 10) || 0;
 			var safeReactionCode = $.trim(reactionCode || '');
@@ -1453,7 +1557,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -1462,10 +1566,11 @@
 					format: 'json',
 					message_id: safeMessageId,
 					reaction_code: safeReactionCode,
-					conversation_id: this.activeConversationId,
+					conversation_id: conversationId,
 					_csrf: cfg.csrfToken
 				}
 			}).done(function (payload) {
+				if (revision !== self.conversationRevision) return;
 				if (payload && payload.ok) {
 					self.renderPayload(payload, {
 						force: true,
@@ -1475,6 +1580,7 @@
 					self.showNotice(payload.message);
 				}
 			}).fail(function () {
+				if (revision !== self.conversationRevision) return;
 				self.showNotice(window.MESSENGER_BOOTSTRAP.reactionFailedMessage || 'Nie udało się zapisać reakcji.');
 			});
 
@@ -2029,7 +2135,7 @@
 			formData.append('_csrf', cfg.csrfToken);
 			formData.append('voice_file', blob, fileName || 'voice-message.webm');
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				processData: false,
 				contentType: false,
@@ -2503,7 +2609,7 @@
 
 			this.profileOpenContext = $.trim(String(profileContext || ''));
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -2553,7 +2659,7 @@
 				return this.respondToGroupInvite(conversationId, actionKind === 'respond_invite_accept' ? 'accept' : 'reject');
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -2596,7 +2702,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -2665,7 +2771,7 @@
 			this.showGroupAlert(window.MESSENGER_BOOTSTRAP.groupEmailChecking || 'Checking user...', false);
 			this.groupEmailRequests[email] = true;
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -2934,13 +3040,10 @@
 
 		open: function () {
 			var self = this;
-			var shouldMarkRead = !this.hasResellerInboxLayout() || (this.resellerViewMode === 'conversation' && this.hasActiveConversationSelection());
 			if (this.isDesktopDocked()) {
+				this.desktopCollapsed = false;
 				this.syncDesktopDockedState();
 				this.refreshOpenLayout(true);
-				if (shouldMarkRead) {
-					this.markRead();
-				}
 				this.fetch({
 					force: true,
 					scrollToBottom: true
@@ -2961,10 +3064,7 @@
 				self.refreshOpenLayout(true);
 				self.scheduleScrollToBottom();
 			});
-			this.icon().removeClass('fa-angle-down').addClass('fa-angle-up');
-			if (shouldMarkRead) {
-				this.markRead();
-			}
+			this.ensureToggleUnreadElements();
 			this.savePanelState(true);
 			this.fetch({
 				force: true,
@@ -2980,22 +3080,51 @@
 
 		close: function () {
 			if (this.isDesktopDocked()) {
+				this.desktopCollapsed = true;
 				this.syncDesktopDockedState();
 				return false;
 			}
 			this.widget().removeClass('is-open');
 			this.heading().attr('aria-expanded', 'false');
 			this.panel().attr('aria-hidden', 'true').removeClass('in is-visible').stop(true, true).slideUp(180);
-			this.icon().removeClass('fa-angle-up').addClass('fa-angle-down');
+			this.ensureToggleUnreadElements();
 			this.savePanelState(false);
 			return false;
 		},
 
-		toggle: function () {
-			if (this.isDesktopDocked()) {
-				this.syncDesktopDockedState();
-				return false;
+		handleToggleButtonAction: function () {
+			var unreadCount = this.getCurrentUnreadCount();
+
+			if (!this.isOpen()) {
+				return this.open();
 			}
+
+			if (this.hasResellerInboxLayout() && unreadCount > 0 && this.resellerViewMode !== 'list') {
+				return this.openInboxFromToggle();
+			}
+
+			return this.close();
+		},
+
+		openInboxFromToggle: function () {
+			if (!this.isOpen()) {
+				return this.open();
+			}
+
+			if (!this.hasResellerInboxLayout()) {
+				return this.close();
+			}
+
+			this.closeGroupMenu();
+			this.closeGroupSettingsMenu();
+			this.closeGroupMembersPopover();
+			this.showConversationList();
+			this.fetch({ force: true });
+
+			return false;
+		},
+
+		toggle: function () {
 			return this.isOpen() ? this.close() : this.open();
 		},
 
@@ -3117,6 +3246,7 @@
 			var requestConversationId;
 			var requestConversationType;
 			var requestData;
+			var revision = this.conversationRevision;
 			options = options || {};
 
 			if (!cfg.userId || this.fetchInFlight || this.sendInFlight || this.uploadInFlight || this.faqPendingKey || this.voiceRecording || this.voiceStartInFlight) {
@@ -3144,12 +3274,15 @@
 				}
 			}
 
-			return $.ajax({
+			var request = messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
 				data: requestData
-			}).done(function (payload) {
+			});
+			this.fetchRequest = request;
+			request.done(function (payload) {
+				if (revision !== self.conversationRevision) return;
 				if (payload && payload.ok) {
 					self.renderPayload(payload, {
 						force: !!options.force,
@@ -3159,10 +3292,21 @@
 					});
 				} else if (payload && payload.cooldown_active) {
 					self.applyCooldown(payload.cooldown_seconds || 30, payload.message || '');
+				} else if (options.markRead) {
+					if (self.hasResellerInboxLayout()) self.showConversationList();
+					self.showNotice((payload && payload.message) || window.MESSENGER_BOOTSTRAP.connectionErrorMessage || 'Unable to load the conversation. Try again.');
 				}
+			}).fail(function (_xhr, status) {
+				if (status === 'abort' || revision !== self.conversationRevision || !options.markRead) return;
+				if (self.hasResellerInboxLayout()) self.showConversationList();
+				self.showNotice(window.MESSENGER_BOOTSTRAP.connectionErrorMessage || 'Unable to load the conversation. Try again.');
 			}).always(function () {
-				self.fetchInFlight = false;
+				if (self.fetchRequest === request) {
+					self.fetchInFlight = false;
+					self.fetchRequest = null;
+				}
 			});
+			return request;
 		},
 
 		markRead: function (conversationId, conversationType) {
@@ -3176,6 +3320,7 @@
 
 		sendMessage: function () {
 			var self = this;
+			var needsResync = false;
 			var cfg = this.config();
 			var message = $.trim(this.input().val());
 			var detectedUrl = this.extractFirstUrl(message);
@@ -3187,13 +3332,14 @@
 			}
 
 			this.sendInFlight = true;
+			if (this.fetchRequest) this.fetchRequest.abort();
 			this.closeMessageActions();
 			$('#btn-chat').prop('disabled', true);
 			this.input().prop('disabled', true);
 			this.input().val('');
 			this.appendLocalSentMessage(message);
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3224,31 +3370,26 @@
 				} else if (payload && payload.cooldown_active) {
 					self.input().val(message);
 					self.queueLinkPreviewRefresh();
-					self.fetch({
-						force: true,
-						scrollToBottom: true
-					});
+					needsResync = true;
 					self.applyCooldown(payload.cooldown_seconds || 30, payload.message || '');
 				} else {
+					self.showNotice((payload && payload.message) || window.MESSENGER_BOOTSTRAP.sendFailedMessage || 'Unable to confirm delivery. Your text has been kept.');
 					self.input().val(message);
 					self.queueLinkPreviewRefresh();
-					self.fetch({
-						force: true,
-						scrollToBottom: true
-					});
+					needsResync = true;
 				}
-			}).fail(function () {
+			}).fail(function (xhr) {
+				self.showNotice((xhr.responseJSON && xhr.responseJSON.message) || window.MESSENGER_BOOTSTRAP.sendFailedMessage || 'Unable to confirm delivery. Your text has been kept.');
 				self.input().val(message);
 				self.queueLinkPreviewRefresh();
-				self.fetch({
-					force: true,
-					scrollToBottom: true
-				});
+				needsResync = true;
 			}).always(function () {
 				self.sendInFlight = false;
 				$('#btn-chat').prop('disabled', false);
-				self.input().prop('disabled', false).trigger('focus');
+				self.input().prop('disabled', false);
+				if (self.isOpen()) self.input().trigger('focus');
 				self.updateComposerAvailability();
+				if (needsResync) self.fetch({ force: true, scrollToBottom: true });
 			});
 
 			return false;
@@ -3256,9 +3397,11 @@
 
 		requestFaqAction: function (action, faqKey) {
 			var self = this;
+			var revision = this.conversationRevision;
+			var conversationId = this.activeConversationId;
 			var cfg = this.config();
 
-			return $.ajax({
+			return messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3269,6 +3412,7 @@
 					_csrf: cfg.csrfToken
 				}
 			}).done(function (payload) {
+				if (revision !== self.conversationRevision) return;
 				if (payload && payload.ok) {
 					self.renderPayload(payload, {
 						force: true,
@@ -3384,7 +3528,7 @@
 			formData.append('_csrf', cfg.csrfToken);
 			formData.append('file', fileInput.files[0]);
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				processData: false,
 				contentType: false,
@@ -3428,6 +3572,8 @@
 
 		deleteMessage: function (messageId) {
 			var self = this;
+			var revision = this.conversationRevision;
+			var conversationId = this.activeConversationId;
 			var cfg = this.config();
 			var $messageNode;
 			var $timeAnchor;
@@ -3438,7 +3584,7 @@
 			}
 
 			sendDeleteRequest = function () {
-				$.ajax({
+				messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3446,10 +3592,11 @@
 					action: 'delete_message',
 					format: 'json',
 					message_id: messageId,
-					conversation_id: self.activeConversationId,
+					conversation_id: conversationId,
 					_csrf: cfg.csrfToken
 				}
 				}).done(function (payload) {
+				if (revision !== self.conversationRevision) return;
 				if (payload && payload.ok) {
 					self.renderPayload(payload, {
 						force: true,
@@ -3460,6 +3607,7 @@
 					self.fetch({ force: true });
 				}
 				}).fail(function () {
+				if (revision !== self.conversationRevision) return;
 				self.showNotice(window.MESSENGER_BOOTSTRAP.deleteFailedMessage || 'Message deletion failed.');
 				self.fetch({ force: true });
 				}).always(function () {
@@ -3494,11 +3642,20 @@
 			var nextConversationType = String(conversationType || 'live_chat');
 			var self = this;
 
+			if (this.sendInFlight || this.faqPendingKey) {
+				this.showNotice(window.MESSENGER_BOOTSTRAP.sendBusyMessage || 'Wait until the current message is sent.');
+				return false;
+			}
 			if (this.voiceRecording || this.voiceStartInFlight || this.uploadInFlight) {
 				this.showNotice(window.MESSENGER_BOOTSTRAP.voiceRecordBusyMessage || 'Finish sending the voice message first.');
 				return false;
 			}
 
+			this.conversationRevision += 1;
+			var revision = this.conversationRevision;
+			if (this.fetchRequest) this.fetchRequest.abort();
+			this.activeCanSend = false;
+			this.updateComposerAvailability();
 			this.activeConversationId = nextConversationId;
 			this.activeConversationType = nextConversationType;
 			this.clearReplyTarget();
@@ -3523,13 +3680,14 @@
 				scrollToBottom: true,
 				animateConversation: true
 			}).always(function () {
-				self.setConversationLoadingState(false);
+				if (revision === self.conversationRevision) self.setConversationLoadingState(false);
 			});
 			return false;
 		},
 
 		submitGroupCreate: function () {
 			var self = this;
+			if (this.groupSubmitInFlight) return false;
 			var cfg = this.config();
 			var groupName = $.trim(this.groupNameInput().val());
 			var action = this.groupModalMode === 'invite' ? 'invite_to_group' : 'create_group';
@@ -3564,7 +3722,8 @@
 				formData.append('group_avatar_file', this.groupAvatarFile);
 			}
 
-			$.ajax({
+			this.groupSubmitInFlight = true;
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3621,7 +3780,7 @@
 						: (window.MESSENGER_BOOTSTRAP.groupCreateError || 'Unable to create group chat.'),
 					true
 				);
-			});
+			}).always(function () { self.groupSubmitInFlight = false; });
 
 			return false;
 		},
@@ -3639,7 +3798,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3679,7 +3838,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3715,7 +3874,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3752,7 +3911,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3787,7 +3946,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3828,7 +3987,7 @@
 				return false;
 			}
 
-			$.ajax({
+			messengerAjax({
 				type: 'POST',
 				url: cfg.endpoint,
 				dataType: 'json',
@@ -3899,7 +4058,7 @@
 			$(document).on('click.messengerUi', '[data-messenger-toggle-button]', function (event) {
 				event.preventDefault();
 				event.stopPropagation();
-				self.toggle();
+				self.handleToggleButtonAction();
 			});
 
 			$(document).on('click.messengerUi', '#btn-chat', function (event) {
@@ -3908,7 +4067,7 @@
 			});
 
 			$(document).on('keydown.messengerUi', '#tresc', function (event) {
-				if (event.which === 13 && !event.shiftKey) {
+				if (event.which === 13 && !event.shiftKey && !event.isComposing && !(event.originalEvent && event.originalEvent.isComposing) && event.keyCode !== 229) {
 					event.preventDefault();
 					self.sendMessage();
 				}
@@ -4306,6 +4465,7 @@
 			this.restoreOpenScrollToBottomPending = !!shouldRestoreOpenState;
 			this.updateViewportMetrics();
 			this.syncConversationStateFromMarkup(true);
+			this.currentUnreadCount = this.readUnreadCountFromDom();
 			if (this.hasResellerInboxLayout()) {
 				if (!(requestedConversationId > 0 && (this.activeConversationId > 0 || this.hasActiveConversationSelection()))) {
 					this.restoreActiveConversationState();
@@ -4323,6 +4483,7 @@
 			this.syncDesktopDockedState();
 			this.resetGroupModal();
 			this.bind();
+			this.ensureToggleUnreadElements();
 			if (shouldRestoreOpenState || (this.isDesktopDocked() && !shouldSuppressAutoOpen)) {
 				this.open();
 			} else {
@@ -4335,7 +4496,10 @@
 	};
 
 	window.MessengerUI = MessengerUI;
-	window.toggleMessengerPanel = function () {
+	window.toggleMessengerPanel = function (source) {
+		if (source === 'inbox') {
+			return MessengerUI.handleToggleButtonAction();
+		}
 		return MessengerUI.toggle();
 	};
 	window.openMessengerPanel = function () {

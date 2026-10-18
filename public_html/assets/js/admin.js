@@ -2411,6 +2411,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var paymentPill = q('[data-admin-order-payment-pill]', form);
             var fulfillmentPill = q('[data-admin-order-fulfillment-pill]', form);
             var activationAlert = q('[data-admin-order-activation-alert]', form);
+            var statusDirectionHint = q('[data-admin-order-status-hint]', form);
             var expiredAlert = q('[data-admin-order-expired-alert]', form);
             var activeAlert = q('[data-admin-order-active-alert]', form);
 
@@ -2439,12 +2440,19 @@ document.addEventListener('DOMContentLoaded', function () {
                     tone = 'is-success';
                 } else if (['expired', 'cancelled', 'failed', 'inactive'].indexOf(statusValue) !== -1) {
                     tone = 'is-danger';
-                } else if (['pending_payment', 'awaiting_review', 'pending', 'unpaid'].indexOf(statusValue) !== -1) {
+                } else if (['pending_payment', 'awaiting_review', 'pending', 'unpaid', 'pending_activation'].indexOf(statusValue) !== -1) {
                     tone = 'is-pending';
                 }
 
-                statusField.classList.remove('is-neutral', 'is-success', 'is-danger', 'is-pending');
+                statusField.classList.remove('is-neutral', 'is-success', 'is-danger', 'is-pending', 'is-action-required');
                 statusField.classList.add(tone);
+                if (tone === 'is-pending' && String(paymentField.value || '').toLowerCase() === 'paid') {
+                    statusField.classList.add('is-action-required');
+                }
+                if (statusDirectionHint) {
+                    setHidden(statusDirectionHint, String(paymentField.value || '').toLowerCase() !== 'paid'
+                        || ['pending_payment', 'awaiting_review', 'pending', 'pending_activation'].indexOf(statusValue) === -1);
+                }
             };
 
             var sync = function () {
@@ -2482,6 +2490,7 @@ document.addEventListener('DOMContentLoaded', function () {
             statusField.addEventListener('change', sync);
             paymentField.addEventListener('change', function () {
                 applyPill(paymentPill, paymentField.value, 'payment', paymentLabels);
+                applyStatusFieldTone(String(statusField.value || '').toLowerCase());
             });
             sync();
         });
@@ -2577,6 +2586,7 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-admin-order-extend-form]').forEach(function (form) {
             var productField = q('[data-admin-order-extend-product]', form);
             var previewField = q('[data-admin-order-extend-preview]', form);
+            var selectionSummary = q('[data-admin-order-extend-selection]', form);
 
             if (!productField || !previewField) {
                 return;
@@ -2584,6 +2594,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             var sync = function () {
                 var selected = productField.options[productField.selectedIndex];
+                if (selectionSummary) selectionSummary.textContent = selected ? selected.textContent.trim() : '';
                 var durationHours = selected ? parseInt(selected.getAttribute('data-duration-hours') || '0', 10) || 0 : 0;
                 var currentExpiry = parseSqlDateTime(form.getAttribute('data-current-expires-at') || '');
                 var now = new Date();
@@ -3982,58 +3993,78 @@ document.addEventListener('DOMContentLoaded', function () {
 	        });
 	    }
 
-	    function initOrdersTableViewToggle() {
-	        var toggle = q('[data-admin-orders-table-view-toggle]');
-	        var defaultViews = qa('[data-admin-orders-view="default"]');
-	        var simpleViews = qa('[data-admin-orders-view="simple"]');
-	        var storageKey = 'subme-admin-orders-table-view';
-	        var simpleClass = 'is-admin-orders-simple-table-view';
-
-	        if (!toggle || (!defaultViews.length && !simpleViews.length)) {
-	            return;
-	        }
-
-	        function readStoredState() {
-	            try {
-	                return window.localStorage ? window.localStorage.getItem(storageKey) : null;
-	            } catch (error) {
-	                return null;
-	            }
-	        }
-
-	        function writeStoredState(isSimple) {
-	            try {
-	                if (window.localStorage) {
-	                    window.localStorage.setItem(storageKey, isSimple ? 'simple' : 'default');
-	                }
-	            } catch (error) {
-	                // Local view preference only; ignore storage errors.
-	            }
-	        }
-
-	        function setSimpleView(isSimple, persist) {
-	            defaultViews.forEach(function (target) {
-	                setHidden(target, isSimple);
-	            });
-	            simpleViews.forEach(function (target) {
-	                setHidden(target, !isSimple);
-	            });
-	            if (doc.body) {
-	                doc.body.classList.toggle(simpleClass, isSimple);
-	            }
-	            toggle.checked = isSimple;
-	            toggle.setAttribute('aria-checked', isSimple ? 'true' : 'false');
-	            if (persist) {
-	                writeStoredState(isSimple);
-	            }
-	        }
-
-        setSimpleView(readStoredState() !== 'default', false);
-
-	        toggle.addEventListener('change', function () {
-	            setSimpleView(toggle.checked, true);
-	        });
-	    }
+    function initOrdersActionMenus() {
+        var triggers = qa('[data-admin-orders-menu-toggle]');
+        if (!triggers.length) return;
+        var active = null;
+        function closeMenu(restoreFocus) {
+            if (!active) return;
+            var previous = active;
+            active = null;
+            previous.menu.hidden = true;
+            previous.trigger.setAttribute('aria-expanded', 'false');
+            previous.placeholder.replaceWith(previous.menu);
+            if (restoreFocus) previous.trigger.focus();
+        }
+        function positionMenu() {
+            if (!active) return;
+            var rect = active.trigger.getBoundingClientRect();
+            var viewport = window.visualViewport;
+            var left = viewport ? viewport.offsetLeft : 0;
+            var top = viewport ? viewport.offsetTop : 0;
+            var width = viewport ? viewport.width : doc.documentElement.clientWidth;
+            var height = viewport ? viewport.height : window.innerHeight;
+            active.menu.style.maxHeight = Math.max(100, height - 24) + 'px';
+            var size = active.menu.getBoundingClientRect();
+            var y = rect.bottom + 6;
+            if (y + size.height > top + height - 12) y = rect.top - size.height - 6;
+            active.menu.style.left = Math.max(left + 12, Math.min(rect.right - size.width, left + width - size.width - 12)) + 'px';
+            active.menu.style.top = Math.max(top + 12, y) + 'px';
+        }
+        triggers.forEach(function (trigger) {
+            trigger.addEventListener('click', function () {
+                if (active && active.trigger === trigger) { closeMenu(false); return; }
+                closeMenu(false);
+                var menu = doc.getElementById(trigger.getAttribute('aria-controls'));
+                if (!menu) return;
+                var placeholder = doc.createComment('order actions');
+                menu.replaceWith(placeholder);
+                doc.body.appendChild(menu);
+                active = {menu: menu, trigger: trigger, placeholder: placeholder};
+                menu.hidden = false;
+                trigger.setAttribute('aria-expanded', 'true');
+                positionMenu();
+                var firstItem = q('a[href],button:not(:disabled),input:not(:disabled)', menu);
+                if (firstItem) firstItem.focus();
+            });
+        });
+        doc.addEventListener('click', function (event) {
+            if (!active || active.trigger.contains(event.target)) return;
+            if (!active.menu.contains(event.target)) { closeMenu(false); return; }
+            if (closest(event.target, 'a, button')) closeMenu(false);
+        });
+        doc.addEventListener('keydown', function (event) {
+            if (!active) return;
+            if (event.key === 'Escape') { event.preventDefault(); closeMenu(true); return; }
+            var items = qa('a[href],button:not(:disabled),input:not(:disabled)', active.menu);
+            if (!items.length) return;
+            var index = items.indexOf(doc.activeElement);
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+            }
+        });
+        doc.addEventListener('focusin', function (event) {
+            if (active && !active.menu.contains(event.target) && !active.trigger.contains(event.target)) closeMenu(false);
+        });
+        window.addEventListener('resize', function () { closeMenu(false); });
+        doc.addEventListener('scroll', function (event) {
+            if (!active || active.menu.contains(event.target)) return;
+            var rect = active.trigger.getBoundingClientRect();
+            if (rect.bottom < 0 || rect.top > window.innerHeight) closeMenu(false);
+            else positionMenu();
+        }, true);
+    }
 
     function initCompletedOrdersExpirySort() {
         qa('[data-admin-completed-orders-body]').forEach(function (body) {
@@ -4262,13 +4293,21 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function renderTopbarOrderItem(order) {
+            if (typeof order.task_html === 'string') {
+                var taskWrapper = document.createElement('div');
+                taskWrapper.innerHTML = order.task_html;
+                var taskItem = q('[data-admin-topbar-order-item]', taskWrapper);
+                if (taskItem) return taskItem;
+            }
             var article = document.createElement('article');
             article.className = 'admin-topbar-notifications__item admin-topbar-notifications__item--compact admin-topbar-notifications__item--order';
-            var inlineText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-order-created-text') || 'paid and is waiting for approval. Click to open') : 'paid and is waiting for approval. Click to open';
-            var openOrderText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-order-inline-text') || 'order') : 'order';
-            var openPaymentText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-inline-text') || 'payment') : 'payment';
-            var paymentJoinerText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-joiner-text') || 'or') : 'or';
+            var inlineText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-order-created-text') || 'Payment confirmed. Waiting for fulfillment.') : 'Payment confirmed. Waiting for fulfillment.';
+            var openOrderText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-order-inline-text') || 'Order') : 'Order';
+            var openPaymentText = activeFlyout ? (activeFlyout.getAttribute('data-topbar-open-payment-inline-text') || 'Payment') : 'Payment';
             var customerLabel = String(order.customer_email || '').trim();
+            var customerHandle = String(order.customer_handle || '').trim().replace(/^@+/, '');
+            var customerUrl = '/admin/?page=users&customer_id=' + encodeURIComponent(String(order.customer_id || 0));
+            var orderUrl = String(order.order_url || '/admin/?page=orders');
             var paymentLink = String(order.payment_url || '').trim();
             var statusIcon = String(order.status_icon || 'bi bi-arrow-repeat').trim() || 'bi bi-arrow-repeat';
             var statusClass = String(order.status_class || 'admin-order-status-icon--awaiting-activation').trim() || 'admin-order-status-icon--awaiting-activation';
@@ -4277,24 +4316,21 @@ document.addEventListener('DOMContentLoaded', function () {
             var walletLabel = String(order.wallet_label || '').trim();
             article.innerHTML =
                 '<div class="admin-topbar-notifications__order-visual" aria-hidden="true">'
-                + '<i class="' + escapeHtml(statusIcon) + ' admin-order-status-icon ' + escapeHtml(statusClass) + '"></i>'
-                + '</div>'
+                + '<i class="' + escapeHtml(statusIcon) + ' admin-order-status-icon ' + escapeHtml(statusClass) + '"></i></div>'
                 + '<div class="admin-topbar-notifications__item-main">'
-                + '<p>'
-                + '<a class="admin-inline-link admin-payment-summary__email" href="/admin/?page=users&amp;customer_id=' + encodeURIComponent(String(order.customer_id || 0)) + '">'
-                + escapeHtml(customerLabel)
-                + '</a>'
-                + ' ' + escapeHtml(inlineText) + ' '
-                + '<a href="' + escapeHtml(String(order.order_url || '/admin/?page=orders')) + '">' + escapeHtml(openOrderText) + '</a>'
-                + (paymentLink !== '' ? ' <span>' + escapeHtml(paymentJoinerText) + '</span> <a href="' + escapeHtml(paymentLink) + '">' + escapeHtml(openPaymentText) + '</a>' : '')
-                + '</p>'
+                + '<div class="admin-topbar-notifications__order-topline"><div class="admin-topbar-notifications__order-identity">'
+                + (customerHandle ? '<a class="admin-topbar-notifications__order-handle" href="' + escapeHtml(customerUrl) + '">@' + escapeHtml(customerHandle) + '</a>' : '')
+                + (customerLabel ? '<a class="admin-topbar-notifications__order-email" href="' + escapeHtml(customerUrl) + '">' + escapeHtml(customerLabel) + '</a>' : '')
+                + '</div><a class="admin-topbar-notifications__order-reference" href="' + escapeHtml(orderUrl) + '">#' + escapeHtml(String(order.id || '')) + '</a></div>'
+                + '<p class="admin-topbar-notifications__order-summary">' + escapeHtml(inlineText) + '</p>'
+                + '<div class="admin-topbar-notifications__wallet-details">'
                 + (walletAddressCompact !== '' && walletExplorerUrl !== ''
-                    ? '<div class="admin-topbar-notifications__wallet-row"><a class="admin-topbar-notifications__wallet-link" href="' + escapeHtml(walletExplorerUrl) + '" target="_blank" rel="noopener noreferrer"><code>' + escapeHtml(walletAddressCompact) + '</code></a></div>'
-                    : '')
-                + (walletLabel !== ''
-                    ? '<div class="admin-topbar-notifications__wallet-meta"><span class="admin-status-pill admin-status-pill--assigned">' + escapeHtml(walletLabel) + '</span></div>'
-                    : '')
-                + '</div>';
+                    ? '<div class="admin-topbar-notifications__wallet-row"><a class="admin-topbar-notifications__wallet-link" href="' + escapeHtml(walletExplorerUrl) + '" target="_blank" rel="noopener noreferrer"><code>' + escapeHtml(walletAddressCompact) + '</code></a></div>' : '')
+                + (walletLabel !== '' ? '<div class="admin-topbar-notifications__wallet-meta"><span class="admin-status-pill admin-status-pill--assigned">' + escapeHtml(walletLabel) + '</span></div>' : '')
+                + '</div><div class="admin-topbar-notifications__order-links">'
+                + '<a class="admin-topbar-notifications__order-action" href="' + escapeHtml(orderUrl) + '"><i class="bi bi-receipt" aria-hidden="true"></i>' + escapeHtml(openOrderText) + '<i class="bi bi-arrow-right" aria-hidden="true"></i></a>'
+                + (paymentLink ? '<a class="admin-topbar-notifications__order-action admin-topbar-notifications__order-action--secondary" href="' + escapeHtml(paymentLink) + '"><i class="bi bi-wallet2" aria-hidden="true"></i>' + escapeHtml(openPaymentText) + '</a>' : '')
+                + '</div></div>';
             return article;
         }
 
@@ -4325,8 +4361,29 @@ document.addEventListener('DOMContentLoaded', function () {
                     ordersList.setAttribute('data-admin-topbar-orders-list', '1');
                     ordersSection.appendChild(ordersList);
                 }
+                var existingTask = q('[data-admin-topbar-order-item="' + (parseInt(order.id, 10) || 0) + '"]', ordersList);
+                if (existingTask) existingTask.remove();
                 ordersList.insertBefore(renderTopbarOrderItem(order), ordersList.firstChild || null);
-                updateOrdersCount(ordersSection, 1);
+                if (!existingTask) updateOrdersCount(ordersSection, 1);
+            }
+        }
+
+        function syncTopbarOrderTasks(flyout, payload) {
+            if (!flyout || typeof payload.orders_html !== 'string' || !payload.orders_revision) return;
+            if (flyout.getAttribute('data-orders-revision') === payload.orders_revision) return;
+            var section = q('[data-admin-topbar-orders-section]', flyout);
+            if (!section) return;
+            var wrapper = document.createElement('div');
+            wrapper.innerHTML = payload.orders_html;
+            var replacement = q('[data-admin-topbar-orders-section]', wrapper);
+            if (!replacement) return;
+            var activeLink = section.contains(document.activeElement) && document.activeElement.tagName === 'A'
+                ? document.activeElement.getAttribute('href') : '';
+            section.replaceWith(replacement);
+            flyout.setAttribute('data-orders-revision', payload.orders_revision);
+            if (activeLink) {
+                var focusLink = qa('a', replacement).filter(function (link) { return link.getAttribute('href') === activeLink; })[0];
+                if (focusLink) focusLink.focus({ preventScroll: true });
             }
         }
 
@@ -4622,12 +4679,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     state.previewMeta = responsePayload.preview || null;
                     explorerPanel.innerHTML = String(responsePayload.html || '');
                     if (!state.cryptoManual && state.previewMeta && parseNumeric(state.previewMeta.candidate_crypto_amount) > 0) {
-                        var requestedCrypto = parseNumeric(currentPayload.requested_crypto_amount);
                         var candidateCrypto = parseNumeric(state.previewMeta.candidate_crypto_amount);
                         var hasSavedReceivedCrypto = String(currentPayload.received_crypto_amount || '').trim() !== '';
-                        if (!hasSavedReceivedCrypto && requestedCrypto > 0 && Math.abs(candidateCrypto - requestedCrypto) > 0.000000005) {
+                        if (!hasSavedReceivedCrypto) {
                             cryptoInput.value = formatCryptoValue(candidateCrypto);
-                            state.fiatManual = false;
                         }
                     }
                     updateComputedFields();
@@ -4658,7 +4713,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 var requestedFiatLabel;
 
                 if (!state.fiatManual && rate > 0) {
-                    fiatInput.value = formatRoundedFiatValue(parseNumeric(cryptoInput.value) * rate);
+                    fiatInput.value = String(cryptoInput.value).trim() === '' ? '' : formatRoundedFiatValue(parseNumeric(cryptoInput.value) * rate);
                 }
 
                 currentFiat = parseNumeric(fiatInput.value);
@@ -4721,12 +4776,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 var cryptoLabelTemplate = modalNode.getAttribute('data-received-crypto-label') || 'Received {asset}';
                 var statusLabel = String(payload.status_label || '').trim();
                 var topupText = modalNode.getAttribute('data-topup-badge') || '';
-                var receivedCrypto = String(payload.received_crypto_amount || payload.requested_crypto_amount || '').trim();
-                var receivedFiat = String(payload.received_fiat_amount || payload.requested_fiat_amount || '').trim();
+                var receivedCrypto = String(payload.received_crypto_amount || '').trim();
+                var receivedFiat = String(payload.received_fiat_amount || '').trim();
                 var logoUrl = String(payload.asset_logo_url || '').trim();
 
                 state.payload = payload;
-                state.fiatManual = false;
+                state.fiatManual = receivedFiat !== '';
                 state.cryptoManual = false;
 
                 if (cryptoInputLabel) {
@@ -4760,8 +4815,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     step2Node.textContent = modalNode.getAttribute('data-step2') || step2Node.textContent;
                 }
 
-                cryptoInput.value = receivedCrypto !== '' ? receivedCrypto : String(payload.requested_crypto_amount || '');
-                fiatInput.value = receivedFiat !== '' ? formatRoundedFiatValue(receivedFiat) : String(payload.requested_fiat_amount || '');
+                cryptoInput.value = receivedCrypto;
+                fiatInput.value = receivedFiat !== '' ? formatFiatValue(receivedFiat) : '';
                 updateComputedFields();
             }
 
@@ -4899,10 +4954,14 @@ document.addEventListener('DOMContentLoaded', function () {
                     submitButton.disabled = false;
                     populate(payload);
                     showModal();
-                    window.setTimeout(function () {
-                        cryptoInput.focus();
-                        cryptoInput.select();
-                    }, 40);
+                    if (window.matchMedia('(min-width: 992px)').matches) {
+                        window.setTimeout(function () {
+                            if (state.payload) {
+                                cryptoInput.focus();
+                                cryptoInput.select();
+                            }
+                        }, 40);
+                    }
                     return true;
                 }
             };
@@ -4961,6 +5020,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 event.stopPropagation();
                 if (flyout.hasAttribute('hidden')) {
                     openFlyout(flyout);
+                    pollTopbarState(true);
                 } else {
                     closeFlyout(flyout);
                 }
@@ -5070,18 +5130,22 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 pollInFlight = true;
-                jsonFetch(activeStateUrl, { credentials: 'same-origin' }).then(function (payload) {
+                var controller = window.AbortController ? new window.AbortController() : null;
+                var timeout = controller ? window.setTimeout(function () { controller.abort(); }, 20000) : null;
+                jsonFetch(activeStateUrl, { credentials: 'same-origin', signal: controller ? controller.signal : undefined }).then(function (payload) {
                     if (payload && payload.__status === 404 && stateUrlIndex < fallbackStateUrls.length - 1) {
                         stateUrlIndex += 1;
-                        return pollTopbarState(force);
+                        return;
                     }
                     if (!payload || !payload.ok) {
                         return;
                     }
                     updateToggleBadge(toggle, payload.badge_count);
+                    syncTopbarOrderTasks(flyout, payload);
                 }).catch(function () {
                     return;
-                }).then(function () {
+                }).finally(function () {
+                    if (timeout !== null) window.clearTimeout(timeout);
                     pollInFlight = false;
                 });
             }
@@ -5553,6 +5617,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var bankOpenButton = q('[data-admin-chat-bank-open]', root);
         var csrfToken = root.getAttribute('data-csrf-token') || '';
         var chatStateUrl = root.getAttribute('data-admin-chat-state-url') || '/admin/chat.php?action=inbox_state';
+        var chatInboxFetchInFlight = false;
         var retentionHintTemplate = root.getAttribute('data-chat-group-retention-hint-template') || 'Auto-delete after {label}';
         var activeConversationId = 0;
         var activeCustomerId = 0;
@@ -6548,11 +6613,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         function pollChatInboxState(force) {
-            if (!chatStateUrl || doc.hidden && !force) {
+            if (!chatStateUrl || chatInboxFetchInFlight || doc.hidden && !force) {
                 return;
             }
 
-            jsonFetch(chatStateUrl, { credentials: 'same-origin' }).then(function (payload) {
+            chatInboxFetchInFlight = true;
+            var controller = window.AbortController ? new window.AbortController() : null;
+            var timeout = controller ? window.setTimeout(function () { controller.abort(); }, 20000) : null;
+            jsonFetch(chatStateUrl, { credentials: 'same-origin', signal: controller ? controller.signal : undefined }).then(function (payload) {
                 if (!payload || !payload.ok) {
                     return;
                 }
@@ -6561,6 +6629,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 updateChatInboxItems(payload.items);
             }).catch(function () {
                 return;
+            }).finally(function () {
+                if (timeout !== null) window.clearTimeout(timeout);
+                chatInboxFetchInFlight = false;
             });
         }
 
@@ -9787,13 +9858,41 @@ document.addEventListener('DOMContentLoaded', function () {
     initSensitiveRouteProtection();
     initTopbarTools();
     initOrdersGuidanceToggle();
-    initOrdersTableViewToggle();
+    initOrdersActionMenus();
     initCompletedOrdersExpirySort();
     initPaymentReceivedFields();
     initPaymentBlockchainCheck();
 
     if (!hasBootstrap) {
         return;
+    }
+
+    if (window.bootstrap.Tooltip) {
+        var orderTooltips = [];
+        qa('[data-admin-action-help], .admin-orders-table-scroll [title], .admin-orders-table-scroll .admin-orders-menu-trigger, .admin-orders-actions .admin-orders-menu-trigger, .admin-order-modal .admin-order-summary__delivery-link-indicator[title]').forEach(function (element) {
+            if (element.getAttribute('data-bs-toggle') === 'tooltip' || element.classList.contains('admin-orders-menu__item')) return;
+            if (!element.hasAttribute('title')) element.setAttribute('title', element.getAttribute('aria-label') || '');
+            if (element.classList.contains('admin-order-summary__delivery-link-indicator')) element.tabIndex = 0;
+            var tooltip = new window.bootstrap.Tooltip(element, {
+                container: doc.body,
+                boundary: 'viewport',
+                placement: 'top',
+                trigger: 'hover focus',
+                customClass: closest(element, '.admin-order-modal') ? 'admin-orders-tooltip admin-orders-tooltip--order-modal' : 'admin-orders-tooltip',
+                html: false,
+                delay: {show: 180, hide: 0}
+            });
+            orderTooltips.push(tooltip);
+            element.addEventListener('click', function () { tooltip.hide(); });
+        });
+        function hideOrderTooltips() {
+            orderTooltips.forEach(function (tooltip) { tooltip.hide(); });
+        }
+        window.addEventListener('resize', hideOrderTooltips);
+        doc.addEventListener('scroll', hideOrderTooltips, true);
+        doc.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') hideOrderTooltips();
+        });
     }
 
     qa('[data-bs-toggle="tooltip"]').forEach(function (element) {

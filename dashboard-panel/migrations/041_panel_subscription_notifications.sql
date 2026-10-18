@@ -1,0 +1,21 @@
+-- Once-per-expiry admin notifications. Existing email rows keep NULL dedupe keys.
+SET @panel_expiry_ddl = IF(EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='app_settings' AND column_name='admin_panel_subscription_paid_until'), 'SELECT 1', 'ALTER TABLE app_settings ADD COLUMN admin_panel_subscription_paid_until DATE DEFAULT NULL');
+PREPARE panel_expiry_stmt FROM @panel_expiry_ddl;
+EXECUTE panel_expiry_stmt;
+DEALLOCATE PREPARE panel_expiry_stmt;
+SET @panel_expiry_ddl = IF(EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='app_settings' AND column_name='admin_panel_subscription_renewal_url'), 'SELECT 1', 'ALTER TABLE app_settings ADD COLUMN admin_panel_subscription_renewal_url VARCHAR(500) DEFAULT NULL');
+PREPARE panel_expiry_stmt FROM @panel_expiry_ddl;
+EXECUTE panel_expiry_stmt;
+DEALLOCATE PREPARE panel_expiry_stmt;
+SET @panel_expiry_ddl = IF(EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='app_settings' AND column_name='admin_panel_subscription_notified_until'), 'SELECT 1', 'ALTER TABLE app_settings ADD COLUMN admin_panel_subscription_notified_until DATE DEFAULT NULL');
+PREPARE panel_expiry_stmt FROM @panel_expiry_ddl;
+EXECUTE panel_expiry_stmt;
+DEALLOCATE PREPARE panel_expiry_stmt;
+SET @panel_expiry_ddl = IF(EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='outbound_email_queue' AND column_name='dedupe_key'), 'SELECT 1', 'ALTER TABLE outbound_email_queue ADD COLUMN dedupe_key VARCHAR(191) DEFAULT NULL');
+PREPARE panel_expiry_stmt FROM @panel_expiry_ddl;
+EXECUTE panel_expiry_stmt;
+DEALLOCATE PREPARE panel_expiry_stmt;
+SET @panel_expiry_ddl = IF(EXISTS(SELECT 1 FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='outbound_email_queue' AND index_name='uniq_outbound_email_dedupe'), 'SELECT 1', 'ALTER TABLE outbound_email_queue ADD UNIQUE KEY uniq_outbound_email_dedupe (dedupe_key)');
+PREPARE panel_expiry_stmt FROM @panel_expiry_ddl;
+EXECUTE panel_expiry_stmt;
+DEALLOCATE PREPARE panel_expiry_stmt;

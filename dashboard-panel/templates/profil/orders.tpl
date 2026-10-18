@@ -48,14 +48,14 @@
     {else}
     <hr />
     {if $wygrane}
-        <div class="table-responsive">
+        <div class="table-responsive orders-table-scroll" tabindex="0" role="region" aria-label="{$t.orders|default:'Orders'}">
             <table id="orders" class="table align-middle orders-user-table">
                 <thead>
                     <tr>
                         <th class="orders-user-table__id-col text-center">{$t.history_badge_order|default:'ID'}</th>
                         <th class="orders-user-table__product-col">{$t.orders_product|default:'Product'}</th>
+                        <th class="orders-user-table__expiry-col">{$t.orders_expiry_column|default:'Expires'}</th>
                         <th class="orders-user-table__amount-col">{$t.orders_amount|default:'Amount'}</th>
-                        <th class="orders-user-table__date-col hidden-xs hidden-sm hidden-md text-center"></th>
                         <th class="orders-user-table__actions-col"></th>
                     </tr>
                 </thead>
@@ -66,18 +66,19 @@
                         {assign var="showPendingPaymentAction" value=($order_sales_available && $canPendingPaymentActionsTable)}
                         <tr>
                             <td data-label="{$t.history_badge_order|default:'Order'}">
-                                <span class="badge badge-secondary">#{$wygrane[i].id}</span>
+                                <span class="orders-user-id">#{$wygrane[i].id}</span>
+                                <span class="orders-user-created" title="{$t.history_column_date|default:'Date'}">{$wygrane[i].created_display}</span>
                             </td>
                             <td data-label="{$t.orders_product|default:'Product'}" class="{if $wygrane[i].status == 0}orders-user-cell-muted{/if}">
                                 <div class="orders-user-summary">
                                     <div class="orders-user-summary__title-row">
                                         {if $wygrane[i].extend}
-                                            <button type="button" class="orders-user-summary__history-toggle collapsed" data-toggle="collapse" data-target="#orderExtendInline{$wygrane[i].id}" aria-expanded="false" aria-controls="orderExtendInline{$wygrane[i].id}">
-                                                <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
+                                            <button type="button" class="orders-user-summary__history-toggle collapsed" data-toggle="collapse" data-target="#orderExtendInline{$wygrane[i].id}" aria-expanded="false" aria-controls="orderExtendInline{$wygrane[i].id}" title="{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}">
+                                                <strong>{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}</strong>
                                                 <i class="fa fa-angle-down" aria-hidden="true"></i>
                                             </button>
                                         {else}
-                                            <strong>{$wygrane[i].provider_name} {$wygrane[i].name}</strong>
+                                            <button type="button" class="orders-user-summary__product-trigger user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" title="{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}"><strong>{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}</strong></button>
                                         {/if}
                                         {if $wygrane[i].payment_waiting_activation || ($wygrane[i].renewal_paid_pending_activation|default:0)}
                                             <span class="orders-user-new-badge orders-user-new-badge--success">{$t.orders_status_payment_confirmed_short|default:'PAID'}</span>
@@ -85,9 +86,6 @@
                                             <span class="orders-user-new-badge">NEW</span>
                                         {/if}
                                     </div>
-                                    {if $wygrane[i].status == 2}
-                                    <span class="btn btn-danger btn-xs text-left d-block d-sm-none">Expiried <i class="fa fa-angle-double-right"></i></span>
-                                    {else}
                                     {if $wygrane[i].payment_waiting_activation}
                                         <div class="orders-user-summary__note orders-user-summary__note--success">
                                             <i class="fa fa-check-circle" aria-hidden="true"></i> {$t.orders_payment_confirmed_waiting_activation|default:'Payment confirmed. Waiting for activation.'}
@@ -97,12 +95,24 @@
                                             <i class="fa fa-check-circle" aria-hidden="true"></i> {$t.orders_payment_confirmed_waiting_extension|default:'Payment confirmed. Waiting for extension.'}
                                         </div>
                                     {/if}
+                                    {if $wygrane[i].status != 2}
                                     {if $wygrane[i].note neq ''}
-                                        <div class="orders-user-summary__note">{$wygrane[i].note}</div>
+                                        <div class="orders-user-summary__note">{$wygrane[i].note|escape:'html'}</div>
                                     {/if}
                                     {if $wygrane[i].link_url neq ''}
                                         <div class="orders-user-summary__note"><i class="fa fa-check text-success" aria-hidden="true"></i> {$t.order_delivery_enabled|default:'m3u enabled'}</div>
                                     {/if}
+                                    {if $wygrane[i].extend}
+                                        <div id="orderExtendInline{$wygrane[i].id}" class="collapse orders-user-summary__extend-list">
+                                            {foreach from=$wygrane[i].extend item=foo}
+                                                <div class="orders-user-summary__extend-item">{$t.orders_extension_entry_prefix|default:'Extend'}: {$foo.date}</div>
+                                            {/foreach}
+                                        </div>
+                                    {/if}
+                                    {/if}
+                                </div>
+                            </td>
+                            <td data-label="{$t.orders_expiry_column|default:'Expires'}" class="orders-user-table__expiry-col">
                                     {if $wygrane[i].status == 1 && $wygrane[i].product_type|default:'subscription' eq 'subscription' && $wygrane[i].progress.has_expiry}
                                         <div class="orders-user-progress">
                                             <div class="orders-user-progress__days orders-user-progress__days--{$wygrane[i].progress.tone|default:'neutral'}">
@@ -125,30 +135,16 @@
                                             </div>
                                         </div>
                                     {/if}
-                                    {if $wygrane[i].extend}
-                                        <div id="orderExtendInline{$wygrane[i].id}" class="collapse orders-user-summary__extend-list">
-                                            {foreach from=$wygrane[i].extend item=foo}
-                                                <div class="orders-user-summary__extend-item">{$t.orders_extension_entry_prefix|default:'Extend'}: {$foo.date}</div>
-                                            {/foreach}
-                                        </div>
-                                    {/if}
-                                    {/if}
-                                </div>
+                                {if $wygrane[i].status == 2}
+                                    <span class="orders-user-expired"><i class="fa fa-clock-o" aria-hidden="true"></i> {$wygrane[i].expiry|default:$t.orders_status_expired|escape:'html'}</span>
+                                {elseif $wygrane[i].status != 1 || !$wygrane[i].progress.has_expiry}
+                                    <span class="orders-user-expiry-empty">{if $wygrane[i].payment_waiting_activation}{$t.orders_status_pending|default:'Pending'}{elseif $wygrane[i].product_type|default:'subscription' neq 'subscription'}—{else}{$t.order_no_expiry|default:'No expiry'}{/if}</span>
+                                {/if}
                             </td>
                             <td data-label="{$t.orders_amount|default:'Amount'}" class="orders-user-table__amount-col">
                                 <div class="orders-user-amount">
                                     <strong class="{if $wygrane[i].status == 1}text-success{elseif $wygrane[i].status == 2}text-danger{else}text-dark{/if}">{$wygrane[i].price_label|default:$wygrane[i].price}</strong>
-                                    {if $wygrane[i].status != 2}
-                                        <i class="{$wygrane[i].status_visual.icon|default:'fa fa-circle'} orders-user-status-icon {$wygrane[i].status_visual.class|default:'orders-status-neutral'}" aria-hidden="true" title="{$t[$wygrane[i].status_visual.label_key]|default:$wygrane[i].status_visual.label|default:'Status'}"></i>
-                                    {/if}
                                 </div>
-                            </td>
-                            <td class="orders-user-table__date-col center hidden-xs hidden-sm hidden-md" data-label="{$t.history_column_date|default:'Date'}">
-                                    {if $wygrane[i].status == 2}
-                                        <span class="badge badge-danger">Expired</span>
-                                    {else}
-                                        {$wygrane[i].created_display}
-                                    {/if}
                             </td>
                             <td data-label="{$t.orders_actions|default:'Actions'}" class="orders-user-table__actions-col">
                                 {if $showPendingPaymentAction}
@@ -161,8 +157,8 @@
                                     <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
                                 </a>
                                 {/if}
-                                <button type="button" class="btn {if $wygrane[i].payment_waiting_activation}btn-dark{elseif $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="Details" style="width: 40px;">
-                                    <i class="fa {if $wygrane[i].payment_waiting_activation}fa-repeat fa-spin{else}fa-search{/if}" aria-hidden="true"></i>
+                                <button type="button" class="btn {if $wygrane[i].payment_waiting_activation}btn-dark{elseif $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="{$t.orders_details_label|default:'Order details'}" title="{$t.orders_details_label|default:'Order details'}" style="width: 40px;">
+                                    <i class="fa {if $wygrane[i].payment_waiting_activation}fa-repeat fa-spin{else}fa-eye{/if}" aria-hidden="true"></i>
                                 </button>
                             </td>
                         </tr>
@@ -212,7 +208,7 @@
                                 </li>
                             {/if}
                             <li role="presentation" class="nav-item">
-                                <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">Details</a>
+                                <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">{$t.orders_tab_details|default:'Details'}</a>
                             </li>
                             {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || $showRenewalPaymentAction)}
                                 <li role="presentation" class="nav-item">
@@ -301,7 +297,7 @@
                                     {/if}
                                     <div>
                                         <label class="form-label">{$t.orders_note|default:'Note'}</label>
-                                        <textarea class="form-control user-order-modal__readonly" rows="3" readonly>{if $wygrane[i].note neq ''}{$wygrane[i].note}{else}{$t.orders_note_empty|default:'No note added.'}{/if}</textarea>
+                                        <textarea class="form-control user-order-modal__readonly" rows="3" readonly>{if $wygrane[i].note neq ''}{$wygrane[i].note|escape:'html'}{else}{$t.orders_note_empty|default:'No note added.'}{/if}</textarea>
                                     </div>
                                     {if $can_pending_payment_actions}
                                         <div class="user-order-modal__danger-action">

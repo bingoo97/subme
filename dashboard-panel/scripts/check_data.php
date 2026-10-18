@@ -27,7 +27,7 @@ if (typeof window.toggleMessengerPanel !== 'function') {
 			$heading.attr('aria-expanded', 'false');
 			$panel.attr('aria-hidden', 'true').removeClass('in is-visible').stop(true, true).slideUp(180);
 			if ($icon && $icon.length) {
-				$icon.removeClass('fa-angle-up').addClass('fa-angle-down');
+				$icon.removeClass('fa-times').addClass('fa-angle-down');
 			}
 			return false;
 		}
@@ -41,7 +41,7 @@ if (typeof window.toggleMessengerPanel !== 'function') {
 			}
 		});
 		if ($icon && $icon.length) {
-			$icon.removeClass('fa-angle-down').addClass('fa-angle-up');
+			$icon.removeClass('fa-angle-down').addClass('fa-times');
 		}
 		return false;
 	};

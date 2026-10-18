@@ -1923,24 +1923,26 @@ if (!function_exists('chat_retention_days')) {
 if (!function_exists('chat_purge_expired_messages')) {
     function chat_purge_expired_messages(Mysql_ks $db, int $retentionHours): void
     {
-        if ($retentionHours < 1) {
-            $retentionHours = 1;
-        }
+        app_run_read_maintenance_once($db, 'chat-retention-' . $retentionHours, 60, static function () use ($db, $retentionHours): void {
+            if ($retentionHours < 1) {
+                $retentionHours = 1;
+            }
 
-        if (function_exists('app_prune_support_chat_messages')) {
-            app_prune_support_chat_messages($db);
-        }
+            if (function_exists('app_prune_support_chat_messages')) {
+                app_prune_support_chat_messages($db);
+            }
 
-        if (function_exists('chat_prune_group_chat_messages')) {
-            chat_prune_group_chat_messages($db);
-        }
+            if (function_exists('chat_prune_group_chat_messages')) {
+                chat_prune_group_chat_messages($db);
+            }
 
-        if (schema_object_exists($db, 'produkty_chat')) {
-            $db->query(
-                "DELETE FROM produkty_chat
-                 WHERE data < DATE_SUB(NOW(), INTERVAL {$retentionHours} HOUR)"
-            );
-        }
+            if (schema_object_exists($db, 'produkty_chat')) {
+                $db->query(
+                    "DELETE FROM produkty_chat
+                     WHERE data < DATE_SUB(NOW(), INTERVAL {$retentionHours} HOUR)"
+                );
+            }
+        });
     }
 }
 

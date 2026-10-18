@@ -48,6 +48,9 @@
 .admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis small{color:#c9d1dd;}
 .admin-dashboard-sales .admin-dashboard-chart__canvas{position:relative;padding:0;min-width:0;isolation:isolate;}
 .admin-dashboard-chart__heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.15rem .35rem .5rem;}
+.admin-dashboard-chart__controls{display:flex;align-items:center;gap:.4rem;margin:0;flex:none;}
+.admin-dashboard-chart__range-select{max-width:100%;min-height:32px;padding:.3rem 1.6rem .3rem .55rem;border:1px solid #e3e9f1;border-radius:7px;background-color:#fff;color:#526177;font-size:.68rem;font-weight:600;cursor:pointer;}
+.admin-dashboard-chart__range-select:focus-visible{outline:2px solid #94a3b8;outline-offset:2px;}
 .admin-dashboard-chart__heading>div{display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;}
 .admin-dashboard-chart__legend{display:inline-flex;align-items:center;gap:.4rem;font-size:.7rem;font-weight:600;color:#526177;}
 .admin-dashboard-chart__legend>span{width:15px;height:3px;border-radius:4px;background:#475569;}
@@ -163,6 +166,8 @@
     .admin-dashboard-sales .admin-dashboard-chart__summary-item strong{font-size:1rem;}
     .admin-dashboard-sales .admin-dashboard-chart__summary-item small{font-size:.62rem;}
     .admin-dashboard-sales .admin-dashboard-chart{padding:.7rem;}
+    .admin-dashboard-chart__heading{flex-wrap:wrap;gap:.5rem;}
+    .admin-dashboard-chart__controls{margin-left:auto;}
     .admin-dashboard-chart__heading>div{gap:.2rem .7rem;}
     .admin-dashboard-chart__range{font-size:.58rem;}
     .admin-dashboard-chart__popover{position:relative;inset:auto!important;width:100%;max-width:none;margin-top:.6rem;box-shadow:none;background:#f8fafc;border-color:#e9edf3;padding:.8rem;}
@@ -201,3 +206,61 @@
     .admin-dashboard-sales .admin-dashboard-sales-summary-table td:last-child::before{margin:0;}
     .admin-dashboard-sales .admin-dashboard-sales-summary-table__product{min-width:0;}
 }
+
+/* Keep the tooltip's existing appearance; only use flow placement when no safe side fits. */
+.admin-dashboard-chart__popover.is-below-plot{position:relative;inset:auto!important;margin:.6rem 0 0 auto;}
+
+/* Notes and release history follow the same compact typography as the sales cards. */
+:is(.admin-dashboard-notes-card,.admin-dashboard-change-log-card).admin-panel-card{padding:1.2rem;border-color:#e9edf3;border-radius:18px;box-shadow:0 4px 18px rgba(24,39,63,.035);}
+:is(.admin-dashboard-notes-card,.admin-dashboard-change-log-card) .admin-panel-card__header{margin-bottom:1rem;}
+:is(.admin-dashboard-notes-card,.admin-dashboard-change-log-card) .admin-panel-card__header h2{margin-bottom:.3rem;color:#263244;font-size:1.02rem;font-weight:650;letter-spacing:-.02em;}
+:is(.admin-dashboard-notes-card,.admin-dashboard-change-log-card) .admin-panel-card__header p{max-width:90ch;color:#7a8495;font-size:.77rem;font-weight:400;line-height:1.65;}
+.admin-dashboard-notes-card .form-label{margin-bottom:.5rem;color:#526176;font-size:.73rem;font-weight:600;}
+.admin-dashboard-notes-card .form-text{color:#8a95a5;font-size:.69rem;line-height:1.6;}
+.admin-dashboard-notes-card .admin-rich-editor{gap:.6rem;}
+.admin-dashboard-notes-card .admin-rich-editor__toolbar{gap:.3rem;padding:.5rem;border-color:#e7ecf2;border-radius:10px;background:#f8fafc;}
+.admin-dashboard-notes-card .admin-rich-editor__toolbar button{min-width:32px;height:32px;border-color:#e3e9f0;border-radius:7px;font-size:.78rem;font-weight:550;}
+.admin-dashboard-notes-card :is(.admin-rich-editor__color,.admin-rich-editor__select){height:32px;border-color:#e3e9f0;border-radius:7px;font-size:.71rem;font-weight:500;}
+.admin-dashboard-notes-card .admin-rich-editor__select{min-width:95px;padding:0 .5rem;}
+.admin-dashboard-notes-card .admin-rich-editor__select--font-size{min-width:70px;}
+.admin-dashboard-notes-card .admin-rich-editor__color{width:35px;min-width:35px;}
+.admin-dashboard-notes-card .admin-rich-editor__toolbar-separator{min-height:32px;}
+.admin-dashboard-notes-card :is(.admin-rich-editor__surface,.admin-rich-editor__source){min-height:320px;padding:1rem;border-color:#e3e9f0;border-radius:10px;box-shadow:none;font-size:.8rem;line-height:1.75;}
+.admin-dashboard-notes-card .admin-rich-editor__surface h1{font-size:1.2rem;}
+.admin-dashboard-notes-card .admin-rich-editor__surface h2{font-size:1.05rem;}
+.admin-dashboard-notes-card .admin-rich-editor__surface h3{font-size:.92rem;}
+.admin-dashboard-notes-card .admin-rich-editor__gallery-actions .btn,
+.admin-dashboard-notes-card [data-admin-personal-notes-save]{padding:.5rem .75rem;border-radius:7px;font-size:.73rem;font-weight:550;}
+.admin-dashboard-notes-card .admin-rich-editor__gallery-actions .btn{gap:.4rem;}
+body.admin-app-page .admin-dashboard-change-log-card .admin-table thead th{padding:.65rem .8rem;border-color:#edf1f5;background:#f8fafc;color:#8a95a5;font-size:.62rem;font-weight:600;letter-spacing:.045em;}
+body.admin-app-page .admin-dashboard-change-log-card .admin-table tbody td{padding:.85rem .8rem;border-color:#edf1f5;color:#68768a;font-size:.76rem;font-weight:400;line-height:1.7;vertical-align:top;}
+.admin-dashboard-change-log-card .admin-table td>strong{color:#526176;font-size:.71rem;font-weight:600;white-space:nowrap;}
+.admin-dashboard-change-log-card .admin-table ul{padding-left:1rem!important;}
+.admin-dashboard-change-log-card .admin-table li+li{margin-top:.4rem;}
+.admin-dashboard-change-log-card .admin-table li::marker{color:#bdc7d4;font-size:.65em;}
+
+.admin-panel-subscription-strip{display:flex;align-items:center;flex-wrap:nowrap;gap:12px;margin:0 0 1rem;padding:12px 16px;border:1px solid #e9edf3;border-radius:12px;background:#fff;box-shadow:0 3px 14px rgba(24,39,63,.025);font-weight:400;}
+.admin-panel-subscription-strip__icon{display:grid;place-items:center;flex:none;width:38px;height:38px;border:1px solid #e9eef5;border-radius:10px;background:#f5f8fb;color:#7b8da3;font-size:1rem;}
+.admin-panel-subscription-strip__content{display:flex;flex:1;flex-direction:column;min-width:0;gap:3px;}
+.admin-panel-subscription-strip__label{color:#8a95a5;font-size:.68rem;font-weight:450;line-height:1.5;}
+.admin-panel-subscription-strip__date{color:#334155;font-size:.91rem;font-weight:650;line-height:1.4;font-variant-numeric:tabular-nums;}
+.admin-panel-subscription-strip__link{display:inline-flex;flex:none;align-items:center;justify-content:center;gap:9px;min-height:34px;padding:7px 11px;border:1px solid #e4eaf1;border-radius:7px;background:#fff;color:#5e6e83;font-size:.69rem;font-weight:550;line-height:1.5;text-decoration:none;}
+.admin-panel-subscription-strip__link:hover{border-color:#ccd7e4;background:#f7f9fc;color:#26374d;text-decoration:none;}
+.admin-panel-subscription-strip__link:focus-visible{outline:2px solid #94a9c1;outline-offset:3px;text-decoration:none;}
+.admin-panel-subscription-strip.is-due .admin-panel-subscription-strip__icon{border-color:#f4e7c9;background:#fffbf2;color:#b58b3e;}
+.admin-panel-subscription-strip.is-due .admin-panel-subscription-strip__date{color:#9d7738;}
+.admin-panel-subscription-strip.is-expired .admin-panel-subscription-strip__icon{border-color:#f3d5da;background:#fff3f4;color:#dc3545;}
+.admin-panel-subscription-strip.is-expired{border-color:#f2d9de;}
+.admin-panel-subscription-strip.is-expired .admin-panel-subscription-strip__date{color:#dc3545;}
+@media(max-width:575px){
+    .admin-panel-subscription-strip{flex-wrap:wrap;gap:10px;padding:12px;border-radius:10px;}
+    .admin-panel-subscription-strip__icon{width:34px;height:34px;border-radius:9px;font-size:.9rem;}
+    .admin-panel-subscription-strip__label{font-size:.66rem;}
+    .admin-panel-subscription-strip__date{font-size:.86rem;}
+    .admin-panel-subscription-strip__link{flex-basis:100%;min-height:38px;}
+}
+.admin-panel-subscription-strip__link.btn-danger{border-color:#dc3545;background:#dc3545;color:#fff;animation:admin-panel-renewal-pulse 2.6s ease-in-out infinite;}
+.admin-panel-subscription-strip__link.btn-danger:hover,
+.admin-panel-subscription-strip__link.btn-danger:focus-visible{border-color:#bb2d3b;background:#bb2d3b;color:#fff;animation:none;}
+.admin-panel-subscription-strip__link.btn-danger:focus-visible{outline-color:#dc3545;}
+@media(prefers-reduced-motion:reduce){.admin-panel-subscription-strip__link.btn-danger{animation:none;transform:none;}}

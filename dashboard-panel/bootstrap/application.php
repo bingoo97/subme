@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/schema.php';
 require_once __DIR__ . '/crypto_runtime.php';
+require_once __DIR__ . '/read_maintenance.php';
 
 if (!function_exists('app_runtime_timezone_name')) {
     function app_runtime_timezone_name() {
@@ -5839,6 +5840,114 @@ function app_order_upsert_pending_renewal(Mysql_ks $db, array $order, array $pro
     ];
 }
 
+/** Reserve a customer's payment; provider activation remains an admin action. */
+function app_pay_order_from_customer_balance(
+    Mysql_ks $db,
+    int $customerId,
+    int $orderId,
+    int $productId,
+    array $settings,
+    string $expectedExpiry,
+    string $ipAddress = ''
+): array {
+    $fail = static fn(string $key): array => ['ok' => false, 'message_key' => $key];
+    if ($customerId <= 0 || $orderId <= 0 || $productId <= 0) return $fail('payment_balance_update_error');
+    app_ensure_customer_balance_runtime_table($db);
+    app_ensure_order_renewal_runtime_columns($db);
+    app_ensure_sales_runtime_columns($db);
+    app_ensure_customer_provider_visibility_runtime_table($db);
+    $key = 'payment:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 16) . ':' . $customerId;
+    $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) return $fail('payment_operation_busy');
+    $transaction = false;
+    try {
+        $customer = $db->select_user("SELECT * FROM customers WHERE id = {$customerId} LIMIT 1");
+        if (!is_array($customer) || !app_customer_is_active($customer) || !app_customer_sales_enabled($customer, $settings)) return $fail('sales_disabled_notice');
+        if (app_find_customer_pending_balance_topup_payment($db, $customerId)) return $fail('payment_operation_busy');
+        if (!$db->query('START TRANSACTION')) return $fail('payment_balance_update_error');
+        $transaction = true;
+        $order = $db->select_user("SELECT orders.*, products.provider_id, products.product_type, products.is_trial AS trial, products.duration_hours
+            FROM orders JOIN products ON products.id = orders.product_id
+            WHERE orders.id = {$orderId} AND orders.customer_id = {$customerId} FOR UPDATE");
+        if (!is_array($order) || empty($order['id'])) throw new RuntimeException('payment_order_unavailable');
+        $renewalFlow = app_order_can_self_extend($order);
+        // An already paid initial order cannot be paid again, even by a stale form.
+        if (!$renewalFlow && (string)$order['payment_status'] === 'paid') {
+            if (!$db->query('COMMIT')) throw new RuntimeException('payment_balance_update_error');
+            $transaction = false;
+            return ['ok' => true, 'already_applied' => true, 'renewal' => false];
+        }
+        if ((string)($order['expires_at'] ?? '') !== $expectedExpiry) throw new RuntimeException('payment_order_changed');
+        if (app_find_customer_paid_pending_activation_order($db, $customerId, $orderId)) throw new RuntimeException('payment_balance_blocked_pending_activation');
+        if ($renewalFlow) {
+            $pending = app_order_find_pending_renewal($db, $orderId);
+            if ($pending) {
+                if ((string)$pending['status'] === 'paid_pending_activation' && (int)$pending['product_id'] === $productId) {
+                    if (!$db->query('COMMIT')) throw new RuntimeException('payment_balance_update_error');
+                    $transaction = false;
+                    return ['ok' => true, 'already_applied' => true, 'renewal' => true];
+                }
+                // Generated bank/crypto requests keep their existing payment workflow.
+                throw new RuntimeException('payment_operation_busy');
+            }
+            if (!app_order_can_open_self_extension_payment($order)) throw new RuntimeException('payment_order_changed');
+        } elseif ((string)$order['status'] !== 'pending_payment' || (string)$order['payment_status'] !== 'unpaid') {
+            throw new RuntimeException('payment_order_unavailable');
+        }
+        $typesSql = app_customer_order_catalog_product_type_sql($db, $customer, $settings);
+        $product = $db->select_user("SELECT products.* FROM products
+            JOIN product_providers ON product_providers.id = products.provider_id
+            WHERE products.id = {$productId} AND products.is_active = 1 AND product_providers.is_active = 1
+              AND products.product_type IN ({$typesSql})
+              " . app_customer_provider_visibility_sql($db, $customerId, 'products.provider_id') . " LIMIT 1");
+        if (!is_array($product) || empty($product['id'])
+            || (int)$product['provider_id'] !== (int)$order['provider_id']
+            || (string)$product['product_type'] !== (string)$order['product_type']
+            || (!empty($product['is_trial']) && empty($settings['active_trials']) && empty($settings['trials_enabled']))) {
+            throw new RuntimeException('payment_choose_package_error');
+        }
+        $amount = round((float)$product['price_amount'], 2);
+        if (!is_finite($amount) || $amount <= 0) throw new RuntimeException('payment_balance_unavailable');
+        $renewalId = 0;
+        if ($renewalFlow) {
+            $prepared = app_order_upsert_pending_renewal($db, $order, $product, 'Paid from customer balance; awaiting manual provider extension');
+            if (empty($prepared['ok'])) throw new RuntimeException('payment_balance_update_error');
+            $renewalId = (int)$prepared['renewal_id'];
+        }
+        $debit = app_apply_customer_balance_runtime_event($db, $customerId, $amount, 'debit',
+            $renewalFlow ? 'order_extension' : 'order_activation',
+            $renewalFlow ? 'renewal:balance:' . $renewalId : (string)$orderId,
+            'Paid from customer balance for order #' . $orderId, 'customer', 0, $ipAddress, true);
+        if (empty($debit['ok'])) throw new RuntimeException(($debit['message'] ?? '') === 'Customer balance is too low for this action.'
+            ? 'payment_balance_too_low' : 'payment_balance_update_error');
+        // Never turn an unrelated, historical reservation into a second purchase.
+        if (!empty($debit['already_applied'])) throw new RuntimeException('payment_order_changed');
+        if ($renewalFlow) {
+            $saved = $db->update_using_id(['status','paid_at','payment_request_type','payment_request_id'],
+                ['paid_pending_activation',date('Y-m-d H:i:s'),'balance',null], 'order_renewals', $renewalId);
+        } else {
+            $expiry = app_product_type_uses_expiry($product['product_type'])
+                ? app_subscription_expiry_from_base_timestamp(time(), max(1, (int)$product['duration_hours'])) : null;
+            $saved = $db->update_using_id(['product_id','total_amount','currency_id','expires_at','payment_method','payment_status','fulfillment_status','paid_at','status'],
+                [$productId,$amount,(int)$product['currency_id'],$expiry,'balance','paid','pending',date('Y-m-d H:i:s'),'pending_payment'], 'orders', $orderId);
+            if ($saved && schema_object_exists($db, 'order_status_events')) {
+                $saved = $db->insert(['order_id','old_status','new_status','event_note'],
+                    [$orderId,(string)$order['status'],'pending_payment','Payment confirmed from customer balance'], 'order_status_events');
+            }
+        }
+        if (!$saved || !$db->query('COMMIT')) throw new RuntimeException('payment_balance_update_error');
+        $transaction = false;
+        return ['ok' => true, 'already_applied' => false, 'renewal' => $renewalFlow];
+    } catch (Throwable $exception) {
+        if ($transaction) $db->query('ROLLBACK');
+        $allowed = ['payment_order_unavailable','payment_order_changed','payment_balance_blocked_pending_activation','payment_operation_busy',
+            'payment_choose_package_error','payment_balance_update_error','payment_balance_unavailable','payment_balance_too_low'];
+        return $fail(in_array($exception->getMessage(), $allowed, true) ? $exception->getMessage() : 'payment_balance_update_error');
+    } finally {
+        $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($key) . "') released");
+    }
+}
+
 function app_order_attach_renewal_payment_request(Mysql_ks $db, int $renewalId, string $paymentRequestType, int $paymentRequestId): void
 {
     if ($renewalId <= 0 || $paymentRequestId <= 0 || !schema_object_exists($db, 'order_renewals')) {
@@ -6435,6 +6544,15 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
              AFTER admin_panel_subscription_paid_until"
         );
         schema_forget_column_cache('app_settings', 'admin_panel_subscription_renewal_url');
+    }
+
+    if (!schema_column_exists($db, 'app_settings', 'admin_panel_subscription_notified_until')) {
+        @$db->query("ALTER TABLE app_settings ADD COLUMN admin_panel_subscription_notified_until DATE DEFAULT NULL AFTER admin_panel_subscription_renewal_url");
+        schema_forget_column_cache('app_settings', 'admin_panel_subscription_notified_until');
+    }
+    if (schema_object_exists($db, 'outbound_email_queue') && !schema_column_exists($db, 'outbound_email_queue', 'dedupe_key')) {
+        @$db->query("ALTER TABLE outbound_email_queue ADD COLUMN dedupe_key VARCHAR(191) DEFAULT NULL, ADD UNIQUE KEY uniq_outbound_email_dedupe (dedupe_key)");
+        schema_forget_column_cache('outbound_email_queue', 'dedupe_key');
     }
 
     if (!schema_column_exists($db, 'app_settings', 'history_cleanup_enabled')) {
@@ -7737,29 +7855,83 @@ function app_customer_order_catalog_mode(array $customer, array $settings = []):
     return $types[0] ?? 'subscription';
 }
 
-function app_panel_subscription_is_expired(array $settings): bool
+/** The paid date is inclusive, in the application's runtime timezone. Invalid/unset dates do not suspend a site. */
+function app_panel_subscription_paid_until_timestamp(array $settings): ?int
 {
     $paidUntil = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
-    if ($paidUntil === '') {
-        return false;
+    if (!preg_match('/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/D', $paidUntil, $parts)
+        || !checkdate((int)$parts[2], (int)$parts[3], (int)$parts[1])) {
+        return null;
     }
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $paidUntil, new DateTimeZone(app_runtime_timezone_name()));
+    return $date !== false ? $date->setTime(23, 59, 59)->getTimestamp() : null;
+}
 
-    $paidUntilTimestamp = strtotime($paidUntil . ' 23:59:59');
-    return $paidUntilTimestamp !== false && $paidUntilTimestamp < time();
+function app_panel_subscription_is_expired(array $settings, ?int $now = null): bool
+{
+    $paidUntilTimestamp = app_panel_subscription_paid_until_timestamp($settings);
+    return $paidUntilTimestamp !== null && $paidUntilTimestamp < ($now ?? time());
+}
+
+/** Queue once per expiry and active administrator. Delivery stays in the existing email worker. */
+function app_queue_panel_subscription_expired_emails(Mysql_ks $db, array $settings): bool
+{
+    $date = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
+    if (!app_panel_subscription_is_expired($settings) || empty($settings['maintenance_mode'])) return false;
+    if ((string)($settings['admin_panel_subscription_notified_until'] ?? '') === $date) return true;
+    if (!schema_object_exists($db, 'admin_users') || !schema_object_exists($db, 'outbound_email_queue')
+        || !schema_column_exists($db, 'outbound_email_queue', 'dedupe_key')
+        || !schema_column_exists($db, 'app_settings', 'admin_panel_subscription_notified_until')) return false;
+    $locale = app_normalize_email_locale((string)($settings['default_locale_code'] ?? 'en'));
+    $pl = $locale === 'pl';
+    $escape = static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+    $siteName = trim((string)($settings['site_name'] ?? 'Subme'));
+    $subject = app_email_subject(($pl ? 'Przerwa techniczna — wygasło opłacenie panelu: ' : 'Maintenance enabled — panel subscription expired: ') . $siteName);
+    $subject = function_exists('mb_substr') ? mb_substr($subject, 0, 191) : substr($subject, 0, 191);
+    $label = date('d.m.Y', (int)app_panel_subscription_paid_until_timestamp($settings));
+    $body = '<h2>' . ($pl ? 'Strona klienta jest w przerwie technicznej' : 'The customer site is under maintenance') . '</h2>'
+        . '<p>' . ($pl ? 'Opłacony okres dostępu do panelu administratora zakończył się ' : 'The paid admin panel subscription ended on ') . '<strong>' . $escape($label) . '</strong>.</p>'
+        . '<p>' . ($pl ? 'System automatycznie włączył przerwę techniczną (ON). Panel administratora pozostaje dostępny.' : 'The system automatically enabled maintenance mode (ON). The admin panel remains accessible.') . '</p>'
+        . '<p>' . ($pl ? 'Po odnowieniu opłacenia panelu i zaktualizowaniu daty ważności wyłącz przerwę techniczną w ustawieniach, aby ponownie udostępnić stronę klientom.' : 'After renewing and updating the paid-until date, turn off maintenance in settings to reopen the customer site.') . '</p>';
+    $renewalUrl = trim((string)($settings['admin_panel_subscription_renewal_url'] ?? ''));
+    if (in_array(strtolower((string)parse_url($renewalUrl, PHP_URL_SCHEME)), ['https', 'http'], true)) {
+        $body .= '<p><a href="' . $escape($renewalUrl) . '">' . ($pl ? 'Przejdź do płatności' : 'Go to payment') . '</a></p>';
+    }
+    $body = app_email_wrap_html($settings, $body, $locale);
+    $recipients = $db->select_full_user("SELECT id, email FROM admin_users WHERE status = 'active' ORDER BY id");
+    if ($recipients === false) return false;
+    $safeDate = $db->escape($date);
+    foreach ((array)$recipients as $recipient) {
+        $email = strtolower(trim((string)($recipient['email'] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) continue;
+        $key = 'panel-expired:' . $date . ':admin:' . (int)$recipient['id'];
+        // The unique key survives page refreshes, concurrency and partial retries. No nested transaction/SMTP here.
+        $queued = $db->query("INSERT INTO outbound_email_queue (to_email, subject, body_html, status, scheduled_at, dedupe_key)
+            SELECT '" . $db->escape($email) . "', '" . $db->escape($subject) . "', '" . $db->escape($body) . "', 'pending', NOW(), '" . $db->escape($key) . "'
+            FROM app_settings WHERE id = 1 AND maintenance_mode = 1 AND admin_panel_subscription_paid_until = '{$safeDate}'
+            ON DUPLICATE KEY UPDATE dedupe_key = outbound_email_queue.dedupe_key");
+        if (!$queued) return false;
+    }
+    return (bool)$db->query("UPDATE app_settings SET admin_panel_subscription_notified_until = '{$safeDate}'
+        WHERE id = 1 AND maintenance_mode = 1 AND admin_panel_subscription_paid_until = '{$safeDate}'
+        AND (admin_panel_subscription_notified_until IS NULL OR admin_panel_subscription_notified_until <> '{$safeDate}')");
 }
 
 function app_enforce_panel_subscription_maintenance(Mysql_ks $db, array $settings): array
 {
-    if (!app_panel_subscription_is_expired($settings) || !empty($settings['maintenance_mode'])) {
+    if (!app_panel_subscription_is_expired($settings)) {
         return $settings;
     }
-
-    if (schema_object_exists($db, 'app_settings') && schema_column_exists($db, 'app_settings', 'maintenance_mode')) {
-        @$db->update_using_id(['maintenance_mode'], [1], 'app_settings', 1);
-        $settings['maintenance_mode'] = 1;
-        $settings['technical_break'] = 1;
+    // Persist ON once, so the admin switch and the customer-facing site agree.
+    if (empty($settings['maintenance_mode']) && schema_object_exists($db, 'app_settings') && schema_column_exists($db, 'app_settings', 'maintenance_mode')) {
+        @$db->query("UPDATE app_settings SET maintenance_mode = 1 WHERE id = 1 AND maintenance_mode <> 1");
     }
-
+    // Enforce this request even if persistence is temporarily unavailable.
+    $settings['maintenance_mode'] = 1;
+    $settings['technical_break'] = 1;
+    if (app_queue_panel_subscription_expired_emails($db, $settings)) {
+        $settings['admin_panel_subscription_notified_until'] = $settings['admin_panel_subscription_paid_until'];
+    }
     return $settings;
 }
 
@@ -9428,18 +9600,29 @@ function app_sync_builtin_email_templates(Mysql_ks $db, bool $overwriteExisting 
         return;
     }
 
+    $existingTemplates = [];
+    foreach ($db->select_full_user('SELECT id, template_key FROM email_templates') as $row) {
+        $existingTemplates[(string)$row['template_key']] = $row;
+    }
+    $hasTranslations = schema_object_exists($db, 'email_template_translations');
+    $existingTranslations = [];
+    if ($hasTranslations) {
+        foreach ($db->select_full_user('SELECT id, template_id, locale_code FROM email_template_translations') as $row) {
+            $existingTranslations[(int)$row['template_id']][(string)$row['locale_code']] = $row;
+        }
+    }
+    $localizedTemplates = [];
+    foreach (app_supported_email_locales() as $localeCode) {
+        $localizedTemplates[$localeCode] = app_email_builtin_templates_localized($localeCode);
+    }
+    $activeKeys = array_fill_keys(app_email_active_template_keys(), true);
+
     foreach (app_email_builtin_templates() as $templateKey => $meta) {
-        if (!in_array($templateKey, app_email_active_template_keys(), true)) {
+        if (!isset($activeKeys[$templateKey])) {
             continue;
         }
 
-        $safeKey = $db->escape($templateKey);
-        $existing = $db->select_user(
-            "SELECT id
-             FROM email_templates
-             WHERE template_key = '{$safeKey}'
-             LIMIT 1"
-        );
+        $existing = $existingTemplates[$templateKey] ?? null;
 
         if (is_array($existing) && !empty($existing['id'])) {
             $templateId = (int)$existing['id'];
@@ -9472,25 +9655,17 @@ function app_sync_builtin_email_templates(Mysql_ks $db, bool $overwriteExisting 
             $templateId = (int)$db->id();
         }
 
-        if ($templateId <= 0 || !schema_object_exists($db, 'email_template_translations')) {
+        if ($templateId <= 0 || !$hasTranslations) {
             continue;
         }
 
         foreach (app_supported_email_locales() as $localeCode) {
-            $localized = app_email_builtin_templates_localized($localeCode);
-            $localizedMeta = $localized[$templateKey] ?? null;
+            $localizedMeta = $localizedTemplates[$localeCode][$templateKey] ?? null;
             if (!is_array($localizedMeta)) {
                 continue;
             }
 
-            $safeLocale = $db->escape($localeCode);
-            $existingTranslation = $db->select_user(
-                "SELECT id
-                 FROM email_template_translations
-                 WHERE template_id = {$templateId}
-                   AND locale_code = '{$safeLocale}'
-                 LIMIT 1"
-            );
+            $existingTranslation = $existingTranslations[$templateId][$localeCode] ?? null;
 
             if (is_array($existingTranslation) && !empty($existingTranslation['id'])) {
                 if ($overwriteExisting) {
@@ -12497,7 +12672,8 @@ function app_apply_customer_balance_runtime_event(
     string $note,
     string $actorType = 'system',
     int $adminUserId = 0,
-    string $ipAddress = ''
+    string $ipAddress = '',
+    bool $joinTransaction = false
 ): array
 {
     $amount = round($amount, 2);
@@ -12526,7 +12702,9 @@ function app_apply_customer_balance_runtime_event(
     $safeSourceType = $db->escape($sourceType);
     $safeSourceKey = $db->escape($sourceKey);
 
-    $db->query('START TRANSACTION');
+    if (!$joinTransaction && !$db->query('START TRANSACTION')) {
+        return ['ok' => false, 'message' => 'Unable to start balance operation.'];
+    }
 
     $customerRow = $db->select_user(
         "SELECT id, balance_amount
@@ -12536,7 +12714,7 @@ function app_apply_customer_balance_runtime_event(
     );
 
     if (!is_array($customerRow) || empty($customerRow['id'])) {
-        $db->query('ROLLBACK');
+        if (!$joinTransaction) $db->query('ROLLBACK');
         return ['ok' => false, 'message' => 'Customer not found.'];
     }
 
@@ -12550,7 +12728,7 @@ function app_apply_customer_balance_runtime_event(
     );
 
     if (is_array($existingEvent) && !empty($existingEvent['id'])) {
-        $db->query('COMMIT');
+        if (!$joinTransaction) $db->query('COMMIT');
         return [
             'ok' => true,
             'already_applied' => true,
@@ -12561,7 +12739,7 @@ function app_apply_customer_balance_runtime_event(
     $currentBalance = round((float)($customerRow['balance_amount'] ?? 0), 2);
     $delta = round($amount, 2);
     if ($direction === 'debit' && $currentBalance + 0.00001 < $delta) {
-        $db->query('ROLLBACK');
+        if (!$joinTransaction) $db->query('ROLLBACK');
         return ['ok' => false, 'message' => 'Customer balance is too low for this action.'];
     }
 
@@ -12577,7 +12755,7 @@ function app_apply_customer_balance_runtime_event(
     );
 
     if (!$updated) {
-        $db->query('ROLLBACK');
+        if (!$joinTransaction) $db->query('ROLLBACK');
         return ['ok' => false, 'message' => 'Unable to update customer balance.'];
     }
 
@@ -12597,11 +12775,11 @@ function app_apply_customer_balance_runtime_event(
     );
 
     if (!$inserted) {
-        $db->query('ROLLBACK');
+        if (!$joinTransaction) $db->query('ROLLBACK');
         return ['ok' => false, 'message' => 'Unable to save customer balance event.'];
     }
 
-    $db->query('COMMIT');
+    if (!$joinTransaction) $db->query('COMMIT');
 
     $description = ($direction === 'debit' ? 'Balance debited automatically: ' : 'Balance credited automatically: ')
         . number_format($delta, 2, '.', '');
@@ -13162,7 +13340,11 @@ function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $
 
         $_SESSION['customer_login_state_needs_sync'] = 0;
         $_SESSION['customer_login_state_customer_id'] = $customerId;
-        $_SESSION['customer_last_seen_touch_ts'] = $currentTimestamp;
+        // Keep the time of the database touch, not the latest poll, or frequent
+        // requests postpone the next presence update forever.
+        if ($needsLoginSync || $shouldTouchLastSeen) {
+            $_SESSION['customer_last_seen_touch_ts'] = $currentTimestamp;
+        }
         return;
     }
 

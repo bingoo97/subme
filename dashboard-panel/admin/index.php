@@ -173,7 +173,9 @@ if ($adminUser === null) {
     exit;
 }
 
-app_delete_stale_unpaid_orders($db);
+app_run_read_maintenance_once($db, 'stale-unpaid-orders', 60, static function () use ($db): void {
+    app_delete_stale_unpaid_orders($db);
+});
 
 $paymentFilterCustomerId = 0;
 $paymentScope = 'open';
@@ -3094,6 +3096,9 @@ if ($route === 'orders') {
         if (!admin_csrf_is_valid($_POST['_csrf'] ?? '')) {
             $pageAlert = admin_t($messages, 'login_error', 'Login failed. Check your credentials.');
             $pageAlertType = 'danger';
+        } elseif (!isset($_POST['extend_expected_expires_at'], $_POST['extend_expected_renewal_id'])) {
+            $pageAlert = admin_t($messages, 'order_extend_stale_form', 'Refresh this page before extending the order.');
+            $pageAlertType = 'warning';
         } else {
             $requestedExtendedExpiry = trim((string)($_POST['extend_predicted_expiry'] ?? ''));
             $extendResult = admin_extend_order(
@@ -3101,9 +3106,12 @@ if ($route === 'orders') {
                 (int)($_POST['order_id'] ?? 0),
                 (int)($_POST['extend_product_id'] ?? 0),
                 (string)($_POST['extend_charge_balance'] ?? '1') !== '0',
-                $requestedExtendedExpiry
+                $requestedExtendedExpiry,
+                (string)$_POST['extend_expected_expires_at'],
+                (int)$_POST['extend_expected_renewal_id']
             );
-            $pageAlert = (string)($extendResult['message'] ?? admin_t($messages, 'order_extend_error', 'Unable to extend subscription.'));
+            $extendMessageKey = trim((string)($extendResult['message_key'] ?? ''));
+            $pageAlert = $extendMessageKey !== '' ? admin_t($messages, $extendMessageKey, (string)($extendResult['message'] ?? '')) : (string)($extendResult['message'] ?? admin_t($messages, 'order_extend_error', 'Unable to extend subscription.'));
             $pageAlertType = !empty($extendResult['ok']) ? 'success' : 'danger';
         }
     }
@@ -4817,6 +4825,7 @@ if ($route === 'payments') {
                     'wallet_address_compact' => $acceptedOrderWalletAddress !== '' ? admin_compact_wallet_address($acceptedOrderWalletAddress, 8, 5) : '',
                     'wallet_explorer_url' => $acceptedOrderWalletAddress !== '' ? admin_crypto_wallet_explorer_url($acceptedOrderWalletAssetCode, $acceptedOrderWalletNetworkCode, $acceptedOrderWalletAddress) : '',
                     'wallet_label' => $acceptedOrderWalletLabel,
+                    'task_html' => admin_topbar_order_tasks_html([$acceptedOrderRow], 1, $messages),
                 ];
             } else {
                 $fallbackOrderRow = admin_order_find($db, $acceptedOrderId);
@@ -5078,7 +5087,8 @@ if ($route === 'dashboard') {
         $metrics = ['active_customers' => (int)($activeCustomers['total'] ?? 0)];
         $dashboardSubscriptionStatusCounts = admin_dashboard_subscription_status_counts($db);
         $dashboardPeriodMetrics = admin_dashboard_period_metrics($db);
-        $dashboardSalesSeries = admin_dashboard_sales_series($db, 30);
+        $dashboardSalesDays = admin_dashboard_sales_chart_days($_GET['dashboard_sales_days'] ?? null);
+        $dashboardSalesSeries = admin_dashboard_sales_series($db, $dashboardSalesDays);
         $dashboardMonthlySalesSeries = admin_dashboard_monthly_sales_series($db, 12);
         $dashboardYearlySalesSeries = admin_dashboard_yearly_sales_series($db, 6);
         $dashboardSalesYearOptions = admin_dashboard_sales_year_options($db);
@@ -5229,9 +5239,10 @@ $pageIntroMap = [
 ];
 
 $adminTopbarPayments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($appSettings), 8);
-$adminTopbarOrders = admin_topbar_notification_order_rows($db, 8);
+$adminCanViewOrderTasks = admin_user_can_access_route($adminUser, 'orders');
+$adminTopbarOrders = $adminCanViewOrderTasks ? admin_topbar_notification_order_rows($db, 8) : [];
 $adminSidebarPaymentAlertCount = (int)(admin_payment_summary($db, 0, admin_bank_transfers_enabled($appSettings))['open_total'] ?? 0);
-$adminSidebarOrderAlertCount = admin_topbar_notification_order_count($db);
+$adminSidebarOrderAlertCount = $adminCanViewOrderTasks ? admin_topbar_notification_order_count($db) : 0;
 $adminTopbarAutoAcceptedPayments = admin_topbar_notification_auto_accepted_crypto_payment_rows($db, 5, 24);
 $adminTopbarNewCustomers = admin_topbar_notification_new_customer_rows($db, 5);
 $adminTopbarExpiringSubscriptions = admin_topbar_notification_expiring_subscription_data($db, 8, 24);
@@ -5242,7 +5253,11 @@ $bankAccountPoolUnavailable = false;
 if (admin_bank_transfers_enabled($appSettings)) {
     $bankAccountPoolUnavailable = !app_available_bank_account_rows($db, $adminDefaultCurrencyCode, $appSettings);
 }
-$adminTopbarNotificationsCount = admin_topbar_notification_count($db, $appSettings);
+$adminTopbarNotificationsCount = count($adminTopbarPayments)
+    + $adminSidebarOrderAlertCount
+    + count($adminTopbarAutoAcceptedPayments)
+    + (!empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? 1 : 0)
+    + (!empty($adminTopbarBackupNotice['show']) ? 1 : 0);
 if ($cryptoWalletPoolDepleted) {
     $adminTopbarNotificationsCount++;
 }
@@ -5419,7 +5434,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             <?php endif; ?>
                         </button>
 
-                        <div class="admin-topbar-flyout admin-topbar-notifications" id="adminTopbarNotifications" data-admin-topbar-flyout hidden data-topbar-no-payments-text="<?php echo admin_e(admin_t($messages, 'topbar_notifications_no_payments', 'No pending payments right now.')); ?>" data-topbar-order-paid-text="<?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?>" data-topbar-open-order-text="<?php echo admin_e(admin_t($messages, 'topbar_open_order', 'Open order')); ?>" data-topbar-open-order-inline-text="<?php echo admin_e(admin_t($messages, 'topbar_open_order_inline', 'order')); ?>" data-topbar-open-payment-inline-text="<?php echo admin_e(admin_t($messages, 'topbar_open_payment_inline', 'payment')); ?>" data-topbar-open-payment-joiner-text="<?php echo admin_e(admin_t($messages, 'topbar_open_payment_joiner_inline', 'or')); ?>" data-topbar-order-created-text="<?php echo admin_e(admin_t($messages, 'topbar_pending_order_created_message', 'paid and is waiting for approval. Click to open')); ?>" data-topbar-accept-error-text="<?php echo admin_e(admin_t($messages, 'payment_save_error', 'Unable to save payment request.')); ?>">
+                        <div class="admin-topbar-flyout admin-topbar-notifications" id="adminTopbarNotifications" data-admin-topbar-flyout hidden data-topbar-no-payments-text="<?php echo admin_e(admin_t($messages, 'topbar_notifications_no_payments', 'No pending payments right now.')); ?>" data-topbar-order-paid-text="<?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?>" data-topbar-open-order-text="<?php echo admin_e(admin_t($messages, 'topbar_open_order', 'Open order')); ?>" data-topbar-open-order-inline-text="<?php echo admin_e(admin_t($messages, 'topbar_open_order_inline', 'order')); ?>" data-topbar-open-payment-inline-text="<?php echo admin_e(admin_t($messages, 'topbar_open_payment_inline', 'payment')); ?>" data-topbar-open-payment-joiner-text="<?php echo admin_e(admin_t($messages, 'topbar_open_payment_joiner_inline', 'or')); ?>" data-topbar-order-created-text="<?php echo admin_e(admin_t($messages, 'topbar_pending_order_created_message', 'Payment confirmed. Waiting for fulfillment.')); ?>" data-topbar-accept-error-text="<?php echo admin_e(admin_t($messages, 'payment_save_error', 'Unable to save payment request.')); ?>">
                             <div class="admin-topbar-flyout__header">
                                 <div>
                                     <strong><?php echo admin_e(admin_t($messages, 'topbar_notifications_title', 'Pending notifications')); ?></strong>
@@ -5433,6 +5448,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                             </div>
 
                             <div class="admin-topbar-notifications__body">
+                                <?php echo admin_topbar_order_tasks_html($adminTopbarOrders, $adminSidebarOrderAlertCount, $messages); ?>
                                 <?php if ($cryptoWalletPoolDepleted): ?>
                                     <section class="admin-topbar-notifications__section">
                                         <div class="admin-topbar-notifications__section-head">
@@ -5577,14 +5593,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <?php echo admin_e(admin_t($messages, 'payment_topup_info', 'The user did not add an order. They only want to top up their account balance.')); ?>
                                                             </div>
                                                         <?php endif; ?>
-                                                        <p>
+                                                        <div class="admin-topbar-notifications__payment-identity">
                                                             <?php if ($paymentPublicHandle !== ''): ?>
                                                                 <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$paymentCustomerId); ?>" class="admin-topbar-notifications__payment-handle"><?php echo admin_e('@' . $paymentPublicHandle); ?></a>
                                                                 <span class="admin-topbar-notifications__payment-email"><?php echo admin_e((string)($paymentRow['customer_email'] ?? '')); ?></span>
                                                             <?php else: ?>
                                                                 <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$paymentCustomerId); ?>" class="admin-topbar-notifications__payment-email"><?php echo admin_e((string)($paymentRow['customer_email'] ?? '')); ?></a>
                                                             <?php endif; ?>
-                                                            ·
+                                                        </div>
+                                                        <p class="admin-topbar-notifications__payment-meta">
                                                             <span class="admin-topbar-notifications__amount"><?php echo admin_e($paymentAmountLabel); ?></span>
                                                             <?php if ($paymentRequestedLabel !== ''): ?>
                                                                 ·
@@ -5657,83 +5674,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <?php endif; ?>
                                 </section>
 
-                                <section class="admin-topbar-notifications__section" data-admin-topbar-orders-section<?php echo !$adminTopbarOrders ? ' hidden' : ''; ?>>
-                                    <div class="admin-topbar-notifications__section-head">
-                                        <span><?php echo admin_e(admin_t($messages, 'topbar_pending_orders', 'Pending orders')); ?></span>
-                                        <?php if (count($adminTopbarOrders) > 0): ?>
-                                            <span class="admin-status-pill admin-status-pill--warning" data-admin-topbar-orders-count><?php echo admin_e((string)count($adminTopbarOrders)); ?></span>
-                                        <?php endif; ?>
-                                    </div>
 
-                                    <?php if ($adminTopbarOrders): ?>
-                                        <div class="admin-topbar-notifications__list" data-admin-topbar-orders-list>
-                                            <?php foreach ($adminTopbarOrders as $orderRow): ?>
-                                                <?php
-                                                $orderRowId = (int)($orderRow['id'] ?? 0);
-                                                $orderCustomerId = (int)($orderRow['customer_id'] ?? 0);
-                                                $orderDisplay = (string)($orderRow['customer_email'] ?? '');
-                                                $orderHandle = trim((string)($orderRow['public_handle'] ?? ''));
-                                                $orderHandleLabel = $orderHandle !== '' ? '@' . ltrim($orderHandle, '@') : '';
-                                                $orderStatusVisual = admin_order_status_visual((array)$orderRow);
-                                                $orderCryptoPaymentId = (int)($orderRow['crypto_payment_id'] ?? 0);
-                                                $orderBankPaymentId = (int)($orderRow['bank_payment_id'] ?? 0);
-                                                $orderWalletAddress = trim((string)($orderRow['wallet_address'] ?? ''));
-                                                $orderWalletLabel = trim((string)($orderRow['wallet_label'] ?? ''));
-                                                $orderWalletAssetCode = trim((string)($orderRow['wallet_asset_code'] ?? ''));
-                                                $orderWalletNetworkCode = trim((string)($orderRow['wallet_network_code'] ?? ''));
-                                                $orderWalletExplorerUrl = $orderWalletAddress !== ''
-                                                    ? admin_crypto_wallet_explorer_url($orderWalletAssetCode, $orderWalletNetworkCode, $orderWalletAddress)
-                                                    : '';
-                                                $orderWalletCompact = $orderWalletAddress !== ''
-                                                    ? admin_compact_wallet_address($orderWalletAddress, 8, 5)
-                                                    : '';
-                                                $orderPaymentUrl = $orderCryptoPaymentId > 0
-                                                    ? '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId
-                                                    : ($orderBankPaymentId > 0
-                                                        ? '/admin/?page=payments&payment_type=bank&payment_id=' . $orderBankPaymentId
-                                                        : '');
-                                                ?>
-                                                <article class="admin-topbar-notifications__item admin-topbar-notifications__item--compact admin-topbar-notifications__item--order">
-                                                    <div class="admin-topbar-notifications__order-visual" aria-hidden="true">
-                                                        <i class="<?php echo admin_e((string)($orderStatusVisual['icon'] ?? 'bi bi-arrow-repeat')); ?> admin-order-status-icon <?php echo admin_e((string)($orderStatusVisual['class'] ?? 'admin-order-status-icon--awaiting-activation')); ?>"></i>
-                                                    </div>
-                                                    <div class="admin-topbar-notifications__item-main">
-                                                        <?php if ($orderCustomerId > 0): ?>
-                                                            <div class="admin-topbar-notifications__order-identity">
-                                                                <?php if ($orderHandleLabel !== ''): ?>
-                                                                    <a class="admin-topbar-notifications__order-handle" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>"><?php echo admin_e($orderHandleLabel); ?></a>
-                                                                <?php endif; ?>
-                                                                <?php if ($orderDisplay !== ''): ?>
-                                                                    <a class="admin-topbar-notifications__order-email" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>"><?php echo admin_e($orderDisplay); ?></a>
-                                                                <?php endif; ?>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                        <p>
-                                                            <?php echo admin_e(admin_t($messages, 'topbar_pending_order_created_message', 'created a new order and it is waiting for approval.')); ?>
-                                                            <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$orderRowId); ?>"><?php echo admin_e(admin_t($messages, 'topbar_open_order_inline', 'order')); ?></a>
-                                                            <?php if ($orderPaymentUrl !== ''): ?>
-                                                                <span><?php echo admin_e(admin_t($messages, 'topbar_open_payment_joiner_inline', 'or')); ?></span>
-                                                                <a href="<?php echo admin_e($orderPaymentUrl); ?>"><?php echo admin_e(admin_t($messages, 'topbar_open_payment_inline', 'payment')); ?></a>
-                                                            <?php endif; ?>
-                                                        </p>
-                                                        <?php if ($orderWalletCompact !== '' && $orderWalletExplorerUrl !== ''): ?>
-                                                            <div class="admin-topbar-notifications__wallet-row">
-                                                                <a class="admin-topbar-notifications__wallet-link" href="<?php echo admin_e($orderWalletExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e($orderWalletAddress); ?>">
-                                                                    <code><?php echo admin_e($orderWalletCompact); ?></code>
-                                                                </a>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                        <?php if ($orderWalletLabel !== ''): ?>
-                                                            <div class="admin-topbar-notifications__wallet-meta">
-                                                                <span class="admin-status-pill admin-status-pill--assigned"><?php echo admin_e($orderWalletLabel); ?></span>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                </article>
-                                            <?php endforeach; ?>
-                                        </div>
-                                    <?php endif; ?>
-	                                </section>
 
                                 <?php if ($adminTopbarAutoAcceptedPayments): ?>
                                     <section class="admin-topbar-notifications__section">
@@ -6908,7 +6849,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 </div>
             </div>
 
-            <main class="admin-content<?php echo !in_array($route, ['dashboard', 'products'], true) ? ' admin-content--table-polish' : ''; ?>">
+            <main class="admin-content admin-content--<?php echo admin_e($route); ?><?php echo !in_array($route, ['dashboard', 'products'], true) ? ' admin-content--table-polish' : ''; ?><?php echo in_array($route, ['products', 'bank-accounts', 'crypto-wallets', 'cryptocurrencies', 'news', 'pages', 'email-templates', 'faq', 'help', 'settings', 'live-chat'], true) ? ' admin-content--workspace-polish' : ''; ?>">
                 <?php if ($pageAlert !== ''): ?>
                     <div class="alert alert-<?php echo admin_e($pageAlertType); ?> admin-page-alert"><?php echo $pageAlertHtml !== '' ? $pageAlertHtml : admin_e($pageAlert); ?></div>
                 <?php endif; ?>
@@ -6975,47 +6916,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                     </section>
 
                     <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')) !== ''): ?>
-                    <div class="admin-panel-subscription-strip">
-                        <span class="admin-panel-subscription-strip__label">
-                            <?php echo admin_e(admin_t($messages, 'admin_panel_subscription_strip_label', 'Panel Admina opłacony do')); ?>:
-                        </span>
-                        <span class="admin-panel-subscription-strip__date"><?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['paid_until_label']); ?></span>
+                    <aside class="admin-panel-subscription-strip<?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['is_expired']) ? ' is-expired' : (!empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? ' is-due' : ''); ?>">
+                        <span class="admin-panel-subscription-strip__icon" aria-hidden="true"><i class="bi <?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['is_expired']) ? 'bi-calendar-x' : (!empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? 'bi-exclamation-triangle' : 'bi-calendar2-check'); ?>"></i></span>
+                        <div class="admin-panel-subscription-strip__content">
+                            <span class="admin-panel-subscription-strip__label"><?php echo admin_e(admin_t($messages, 'admin_panel_subscription_strip_label', 'Panel Admina opłacony do')); ?></span>
+                            <time class="admin-panel-subscription-strip__date" datetime="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until'] ?? '')); ?>"><?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['paid_until_label']); ?></time>
+                        </div>
                         <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['renewal_url'] ?? '')) !== ''): ?>
-                            <span aria-hidden="true">-</span>
-                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="admin-panel-subscription-strip__link">
+                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn admin-panel-subscription-strip__link<?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['show']) ? ' btn-danger is-urgent' : ''; ?>">
                                 <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?>
-                                <span aria-hidden="true">&gt;</span>
+                                <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
                             </a>
                         <?php endif; ?>
-                    </div>
+                    </aside>
                     <?php endif; ?>
-
-                    <section class="admin-panel-card admin-orders-workflow-card">
-                        <div class="admin-orders-workflow">
-                            <div class="admin-orders-workflow__intro">
-                                <strong><?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?></strong>
-                                <span><?php echo admin_e(admin_t($messages, 'orders_workflow_subtitle', 'Follow these steps to complete the order.')); ?></span>
-                            </div>
-                            <div class="admin-orders-workflow__steps" aria-label="<?php echo admin_e(admin_t($messages, 'orders_workflow_title', 'Order flow')); ?>">
-                                <div class="admin-orders-workflow__step">
-                                    <span class="admin-orders-workflow__dot">1</span>
-                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=payments"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_payment_accept', 'Accept the payment')); ?></a></span>
-                                </div>
-                                <div class="admin-orders-workflow__step">
-                                    <span class="admin-orders-workflow__dot">2</span>
-                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=payments"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_order_confirm', 'Confirm payment on the order')); ?></a></span>
-                                </div>
-                                <div class="admin-orders-workflow__step">
-                                    <span class="admin-orders-workflow__dot">3</span>
-                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=orders"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_provider_extend', 'Extend the package in Dashboard URL')); ?></a></span>
-                                </div>
-                                <div class="admin-orders-workflow__step">
-                                    <span class="admin-orders-workflow__dot">4</span>
-                                    <span class="admin-orders-workflow__label"><a href="/admin/?page=orders"><?php echo admin_e(admin_t($messages, 'orders_workflow_step_complete', 'Change order status to completed')); ?></a></span>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
 
                     <section class="admin-panel-card admin-panel-card--wide admin-dashboard-sales">
                         <div class="admin-panel-card__header">
@@ -7127,13 +7041,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <div class="admin-dashboard-chart">
                                         <div class="admin-dashboard-chart__summary">
                                             <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
-                                                <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_total_revenue', 'Revenue 30d')); ?></span>
+                                                <span><?php echo admin_e(sprintf(admin_t($messages, 'dashboard_chart_range_revenue', 'Revenue · %d days'), $dashboardSalesDays)); ?></span>
                                                 <strong><?php echo admin_e(admin_dashboard_revenue_label(admin_dashboard_revenue_sum($dashboardSalesSeries), $adminDefaultCurrencyCode)); ?></strong>
                                                 <small><?php echo admin_e((string)$chartTotalOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
                                             </div>
                                             <div class="admin-dashboard-chart__summary-item">
                                                 <span><?php echo admin_e(admin_t($messages, 'dashboard_chart_average_day', 'Avg/day')); ?></span>
-                                                <strong><?php echo admin_e(number_format($chartAverageOrders, 1, '.', '')); ?></strong>
+                                                <strong><?php echo admin_e(number_format($chartAverageOrders, $chartAverageOrders > 0 && $chartAverageOrders < 0.1 ? 2 : 1, '.', '')); ?></strong>
                                                 <small><?php echo admin_e(admin_t($messages, 'dashboard_chart_last_day', 'Latest day') . ': ' . $chartLatestLabel); ?></small>
                                             </div>
                                             <div class="admin-dashboard-chart__summary-item">
@@ -7155,7 +7069,18 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <span class="admin-dashboard-chart__legend"><span aria-hidden="true"></span><?php echo admin_e(admin_t($messages, 'dashboard_tooltip_sales', 'Sales')); ?></span>
                                                     <span class="admin-dashboard-chart__range"><?php echo admin_e(date('d.m.Y', strtotime($dashboardSalesSeries[0]['date'])) . ' – ' . date('d.m.Y', strtotime($chartLatestSeriesRow['date']))); ?></span>
                                                 </div>
-                                                <span class="admin-dashboard-chart__interval"><?php echo admin_e(admin_t($messages, 'dashboard_chart_daily_interval', 'Daily')); ?></span>
+                                                <form method="get" action="#adminDashboardTrendPane" class="admin-dashboard-chart__controls">
+                                                    <input type="hidden" name="page" value="dashboard">
+                                                    <input type="hidden" name="dashboard_sales_view" value="trend">
+                                                    <input type="hidden" name="dashboard_sales_year" value="<?php echo (int)$dashboardSalesYearFilter; ?>">
+                                                    <label class="visually-hidden" for="dashboard_sales_days"><?php echo admin_e(admin_t($messages, 'dashboard_chart_range_label', 'Chart period')); ?></label>
+                                                    <select id="dashboard_sales_days" name="dashboard_sales_days" class="admin-dashboard-chart__range-select" onchange="this.form.submit()">
+                                                        <?php foreach ([30, 90, 365] as $chartDaysOption): ?>
+                                                            <option value="<?php echo $chartDaysOption; ?>"<?php echo $dashboardSalesDays === $chartDaysOption ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'dashboard_chart_range_' . $chartDaysOption, $chartDaysOption . ' days')); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                    <span class="admin-dashboard-chart__interval"><?php echo admin_e(admin_t($messages, 'dashboard_chart_daily_interval', 'Daily')); ?></span>
+                                                </form>
                                             </div>
                                             <svg viewBox="0 0 640 252" role="group" aria-label="<?php echo admin_e(admin_t($messages, 'dashboard_sales_chart_title', 'Sales trend')); ?>" data-sales-plot>
                                                 <defs>
@@ -7497,6 +7422,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     <form method="get" class="admin-dashboard-summary-toolbar">
                                         <input type="hidden" name="page" value="dashboard">
                                         <input type="hidden" name="dashboard_sales_view" value="summary">
+                                        <input type="hidden" name="dashboard_sales_days" value="<?php echo (int)$dashboardSalesDays; ?>">
                                         <label class="admin-dashboard-summary-toolbar__label" for="dashboard_sales_year_filter"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_filter_label', 'Rok')); ?></label>
                                         <select class="form-select admin-dashboard-summary-toolbar__select" id="dashboard_sales_year_filter" name="dashboard_sales_year" onchange="this.form.submit()">
                                             <option value="0"><?php echo admin_e(admin_t($messages, 'dashboard_sales_summary_filter_all', 'Wszystkie lata')); ?></option>
@@ -8737,6 +8663,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $orderExpirySortDirection,
                                         $orderIdSortDirection
                                     );
+                                    $orderBalancePaymentContexts = [];
                                     foreach ($orderRows as $orderRowIndex => $orderRowData) {
                                         $pendingRenewalContext = admin_order_pending_renewal_context($db, (array)$orderRowData);
                                         $orderRows[$orderRowIndex]['pending_renewal_id'] = (int)($pendingRenewalContext['renewal_id'] ?? 0);
@@ -8752,6 +8679,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $orderRows[$orderRowIndex]['pending_renewal_customer_balance'] = (float)($pendingRenewalContext['customer_balance'] ?? 0);
                                         $orderRows[$orderRowIndex]['pending_renewal_customer_balance_label'] = (string)($pendingRenewalContext['customer_balance_label'] ?? '');
                                         $orderRows[$orderRowIndex]['has_paid_pending_renewal'] = !empty($pendingRenewalContext['has_paid_pending_activation']) ? 1 : 0;
+                                        $orderRows[$orderRowIndex]['pending_renewal_balance_reserved'] = !empty($pendingRenewalContext['balance_reserved']);
                                     }
                                     $openOrderCount = 0;
                                     $completedOrderCount = 0;
@@ -8809,21 +8737,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $orderIdSortUrl = '/admin/?' . http_build_query($orderIdSortParams);
 	                                    ?>
 		                                    <div class="admin-section-actions admin-orders-actions">
-		                                        <div class="admin-orders-actions__buttons">
-		                                            <a href="/admin/?page=payments" class="btn btn-outline-default">
-		                                                <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
-		                                                <span><?php echo admin_e(admin_t($messages, 'order_go_to_payments', 'Go to payments')); ?></span>
-		                                            </a>
-		                                            <a href="/admin/?page=crypto-wallets" class="btn btn-outline-default">
-		                                                <i class="bi bi-wallet2" aria-hidden="true"></i>
-		                                                <span><?php echo admin_e(admin_t($messages, 'order_add_wallet', 'Add wallet')); ?></span>
-		                                            </a>
-		                                            <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark">
-		                                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
-		                                                <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
-		                                            </a>
-		                                        </div>
-			                                        <?php if (!$orderHasFocusedFilter): ?>
+                                            <a href="/admin/?page=orders&amp;view=create" class="btn btn-dark admin-orders-add">
+                                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                <span><?php echo admin_e(admin_t($messages, 'order_add_new', 'Add new')); ?></span>
+                                            </a>
+                                            <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-expanded="false" aria-controls="adminOrdersPageActions" aria-label="<?php echo admin_e(admin_t($messages, 'orders_more_actions', 'More order options')); ?>">
+                                                <i class="bi bi-three-dots" aria-hidden="true"></i>
+                                            </button>
+                                            <div id="adminOrdersPageActions" class="admin-orders-menu" data-admin-orders-menu hidden>
+                                                <a href="/admin/?page=payments" class="admin-orders-menu__item"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'order_go_to_payments', 'Go to payments')); ?></span></a>
+                                                <a href="/admin/?page=crypto-wallets" class="admin-orders-menu__item"><i class="bi bi-wallet2" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'order_add_wallet', 'Add wallet')); ?></span></a>
+                                                <?php if (!$orderHasFocusedFilter): ?>
 			                                        <label class="admin-orders-guidance-toggle" for="adminOrdersGuidanceToggle">
 			                                            <span class="admin-orders-guidance-toggle__label"><?php echo admin_e(admin_t($messages, 'orders_guidance_toggle', 'Pokaż wskazówki')); ?></span>
 			                                            <span class="admin-orders-guidance-toggle__switch">
@@ -8832,15 +8756,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 			                                            </span>
 			                                        </label>
 			                                        <?php endif; ?>
-			                                        <label class="admin-orders-guidance-toggle" for="adminOrdersSimpleTableToggle">
-			                                            <span class="admin-orders-guidance-toggle__label"><?php echo admin_e(admin_t($messages, 'orders_simple_table_toggle', 'Prosta tabela')); ?></span>
-			                                            <span class="admin-orders-guidance-toggle__switch">
-				                                                <input type="checkbox" id="adminOrdersSimpleTableToggle" data-admin-orders-table-view-toggle role="switch" aria-checked="true" aria-controls="adminOrdersOpenTableDefault adminOrdersOpenTableSimple adminOrdersCompletedTableDefault adminOrdersCompletedTableSimple" checked>
-			                                                <span aria-hidden="true"></span>
-			                                            </span>
-			                                        </label>
-			                                    </div>
-		                                    <?php if (!$orderHasFocusedFilter): ?>
+                                            </div>
+                                        </div>
+                                        <?php if (!$orderHasFocusedFilter): ?>
 		                                    <section class="admin-panel-card admin-orders-workflow-card" id="adminOrdersWorkflowCard">
 	                                        <div class="admin-orders-workflow">
 	                                            <div class="admin-orders-workflow__intro">
@@ -8874,268 +8792,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                    <?php endif; ?>
 	                                    <?php if (!$orderHasFocusedFilter || $openOrderCount > 0): ?>
 	                                    <div class="admin-orders-header-row d-flex align-items-center justify-content-between gap-3 mt-4 mb-1">
-	                                        <h3 class="mb-0 admin-orders-table-title"><?php echo admin_e(admin_t($messages, 'orders_open_table_title', 'Otwarte zamówienia')); ?></h3>
+	                                        <h3 id="adminOrdersOpenHeading" class="mb-0 admin-orders-table-title"><?php echo admin_e(admin_t($messages, 'orders_open_table_title', 'Otwarte zamówienia')); ?></h3>
 	                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$openOrderCount); ?></span>
 	                                    </div>
 	                                    <?php endif; ?>
 	                                    <?php if ($openOrderCount > 0): ?>
-	                                        <div class="table-responsive" id="adminOrdersOpenTableDefault" data-admin-orders-view="default">
-	                                            <table class="table admin-table admin-orders-table align-middle">
-                                                <thead>
-                                                    <tr>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
-                                                        <th class="admin-orders-table__date-col d-none d-xl-table-cell"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
-                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($orderRows as $row): ?>
-                                                        <?php
-                                                        $orderId = (int)$row['id'];
-                                                        $orderTitle = admin_order_product_title($row, $messages);
-                                                        $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
-                                                        $orderStatusVisual = admin_order_status_visual($row);
-                                                        $orderProgress = admin_order_progress_data($row);
-                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
-                                                        $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
-                                                        $orderCreatedIsToday = admin_is_current_day_datetime((string)($row['created_at'] ?? ''));
-                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
-                                                        $orderWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
-                                                        $orderWalletLabel = trim((string)($row['wallet_label'] ?? ''));
-                                                        $orderWalletEditUrl = ($orderPaymentStatusRaw === 'paid' && $orderWalletAddressId > 0 && $orderWalletLabel !== '')
-                                                            ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $orderWalletAddressId
-                                                            : '';
-                                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
-                                                        $orderCryptoPaymentStatus = strtolower(trim((string)($row['crypto_payment_status'] ?? '')));
-                                                        $orderBankPaymentId = (int)($row['bank_payment_id'] ?? 0);
-                                                        $orderBankPaymentStatus = strtolower(trim((string)($row['bank_payment_status'] ?? '')));
-                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
-                                                        $orderOpenPaymentDetailsUrl = '';
-                                                        $orderHasOpenPaymentRequest = false;
-                                                        $orderRowStatus = (string)($row['status'] ?? '');
-                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
-                                                        if (
-                                                            $orderPaymentStatusRaw === 'unpaid'
-                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true)
-                                                        ) {
-                                                            if ($orderCryptoPaymentId > 0 && in_array($orderCryptoPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
-                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId;
-                                                                $orderHasOpenPaymentRequest = true;
-                                                            } elseif ($orderBankPaymentId > 0 && in_array($orderBankPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
-                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=bank&payment_id=' . $orderBankPaymentId;
-                                                                $orderHasOpenPaymentRequest = true;
-                                                            }
-                                                        }
-                                                        $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
-                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
-                                                            && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
-                                                            && !$isPendingRenewalAwaitingExtension;
-                                                        $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
-                                                            && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
-                                                            && !in_array(strtolower(trim($orderRowStatus)), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
-                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
-                                                        $isFreshUnpaidOrder = $orderPaymentStatusRaw === 'unpaid'
-                                                            && !$orderHasOpenPaymentRequest
-                                                            && !$hasRecentBalanceTopupForOrder
-                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true);
-                                                        if ($isCompletedPaidOrder) {
-                                                            $orderDetailsButtonClass = 'btn-success';
-                                                        } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isPendingRenewalAwaitingExtension) {
-                                                            $orderDetailsButtonClass = 'btn-primary';
-                                                        } elseif ($isFreshUnpaidOrder) {
-                                                            $orderDetailsButtonClass = 'btn-outline-default';
-                                                        } else {
-                                                            $orderDetailsButtonClass = 'btn-dark';
-                                                        }
-                                                        $orderDetailsHintLabel = admin_t($messages, 'order_details_toggle', 'Show details');
-                                                        $showOrderDetailsEditHint = false;
-                                                        if ($isCompletedPaidOrder) {
-                                                            $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
-                                                            $orderDetailsButtonIcon = 'bi bi-check-circle-fill';
-                                                        } elseif ($isPendingRenewalAwaitingExtension) {
-                                                            $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_extend', 'Click to extend');
-                                                            $orderDetailsButtonIcon = 'bi bi-arrow-repeat';
-                                                        } elseif ($isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder) {
-                                                            $orderDetailsButtonLabel = admin_t($messages, 'order_click_to_approve', 'Click to approve');
-                                                            $orderDetailsButtonIcon = 'bi bi-check2-circle';
-                                                        } elseif ($isFreshUnpaidOrder) {
-                                                            $orderDetailsButtonLabel = admin_t($messages, 'enum_pending_payment', 'Awaiting payment');
-                                                            $orderDetailsButtonIcon = 'bi bi-hourglass-split';
-                                                        } else {
-                                                            $orderDetailsButtonLabel = $orderDetailsHintLabel;
-                                                            $orderDetailsButtonIcon = 'bi bi-search';
-                                                            $showOrderDetailsEditHint = true;
-                                                        }
-                                                        if ($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isPendingRenewalAwaitingExtension) {
-                                                            $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
-                                                        } elseif ($isFreshUnpaidOrder) {
-                                                            $orderLeadingIcon = 'bi bi-plus-lg text-dark';
-                                                        } else {
-                                                            $orderLeadingIcon = 'bi bi-credit-card text-success';
-                                                        }
-                                                        $showOrderAmountStatusIcon = !$isFreshUnpaidOrder;
-                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
-                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
-                                                        $orderCustomerEmailShort = $orderCustomerEmail !== ''
-                                                            ? admin_string_truncate($orderCustomerEmail, 20)
-                                                            : '';
-                                                        $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
-                                                            ? '@' . $orderCustomerHandleLabel
-                                                            : $orderCustomerEmail;
-                                                        $extendProducts = $orderProductsByProvider[(int)($row['provider_id'] ?? 0)] ?? [];
-                                                        $modalId = 'adminOrderModal' . $orderId;
-                                                        $tabInfoId = 'adminOrderInfoTab' . $orderId;
-                                                        $tabExtendId = 'adminOrderExtendTab' . $orderId;
-                                                        ?>
-                                                        <?php if (!$isCompletedPaidOrder): ?>
-                                                        <tr>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
-                                                                <span class="d-inline-flex align-items-center justify-content-center w-100" title="#<?php echo admin_e((string)$row['id']); ?>">
-                                                                    <i class="<?php echo admin_e($orderLeadingIcon); ?> fs-3" aria-hidden="true"></i>
-                                                                </span>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
-                                                                <div class="admin-order-summary">
-	                                                                    <div class="admin-order-summary__title-row">
-	                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
-                                                                            <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
-                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
-                                                                                <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
-                                                                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
-                                                                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password'); ?>
-                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
-                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
-                                                                                </span>
-                                                                            <?php endif; ?>
-	                                                                        <?php if ($isAwaitingActivationOrder): ?>
-                                                                            <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_paid_badge', 'PAID')); ?></span>
-                                                                        <?php elseif ($hasRecentBalanceTopupForOrder): ?>
-                                                                            <span class="admin-order-new-badge admin-order-new-badge--success"><?php echo admin_e(admin_t($messages, 'order_balance_paid_badge', 'BALANCE TOPPED UP')); ?></span>
-                                                                        <?php elseif ($isPendingOrder): ?>
-                                                                            <span class="admin-order-new-badge">NEW</span>
-                                                                        <?php endif; ?>
-                                                                    </div>
-                                                                    <?php if ((string)($row['status'] ?? '') === 'expired'): ?>
-                                                                        <span class="btn btn-danger btn-xs text-left d-block d-sm-none"><?php echo admin_e(admin_t($messages, 'enum_expired', 'Expired')); ?> <i class="fa fa-angle-double-right" aria-hidden="true"></i></span>
-                                                                    <?php endif; ?>
-                                                                    <div class="admin-order-summary__customer-row">
-                                                                        <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
-                                                                            <?php echo admin_e($orderCustomerPrimaryLabel); ?>
-                                                                        </a>
-                                                                        <?php if ($orderCustomerEmail !== ''): ?>
-                                                                            <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
-                                                                                <?php echo admin_e($orderCustomerEmailShort); ?>
-                                                                            </span>
-                                                                        <?php endif; ?>
-                                                                    </div>
-                                                                    <div class="admin-order-summary__created d-xl-none<?php echo $orderCreatedIsToday ? ' admin-order-summary__created--today' : ''; ?>">
-                                                                        <span><?php echo admin_e($orderCreatedLabel); ?></span>
-                                                                        <?php if ($orderWalletEditUrl !== ''): ?>
-                                                                            <a href="<?php echo admin_e($orderWalletEditUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
-                                                                                <?php echo admin_e($orderWalletLabel); ?>
-                                                                            </a>
-                                                                        <?php endif; ?>
-                                                                    </div>
-                                                                    <?php if ($isPendingRenewalAwaitingExtension): ?>
-                                                                        <div class="admin-order-summary__note admin-order-summary__note--success">
-                                                                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e(admin_t($messages, 'order_waiting_extension', 'Payment confirmed. Waiting for extension.')); ?></span>
-                                                                        </div>
-                                                                    <?php elseif ($isAwaitingActivationOrder): ?>
-                                                                        <div class="admin-order-summary__note admin-order-summary__note--success">
-                                                                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e(admin_t($messages, 'order_waiting_activation', 'Payment confirmed. Waiting for activation.')); ?></span>
-                                                                        </div>
-                                                                    <?php elseif ($hasRecentBalanceTopupForOrder): ?>
-                                                                        <div class="admin-order-summary__note admin-order-summary__note--success">
-                                                                            <i class="bi bi-wallet2" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e(admin_t($messages, 'order_balance_recent_topup_message', 'The customer has just topped up their account balance.')); ?></span>
-                                                                        </div>
-                                                                    <?php elseif ((string)($row['status'] ?? '') === 'active' && $usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
-                                                                        <div class="admin-order-progress">
-                                                                            <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
-                                                                                <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
-                                                                            </div>
-                                                                            <div class="admin-order-progress__track">
-                                                                                <div class="admin-order-progress__meta">
-                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
-                                                                                    <?php if (!empty($row['expires_at'])): ?>
-                                                                                        <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
-                                                                                    <?php else: ?>
-                                                                                        <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
-                                                                                    <?php endif; ?>
-                                                                                </div>
-                                                                                <div class="admin-order-progress__bar">
-                                                                                    <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
-                                                                                </div>
-                                                                            </div>
-                                                                        </div>
-                                                                    <?php endif; ?>
-                                                                    <?php $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? '')); ?>
-                                                                    <?php if ($orderVisibleSupportNote !== ''): ?>
-                                                                        <div class="admin-order-summary__note admin-order-summary__note--warning">
-                                                                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                                                            <span><?php echo nl2br(admin_e($orderVisibleSupportNote)); ?></span>
-                                                                        </div>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                            <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
-                                                                <div class="admin-order-amount">
-                                                                    <strong class="<?php echo (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--expired' ? 'text-danger' : ((string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending' ? 'text-dark' : 'text-success'); ?>"><?php echo admin_e($orderAmountLabel); ?></strong>
-                                                                    <?php if ((string)($row['delivery_link'] ?? '') !== '' && !empty($row['delivery_link_visible'])): ?>
-                                                                        <span><?php echo admin_e(admin_t($messages, 'order_delivery_enabled', 'URL enabled')); ?></span>
-                                                                    <?php endif; ?>
-                                                                    <?php if ($showOrderAmountStatusIcon): ?>
-                                                                        <i class="<?php echo admin_e($orderStatusVisual['icon']); ?> admin-order-status-icon <?php echo admin_e($orderStatusVisual['class']); ?>" aria-hidden="true" title="<?php echo admin_e($orderStatusVisual['label']); ?>"></i>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                            <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
-                                                                <div class="admin-order-date-meta">
-                                                                    <span class="<?php echo $orderCreatedIsToday ? 'text-danger fw-bold' : ''; ?>"><?php echo admin_e($orderCreatedLabel); ?></span>
-                                                                    <?php if ($orderWalletEditUrl !== ''): ?>
-                                                                        <a href="<?php echo admin_e($orderWalletEditUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
-                                                                            <?php echo admin_e($orderWalletLabel); ?>
-                                                                        </a>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                <div class="admin-order-row__actions">
-                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="<?php echo admin_e($orderDetailsButtonLabel); ?>">
-                                                                        <i class="bi bi-search admin-order-row__mobile-icon" aria-hidden="true"></i>
-                                                                        <?php if (!($isCompletedPaidOrder || $isAwaitingActivationOrder || $hasRecentBalanceTopupForOrder || $isFreshUnpaidOrder)): ?>
-                                                                            <i class="bi bi-search me-1 admin-order-row__desktop-icon" aria-hidden="true"></i>
-                                                                        <?php endif; ?>
-                                                                        <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
-                                                                    </button>
-                                                                    <?php if ($showOrderDetailsEditHint || $orderDetailsButtonLabel === $orderDetailsHintLabel): ?>
-                                                                        <p class="admin-order-row__details-hint"><?php echo admin_e(admin_t($messages, 'order_click_edit_order_hint', 'Click to edit order details.')); ?></p>
-                                                                    <?php endif; ?>
-                                                                    <?php if ($orderHasOpenPaymentRequest && $orderOpenPaymentDetailsUrl !== ''): ?>
-                                                                        <a href="<?php echo admin_e($orderOpenPaymentDetailsUrl); ?>" class="btn btn-primary btn-sm w-100" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?>">
-                                                                            <i class="bi bi-receipt me-1" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e(admin_t($messages, 'payment_action_payment_details', 'Payment details')); ?></span>
-                                                                        </a>
-                                                                    <?php elseif (!$isCompletedPaidOrder && !$isFreshUnpaidOrder && trim((string)($row['dashboard_url'] ?? '')) !== ''): ?>
-                                                                        <a href="<?php echo admin_e((string)$row['dashboard_url']); ?>" class="btn btn-warning btn-sm w-100" target="_blank" rel="noopener noreferrer" aria-label="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
-                                                                            <i class="bi bi-play-btn me-1" aria-hidden="true"></i>
-                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
-                                                                        </a>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                        </tr>
-                                                        <?php endif; ?>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-		                                            </table>
-		                                        </div>
-		                                        <div class="table-responsive" id="adminOrdersOpenTableSimple" data-admin-orders-view="simple" hidden>
+	                                        <div class="table-responsive admin-orders-table-scroll" id="adminOrdersOpenTableSimple" tabindex="0" role="region" aria-labelledby="adminOrdersOpenHeading">
 		                                            <table class="table admin-table admin-orders-table admin-orders-simple-table align-middle">
 		                                                <thead>
 		                                                    <tr>
@@ -9158,7 +8820,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 			                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
 			                                                        $orderRowStatus = strtolower(trim((string)($row['status'] ?? '')));
 			                                                        $orderFulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
-			                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
+			                                                        $orderBalancePaymentContext = ($orderBalancePaymentContexts[(int)$row['id']] ??= admin_order_balance_payment_context($db, $row));
 			                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
 			                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
 	                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
@@ -9181,9 +8843,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                                            && !in_array($orderFulfillmentStatusRaw, ['delivered', 'fulfilled', 'completed'], true)
 	                                                            && !in_array($orderRowStatus, ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
 	                                                        $isOrderPaymentApproved = $orderPaymentStatusRaw === 'paid';
-	                                                        $orderProviderDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
-			                                                        $showProviderQuickButton = $isOrderPaymentApproved && !$isCompletedPaidOrder && $orderProviderDashboardUrl !== '';
-			                                                        $orderDetailsButtonClass = ($isOrderPaymentApproved && !$isCompletedPaidOrder) ? 'btn-success admin-orders-simple-table__icon-btn--paid' : 'btn-dark';
+			                                                        $orderDetailsButtonClass = ($isOrderPaymentApproved && !$isCompletedPaidOrder && !in_array($orderRowStatus, ['cancelled', 'refunded', 'failed', 'inactive', 'archived'], true) && ($orderRowStatus !== 'expired' || $isPendingRenewalAwaitingExtension)) ? 'btn btn-warning admin-orders-details--awaiting' : '';
 			                                                        $orderCustomerId = (int)($row['customer_id'] ?? 0);
 		                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
 		                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
@@ -9203,7 +8863,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>">
 		                                                                <div class="admin-order-summary">
 	                                                                        <div class="admin-order-summary__title-row">
-	                                                                        <strong class="<?php echo admin_e($orderProductClass); ?>"><?php echo admin_e($orderTitle); ?></strong>
+	                                                                        <button type="button" class="admin-orders-title <?php echo admin_e($orderProductClass); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e($orderTitle); ?>" aria-label="<?php echo admin_e($orderTitle . ' — ' . admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details') . ' #' . $orderId); ?>"><?php echo admin_e($orderTitle); ?></button>
                                                                             <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
                                                                             <?php if ($orderDeliveryLinkMode !== ''): ?>
                                                                                 <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
@@ -9244,37 +8904,34 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                                            </td>
 		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
 			                                                                <div class="admin-orders-simple-table__notes">
-				                                                                    <?php if ($showProviderQuickButton): ?>
-			                                                                        <a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="btn btn-warning btn-xs admin-orders-simple-table__provider-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
-			                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
-			                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
-			                                                                        </a>
-			                                                                    <?php endif; ?>
-				                                                                    <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : (!$showProviderQuickButton ? '<span class="admin-orders-simple-table__empty">-</span>' : ''); ?></div>
+
+				                                                                    <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : '<span class="admin-orders-simple-table__empty">-</span>'; ?></div>
 			                                                                </div>
 			                                                            </td>
 		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
 		                                                                <div class="admin-orders-simple-table__actions">
-			                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-xs admin-orders-simple-table__icon-btn" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>">
-			                                                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+			                                                                    <button type="button" class="admin-orders-details admin-orders-simple-table__icon-btn <?php echo admin_e($orderDetailsButtonClass); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>">
+			                                                                        <i class="bi bi-eye" aria-hidden="true"></i>
 			                                                                    </button>
-		                                                                    <button type="button" class="btn btn-primary btn-xs admin-orders-simple-table__icon-btn" data-admin-copy-value="<?php echo admin_e($orderCustomerHandleLabel); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandleLabel === '' ? ' disabled' : ''; ?>>
+                                                                        <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-expanded="false" aria-controls="adminOrderActions<?php echo (int)$orderId; ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_row_more_actions', 'More actions for order') . ' #' . $orderId); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                                                                        <div id="adminOrderActions<?php echo (int)$orderId; ?>" class="admin-orders-menu" data-admin-orders-menu hidden>
+		                                                                    <button type="button" class="admin-orders-menu__item admin-orders-menu__item--label" data-admin-copy-value="<?php echo admin_e($orderCustomerHandleLabel); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandleLabel === '' ? ' disabled' : ''; ?>>
 		                                                                        <i class="bi bi-clipboard" aria-hidden="true"></i>
 		                                                                    </button>
-		                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
+		                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
 		                                                                        <i class="bi bi-person" aria-hidden="true"></i>
 		                                                                    </a>
-			                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+			                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
 			                                                                        <i class="bi bi-card-list" aria-hidden="true"></i>
 			                                                                    </a>
 			                                                                    <form method="post" class="admin-orders-simple-table__delete-form">
 			                                                                        <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
 			                                                                        <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
-			                                                                        <button type="submit" class="btn btn-danger btn-xs admin-orders-simple-table__icon-btn" name="admin_delete_order" title="<?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');">
+			                                                                        <button type="submit" class="admin-orders-menu__item admin-orders-menu__item--label admin-orders-menu__item--danger" name="admin_delete_order" title="<?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_delete_button', 'Delete order')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');">
 			                                                                            <i class="bi bi-trash" aria-hidden="true"></i>
 			                                                                        </button>
 			                                                                    </form>
-			                                                                </div>
+			                                                                </div></div>
 			                                                            </td>
 		                                                        </tr>
 		                                                    <?php endforeach; ?>
@@ -9295,7 +8952,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                    </div>
 	                                    <?php endif; ?>
 	                                    <div class="admin-orders-header-row d-flex align-items-center justify-content-between gap-3 mt-4 mb-1">
-	                                        <h3 class="mb-0 admin-orders-table-title">
+	                                        <h3 id="adminOrdersCompletedHeading" class="mb-0 admin-orders-table-title">
                                                 <?php echo admin_e($orderIsExpiredFiltered
                                                     ? admin_t($messages, 'orders_expired_table_title', 'Expired orders')
                                                     : admin_t($messages, 'orders_completed_table_title', 'Completed orders')); ?>
@@ -9303,177 +8960,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$completedOrderCount); ?></span>
 	                                    </div>
                                     <?php if ($completedOrderCount > 0): ?>
-	                                        <div class="table-responsive" id="adminOrdersCompletedTableDefault" data-admin-orders-view="default">
-	                                            <table class="table admin-table admin-orders-table align-middle">
-                                                <thead>
-                                                    <tr>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></th>
-                                                        <th><?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?></th>
-                                                        <th class="admin-orders-table__date-col d-none d-xl-table-cell"><?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?></th>
-                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
-                                                    </tr>
-                                                </thead>
-	                                                <tbody data-admin-completed-orders-body data-sort-direction="<?php echo admin_e($orderExpirySortDirection); ?>">
-                                                    <?php foreach ($orderRows as $row): ?>
-                                                        <?php
-                                                        $orderId = (int)$row['id'];
-                                                        $orderTitle = admin_order_product_title($row, $messages);
-                                                        $orderAmountLabel = admin_format_money_value($row['total_amount'] ?? 0, (string)($row['currency_code'] ?? ''));
-                                                        $orderStatusVisual = admin_order_status_visual($row);
-                                                        $orderProgress = admin_order_progress_data($row);
-                                                        $usesSubscriptionTiming = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
-                                                        $orderCreatedLabel = admin_compact_datetime_label((string)($row['created_at'] ?? ''));
-                                                        $orderCreatedIsToday = admin_is_current_day_datetime((string)($row['created_at'] ?? ''));
-                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
-                                                        $orderWalletAddressId = (int)($row['wallet_address_id'] ?? 0);
-                                                        $orderWalletLabel = trim((string)($row['wallet_label'] ?? ''));
-                                                        $orderWalletEditUrl = ($orderPaymentStatusRaw === 'paid' && $orderWalletAddressId > 0 && $orderWalletLabel !== '')
-                                                            ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . $orderWalletAddressId
-                                                            : '';
-                                                        $orderCryptoPaymentId = (int)($row['crypto_payment_id'] ?? 0);
-                                                        $orderCryptoPaymentStatus = strtolower(trim((string)($row['crypto_payment_status'] ?? '')));
-                                                        $orderBankPaymentId = (int)($row['bank_payment_id'] ?? 0);
-                                                        $orderBankPaymentStatus = strtolower(trim((string)($row['bank_payment_status'] ?? '')));
-                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
-                                                        $orderOpenPaymentDetailsUrl = '';
-                                                        $orderHasOpenPaymentRequest = false;
-                                                        $orderRowStatus = (string)($row['status'] ?? '');
-                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
-                                                        if (
-                                                            $orderPaymentStatusRaw === 'unpaid'
-                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true)
-                                                        ) {
-                                                            if ($orderCryptoPaymentId > 0 && in_array($orderCryptoPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
-                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=crypto&payment_id=' . $orderCryptoPaymentId;
-                                                                $orderHasOpenPaymentRequest = true;
-                                                            } elseif ($orderBankPaymentId > 0 && in_array($orderBankPaymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true)) {
-                                                                $orderOpenPaymentDetailsUrl = '/admin/?page=payments&payment_type=bank&payment_id=' . $orderBankPaymentId;
-                                                                $orderHasOpenPaymentRequest = true;
-                                                            }
-                                                        }
-                                                        $isPendingOrder = (string)($orderStatusVisual['class'] ?? '') === 'admin-order-status-icon--pending';
-                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
-                                                            && in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed', 'shipped', 'sent'], true)
-                                                            && in_array(strtolower(trim((string)($row['status'] ?? ''))), ['active', 'approved', 'completed', 'fulfilled', 'expired'], true)
-                                                            && !$isPendingRenewalAwaitingExtension;
-                                                        $isAwaitingActivationOrder = $orderPaymentStatusRaw === 'paid'
-                                                            && !in_array(strtolower(trim((string)($row['fulfillment_status'] ?? ''))), ['delivered', 'fulfilled', 'completed'], true)
-                                                            && !in_array(strtolower(trim($orderRowStatus)), ['active', 'expired', 'cancelled', 'failed', 'inactive'], true);
-                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
-                                                        $isFreshUnpaidOrder = $orderPaymentStatusRaw === 'unpaid'
-                                                            && !$orderHasOpenPaymentRequest
-                                                            && !$hasRecentBalanceTopupForOrder
-                                                            && in_array($orderRowStatus, ['pending', 'pending_payment'], true);
-                                                        if (!$isCompletedPaidOrder) {
-                                                            continue;
-                                                        }
-                                                        $orderDetailsButtonClass = 'btn-success';
-                                                        $orderDetailsButtonLabel = admin_t($messages, 'order_completed_button', 'Completed');
-                                                        $orderDetailsButtonIcon = 'bi bi-check-circle-fill';
-                                                        $orderLeadingIcon = 'bi bi-check-circle-fill text-success';
-                                                        $showOrderAmountStatusIcon = false;
-                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
-                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
-                                                        $orderCustomerEmailShort = $orderCustomerEmail !== ''
-                                                            ? admin_string_truncate($orderCustomerEmail, 20)
-                                                            : '';
-                                                        $orderCustomerPrimaryLabel = $orderCustomerHandleLabel !== ''
-                                                            ? '@' . $orderCustomerHandleLabel
-                                                            : $orderCustomerEmail;
-                                                        $modalId = 'adminOrderModal' . $orderId;
-                                                        ?>
-	                                                        <tr data-admin-completed-order-row data-order-expires-at="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>">
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>">
-                                                                <span class="d-inline-flex align-items-center justify-content-center w-100" title="#<?php echo admin_e((string)$row['id']); ?>">
-                                                                    <i class="<?php echo admin_e($orderLeadingIcon); ?> fs-3" aria-hidden="true"></i>
-                                                                </span>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
-                                                                <div class="admin-order-summary">
-	                                                                    <div class="admin-order-summary__title-row">
-	                                                                        <strong><?php echo admin_e($orderTitle); ?></strong>
-                                                                            <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
-                                                                            <?php if ($orderDeliveryLinkMode !== ''): ?>
-                                                                                <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
-                                                                                    ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
-                                                                                    : admin_t($messages, 'order_delivery_link_credentials_badge', 'The customer sees only the login and password'); ?>
-                                                                                <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
-                                                                                    <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
-                                                                                </span>
-                                                                            <?php endif; ?>
-	                                                                    </div>
-                                                                    <div class="admin-order-summary__customer-row">
-                                                                        <a class="admin-inline-link admin-order-summary__customer" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$row['customer_id']); ?>">
-                                                                            <?php echo admin_e($orderCustomerPrimaryLabel); ?>
-                                                                        </a>
-                                                                        <?php if ($orderCustomerEmail !== ''): ?>
-                                                                            <span class="admin-order-summary__customer-email" title="<?php echo admin_e($orderCustomerEmail); ?>">
-                                                                                <?php echo admin_e($orderCustomerEmailShort); ?>
-                                                                            </span>
-                                                                        <?php endif; ?>
-                                                                    </div>
-                                                                    <?php if ($usesSubscriptionTiming && !empty($orderProgress['has_expiry'])): ?>
-                                                                    <div class="admin-order-progress">
-                                                                        <div class="admin-order-progress__days admin-order-progress__days--<?php echo admin_e((string)($orderProgress['tone'] ?? 'neutral')); ?>">
-                                                                            <?php echo admin_e((string)($orderProgress['remaining_days'] ?? 0)); ?>
-                                                                        </div>
-                                                                        <div class="admin-order-progress__track">
-                                                                            <div class="admin-order-progress__meta">
-                                                                                <span><?php echo admin_e(admin_t($messages, 'order_days_label', 'Days')); ?></span>
-                                                                                <?php if (!empty($row['expires_at'])): ?>
-                                                                                    <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y')); ?></span>
-                                                                                <?php else: ?>
-                                                                                    <span><?php echo admin_e(admin_t($messages, 'order_no_expiry', 'No expiry')); ?></span>
-                                                                                <?php endif; ?>
-                                                                            </div>
-                                                                            <div class="admin-order-progress__bar">
-                                                                                <span style="width: <?php echo admin_e((string)$orderProgress['percent']); ?>%; background: <?php echo admin_e((string)$orderProgress['color']); ?>;"></span>
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                    <?php endif; ?>
-                                                                    <?php $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? '')); ?>
-                                                                    <?php if ($orderVisibleSupportNote !== ''): ?>
-                                                                        <div class="admin-order-summary__note admin-order-summary__note--warning">
-                                                                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                                                            <span><?php echo nl2br(admin_e($orderVisibleSupportNote)); ?></span>
-                                                                        </div>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                            <td class="admin-orders-table__amount-col" data-label="<?php echo admin_e(admin_t($messages, 'col_amount', 'Amount')); ?>">
-                                                                <div class="admin-order-amount">
-                                                                    <strong class="text-success"><?php echo admin_e($orderAmountLabel); ?></strong>
-                                                                    <?php if ($showOrderAmountStatusIcon): ?>
-                                                                        <i class="<?php echo admin_e($orderStatusVisual['icon']); ?> admin-order-status-icon <?php echo admin_e($orderStatusVisual['class']); ?>" aria-hidden="true" title="<?php echo admin_e($orderStatusVisual['label']); ?>"></i>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                            <td class="admin-orders-table__date-col d-none d-xl-table-cell" data-label="<?php echo admin_e(admin_t($messages, 'col_date', 'Date')); ?>">
-                                                                <div class="admin-order-date-meta">
-                                                                    <span class="<?php echo $orderCreatedIsToday ? 'text-danger fw-bold' : ''; ?>"><?php echo admin_e($orderCreatedLabel); ?></span>
-                                                                    <?php if ($orderWalletEditUrl !== ''): ?>
-                                                                        <a href="<?php echo admin_e($orderWalletEditUrl); ?>" class="admin-status-pill admin-status-pill--muted admin-order-wallet-badge">
-                                                                            <?php echo admin_e($orderWalletLabel); ?>
-                                                                        </a>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                <div class="admin-order-row__actions">
-                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-sm w-100" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" aria-label="<?php echo admin_e($orderDetailsButtonLabel); ?>">
-                                                                        <i class="bi bi-search admin-order-row__mobile-icon" aria-hidden="true"></i>
-                                                                        <span><?php echo admin_e($orderDetailsButtonLabel); ?></span>
-                                                                    </button>
-                                                                </div>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-	                                            </table>
-	                                        </div>
-	                                        <div class="table-responsive" id="adminOrdersCompletedTableSimple" data-admin-orders-view="simple" hidden>
+	                                        <div class="table-responsive admin-orders-table-scroll" id="adminOrdersCompletedTableSimple" tabindex="0" role="region" aria-labelledby="adminOrdersCompletedHeading">
 	                                            <table class="table admin-table admin-orders-table admin-orders-simple-table align-middle">
 	                                                <thead>
 	                                                    <tr>
@@ -9521,7 +9008,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 		                                                        $orderPaymentStatusRaw = strtolower(trim((string)($row['payment_status'] ?? '')));
 		                                                        $orderRowStatus = strtolower(trim((string)($row['status'] ?? '')));
 		                                                        $orderFulfillmentStatusRaw = strtolower(trim((string)($row['fulfillment_status'] ?? '')));
-		                                                        $orderBalancePaymentContext = admin_order_balance_payment_context($db, $row);
+		                                                        $orderBalancePaymentContext = ($orderBalancePaymentContexts[(int)$row['id']] ??= admin_order_balance_payment_context($db, $row));
 		                                                        $hasRecentBalanceTopupForOrder = !empty($orderBalancePaymentContext['has_recent_topup_credit']);
 		                                                        $isPendingRenewalAwaitingExtension = !empty($row['has_paid_pending_renewal']);
 		                                                        $isCompletedPaidOrder = $orderPaymentStatusRaw === 'paid'
@@ -9542,9 +9029,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 		                                                            ? 'admin-orders-simple-table__amount admin-orders-simple-table__amount--red'
 		                                                            : 'admin-orders-simple-table__amount';
 			                                                        $orderProductClass = $isOrderExpired ? 'admin-orders-simple-table__product-name--red' : '';
-	                                                        $orderProviderDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
-		                                                        $showProviderQuickButton = $isOrderPaymentApproved && !$isCompletedPaidOrder && $orderProviderDashboardUrl !== '';
-		                                                        $orderDetailsButtonClass = ($isOrderPaymentApproved && !$isCompletedPaidOrder) ? 'btn-success admin-orders-simple-table__icon-btn--paid' : 'btn-dark';
+		                                                        $orderDetailsButtonClass = ($isOrderPaymentApproved && !$isCompletedPaidOrder && !in_array($orderRowStatus, ['cancelled', 'refunded', 'failed', 'inactive', 'archived'], true) && ($orderRowStatus !== 'expired' || $isPendingRenewalAwaitingExtension)) ? 'btn btn-warning admin-orders-details--awaiting' : '';
 		                                                        $orderCustomerId = (int)($row['customer_id'] ?? 0);
 	                                                        $orderCustomerHandleLabel = trim((string)($row['public_handle'] ?? ''));
 	                                                        $orderCustomerEmail = trim((string)($row['customer_email'] ?? ''));
@@ -9564,7 +9049,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>">
 	                                                                <div class="admin-order-summary">
 	                                                                    <div class="admin-order-summary__title-row">
-	                                                                        <strong class="<?php echo admin_e($orderProductClass); ?>"><?php echo admin_e($orderTitle); ?></strong>
+	                                                                        <button type="button" class="admin-orders-title <?php echo admin_e($orderProductClass); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e($orderTitle); ?>" aria-label="<?php echo admin_e($orderTitle . ' — ' . admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details') . ' #' . $orderId); ?>"><?php echo admin_e($orderTitle); ?></button>
                                                                             <?php $orderDeliveryLinkMode = admin_order_delivery_link_mode($row); ?>
                                                                             <?php if ($orderDeliveryLinkMode !== ''): ?>
                                                                                 <?php $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
@@ -9590,7 +9075,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 		                                                            </td>
 		                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_expire_date', 'Expire date')); ?>">
 		                                                                <?php if ($isOrderExpired && $usesSubscriptionTiming && !empty($row['expires_at'])): ?>
-		                                                                    <span class="btn btn-danger btn-xs admin-orders-simple-table__provider-btn admin-orders-simple-table__expired-btn">
+		                                                                    <span class="admin-orders-simple-table__expired-btn">
 		                                                                        <i class="bi bi-calendar-x" aria-hidden="true"></i>
 		                                                                        <span><?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y, H:i')); ?></span>
 		                                                                    </span>
@@ -9622,30 +9107,26 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 	                                                            </td>
 	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
 		                                                                <div class="admin-orders-simple-table__notes">
-		                                                                    <?php if ($showProviderQuickButton): ?>
-		                                                                        <a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="btn btn-warning btn-xs admin-orders-simple-table__provider-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
-		                                                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
-		                                                                            <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
-		                                                                        </a>
-		                                                                    <?php endif; ?>
-		                                                                    <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : (!$showProviderQuickButton ? '<span class="admin-orders-simple-table__empty">-</span>' : ''); ?></div>
+		                                                                    <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : '<span class="admin-orders-simple-table__empty">-</span>'; ?></div>
 		                                                                </div>
 		                                                            </td>
 	                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
 	                                                                <div class="admin-orders-simple-table__actions">
-		                                                                    <button type="button" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-xs admin-orders-simple-table__icon-btn" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>">
-		                                                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+		                                                                    <button type="button" class="admin-orders-details admin-orders-simple-table__icon-btn <?php echo admin_e($orderDetailsButtonClass); ?>" data-bs-toggle="modal" data-bs-target="#<?php echo admin_e($modalId); ?>" title="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?>">
+		                                                                        <i class="bi bi-eye" aria-hidden="true"></i>
 		                                                                    </button>
-	                                                                    <button type="button" class="btn btn-primary btn-xs admin-orders-simple-table__icon-btn" data-admin-copy-value="<?php echo admin_e($orderCustomerHandleLabel); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandleLabel === '' ? ' disabled' : ''; ?>>
+                                                                        <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-expanded="false" aria-controls="adminOrderActions<?php echo (int)$orderId; ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_row_more_actions', 'More actions for order') . ' #' . $orderId); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                                                                        <div id="adminOrderActions<?php echo (int)$orderId; ?>" class="admin-orders-menu" data-admin-orders-menu hidden>
+	                                                                    <button type="button" class="admin-orders-menu__item admin-orders-menu__item--label" data-admin-copy-value="<?php echo admin_e($orderCustomerHandleLabel); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandleLabel === '' ? ' disabled' : ''; ?>>
 	                                                                        <i class="bi bi-clipboard" aria-hidden="true"></i>
 	                                                                    </button>
-	                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
+	                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
 	                                                                        <i class="bi bi-person" aria-hidden="true"></i>
 	                                                                    </a>
-	                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+	                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$orderCustomerId); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
 	                                                                        <i class="bi bi-card-list" aria-hidden="true"></i>
 	                                                                    </a>
-	                                                                </div>
+	                                                                </div></div>
 	                                                            </td>
 	                                                        </tr>
 	                                                    <?php endforeach; ?>
@@ -9682,8 +9163,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         if (in_array($orderStatusRaw, ['active'], true)) {
                                             $modalOrderStatusClass = 'is-success';
                                             $modalOrderStatusIcon = 'bi bi-check-lg';
-                                        } elseif (in_array($orderStatusRaw, ['pending_payment', 'awaiting_review', 'pending', 'unpaid'], true)) {
-                                            $modalOrderStatusClass = 'is-pending';
+                                        } elseif (in_array($orderStatusRaw, ['pending_payment', 'awaiting_review', 'pending', 'unpaid', 'pending_activation'], true)) {
+                                            $modalOrderStatusClass = 'is-pending' . ($paymentStatusRaw === 'paid' ? ' is-action-required' : '');
                                             $modalOrderStatusIcon = 'bi bi-arrow-repeat';
                                             $modalOrderStatusIconClass = ' admin-order-modal__status-icon--spin';
                                         } elseif (in_array($orderStatusRaw, ['expired', 'cancelled', 'failed', 'inactive'], true)) {
@@ -9732,7 +9213,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         $modalHeaderStatusClass = $modalOrderStatusClass;
                                                         $modalHeaderStatusIcon = $modalOrderStatusIcon;
                                                         $modalHeaderStatusIconClass = $modalOrderStatusIconClass;
-                                                        $balancePaymentContext = admin_order_balance_payment_context($db, $row);
+                                                        $balancePaymentContext = ($orderBalancePaymentContexts[(int)$row['id']] ??= admin_order_balance_payment_context($db, $row));
                                                         $hasRecentBalanceTopup = !empty($balancePaymentContext['has_recent_topup_credit']);
                                                         $canMarkPaidFromBalance = !empty($balancePaymentContext['can_mark_paid_from_balance']);
                                                         if ($isPendingRenewalAwaitingExtension) {
@@ -9794,12 +9275,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             : '/admin/?page=billing&billing_tab=customers&billing_link_customer_id=' . (int)($row['customer_id'] ?? 0);
                                         ?>
                                         <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>" tabindex="-1" aria-hidden="true">
-                                            <div class="modal-dialog modal-dialog-centered modal-xl">
+                                            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-xl">
                                                 <div class="modal-content">
                                                     <div class="modal-header">
                                                         <div>
                                                             <h5 class="modal-title">
-                                                                <span>#<?php echo admin_e((string)$orderId); ?> <?php echo admin_e($orderTitle); ?></span>
+                                                                <span class="admin-order-modal__order-id">#<?php echo admin_e((string)$orderId); ?></span>
+                                                                <span class="admin-order-modal__order-name"><?php echo admin_e($orderTitle); ?></span>
                                                                 <?php if ($orderDeliveryLinkMode !== ''): ?>
                                                                     <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
                                                                         <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
@@ -9932,6 +9414,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <div class="admin-order-modal__next-step">
                                                                                     <strong class="admin-order-modal__next-step-title"><?php echo admin_e(preg_replace($providerRemoteFlow ? '/^2\./' : '/^$/', $providerRemoteFlow ? '3.' : '', $isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_title', '2. Open Extend tab and apply package.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')))); ?></strong>
                                                                                     <span class="admin-order-modal__next-step-copy"><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_copy', 'After manual extension in provider panel, use Extend tab and then verify order status below.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_copy', 'After updating the customer account, change the order status below.') : admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.'))); ?></span>
+                                                                                    <?php if (!$isPendingRenewalAwaitingExtension): ?>
+                                                                                        <span class="admin-order-modal__status-direction" data-admin-order-status-hint aria-hidden="true"<?php echo !in_array($orderStatusRaw, ['pending_payment','awaiting_review','pending','pending_activation'], true) ? ' hidden' : ''; ?>><i class="bi bi-chevron-double-down" aria-hidden="true"></i></span>
+                                                                                    <?php endif; ?>
                                                                                 </div>
                                                                             </div>
                                                                         <?php elseif ($canMarkPaidFromBalance): ?>
@@ -10074,7 +9559,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             aria-expanded="false"
                                                                             aria-controls="adminOrderDetails<?php echo admin_e((string)$orderId); ?>"
                                                                         >
-                                                                            <span><?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?></span>
+                                                                            <span><?php echo admin_e(admin_t($messages, $orderDetailsButtonClass !== '' ? 'order_details_complete' : 'order_details_toggle', $orderDetailsButtonClass !== '' ? 'Paid — complete this order' : 'Show details')); ?></span>
                                                                             <i class="bi bi-chevron-down" aria-hidden="true"></i>
                                                                         </button>
                                                                         <p class="admin-order-modal__details-hint">
@@ -10179,13 +9664,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         </div>
                                                                     </div>
                                                                     <div class="admin-order-modal__actions">
-                                                                        <button type="submit" class="btn btn-success w-100" name="admin_save_order_info">
+                                                                        <button type="submit" class="btn btn-success admin-order-modal__save" name="admin_save_order_info">
                                                                             <i class="bi bi-floppy" aria-hidden="true"></i>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_save_button', 'Save order')); ?></span>
                                                                         </button>
                                                                         <button
                                                                             type="submit"
-                                                                            class="btn btn-danger w-100"
+                                                                            class="btn btn-danger admin-order-modal__delete"
                                                                             name="admin_delete_order"
                                                                             <?php if ($canDeleteOrderFromModal): ?>
                                                                                 onclick="return confirm('<?php echo admin_e(admin_t($messages, 'order_delete_confirm', 'Delete this order completely? This cannot be undone.')); ?>');"
@@ -10209,12 +9694,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <div class="tab-pane fade<?php echo $openExtendTabByDefault ? ' show active' : ''; ?>" id="<?php echo admin_e($tabExtendId); ?>Pane" role="tabpanel" aria-labelledby="<?php echo admin_e($tabExtendId); ?>">
                                                                     <form
                                                                         method="post"
-                                                                        class="admin-order-modal__form"
+                                                                        class="admin-order-modal__form admin-order-extend"
                                                                         data-admin-order-extend-form
                                                                         data-current-expires-at="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>"
                                                                     >
                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                         <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
+                                                                        <input type="hidden" name="extend_expected_expires_at" value="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>">
+                                                                        <input type="hidden" name="extend_expected_renewal_id" value="<?php echo (int)($row['pending_renewal_id'] ?? 0); ?>">
                                                                         <div class="admin-order-modal__stack">
                                                                             <?php if ($isPendingRenewalAwaitingExtension): ?>
                                                                                 <div class="alert alert-success" role="alert">
@@ -10242,19 +9729,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <div class="admin-order-extend__hint">
                                                                                 <?php echo admin_e(admin_t($messages, 'order_extend_hint', 'Select a package from the same provider. Its duration will be added to the current subscription expiry date.')); ?>
                                                                             </div>
-                                                                            <div>
-                                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_label', 'Charge customer balance')); ?></label>
-                                                                                <select class="form-select" name="extend_charge_balance">
-                                                                                    <option value="1"><?php echo admin_e(admin_t($messages, 'yes', 'Yes')); ?></option>
-                                                                                    <option value="0"><?php echo admin_e(admin_t($messages, 'no', 'No')); ?></option>
-                                                                                </select>
-                                                                                <div class="form-text"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_help', 'If set to Yes, the customer must have enough balance. If set to No, the subscription will be extended for free and a note will be added to the customer history.')); ?></div>
-                                                                            </div>
-                                                                            <div>
-                                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_current_expiry', 'Current expiry')); ?></label>
-                                                                                <input type="text" class="form-control" value="<?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y H:i')); ?>" readonly>
-                                                                            </div>
-                                                                            <div>
+                                                                            <div class="admin-order-extend__layout">
+                                                                                <section class="admin-order-extend__card admin-order-extend__options">
+                                                                                    <h6 class="admin-order-extend__heading"><i class="bi bi-box-seam" aria-hidden="true"></i><?php echo admin_e(admin_t($messages, 'order_extend_options_title', 'Package and payment')); ?></h6>
+                                                                            <div class="admin-order-extend__package">
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_package', 'Extension package')); ?></label>
                                                                                 <?php if ($extendProducts): ?>
                                                                                     <select class="form-select" name="extend_product_id" required data-admin-order-extend-product>
@@ -10276,7 +9754,29 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     </div>
                                                                                 <?php endif; ?>
                                                                             </div>
-                                                                            <div>
+                                                                            <div class="admin-order-extend__balance">
+                                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_label', 'Charge customer balance')); ?></label>
+                                                                                <?php if ($isPendingRenewalAwaitingExtension && !empty($row['pending_renewal_balance_reserved'])): ?>
+                                                                                    <input type="hidden" name="extend_charge_balance" value="0">
+                                                                                    <div class="admin-order-extend__settled"><i class="bi bi-check-circle-fill" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'order_extend_already_settled', 'Already paid — no further balance debit')); ?></span></div>
+                                                                                    <div class="form-text"><?php echo admin_e(admin_t($messages, 'order_extend_already_settled_help', 'The amount was reserved when this renewal was paid. Confirm the extension without charging the balance again.')); ?></div>
+                                                                                <?php else: ?>
+                                                                                    <select class="form-select" name="extend_charge_balance">
+                                                                                        <option value="1" selected><?php echo admin_e(admin_t($messages, 'order_extend_charge_yes', 'Yes — use balance')); ?></option>
+                                                                                        <option value="0"><?php echo admin_e(admin_t($messages, 'order_extend_charge_no', 'No — extend free of charge')); ?></option>
+                                                                                    </select>
+                                                                                    <div class="form-text"><?php echo admin_e(admin_t($messages, 'order_extend_charge_balance_help', 'If set to Yes, the customer must have enough balance. If set to No, the subscription will be extended for free and a note will be added to the customer history.')); ?></div>
+                                                                                <?php endif; ?>
+                                                                            </div>
+                                                                                </section>
+                                                                                <section class="admin-order-extend__card admin-order-extend__summary">
+                                                                                    <h6 class="admin-order-extend__heading"><i class="bi bi-calendar2-check" aria-hidden="true"></i><?php echo admin_e(admin_t($messages, 'order_extend_summary_title', 'Summary')); ?></h6>
+                                                                                    <div class="admin-order-extend__selection" data-admin-order-extend-selection aria-live="polite"><?php echo admin_e($extendProducts ? admin_t($messages, 'order_extend_package_placeholder', 'Choose extension package') : admin_t($messages, 'order_extend_no_packages', 'No extension packages available.')); ?></div>
+                                                                            <div class="admin-order-extend__date">
+                                                                                <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_current_expiry', 'Current expiry')); ?></label>
+                                                                                <input type="text" class="form-control" value="<?php echo admin_e(app_format_runtime_datetime_local((string)($row['expires_at'] ?? ''), 'd.m.Y H:i')); ?>" readonly>
+                                                                            </div>
+                                                                            <div class="admin-order-extend__date admin-order-extend__date--future">
                                                                                 <label class="form-label"><?php echo admin_e(admin_t($messages, 'order_extend_predicted_expiry', 'Expected expiry after extension')); ?></label>
                                                                                 <input
                                                                                     type="datetime-local"
@@ -10287,9 +9787,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     data-admin-order-extend-preview
                                                                                 >
                                                                             </div>
+                                                                                </section>
+                                                                            </div>
                                                                         </div>
                                                                         <div class="admin-order-modal__actions">
-                                                                            <button type="submit" class="btn btn-primary w-100" name="admin_extend_order"<?php echo $extendProducts ? '' : ' disabled'; ?>>
+                                                                            <button type="submit" class="btn btn-primary admin-order-extend__submit" name="admin_extend_order"<?php echo $extendProducts ? '' : ' disabled'; ?>>
                                                                                 <i class="bi bi-plus-circle" aria-hidden="true"></i>
                                                                                 <span><?php echo admin_e(admin_t($messages, 'order_extend_button', 'Extend subscription')); ?></span>
                                                                             </button>
@@ -11195,6 +10697,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-user-detail">
                                             <div class="admin-user-detail__header">
                                                 <div>
+                                                    <span class="admin-record-id">#<?php echo (int)$selectedCustomer['id']; ?></span>
                                                     <?php $selectedCustomerHeaderHandle = trim((string)($selectedCustomer['public_handle'] ?? '')); ?>
                                                     <?php if ($selectedCustomerHeaderHandle !== ''): ?>
                                                         <h1 class="admin-user-detail__handle-title">
@@ -11525,7 +11028,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <a class="admin-inline-link" href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$selectedCustomer['id']); ?>"><?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?></a>
                                                     </div>
                                                     <?php if ($selectedCustomerOrders): ?>
-                                                        <div class="table-responsive">
+                                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                                             <table class="table admin-table admin-user-detail-table align-middle">
                                                                 <thead>
                                                                     <tr>
@@ -11676,7 +11179,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             ];
                                                         }
                                                         ?>
-                                                        <div class="table-responsive">
+                                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                                             <table class="table admin-table admin-user-detail-table align-middle">
                                                                 <thead>
                                                                     <tr>
@@ -11900,7 +11403,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerGroupChats ?? [])); ?></span>
                                                     </div>
                                                     <?php if (!empty($selectedCustomerGroupChats)): ?>
-                                                        <div class="table-responsive">
+                                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                                             <table class="table admin-table admin-user-detail-table admin-user-detail-table--records align-middle">
                                                                 <thead>
                                                                     <tr>
@@ -12032,7 +11535,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerWallets)); ?></span>
                                                     </div>
                                                     <?php if ($selectedCustomerWallets): ?>
-                                                        <div class="table-responsive">
+                                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                                             <table class="table admin-table admin-user-detail-table admin-user-detail-table--records align-middle">
                                                                 <thead>
                                                                     <tr>
@@ -12123,7 +11626,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerBankAccounts)); ?></span>
                                                     </div>
                                                     <?php if ($selectedCustomerBankAccounts): ?>
-                                                        <div class="table-responsive">
+                                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                                             <table class="table admin-table admin-user-detail-table admin-user-detail-table--records align-middle">
                                                                 <thead>
                                                                     <tr>
@@ -12202,7 +11705,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e((string)count($selectedCustomerActivity)); ?></span>
                                                     </div>
                                                     <?php if ($selectedCustomerActivity): ?>
-                                                        <div class="table-responsive">
+                                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                                             <table class="table admin-table admin-user-detail-table admin-user-history-table align-middle">
                                                                 <thead>
                                                                     <tr>
@@ -12465,7 +11968,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                             </section>
                                         </div>
-                                        <div class="table-responsive">
+                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                             <table class="table admin-table admin-users-table align-middle">
                                                 <thead>
                                                     <tr>
@@ -12546,24 +12049,25 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                             </td>
                                                             <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                <div class="admin-user-row__actions">
-                                                                    <a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>">
+                                                                <div class="admin-user-row__actions"><a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>">
                                                                         <i class="bi bi-person-gear" aria-hidden="true"></i>
                                                                     </a>
-                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
+                                                                    <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-controls="adminUserActions<?php echo (int)$rowCustomerId; ?>" aria-expanded="false" aria-label="<?php echo admin_e(admin_t($messages, 'user_more_actions', 'More user actions') . ' #' . (int)$rowCustomerId); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                                                                    <div id="adminUserActions<?php echo (int)$rowCustomerId; ?>" class="admin-orders-menu" data-admin-orders-menu hidden>
+                                                                    <a href="/admin/?page=orders&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_orders', 'Orders')); ?>">
                                                                         <i class="bi bi-receipt" aria-hidden="true"></i>
                                                                     </a>
-                                                                    <a href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-outline-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
+                                                                    <a href="/admin/?page=payments&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_payments', 'Payments')); ?>">
                                                                         <i class="bi bi-credit-card-2-front" aria-hidden="true"></i>
                                                                     </a>
                                                                     <form method="post" class="admin-user-row__inline-form">
                                                                         <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$rowCustomerId); ?>">
-                                                                        <button type="submit" class="btn btn-outline-danger btn-sm admin-user-row__icon-btn" name="admin_delete_customer" title="<?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_delete_confirm', 'Delete this user account with related orders, payments, chat and assignments? This cannot be undone.')); ?>');">
+                                                                        <button type="submit" class="admin-orders-menu__item admin-orders-menu__item--label admin-orders-menu__item--danger" name="admin_delete_customer" title="<?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_delete_button', 'Delete user')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'customer_delete_confirm', 'Delete this user account with related orders, payments, chat and assignments? This cannot be undone.')); ?>');">
                                                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                                                         </button>
                                                                     </form>
-                                                                </div>
+                                                                </div></div>
                                                             </td>
                                                         </tr>
                                                     <?php endforeach; ?>
@@ -12657,7 +12161,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         break;
                                     endif;
                                     ?>
-                                    <div class="table-responsive">
+                                    <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                         <table class="table admin-table align-middle">
                                             <thead>
                                                 <tr>
@@ -12895,36 +12399,38 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-editor-page admin-payments-page">
                                             <div class="admin-editor-page__header">
                                                 <div>
-                                                    <h3><?php echo admin_e(admin_t($messages, 'payment_editor_title', 'Payment details')); ?></h3>
+                                                    <div class="admin-record-heading"><span class="admin-record-id">#<?php echo (int)($paymentEditor['id'] ?? 0); ?></span><h3><?php echo admin_e(admin_t($messages, 'payment_editor_title', 'Payment details')); ?></h3></div>
                                                     <p class="mb-0 text-muted"><?php echo admin_e(admin_t($messages, 'payment_editor_intro', 'Review the request, update its status and jump straight to the related customer or order flow.')); ?></p>
                                                 </div>
-                                                <div class="admin-wallet-actions">
-                                                    <a href="<?php echo admin_e($buildPaymentsListUrl()); ?>" class="btn btn-outline-dark btn-sm">
+                                                <div class="admin-payment-navigation"><a href="<?php echo admin_e($buildPaymentsListUrl()); ?>" class="btn btn-outline-dark btn-sm">
                                                         <i class="bi bi-arrow-left" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'back_to_payments', 'Back to payments')); ?></span>
                                                     </a>
+                                                    <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-controls="adminPaymentRelatedActions" aria-expanded="false" aria-label="<?php echo admin_e(admin_t($messages, 'record_related_actions', 'Related pages')); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                                                    <div id="adminPaymentRelatedActions" class="admin-orders-menu" data-admin-orders-menu hidden>
                                                     <?php if ($paymentEditorExplorerUrl !== ''): ?>
-                                                        <a href="<?php echo admin_e($paymentEditorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger btn-sm">
+                                                        <a href="<?php echo admin_e($paymentEditorExplorerUrl); ?>" target="_blank" rel="noopener noreferrer" class="admin-orders-menu__item">
                                                             <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?></span>
                                                         </a>
                                                     <?php endif; ?>
                                                     <?php if ($paymentWalletPanelUrl !== ''): ?>
-                                                        <a href="<?php echo admin_e($paymentWalletPanelUrl); ?>" class="btn btn-dark btn-sm">
+                                                        <a href="<?php echo admin_e($paymentWalletPanelUrl); ?>" class="admin-orders-menu__item">
                                                             <i class="bi bi-wallet2" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_open_wallet', 'Wallet')); ?></span>
                                                         </a>
                                                     <?php endif; ?>
                                                     <?php if ((int)($paymentEditor['customer_id'] ?? 0) > 0): ?>
-                                                        <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="btn btn-outline-dark btn-sm">
+                                                        <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="admin-orders-menu__item">
                                                             <i class="bi bi-person" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_open_customer', 'Customer')); ?></span>
                                                         </a>
-                                                        <a href="<?php echo admin_e($paymentOrdersUrl); ?>" class="btn btn-success btn-sm">
+                                                        <a href="<?php echo admin_e($paymentOrdersUrl); ?>" class="admin-orders-menu__item">
                                                             <i class="bi bi-check2-square" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_open_orders', 'Orders')); ?></span>
                                                         </a>
                                                     <?php endif; ?>
+                                                </div>
                                                 </div>
                                             </div>
 
@@ -12947,28 +12453,28 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         'saved_payment' => 1,
                                                     ])); ?>">
                                                     <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
-                                                        <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept"<?php if ($paymentEditorType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentEditorAcceptPayloadJson); ?>"<?php endif; ?>>
+                                                        <button type="submit" class="btn btn-success btn-sm" name="quick_action" value="accept" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_accept', '')); ?>"<?php if ($paymentEditorType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentEditorAcceptPayloadJson); ?>"<?php endif; ?>>
                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
-                                                        <button type="submit" class="btn btn-danger btn-sm" name="quick_action" value="cancel">
+                                                        <button type="submit" class="btn btn-danger btn-sm" name="quick_action" value="cancel" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_cancel', '')); ?>">
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && (string)($paymentEditor['status'] ?? '') === 'expired'): ?>
-                                                        <button type="submit" class="btn btn-warning btn-sm" name="quick_action" value="renew">
+                                                        <button type="submit" class="btn btn-warning btn-sm" name="quick_action" value="renew" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_renew', '')); ?>">
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorCanBlockchainCheck): ?>
-                                                        <button type="button" class="btn btn-outline-dark btn-sm" data-admin-payment-blockchain-check data-loading-label="<?php echo admin_e(admin_t($messages, 'payment_blockchain_check_loading', 'Checking...')); ?>" data-explorer-label="<?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?>">
+                                                        <button type="button" class="btn btn-outline-dark btn-sm" data-admin-payment-blockchain-check data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_check', '')); ?>" data-loading-label="<?php echo admin_e(admin_t($messages, 'payment_blockchain_check_loading', 'Checking...')); ?>" data-explorer-label="<?php echo admin_e(admin_t($messages, 'topbar_payment_check_explorer', 'Check in explorer')); ?>">
                                                             <i class="bi bi-search" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_check_blockchain', 'Check Blockchain')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
                                                     <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true)): ?>
-                                                        <button type="submit" class="btn btn-dark btn-sm" name="quick_action" value="archive">
+                                                        <button type="submit" class="btn btn-dark btn-sm" name="quick_action" value="archive" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_archive', '')); ?>">
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
@@ -13028,7 +12534,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <input type="hidden" name="payment_id" value="<?php echo admin_e((string)$paymentEditorId); ?>">
                                                 <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
 
-                                                <div class="row g-3">
+                                                <div class="row g-3 admin-payment-editor-grid">
                                                     <div class="col-12" data-admin-payment-blockchain-check-result hidden></div>
                                                     <div class="col-12">
                                                         <label class="form-label" for="payment_status"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></label>
@@ -13204,7 +12710,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <span><?php echo admin_e(admin_t($messages, 'payment_save_button', 'Save payment')); ?></span>
                                                     </button>
                                                     <?php if (in_array($paymentEditorStatusRaw, ['cancelled', 'rejected', 'failed'], true)): ?>
-                                                        <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                        <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_payment" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_delete', '')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
                                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_delete_button', 'Delete payment')); ?></span>
                                                         </button>
@@ -13427,7 +12933,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php endif; ?>
 
                                         <?php if ($paymentRows): ?>
-                                            <div class="table-responsive">
+                                            <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_payments', 'Table')); ?>">
                                                 <table class="table admin-table admin-payments-table align-middle">
                                                     <thead>
                                                         <tr>
@@ -13667,7 +13173,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="accept"<?php if ($paymentType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentAcceptPayloadJson); ?>"<?php endif; ?>>
+                                                                                        <button type="submit" class="btn btn-success btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="accept" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_accept', '')); ?>"<?php if ($paymentType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentAcceptPayloadJson); ?>"<?php endif; ?>>
                                                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
                                                                                         </button>
                                                                                     </form>
@@ -13684,7 +13190,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="cancel">
+                                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="cancel" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_cancel', '')); ?>">
                                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_cancel_request', 'Cancel request')); ?></span>
                                                                                         </button>
                                                                                     </form>
@@ -13698,7 +13204,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="renew">
+                                                                                        <button type="submit" class="btn btn-warning btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="renew" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_renew', '')); ?>">
                                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_renew', 'Renew')); ?></span>
                                                                                         </button>
                                                                                     </form>
@@ -13712,7 +13218,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-dark btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="archive">
+                                                                                        <button type="submit" class="btn btn-dark btn-sm admin-topbar-notifications__block-btn" name="quick_action" value="archive" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_archive', '')); ?>">
                                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
                                                                                         </button>
                                                                                     </form>
@@ -13763,7 +13269,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <input type="hidden" name="customer_id" value="<?php echo admin_e((string)$paymentFilterCustomerId); ?>">
                                                                                         <input type="hidden" name="payment_scope" value="<?php echo admin_e($paymentScope); ?>">
                                                                                         <input type="hidden" name="payment_type_filter" value="<?php echo admin_e($paymentTypeFilter); ?>">
-                                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="admin_delete_payment" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
+                                                                                        <button type="submit" class="btn btn-danger btn-sm admin-topbar-notifications__block-btn" name="admin_delete_payment" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_delete', '')); ?>" onclick="return confirm('<?php echo admin_e(admin_t($messages, 'payment_delete_confirm', 'Delete this payment request?')); ?>');">
                                                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_delete_cancelled', 'Delete cancelled')); ?></span>
                                                                                         </button>
                                                                                     </form>
@@ -13785,7 +13291,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <a href="<?php echo admin_e($paymentDetailsUrl); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'payment_action_details', 'Details')); ?>">
                                                                                 <i class="bi bi-search" aria-hidden="true"></i>
                                                                             </a>
-                                                                           
+
                                                                         </form>
                                                                     <?php endif; ?>
                                                                 </td>
@@ -21770,42 +21276,49 @@ function admin_render_table(array $headers, array $rows, array $messages): void
             id="adminPanelSubscriptionReminderModal"
             tabindex="-1"
             aria-labelledby="adminPanelSubscriptionReminderModalLabel"
+            aria-describedby="adminPanelSubscriptionReminderStatus"
             aria-hidden="true"
             data-admin-panel-subscription-modal
             data-storage-key="admin-panel-subscription-reminder-<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until'] ?? '')); ?>"
             data-throttle-minutes="60">
             <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
+                <div class="modal-content admin-panel-renewal-modal<?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['is_expired']) ? ' is-expired' : ''; ?>">
                     <div class="modal-header">
+                        <span class="admin-panel-renewal-modal__icon" aria-hidden="true"><i class="bi <?php echo !empty($adminTopbarAdminPanelSubscriptionNotice['is_expired']) ? 'bi-calendar-x' : 'bi-exclamation-triangle'; ?>"></i></span>
                         <h5 class="modal-title" id="adminPanelSubscriptionReminderModalLabel">
-                            <?php echo admin_e(admin_t($messages, 'admin_panel_subscription_modal_reminder_title', 'Przypomnienie!')); ?>
+                            <?php echo admin_e(admin_t($messages, 'admin_panel_subscription_modal_reminder_title', 'Przypomnienie o płatności')); ?>
                         </h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"></button>
                     </div>
                     <div class="modal-body">
                         <div class="admin-panel-subscription-modal-content">
-                            <strong class="admin-panel-subscription-modal-content__heading">
+                            <strong class="admin-panel-subscription-modal-content__heading" id="adminPanelSubscriptionReminderStatus">
                                 <?php if (!empty($adminTopbarAdminPanelSubscriptionNotice['is_expired'])): ?>
                                     <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_expired_heading', 'Admin panel access payment has expired.')); ?>
                                 <?php else: ?>
                                     <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_warning_heading', 'Admin panel access payment expires soon.')); ?>
                                 <?php endif; ?>
                             </strong>
-                            <div class="admin-panel-subscription-modal-content__label"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_paid_until', 'Paid until')); ?>:</div>
-                            <input type="text" class="admin-topbar-panel-subscription__date" value="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')); ?> ·" readonly>
-                            <?php if ($adminTopbarAdminPanelSubscriptionNotice['days_left'] !== null): ?>
-                                <div class="admin-panel-subscription-modal-content__days">
-                                    <?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_days_left', 'Days left')); ?>:
-                                    <strong><?php echo admin_e((string)max(0, (int)$adminTopbarAdminPanelSubscriptionNotice['days_left'])); ?></strong>
+                            <div class="admin-panel-renewal-modal__details">
+                                <div class="admin-panel-renewal-modal__detail">
+                                    <span class="admin-panel-subscription-modal-content__label"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_paid_until', 'Paid until')); ?></span>
+                                    <time class="admin-panel-renewal-modal__date" datetime="<?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until'] ?? '')); ?>"><?php echo admin_e((string)($adminTopbarAdminPanelSubscriptionNotice['paid_until_label'] ?? '')); ?></time>
                                 </div>
-                            <?php endif; ?>
+                                <?php if ($adminTopbarAdminPanelSubscriptionNotice['days_left'] !== null): ?>
+                                    <div class="admin-panel-renewal-modal__detail">
+                                        <span class="admin-panel-subscription-modal-content__label"><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_days_left', 'Days left')); ?></span>
+                                        <strong class="admin-panel-renewal-modal__days"><?php echo admin_e((string)max(0, (int)$adminTopbarAdminPanelSubscriptionNotice['days_left'])); ?></strong>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
                         <?php if (trim((string)($adminTopbarAdminPanelSubscriptionNotice['renewal_url'] ?? '')) !== ''): ?>
-                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger w-100">
-                                <i class="bi bi-credit-card me-1" aria-hidden="true"></i>
+                            <a href="<?php echo admin_e((string)$adminTopbarAdminPanelSubscriptionNotice['renewal_url']); ?>" target="_blank" rel="noopener noreferrer" class="btn btn-danger w-100 admin-panel-renewal-modal__pay">
+                                <i class="bi bi-credit-card" aria-hidden="true"></i>
                                 <span><?php echo admin_e(admin_t($messages, 'topbar_panel_subscription_pay', 'Go to payment')); ?></span>
+                                <i class="bi bi-arrow-up-right" aria-hidden="true"></i>
                             </a>
                         <?php endif; ?>
                     </div>

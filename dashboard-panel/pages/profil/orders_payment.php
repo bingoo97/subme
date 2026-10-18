@@ -434,6 +434,24 @@ if (!function_exists('orders_payment_load_customer_balance_amount')) {
     }
 }
 
+// Serialize mutating customer requests with admin payment approval for this customer.
+$customerPaymentLock = '';
+$customerPaymentActions = ['create_crypto_payment','create_bank_payment','create_balance_payment','cancel_crypto_payment','cancel_bank_payment','cancel_order_from_payment_selection'];
+if (app_uses_v2_schema($db) && array_intersect($customerPaymentActions, array_keys($_POST))) {
+    if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
+        $smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
+        $smarty->assign('selected', null);
+        return;
+    }
+    $customerPaymentLock = 'payment:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 16) . ':' . (int)$user['id'];
+    $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($customerPaymentLock) . "', 0) acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) {
+        $smarty->assign('alert_error', localization_translate($t, 'payment_operation_busy', 'Another payment operation is in progress. Please retry shortly.'));
+        $smarty->assign('selected', null);
+        return;
+    }
+}
+try {
 $tenantId = tenant_current_id($user);
 $orderId = isset($_POST['id']) ? (int)$_POST['id'] : (isset($_GET['payment']) ? (int)$_GET['payment'] : 0);
 $salesEnabled = (int)($settings['active_sale'] ?? 0) === 1;
@@ -469,55 +487,33 @@ if (app_uses_v2_schema($db)) {
         $selectedProductType = strtolower(trim((string)($selected['product_type'] ?? 'subscription')));
         $selected['date_end_s'] = !empty($selected['date_end']) ? strtotime($selected['date_end']) : 0;
         $canRequestPayment = (
-            (($selected['status'] == 0) && ($selected['payment'] == 0))
-            || ($selected['status'] == 2)
+            (($selected['status_raw'] ?? '') === 'pending_payment' && ($selected['payment_status_raw'] ?? '') === 'unpaid')
             || $canOpenRenewalPayment
         ) && !$hasBlockingPendingRenewalState;
 
         $availableProducts = [];
         if (!empty($selected['provider_id'])) {
+            $catalogTypeSql = app_customer_order_catalog_product_type_sql($db, $user, $settings);
             $availableProducts = $db->select_full_user(
-                "SELECT
-                    id,
-                    name,
-                    provider_id,
-                    is_active,
-                    product_type,
-                    duration_hours,
-                    duration_hours AS duration,
-                    price_amount,
-                    price_amount AS price,
-                    currency_id,
-                    is_trial AS trial,
-                    currencies.code AS currency_code,
-                    currencies.symbol AS currency_symbol
+                "SELECT products.id, products.name, products.provider_id, products.is_active, products.product_type,
+                    products.duration_hours, products.duration_hours AS duration, products.price_amount,
+                    products.price_amount AS price, products.currency_id, products.is_trial AS trial,
+                    currencies.code AS currency_code, currencies.symbol AS currency_symbol
                  FROM products
+                 JOIN product_providers ON product_providers.id = products.provider_id
                  LEFT JOIN currencies ON currencies.id = products.currency_id
-                 WHERE provider_id = " . (int)$selected['provider_id'] . "
-                   AND is_active = 1
-                   AND product_type = '" . $db->escape($selectedProductType) . "'
-                   " . ($trialsEnabled ? '' : "AND is_trial = 0") . "
-                 ORDER BY duration_hours ASC, price_amount ASC, id ASC"
+                 WHERE products.provider_id = " . (int)$selected['provider_id'] . "
+                   AND products.is_active = 1 AND product_providers.is_active = 1
+                   AND products.product_type = '" . $db->escape($selectedProductType) . "'
+                   AND products.product_type IN ({$catalogTypeSql})
+                   " . app_customer_provider_visibility_sql($db, (int)$user['id'], 'products.provider_id') . "
+                   " . ($trialsEnabled ? '' : "AND products.is_trial = 0") . "
+                   " . ($isSameOrderRenewalFlow ? 'AND products.is_trial = 0 AND products.duration_hours > 24' : '') . "
+                 ORDER BY products.duration_hours ASC, products.price_amount ASC, products.id ASC"
             );
         }
-
-        if (!$availableProducts && !empty($selected['product_id'])) {
-            $availableProducts = [[
-                'id' => $selected['product_id'],
-                'name' => $selected['name'],
-                'provider_id' => $selected['provider_id'],
-                'is_active' => 1,
-                'product_type' => $selectedProductType,
-                'duration_hours' => $selected['duration'],
-                'duration' => $selected['duration'],
-                'price_amount' => $selected['price'],
-                'price' => $selected['price'],
-                'currency_id' => $selected['currency_id'],
-                'currency_code' => $selected['currency_code'] ?? '',
-                'currency_symbol' => $selected['currency_symbol'] ?? '',
-                'trial' => $selected['trial'],
-            ]];
-        }
+        $packagePaymentUnavailable = $canRequestPayment && !$availableProducts;
+        if ($packagePaymentUnavailable) $canRequestPayment = false;
 
         foreach ($availableProducts as $index => $product) {
             $productCurrencySymbol = trim((string)($product['currency_symbol'] ?? ''));
@@ -538,7 +534,10 @@ if (app_uses_v2_schema($db)) {
                 break;
             }
         }
-        if (!$selectedProduct && !empty($availableProducts)) {
+        if (!$selectedProduct && isset($_POST['payment_product_id'])) {
+            $canRequestPayment = false;
+            $smarty->assign('alert_error', localization_translate($t, 'payment_choose_package_error', 'Choose an available package first.'));
+        } elseif (!$selectedProduct && !empty($availableProducts)) {
             $selectedProduct = $availableProducts[0];
             $selectedProductId = (int)$selectedProduct['id'];
         }
@@ -1070,174 +1069,24 @@ if (app_uses_v2_schema($db)) {
 
         if ($canRequestPayment && isset($_POST['create_balance_payment'])) {
             $selectedMethod = 'balance';
-            if ($pendingBalanceTopupPayment) {
-                $paymentRedirectUrl = (string)($pendingBalanceTopupPayment['payment_url'] ?? '/cryptocurrency');
-            } elseif (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
+            if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
                 $smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
-            } elseif (!$selectedProduct) {
-                $smarty->assign('alert_error', localization_translate($t, 'payment_choose_package_error', 'Choose a package first.'));
-            } elseif ($blockingPendingActivationOrder) {
-                $smarty->assign(
-                    'alert_error',
-                    localization_translate(
-                        $t,
-                        'payment_balance_blocked_pending_activation',
-                        'Balance payment is unavailable while another paid order is still waiting for activation.'
-                    )
-                );
+            } elseif (!array_key_exists('payment_expected_expires_at', $_POST)) {
+                $smarty->assign('alert_error', localization_translate($t, 'payment_order_changed', 'The order changed. Refresh the page before retrying.'));
             } else {
-                $selectedProductPrice = round((float)($selectedProduct['price'] ?? 0), 2);
-                $customerBalanceAmount = orders_payment_load_customer_balance_amount($db, (int)$user['id']);
-                if ($selectedProductPrice <= 0) {
-                    $smarty->assign('alert_error', localization_translate($t, 'payment_balance_unavailable', 'Balance payment is unavailable for this order.'));
-                } elseif ($customerBalanceAmount + 0.00001 < $selectedProductPrice) {
-                    $smarty->assign('alert_error', localization_translate($t, 'payment_balance_too_low', 'Your account balance is too low for this payment.'));
+                $balanceResult = app_pay_order_from_customer_balance($db, (int)$user['id'], (int)$selected['id'],
+                    (int)$selectedProductId, $settings, (string)$_POST['payment_expected_expires_at'], (string)($_SERVER['REMOTE_ADDR'] ?? ''));
+                if (empty($balanceResult['ok'])) {
+                    $smarty->assign('alert_error', localization_translate($t, (string)($balanceResult['message_key'] ?? 'payment_balance_update_error'), 'Unable to save payment. Refresh the page and check the balance before retrying.'));
                 } else {
-                    orders_payment_cancel_open_crypto_requests($db, (int)$user['id'], (int)$selected['id']);
-                    orders_payment_cancel_open_bank_requests($db, (int)$user['id'], (int)$selected['id']);
-
-                    $renewalState = null;
-                    $balanceEventSourceType = 'order_activation';
-                    $balanceEventSourceKey = (string)((int)$selected['id']);
-                    $balanceEventNote = 'Paid from customer balance for order #' . (int)$selected['id'];
-
-                    if ($isSameOrderRenewalFlow) {
-                        $renewalState = app_order_upsert_pending_renewal(
-                            $db,
-                            $selected,
-                            $selectedProduct,
-                            'Paid from customer balance'
-                        );
-
-                        if (empty($renewalState['ok'])) {
-                            $smarty->assign('alert_error', (string)($renewalState['message'] ?? localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.')));
-                        } else {
-                            $renewalIdForBalanceEvent = (int)($renewalState['renewal_id'] ?? 0);
-                            if ($renewalIdForBalanceEvent > 0) {
-                                $balanceEventSourceType = 'order_extension';
-                                $balanceEventSourceKey = 'renewal:balance:' . $renewalIdForBalanceEvent;
-                                $balanceEventNote = 'Paid from customer balance for renewal #' . $renewalIdForBalanceEvent . ' in order #' . (int)$selected['id'];
-                            }
-                        }
+                    if (empty($balanceResult['already_applied'])) {
+                        orders_payment_cancel_open_crypto_requests($db, (int)$user['id'], (int)$selected['id']);
+                        orders_payment_cancel_open_bank_requests($db, (int)$user['id'], (int)$selected['id']);
                     }
-
-                    if (!($isSameOrderRenewalFlow && $smarty->getTemplateVars('alert_error'))) {
-                        $balanceDebitResult = app_apply_customer_balance_runtime_event(
-                            $db,
-                            (int)$user['id'],
-                            $selectedProductPrice,
-                            'debit',
-                            $balanceEventSourceType,
-                            $balanceEventSourceKey,
-                            $balanceEventNote,
-                            'customer',
-                            0,
-                            (string)($_SERVER['REMOTE_ADDR'] ?? '')
-                        );
-
-                        if (empty($balanceDebitResult['ok'])) {
-                            if ($isSameOrderRenewalFlow && !empty($renewalState['ok'])) {
-                                app_order_cancel_pending_renewal(
-                                    $db,
-                                    (int)$selected['id'],
-                                    'Cancelled after failed balance debit'
-                                );
-                            }
-                            $smarty->assign('alert_error', localization_translate($t, 'payment_balance_debit_error', 'Unable to pay from account balance right now.'));
-                        } else {
-                            $updated = false;
-                            if ($isSameOrderRenewalFlow) {
-                                if (empty($renewalState['ok'])) {
-                                    $updated = false;
-                                    $smarty->assign('alert_error', (string)($renewalState['message'] ?? localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.')));
-                                } else {
-                                    $applyRenewalResult = app_apply_pending_order_renewal(
-                                        $db,
-                                        (int)$renewalState['renewal_id'],
-                                        'customer',
-                                        0,
-                                        (string)($_SERVER['REMOTE_ADDR'] ?? ''),
-                                        true
-                                    );
-                                    $updated = !empty($applyRenewalResult['ok']);
-                                    if (!$updated) {
-                                        app_order_cancel_pending_renewal(
-                                            $db,
-                                            (int)$selected['id'],
-                                            'Cancelled after failed balance renewal apply'
-                                        );
-                                    }
-                                }
-                            } else {
-                                $newExpiry = app_product_type_uses_expiry($selectedProduct['product_type'] ?? 'subscription')
-                                    ? app_subscription_expiry_from_base_timestamp($time_s, max(1, (int)$selectedProduct['duration']))
-                                    : null;
-                                $updated = $db->update_using_id(
-                                    ['product_id', 'total_amount', 'currency_id', 'expires_at', 'payment_method', 'payment_status', 'fulfillment_status', 'paid_at', 'status'],
-                                    [
-                                        (int)$selectedProduct['id'],
-                                        $selectedProductPrice,
-                                        (int)$selectedProduct['currency_id'],
-                                        $newExpiry,
-                                        'balance',
-                                        'paid',
-                                        'pending',
-                                        date('Y-m-d H:i:s', $time_s),
-                                        'pending_payment',
-                                    ],
-                                    'orders',
-                                    (int)$selected['id']
-                                );
-                            }
-
-                            if (!$updated) {
-                                if (empty($balanceDebitResult['already_applied'])) {
-                                    app_apply_customer_balance_runtime_event(
-                                        $db,
-                                        (int)$user['id'],
-                                        $selectedProductPrice,
-                                        'credit',
-                                        'order_balance_payment_rollback',
-                                        (string)((int)$selected['id']) . ':' . $time_s,
-                                        'Rollback after failed balance payment save for order #' . (int)$selected['id'],
-                                        'system',
-                                        0,
-                                        (string)($_SERVER['REMOTE_ADDR'] ?? '')
-                                    );
-                                }
-                                if (!$smarty->getTemplateVars('alert_error')) {
-                                    $smarty->assign('alert_error', localization_translate($t, 'payment_balance_update_error', 'Payment was not saved for this order.'));
-                                }
-                            } else {
-                                if (!$isSameOrderRenewalFlow && schema_object_exists($db, 'order_status_events')) {
-                                    $db->insert(
-                                        ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
-                                        [(int)$selected['id'], null, (string)($selected['status_raw'] ?? 'pending_payment'), 'pending_payment', 'Payment confirmed from customer balance'],
-                                        'order_status_events'
-                                    );
-                                }
-                                if (!$isSameOrderRenewalFlow) {
-                                    app_customer_activity_log(
-                                        $db,
-                                        (int)$user['id'],
-                                        'order_payment_approved',
-                                        'Order #' . (int)$selected['id'] . ' was paid from account balance.',
-                                        'customer',
-                                        0,
-                                        (string)($_SERVER['REMOTE_ADDR'] ?? '')
-                                    );
-                                    $paymentRedirectUrl = '/order-payment-' . (int)$selected['id'];
-                                } else {
-                                    $paymentRedirectUrl = '/orders';
-                                }
-                            }
-                        }
-                    }
-                    $selected = orders_payment_load_v2_order($db, (int)$user['id'], $orderId);
-                    if ($selected) {
-                        $selected['date_end_s'] = !empty($selected['date_end']) ? strtotime($selected['date_end']) : 0;
-                    }
+                    $paymentRedirectUrl = !empty($balanceResult['renewal']) ? '/orders' : '/order-payment-' . (int)$selected['id'];
                 }
+                $selected = orders_payment_load_v2_order($db, (int)$user['id'], $orderId);
+                if ($selected) $selected['date_end_s'] = !empty($selected['date_end']) ? strtotime($selected['date_end']) : 0;
             }
         }
 
@@ -1382,7 +1231,9 @@ if (app_uses_v2_schema($db)) {
         $paymentStateNotice = '';
 
         if ($activeRequestMethod === '' && !$canRequestPayment) {
-            if ($hasBlockingPendingRenewalState) {
+            if ($packagePaymentUnavailable) {
+                $paymentStateNotice = 'packages_unavailable';
+            } elseif ($hasBlockingPendingRenewalState) {
                 if ($pendingRenewalStatus === 'paid_pending_activation') {
                     $paymentStateNotice = 'renewal_approved_waiting_extension';
                 } else {
@@ -1446,4 +1297,8 @@ if (app_uses_v2_schema($db)) {
         $selected['date_end_s'] = strtotime($selected['date_end']);
         $smarty->assign('selected', $selected);
     }
+}
+
+} finally {
+    if ($customerPaymentLock !== '') $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($customerPaymentLock) . "') released");
 }

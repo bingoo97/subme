@@ -62,6 +62,28 @@ if ($action === 'search_customers') {
     exit;
 }
 
+if ($action === 'lookup_address') {
+    $messages = admin_load_messages(admin_current_locale());
+    $address = trim((string)($_GET['address'] ?? $_POST['address'] ?? ''));
+    $assetId = (int)($_GET['crypto_asset_id'] ?? $_POST['crypto_asset_id'] ?? 0);
+    $networkCode = trim((string)($_GET['network_code'] ?? $_POST['network_code'] ?? ''));
+    $walletId = (int)($_GET['wallet_id'] ?? $_POST['wallet_id'] ?? 0);
+
+    if ($address === '') {
+        echo json_encode([
+            'ok' => true,
+            'found' => false,
+            'can_reuse' => true,
+            'message' => '',
+            'wallets' => [],
+        ]);
+        exit;
+    }
+
+    echo json_encode(admin_crypto_wallet_existing_address_lookup_payload($db, $address, $assetId, $networkCode, $walletId, $messages));
+    exit;
+}
+
 http_response_code(400);
 echo json_encode([
     'ok' => false,

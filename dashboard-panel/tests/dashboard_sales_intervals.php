@@ -207,3 +207,38 @@ $refreshed = admin_dashboard_product_sales_summary($db,120,null,$asOf);
 check((int)array_sum(array_column($refreshed,'transactions_total')) === 2, 'Next report sees the newly committed sale.');
 $writer->close();
 echo "PASS: {$checks} complete audit assertions\n";
+
+// Rolling chart ranges share one aggregate and retain exact daily purchase/renewal counts.
+foreach ([null, '', '0', '31', '-1', '999999', [], '365x'] as $invalidRange) {
+    check(admin_dashboard_sales_chart_days($invalidRange) === 30, 'Invalid chart range defaults to 30 days.');
+}
+foreach (['2024-03-01 12:00:00', '2026-10-25 12:00:00', '2027-01-01 00:00:00'] as $reference) {
+    auditReset();
+    $asOf = new DateTimeImmutable($reference, $zone);
+    $today = $asOf->setTime(0, 0);
+    foreach ([30, 90, 365] as $days) {
+        auditReset();
+        $start = $today->modify('-' . ($days - 1) . ' days');
+        auditOrder(1, $start->modify('-1 second')->format('Y-m-d H:i:s'), 100);
+        auditOrder(2, $start->format('Y-m-d H:i:s'), 10);
+        auditRenewal(1, 2, $asOf->format('Y-m-d H:i:s'), 'paid_pending_activation', 123, 2);
+        auditOrder(3, $asOf->modify('+1 second')->format('Y-m-d H:i:s'), 100);
+        AdminDashboardSalesQueryCache::$enabled = true;
+        AdminDashboardSalesQueryCache::$rows = [];
+        try {
+            $series = admin_dashboard_sales_series($db, admin_dashboard_sales_chart_days((string)$days), $asOf);
+            check(count($series) === $days, 'Selected chart has exactly the requested number of days.');
+            check($series[0]['date'] === $start->format('Y-m-d') && $series[$days - 1]['date'] === $today->format('Y-m-d'), 'Chart includes today and correct first day across calendar boundaries.');
+            check(count(array_unique(array_column($series, 'date'))) === $days, 'No duplicate or missing dates across DST.');
+            check(sumCounts($series) === 2, 'Only in-range purchase and renewal counted, future sale excluded.');
+            approx((float)admin_dashboard_revenue_sum($series)['EUR'], 12, 'Selected chart revenue excludes out-of-range sales.');
+            check(count(AdminDashboardSalesQueryCache::$rows) === 1, 'One aggregate for the whole selected range.');
+            foreach ([30, 90, 365] as $otherDays) admin_dashboard_sales_series($db, $otherDays, $asOf);
+            check(count(AdminDashboardSalesQueryCache::$rows) === 1, 'All ranges reuse the same aggregate without per-day queries.');
+        } finally {
+            AdminDashboardSalesQueryCache::$enabled = false;
+            AdminDashboardSalesQueryCache::$rows = [];
+        }
+    }
+}
+echo "PASS: {$checks} assertions including rolling chart ranges\n";

@@ -46,7 +46,22 @@
 		}
 
 		if (!function_exists('orders_create_pending_order')) {
-			function orders_create_pending_order(Mysql_ks $db, int $customerId, array $product, string $note = ''): array
+            function orders_create_pending_order(Mysql_ks $db, int $customerId, array $product, string $note = ''): array
+            {
+                $key = 'payment:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 16) . ':' . $customerId;
+                $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
+                if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => false, 'message' => 'Another payment operation is in progress.'];
+                try {
+                    $pending = orders_find_pending_unpaid_order($db, ['id' => $customerId], 1);
+                    if ($pending) return ['ok' => true, 'order_id' => (int)$pending['id'], 'already_exists' => true];
+                    if (app_find_customer_paid_pending_activation_order($db, $customerId)) return ['ok' => false, 'message' => 'A paid order is waiting for activation.'];
+                    return orders_create_pending_order_locked($db, $customerId, $product, $note);
+                } finally {
+                    $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($key) . "') released");
+                }
+            }
+
+			function orders_create_pending_order_locked(Mysql_ks $db, int $customerId, array $product, string $note = ''): array
 			{
 				$productId = (int)($product['id'] ?? 0);
 				if ($customerId <= 0 || $productId <= 0) {
@@ -62,7 +77,7 @@
 				}
 
 				$expiresAt = (app_product_type_uses_expiry($productType) && $durationHours > 0)
-					? date("Y-m-d H:i:s", time() + (3600 * $durationHours))
+					? app_subscription_expiry_from_base_timestamp(time(), $durationHours)
 					: null;
 				$orderReference = 'WEB-' . date('YmdHis') . '-' . $customerId;
 				$insertFields = [
@@ -220,7 +235,7 @@
 										return;
 									}
 								} else {
-									$date_end = date("Y-m-d H:i:s", time() + (3600 * (int)$select_package["duration"]));
+									$date_end = app_subscription_expiry_from_base_timestamp(time(), (int)$select_package["duration"]);
 									$price = (float)$select_package["price"];
 									$orderInsertFields = array("res_id", "product_id", "user_id", "price", "note", "link_url", "date_end", "payment", "shipment", "status");
 									$orderInsertValues = array($tenantId, $product_id, $user["id"], $price, $note, "", $date_end, 0, 0, 0);

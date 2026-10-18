@@ -4347,7 +4347,7 @@ button[name="create_balance_payment"]:hover{
 	display:flex;
 	align-items:center;
 	gap:16px;
-	margin: 0 auto 1.5rem;
+	margin:0 0 1.5rem;
 }
 
 .payment-request-card__head img{
@@ -4359,8 +4359,7 @@ button[name="create_balance_payment"]:hover{
 @media (max-width: 768px) {
 	.payment-request-card__head{
 		gap:16px;
-		margin: 0 auto 1.5rem;
-		max-width: 185px;
+		margin:0 0 1.5rem;
 	}
 	.payment-request-card__head img{
 		width: 45px;
@@ -4377,13 +4376,22 @@ button[name="create_balance_payment"]:hover{
 .payment-request-crypto-title{
 	display:inline-flex;
 	align-items:center;
-	flex-wrap:wrap;
+	flex-wrap:nowrap;
 	gap:8px;
+	line-height:1.2;
+	white-space:nowrap;
+}
+
+.payment-request-crypto-name{
+	display:inline-flex;
+	align-items:center;
+	line-height:1.2;
 }
 
 .crypto-ticker-badge{
 	display:inline-flex;
 	align-items:center;
+	justify-content:center;
 	padding: 2px 6px;
 	font-size:12px;
 	font-weight: 600;
@@ -4394,6 +4402,8 @@ button[name="create_balance_payment"]:hover{
 	border-radius: 2px;
 	font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 	line-height:1.2;
+	white-space:nowrap;
+	flex:0 0 auto;
 }
 
 .payment-request-grid{
@@ -4976,10 +4986,14 @@ body.app-modal-layer-active .messenger-profile-modal.is-open{
 		gap:16px;
 	}
 
+	.payment-request-card{
+		border:none;
+	}
+
 	.payment-request-qr{
 		order:-1;
-		width:100%;
-		max-width:220px;
+		width:min(82vw, 320px);
+		max-width:320px;
 		margin:0 auto;
 	}
 
@@ -7421,3 +7435,64 @@ img.scan{
 		align-items:stretch;
 	}
 }
+
+/* Customer order columns mirror the compact admin order workspace. */
+.orders-view .orders-table-scroll{border:1px solid #e6ebf1;border-radius:12px;max-width:100%;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;}
+.orders-view .orders-table-scroll::-webkit-scrollbar{display:none;width:0;height:0;}
+.orders-view .orders-table-scroll:focus-visible{outline:2px solid #a1b4cb;outline-offset:3px;}
+.orders-view .orders-user-table{table-layout:fixed;min-width:740px;width:100%;font-size:12px;line-height:1.6;}
+.orders-view .orders-user-table .orders-user-table__id-col{width:86px;}
+.orders-view .orders-user-table .orders-user-table__product-col{width:auto;}
+.orders-view .orders-user-table .orders-user-table__expiry-col{width:180px;text-align:left;}
+.orders-view .orders-user-table .orders-user-table__amount-col{width:110px;text-align:center;}
+.orders-view .orders-user-table .orders-user-table__actions-col{width:104px;text-align:right;}
+.orders-view .orders-user-table thead th{padding:11px 12px;background:#fafbfd;color:#8590a1;font-size:10px;font-weight:600;letter-spacing:.045em;text-transform:uppercase;}
+.orders-view .orders-user-table tbody td{padding:12px;border-bottom-color:#eef1f5!important;font-weight:400;}
+.orders-view .orders-user-table tbody tr:last-child td{border-bottom:0!important;}
+.orders-view .orders-user-table tbody td:first-child{display:table-cell!important;text-align:center;}
+.orders-view .orders-user-table thead th:first-child{display:table-cell!important;}
+.orders-user-id{display:block;color:#60738d;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;}
+.orders-user-created{display:block;margin-top:3px;color:#8a97a8;font-size:9px;font-weight:400;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.orders-view .orders-user-summary{min-width:0;gap:5px;}
+.orders-view .orders-user-summary__title-row{min-width:0;flex-wrap:wrap;gap:5px;}
+.orders-view :is(.orders-user-summary__history-toggle,.orders-user-summary__product-trigger){display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;padding:0;border:0;background:transparent;color:#334155;text-align:left;cursor:pointer;}
+.orders-view .orders-user-summary__title-row strong{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;font-size:12px;font-weight:600;line-height:1.6;}
+.orders-view .orders-user-summary__title-row button:focus-visible{outline:2px solid #a1b4cb;outline-offset:3px;border-radius:3px;}
+.orders-view .orders-user-summary__history-toggle i{flex:none;font-size:10px;}
+.orders-view .orders-user-summary__note{font-size:10px;font-weight:400;line-height:1.6;overflow-wrap:anywhere;}
+.orders-view .orders-user-summary__extend-list{margin-top:6px;padding:8px;border:1px solid #e8edf3;border-radius:7px;background:#fafbfd;}
+.orders-view .orders-user-summary__extend-item{font-size:10px;line-height:1.6;}
+.orders-view .orders-user-new-badge{font-size:8px;font-weight:600;padding:2px 4px;border-radius:4px;}
+.orders-view .orders-user-progress{grid-template-columns:30px minmax(0,1fr);gap:7px;max-width:100%;margin:0;}
+.orders-view .orders-user-progress__days{width:30px;height:30px;font-size:11px;font-weight:600;}
+.orders-view .orders-user-progress__meta{gap:5px;font-size:9px;font-weight:400;line-height:1.5;font-variant-numeric:tabular-nums;}
+.orders-view .orders-user-progress__bar{height:5px;margin-top:4px;}
+.orders-view .orders-user-amount{align-items:center;gap:5px;}
+.orders-view .orders-user-amount strong{font-size:12px;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.orders-view .orders-user-status-icon{font-size:14px;}
+.orders-view .orders-user-table__actions-col .btn{display:inline-flex;align-items:center;justify-content:center;width:32px!important;min-width:32px;height:32px;margin:2px 0 2px 3px;padding:0;border-radius:7px;box-shadow:none;font-size:12px;}
+.orders-view .orders-user-table__actions-col .user-order-modal-trigger{border:1px solid #e1e7ef;background:#f4f7fa;color:#52677f;}
+.orders-view .orders-user-table__actions-col .user-order-modal-trigger:hover{border-color:#c9d7e7;background:#eaf0f6;color:#304b6c;}
+.orders-view .orders-user-table__actions-col .btn:focus-visible{outline:2px solid #a1b4cb;outline-offset:2px;}
+.orders-user-expired{display:inline-flex;align-items:center;gap:5px;padding:5px 7px;border:1px solid #f2d6da;border-radius:7px;background:#fff4f5;color:#b33b4b;font-size:10px;line-height:1.5;font-weight:500;}
+.orders-user-expiry-empty{color:#8a97a8;font-size:10px;font-weight:400;}
+.orders-view .orders-history-table{min-width:680px;border:0;table-layout:auto;margin:0;font-size:12px;line-height:1.6;}
+.orders-view .orders-history-table thead :is(th,td){padding:11px 12px;background:#fafbfd;color:#8590a1;font-size:10px;font-weight:600;letter-spacing:.035em;border:0;border-bottom:1px solid #e6ebf1;text-transform:uppercase;}
+.orders-view .orders-history-table tbody td{padding:12px;border:0;border-bottom:1px solid #eef1f5;background:#fff;font-size:12px;font-weight:400;}
+.orders-view .orders-history-table tbody tr:last-child td{border-bottom:0;}
+.orders-view .orders-history-table strong{font-size:12px;font-weight:600;}
+.orders-view .orders-history-table .btn{padding:6px 8px;border-radius:7px;font-size:11px;}
+.orders-view .orders-history-table .orders-history-actions{white-space:nowrap;}
+.orders-view .orders-history-table .orders-product-badges{gap:4px;}
+.orders-view .orders-history-table .badge{font-size:9px;font-weight:500;border-radius:4px;}
+@media(max-width:991px){
+    .orders-view .orders-user-table .orders-user-table__amount-col{width:110px;}
+    .orders-view .orders-user-table .orders-user-table__actions-col{width:112px!important;}
+    .orders-view .orders-user-table tbody td{padding:11px 10px;}
+    .orders-view .orders-user-table__actions-col .btn{width:40px!important;min-width:40px;height:40px;}
+    .orders-view .orders-history-table .btn{min-height:40px;display:inline-flex;align-items:center;}
+    .orders-view .orders-history-table td{display:table-cell;width:auto;}
+}
+
+.orders-view .orders-user-table .orders-user-table__actions-col:not(:has(a)){text-align:center;}
+.orders-view .orders-user-table__actions-col>.user-order-modal-trigger:only-child{margin-inline:0;}

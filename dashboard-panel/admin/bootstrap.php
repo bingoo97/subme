@@ -6688,6 +6688,7 @@ function admin_order_pending_renewal_context(Mysql_ks $db, array $order): array
     $context = [
         'has_pending' => false,
         'has_paid_pending_activation' => false,
+        'balance_reserved' => false,
         'renewal_id' => 0,
         'product_id' => 0,
         'status' => '',
@@ -6702,7 +6703,7 @@ function admin_order_pending_renewal_context(Mysql_ks $db, array $order): array
         'customer_balance_label' => '',
     ];
 
-    if ($orderId <= 0 || !schema_object_exists($db, 'order_renewals')) {
+    if ($orderId <= 0 || in_array(strtolower(trim((string)($order['status'] ?? ''))), ['cancelled','refunded','failed','inactive','archived'], true) || !schema_object_exists($db, 'order_renewals')) {
         $cache[$cacheKey] = $context;
         return $context;
     }
@@ -6721,6 +6722,7 @@ function admin_order_pending_renewal_context(Mysql_ks $db, array $order): array
     $context['has_paid_pending_activation'] = $renewalStatus === 'paid_pending_activation';
 
     if ($context['has_paid_pending_activation']) {
+        $context['balance_reserved'] = admin_order_renewal_balance_reserved($db, $pendingRenewal);
         $paymentType = strtolower(trim((string)($pendingRenewal['payment_request_type'] ?? '')));
         $paymentId = (int)($pendingRenewal['payment_request_id'] ?? 0);
         if (in_array($paymentType, ['crypto', 'bank'], true) && $paymentId > 0) {
@@ -7335,6 +7337,14 @@ function admin_order_status_visual(array $order): array
     $fulfillmentStatus = strtolower(trim((string)($order['fulfillment_status'] ?? '')));
     $hasPaidPendingRenewal = !empty($order['has_paid_pending_renewal']);
 
+    if ($status === 'cancelled' || $fulfillmentStatus === 'cancelled') {
+        return [
+            'icon' => 'bi bi-slash-circle-fill',
+            'class' => 'admin-order-status-icon--cancelled',
+            'label' => 'Cancelled',
+        ];
+    }
+
     if ($hasPaidPendingRenewal) {
         return [
             'icon' => 'bi bi-arrow-repeat',
@@ -7368,14 +7378,6 @@ function admin_order_status_visual(array $order): array
             'icon' => 'bi bi-x-circle-fill',
             'class' => 'admin-order-status-icon--expired',
             'label' => 'Expired',
-        ];
-    }
-
-    if ($status === 'cancelled' || $fulfillmentStatus === 'cancelled') {
-        return [
-            'icon' => 'bi bi-slash-circle-fill',
-            'class' => 'admin-order-status-icon--cancelled',
-            'label' => 'Cancelled',
         ];
     }
 
@@ -9148,7 +9150,8 @@ function admin_apply_customer_balance_runtime_event(
     string $sourceKey,
     string $note,
     int $adminUserId = 0,
-    string $ipAddress = ''
+    string $ipAddress = '',
+    bool $joinTransaction = false
 ): array
 {
     $note = admin_localize_activity_description('balance_event_note', $note);
@@ -9163,7 +9166,8 @@ function admin_apply_customer_balance_runtime_event(
         $note,
         'admin',
         $adminUserId,
-        $ipAddress
+        $ipAddress,
+        $joinTransaction
     );
 
     if (!empty($result['ok']) && empty($result['already_applied']) && $adminUserId > 0) {
@@ -9579,13 +9583,68 @@ function admin_topbar_notification_payment_rows(Mysql_ks $db, bool $includeBankT
     return admin_payment_rows($db, max(1, min(20, $limit)), 0, 'open', '', $includeBankTransfers);
 }
 
-function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): array
+/** A paid renewal remains actionable even while the underlying order is active or expired. */
+function admin_topbar_order_task_where_sql(): string
+{
+    return "orders.payment_status = 'paid'
+        AND COALESCE(orders.status, '') NOT IN ('cancelled','refunded','failed','inactive','archived')
+        AND (
+            (orders.status <> 'expired' AND (orders.status NOT IN ('active','approved','completed','fulfilled')
+                OR COALESCE(orders.fulfillment_status, '') NOT IN ('delivered','fulfilled','completed','shipped','sent')))
+            OR EXISTS (SELECT 1 FROM order_renewals
+                WHERE order_renewals.order_id = orders.id AND order_renewals.status = 'paid_pending_activation')
+        )";
+}
+
+function admin_topbar_order_task(array $row, array $messages): array
+{
+    $renewal = !empty($row['has_paid_pending_renewal']);
+    $subscription = admin_product_type_uses_expiry($row['product_type'] ?? 'subscription');
+    $providerUrl = trim((string)($row['dashboard_url'] ?? ''));
+    $parts = parse_url($providerUrl);
+    if (!$parts || !in_array(strtolower((string)($parts['scheme'] ?? '')), ['http','https'], true)
+        || empty($parts['host']) || isset($parts['user']) || isset($parts['pass']) || preg_match('/[\x00-\x20\x7f]/', $providerUrl)) $providerUrl = '';
+    $titleRow = $row;
+    if ($renewal) {
+        $titleRow['product_name'] = ($row['renewal_product_name'] ?? '') ?: ($row['product_name'] ?? '');
+        $titleRow['duration_hours'] = $row['renewal_duration_hours'] ?? $row['duration_hours'] ?? 0;
+    }
+    $paymentType = $renewal ? (string)($row['renewal_payment_type'] ?? '') : (!empty($row['crypto_payment_id']) ? 'crypto' : 'bank');
+    $paymentId = $renewal ? (int)($row['renewal_payment_id'] ?? 0) : (int)($row[$paymentType . '_payment_id'] ?? 0);
+    return [
+        'kind' => $renewal ? 'renewal' : ($subscription ? 'activation' : 'fulfillment'),
+        'title' => admin_t($messages, $renewal ? 'topbar_task_renewal' : 'topbar_task_fulfillment', $renewal ? 'Renewal to complete' : 'Order to complete'),
+        'product' => admin_order_product_title($titleRow, $messages),
+        'amount' => admin_format_money_value_with_symbol(
+            $renewal ? ($row['renewal_price_amount'] ?? null) : ($row['total_amount'] ?? null),
+            (string)($row['task_currency_code'] ?? $row['currency_code'] ?? ''),
+            (string)($row['task_currency_symbol'] ?? $row['currency_symbol'] ?? '')
+        ),
+        'step_one' => admin_t($messages, $renewal ? 'topbar_task_extend_provider' : ($subscription ? 'topbar_task_activate_provider' : 'topbar_task_deliver'), $renewal ? 'Extend the subscription in the provider panel.' : 'Prepare access for the customer.'),
+        'step_two' => admin_t($messages, $renewal ? 'topbar_task_confirm_renewal' : 'topbar_task_confirm_order', $renewal ? 'In Orders, confirm the extension in the Renew tab.' : 'In Orders, set the status to ACTIVE and save.'),
+        'provider_url' => $providerUrl,
+        'order_url' => '/admin/?page=orders&order_id=' . (int)$row['id'],
+        'payment_url' => $paymentId > 0 && in_array($paymentType, ['crypto','bank'], true) ? '/admin/?page=payments&payment_type=' . $paymentType . '&payment_id=' . $paymentId : '',
+    ];
+}
+
+function admin_topbar_order_tasks_html(array $taskRows, int $taskTotal, array $messages): string
+{
+    ob_start();
+    require __DIR__ . '/partials/notification-order-tasks.php';
+    return (string)ob_get_clean();
+}
+
+function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8, int $orderId = 0): array
 {
     if (!schema_object_exists($db, 'orders')) {
         return [];
     }
 
     app_ensure_customer_runtime_columns($db);
+    app_ensure_order_renewal_runtime_columns($db);
+    $taskWhere = admin_topbar_order_task_where_sql();
+    $orderWhere = $orderId > 0 ? " AND orders.id = {$orderId}" : "";
 
     $limit = max(1, min(20, $limit));
     $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
@@ -9604,14 +9663,28 @@ function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): arr
             orders.total_amount,
             orders.created_at,
             orders.paid_at,
+            orders.expires_at,
+            task_renewal.id AS pending_renewal_id,
+            (task_renewal.id IS NOT NULL) AS has_paid_pending_renewal,
+            task_renewal.price_amount AS renewal_price_amount,
+            task_renewal.duration_hours AS renewal_duration_hours,
+            task_renewal.paid_at AS renewal_paid_at,
+            task_renewal.payment_request_type AS renewal_payment_type,
+            task_renewal.payment_request_id AS renewal_payment_id,
+            renewal_product.name AS renewal_product_name,
+            COALESCE(task_renewal.paid_at, task_renewal.requested_at, orders.paid_at, orders.created_at) AS task_waiting_since,
             customers.email AS customer_email,
             {$customerHandleSelect},
             products.provider_id,
             products.name AS product_name,
             products.duration_hours,
+            products.product_type,
             product_providers.name AS provider_name,
             product_providers.dashboard_url,
             currencies.code AS currency_code,
+            currencies.symbol AS currency_symbol,
+            COALESCE(renewal_currency.code, currencies.code) AS task_currency_code,
+            COALESCE(renewal_currency.symbol, currencies.symbol) AS task_currency_symbol,
             (
                 SELECT crypto_deposit_requests.id
                 FROM crypto_deposit_requests
@@ -9667,38 +9740,29 @@ function admin_topbar_notification_order_rows(Mysql_ks $db, int $limit = 8): arr
                 LIMIT 1
             ) AS wallet_asset_code
          FROM orders
+         LEFT JOIN order_renewals AS task_renewal ON task_renewal.id = (
+             SELECT id FROM order_renewals
+             WHERE order_id = orders.id AND status = 'paid_pending_activation'
+             ORDER BY id DESC LIMIT 1
+         )
+         LEFT JOIN products AS renewal_product ON renewal_product.id = task_renewal.product_id
+         LEFT JOIN currencies AS renewal_currency ON renewal_currency.id = task_renewal.currency_id
          LEFT JOIN customers ON customers.id = orders.customer_id
          LEFT JOIN products ON products.id = orders.product_id
          LEFT JOIN product_providers ON product_providers.id = products.provider_id
          LEFT JOIN currencies ON currencies.id = orders.currency_id
-         WHERE orders.payment_status = 'paid'
-           AND (
-                orders.status <> 'active'
-                OR COALESCE(orders.fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
-           )
-           AND COALESCE(orders.status, '') NOT IN ('cancelled', 'expired')
-         ORDER BY COALESCE(orders.paid_at, orders.created_at) DESC, orders.id DESC
+         WHERE {$taskWhere}{$orderWhere}
+         ORDER BY task_waiting_since ASC, orders.id ASC
          LIMIT {$limit}"
     );
 }
 
 function admin_topbar_notification_order_count(Mysql_ks $db): int
 {
-    if (!schema_object_exists($db, 'orders')) {
-        return 0;
-    }
-
-    $row = $db->select_user(
-        "SELECT COUNT(*) AS total
-         FROM orders
-         WHERE payment_status = 'paid'
-           AND (
-                status <> 'active'
-                OR COALESCE(fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
-           )
-           AND COALESCE(status, '') NOT IN ('cancelled', 'expired')"
-    );
-
+    if (!schema_object_exists($db, 'orders')) return 0;
+    app_ensure_order_renewal_runtime_columns($db);
+    $where = admin_topbar_order_task_where_sql();
+    $row = $db->select_user("SELECT COUNT(*) AS total FROM orders WHERE {$where}");
     return (int)($row['total'] ?? 0);
 }
 
@@ -9940,14 +10004,14 @@ function admin_topbar_manual_backup_notice(array $settings, int $intervalHours =
     ];
 }
 
-function admin_topbar_admin_panel_subscription_notice(array $settings, int $warningDays = 7): array
+function admin_topbar_admin_panel_subscription_notice(array $settings, int $warningDays = 7, ?int $now = null): array
 {
     $paidUntil = trim((string)($settings['admin_panel_subscription_paid_until'] ?? ''));
     $renewalUrl = trim((string)($settings['admin_panel_subscription_renewal_url'] ?? ''));
-    $paidUntilTimestamp = $paidUntil !== '' ? strtotime($paidUntil . ' 23:59:59') : false;
+    $paidUntilTimestamp = app_panel_subscription_paid_until_timestamp($settings);
     $warningDays = max(1, $warningDays);
 
-    if ($paidUntilTimestamp === false) {
+    if ($paidUntilTimestamp === null) {
         return [
             'show' => false,
             'paid_until' => $paidUntil,
@@ -9958,7 +10022,7 @@ function admin_topbar_admin_panel_subscription_notice(array $settings, int $warn
         ];
     }
 
-    $secondsLeft = $paidUntilTimestamp - time();
+    $secondsLeft = $paidUntilTimestamp - ($now ?? time());
     $daysLeft = $secondsLeft >= 0
         ? (int)ceil($secondsLeft / 86400)
         : -1 * (int)ceil(abs($secondsLeft) / 86400);
@@ -9976,16 +10040,16 @@ function admin_topbar_admin_panel_subscription_notice(array $settings, int $warn
     ];
 }
 
-function admin_topbar_notification_count(Mysql_ks $db, array $settings): int
+function admin_topbar_notification_count(Mysql_ks $db, array $settings, ?int $taskTotal = null): int
 {
     $payments = admin_topbar_notification_payment_rows($db, admin_bank_transfers_enabled($settings), 8);
-    $orders = admin_topbar_notification_order_rows($db, 8);
+    $taskTotal = $taskTotal ?? admin_topbar_notification_order_count($db);
     $autoAcceptedPayments = admin_topbar_notification_auto_accepted_crypto_payment_rows($db, 5, 24);
     $backup = admin_topbar_manual_backup_notice($settings, 168);
     $adminPanelSubscription = admin_topbar_admin_panel_subscription_notice($settings, 7);
 
     return count($payments)
-        + count($orders)
+        + $taskTotal
         + count($autoAcceptedPayments)
         + (!empty($adminPanelSubscription['show']) ? 1 : 0)
         + (!empty($backup['show']) ? 1 : 0);
@@ -10299,10 +10363,47 @@ function admin_save_payment(Mysql_ks $db, string $paymentType, int $paymentId, a
     $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
     if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => false, 'message' => 'Another payment operation is in progress. Please retry shortly.'];
     try {
-        return admin_save_payment_locked($db, $paymentType, $paymentId, $input, $adminUserId, $ipAddress);
+        $result = admin_save_payment_locked($db, $paymentType, $paymentId, $input, $adminUserId, $ipAddress);
+        if (!empty($result['ok'])
+            && in_array(strtolower((string)$payment['status']), admin_payment_success_statuses($paymentType), true)
+            && isset($input['status'])
+            && !in_array(strtolower(trim((string)$input['status'])), admin_payment_success_statuses($paymentType), true)) {
+            $fresh = admin_payment_find($db, $paymentType, $paymentId);
+            if (is_array($fresh) && !admin_sync_order_after_payment_reversal($db, $payment, $fresh)) {
+                return ['ok' => false, 'message' => 'Unable to update the linked order after changing payment approval. Refresh and retry.'];
+            }
+        }
+        return $result;
     } finally {
         $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($key) . "') released");
     }
+}
+
+/** Revoke only unfinished work tied to this payment; preserve fulfilled access and ledger entries. */
+function admin_sync_order_after_payment_reversal(Mysql_ks $db, array $previous, array $current): bool
+{
+    $type = (string)($previous['payment_type'] ?? '');
+    $orderId = (int)($previous['order_id'] ?? 0);
+    $paymentId = (int)($previous['id'] ?? 0);
+    if ($orderId <= 0 || $paymentId <= 0 || !in_array($type, ['crypto', 'bank'], true)
+        || in_array(strtolower((string)($current['status'] ?? '')), admin_payment_success_statuses($type), true)) return true;
+    $safeType = $db->escape($type);
+    $renewal = $db->select_user("SELECT id, status FROM order_renewals
+        WHERE order_id = {$orderId} AND payment_request_type = '{$safeType}' AND payment_request_id = {$paymentId}
+        ORDER BY id DESC LIMIT 1");
+    if ($db->error) return false;
+    if (is_array($renewal) && !empty($renewal['id'])) {
+        if ($renewal['status'] !== 'paid_pending_activation') return true;
+        return (bool)$db->update_using_id(['status', 'paid_at'], ['pending_payment', null], 'order_renewals', (int)$renewal['id']);
+    }
+    $credit = admin_find_order_payment_balance_credit_event($db, $orderId);
+    if (is_array($credit) && (string)$credit['source_key'] !== $type . ':' . $paymentId) return true;
+    // The original payment may be edited after an order has already been fulfilled.
+    return $db->query("UPDATE orders SET payment_status = 'unpaid', paid_at = NULL
+        WHERE id = {$orderId} AND customer_id = " . (int)($previous['customer_id'] ?? 0) . "
+          AND status IN ('pending_payment','pending','awaiting_review','pending_activation')
+          AND payment_status = 'paid' AND COALESCE(payment_method, '') <> 'balance'
+          AND COALESCE(fulfillment_status, '') NOT IN ('delivered','fulfilled','completed','shipped','sent')") !== false;
 }
 
 function admin_save_payment_locked(
@@ -10951,11 +11052,13 @@ function admin_finalize_successful_payment(
             $approvalTimestamp = function_exists('app_current_datetime_string') ? app_current_datetime_string() : date('Y-m-d H:i:s');
             $renewalNote = trim((string)($pendingRenewal['renewal_note'] ?? ''));
             $approvalNote = 'Payment approved on ' . $approvalTimestamp . '. Waiting for manual extension in admin panel.';
+            // Re-approval must not append the same notice until the VARCHAR(255) overflows.
+            $approvedRenewalNote = strpos($renewalNote, 'Waiting for manual extension in admin panel.') !== false
+                ? $renewalNote : ($renewalNote !== '' ? $renewalNote . "\n" . $approvalNote : $approvalNote);
+            if (mb_strlen($approvedRenewalNote, 'UTF-8') > 255) $approvedRenewalNote = $renewalNote;
             $updatedRenewal = $db->update_using_id(
                 ['renewal_note'],
-                [
-                    $renewalNote !== '' ? ($renewalNote . "\n" . $approvalNote) : $approvalNote,
-                ],
+                [$approvedRenewalNote],
                 'order_renewals',
                 $renewalId
             );
@@ -11260,110 +11363,9 @@ function admin_payment_accept_with_order(
 
 function admin_topbar_notification_order_row_by_id(Mysql_ks $db, int $orderId): ?array
 {
-    if ($orderId <= 0 || !schema_object_exists($db, 'orders')) {
-        return null;
-    }
-
-    app_ensure_customer_runtime_columns($db);
-
-    $customerHandleSelect = schema_column_exists($db, 'customers', 'public_handle')
-        ? 'customers.public_handle'
-        : "'' AS public_handle";
-
-    $rows = $db->select_full_user(
-        "SELECT
-            orders.id,
-            orders.customer_id,
-            orders.product_id,
-            orders.payment_method,
-            orders.status,
-            orders.payment_status,
-            orders.fulfillment_status,
-            orders.total_amount,
-            orders.created_at,
-            orders.paid_at,
-            customers.email AS customer_email,
-            {$customerHandleSelect},
-            products.provider_id,
-            products.name AS product_name,
-            products.duration_hours,
-            product_providers.name AS provider_name,
-            product_providers.dashboard_url,
-            currencies.code AS currency_code,
-            (
-                SELECT crypto_deposit_requests.id
-                FROM crypto_deposit_requests
-                WHERE crypto_deposit_requests.order_id = orders.id
-                ORDER BY crypto_deposit_requests.id DESC
-                LIMIT 1
-            ) AS crypto_payment_id,
-            (
-                SELECT bank_transfer_requests.id
-                FROM bank_transfer_requests
-                WHERE bank_transfer_requests.order_id = orders.id
-                ORDER BY bank_transfer_requests.id DESC
-                LIMIT 1
-            ) AS bank_payment_id,
-            (
-                SELECT crypto_wallet_addresses.id
-                FROM crypto_deposit_requests
-                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
-                WHERE crypto_deposit_requests.order_id = orders.id
-                ORDER BY crypto_deposit_requests.id DESC
-                LIMIT 1
-            ) AS wallet_address_id,
-            (
-                SELECT crypto_wallet_addresses.address
-                FROM crypto_deposit_requests
-                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
-                WHERE crypto_deposit_requests.order_id = orders.id
-                ORDER BY crypto_deposit_requests.id DESC
-                LIMIT 1
-            ) AS wallet_address,
-            (
-                SELECT crypto_wallet_addresses.label
-                FROM crypto_deposit_requests
-                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
-                WHERE crypto_deposit_requests.order_id = orders.id
-                ORDER BY crypto_deposit_requests.id DESC
-                LIMIT 1
-            ) AS wallet_label,
-            (
-                SELECT crypto_wallet_addresses.network_code
-                FROM crypto_deposit_requests
-                INNER JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
-                WHERE crypto_deposit_requests.order_id = orders.id
-                ORDER BY crypto_deposit_requests.id DESC
-                LIMIT 1
-            ) AS wallet_network_code,
-            (
-                SELECT crypto_assets.code
-                FROM crypto_deposit_requests
-                INNER JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
-                WHERE crypto_deposit_requests.order_id = orders.id
-                ORDER BY crypto_deposit_requests.id DESC
-                LIMIT 1
-            ) AS wallet_asset_code
-         FROM orders
-         LEFT JOIN customers ON customers.id = orders.customer_id
-         LEFT JOIN products ON products.id = orders.product_id
-         LEFT JOIN product_providers ON product_providers.id = products.provider_id
-         LEFT JOIN currencies ON currencies.id = orders.currency_id
-         WHERE orders.id = {$orderId}
-           AND orders.payment_status = 'paid'
-           AND (
-                orders.status <> 'active'
-                OR COALESCE(orders.fulfillment_status, '') NOT IN ('delivered', 'fulfilled', 'completed')
-           )
-           AND COALESCE(orders.status, '') <> 'cancelled'
-         LIMIT 1"
-    );
-
-    if (!$rows || !isset($rows[0]) || !is_array($rows[0])) {
-        return null;
-    }
-
-    return $rows[0];
+    if ($orderId <= 0) return null;
+    $rows = admin_topbar_notification_order_rows($db, 1, $orderId);
+    return $rows[0] ?? null;
 }
 
 function admin_payment_cancel_with_order(
@@ -11753,7 +11755,7 @@ function admin_crypto_accept_preview_fit_analysis(array $row, float $requestedCr
         $amountPercent = max($amountPercent, (int)round(max(0, min(100, $cryptoPaidPercent))));
     }
 
-    if ($requestedFiatAmount > 0 && $amountFiat > 0) {
+    if ($requestedCryptoAmount <= 0 && $requestedFiatAmount > 0 && $amountFiat > 0) {
         $fiatPaidPercent = ($amountFiat / $requestedFiatAmount) * 100;
         $amountPercent = max($amountPercent, (int)round(max(0, min(100, $fiatPaidPercent))));
     }
@@ -11905,6 +11907,7 @@ function admin_crypto_accept_preview_db_rows(Mysql_ks $db, array $paymentRow, in
                 'amount_fiat' => $amountFiat,
                 'timestamp' => $timestamp,
             ], $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, $requestedTimestamp),
+            'deposit_request_id' => (int)($row['deposit_request_id'] ?? 0),
             'source' => 'db',
         ];
         $result[] = $mappedRow;
@@ -13417,6 +13420,79 @@ function admin_crypto_accept_preview_wallet_balance(array $paymentRow): array
     return $balance;
 }
 
+/** Classify request candidates separately from wallet history. This does not verify or accept a payment. */
+function admin_crypto_accept_preview_classify_rows(array $rows, array $paymentRow, array $messages = [], int $windowHours = 24, ?int $now = null): array
+{
+    $now = $now ?? time();
+    $requestedTimestamp = (int)app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''));
+    $requestedCrypto = (float)($paymentRow['requested_amount_crypto'] ?? $paymentRow['amount_crypto'] ?? 0);
+    $requestedFiat = (float)($paymentRow['requested_amount_value'] ?? $paymentRow['amount_value'] ?? 0);
+    $rate = (float)($paymentRow['exchange_rate'] ?? 0);
+    $paymentId = (int)($paymentRow['id'] ?? 0);
+    $windowEnd = min($now, $requestedTimestamp + max(1, min(72, $windowHours)) * 3600);
+    $transactions = [];
+    $history = [];
+    $linked = [];
+    foreach ($rows as $row) {
+        $amount = (float)($row['amount_crypto'] ?? 0);
+        $timestamp = (int)($row['timestamp'] ?? 0);
+        $claim = (int)($row['deposit_request_id'] ?? 0);
+        $isLinked = $paymentId > 0 && $claim === $paymentId;
+        $row['candidate'] = $isLinked;
+        $row['candidate_score'] = $isLinked ? 999 : 0;
+        $analysis = is_finite($amount) && is_finite($requestedCrypto) && is_finite($requestedFiat) && is_finite($rate)
+            ? admin_crypto_accept_preview_fit_analysis($row, $requestedCrypto, $requestedFiat, $rate, $requestedTimestamp, $messages)
+            : ['percent' => 0];
+        $reason = '';
+        if (strtolower((string)($row['direction'] ?? 'incoming')) !== 'incoming') {
+            $reason = 'outgoing';
+        } elseif (!is_finite($amount) || $amount <= 0 || trim((string)($row['hash'] ?? '')) === '') {
+            $reason = 'unverified';
+        } elseif ($claim > 0 && !$isLinked) {
+            $reason = 'assigned';
+        } elseif (!$isLinked) {
+            if ($requestedTimestamp <= 0 || $timestamp <= 0 || $timestamp > $now) {
+                $reason = 'unverified';
+            } elseif ($timestamp < $requestedTimestamp) {
+                $reason = 'before';
+            } elseif ($timestamp > $windowEnd) {
+                $reason = 'outside';
+            } elseif (!is_finite($requestedCrypto) || !is_finite($requestedFiat) || !is_finite($rate)
+                || ($requestedCrypto <= 0 && $requestedFiat <= 0) || (int)($analysis['percent'] ?? 0) < 70) {
+                $reason = 'amount';
+            }
+        }
+        $row['candidate'] = false;
+        // Scores are internal ranking hints, never a probability that the customer paid.
+        $row['match_percent'] = (int)($analysis['percent'] ?? 0);
+        $row['match_text'] = '';
+        if ($reason !== '') {
+            $labels = [
+                'before' => ['payment_accept_modal_history_before', 'Przed utworzeniem requestu'],
+                'outside' => ['payment_accept_modal_history_outside', 'Poza oknem tego requestu'],
+                'assigned' => ['payment_accept_modal_history_assigned', 'Przypisana do innej płatności'],
+                'outgoing' => ['payment_accept_modal_history_outgoing', 'Wypłata z portfela'],
+                'amount' => ['payment_accept_modal_history_amount', 'Kwota nie pasuje do requestu'],
+                'unverified' => ['payment_accept_modal_history_unverified', 'Dane wymagają ręcznej weryfikacji'],
+            ];
+            $row['history_reason'] = admin_t($messages, $labels[$reason][0], $labels[$reason][1]);
+            $row['history_reason_code'] = $reason;
+            $history[] = $row;
+        } else {
+            if ($isLinked) $linked[] = count($transactions);
+            $transactions[] = $row;
+        }
+    }
+    // Never choose an arbitrary payment or prefill its amount when several transfers qualify.
+    $selected = count($linked) === 1 ? $linked[0] : (count($transactions) === 1 ? 0 : null);
+    $candidate = null;
+    if ($selected !== null) {
+        $transactions[$selected]['candidate'] = true;
+        $candidate = $transactions[$selected];
+    }
+    return ['transactions' => $transactions, 'history' => $history, 'candidate' => $candidate, 'linked' => count($linked) > 0];
+}
+
 function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, array $messages, int $windowHours = 24): array
 {
     $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
@@ -13424,87 +13500,56 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
     $walletAddress = trim((string)($paymentRow['wallet_address'] ?? ''));
     $transactions = admin_crypto_accept_preview_db_rows($db, $paymentRow, $windowHours);
 
-    if (!$transactions && ($assetCode === 'BTC' || $networkCode === 'bitcoin')) {
-        $transactions = admin_crypto_accept_preview_btc_remote_rows($paymentRow, $windowHours);
-    } elseif (!$transactions && ($assetCode === 'DOGE' || $networkCode === 'dogecoin')) {
-        $transactions = admin_crypto_accept_preview_doge_remote_rows($paymentRow, $windowHours);
-    } elseif (!$transactions && $networkCode === 'ethereum' && $assetCode === 'ETH') {
-        $transactions = admin_crypto_accept_preview_eth_native_rows($paymentRow, $windowHours);
-    } elseif (!$transactions && $networkCode === 'ethereum') {
-        $transactions = admin_crypto_accept_preview_eth_token_rows($paymentRow, $windowHours);
-    } elseif (!$transactions && ($assetCode === 'TRX' || $networkCode === 'tron')) {
-        $transactions = admin_crypto_accept_preview_trx_rows($paymentRow, $windowHours);
-    } elseif (!$transactions && ($assetCode === 'SOL' || $networkCode === 'solana')) {
-        $transactions = admin_crypto_accept_preview_sol_rows($paymentRow, $windowHours);
+    // Consult the existing cached chain readers even when the database contains older transfers.
+    // Otherwise a historical database row can hide a new incoming payment indefinitely.
+    $remoteRows = [];
+    if ($assetCode === 'BTC' || $networkCode === 'bitcoin') {
+        $remoteRows = admin_crypto_accept_preview_btc_remote_rows($paymentRow, $windowHours);
+    } elseif ($assetCode === 'DOGE' || $networkCode === 'dogecoin') {
+        $remoteRows = admin_crypto_accept_preview_doge_remote_rows($paymentRow, $windowHours);
+    } elseif ($networkCode === 'ethereum' && $assetCode === 'ETH') {
+        $remoteRows = admin_crypto_accept_preview_eth_native_rows($paymentRow, $windowHours);
+    } elseif ($networkCode === 'ethereum') {
+        $remoteRows = admin_crypto_accept_preview_eth_token_rows($paymentRow, $windowHours);
+    } elseif ($assetCode === 'TRX' || $networkCode === 'tron') {
+        $remoteRows = admin_crypto_accept_preview_trx_rows($paymentRow, $windowHours);
+    } elseif ($assetCode === 'SOL' || $networkCode === 'solana') {
+        $remoteRows = admin_crypto_accept_preview_sol_rows($paymentRow, $windowHours);
     }
-
-    $requestedTimestamp = function_exists('app_timestamp_from_runtime_datetime')
-        ? app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''))
-        : strtotime((string)($paymentRow['requested_at'] ?? ''));
-    $requestedCryptoAmount = isset($paymentRow['requested_amount_crypto']) && $paymentRow['requested_amount_crypto'] !== null
-        ? (float)$paymentRow['requested_amount_crypto']
-        : (float)($paymentRow['amount_crypto'] ?? 0);
-    $requestedFiatAmount = isset($paymentRow['requested_amount_value']) && $paymentRow['requested_amount_value'] !== null
-        ? (float)$paymentRow['requested_amount_value']
-        : (float)($paymentRow['amount_value'] ?? 0);
-    $lockedRate = (float)($paymentRow['exchange_rate'] ?? 0);
-
-    $bestIndex = null;
-    $bestPercent = -1;
-    $bestAnalysis = null;
-    $linkedIndex = null;
-    foreach ($transactions as $index => $row) {
-        $analysis = admin_crypto_accept_preview_fit_analysis($row, $requestedCryptoAmount, $requestedFiatAmount, $lockedRate, (int)$requestedTimestamp, $messages);
-        $transactions[$index]['candidate'] = false;
-        $transactions[$index]['match_percent'] = (int)($analysis['percent'] ?? 0);
-        $transactions[$index]['match_score'] = (float)($analysis['score'] ?? 0.0);
-        $transactions[$index]['match_tone'] = (string)($analysis['tone'] ?? 'warning');
-        $transactions[$index]['match_title'] = (string)($analysis['title'] ?? '');
-        $transactions[$index]['match_text'] = (string)($analysis['text'] ?? '');
-
-        if (!empty($row['candidate']) && (float)($row['candidate_score'] ?? 0) >= 999.0) {
-            $linkedIndex = $index;
-        }
-
-        $percent = (int)($analysis['percent'] ?? 0);
-        if ($percent > $bestPercent) {
-            $bestPercent = $percent;
-            $bestIndex = $index;
-            $bestAnalysis = $analysis;
+    $byHash = [];
+    $hashKey = static fn(string $hash): string => $networkCode === 'solana' ? $hash : strtolower($hash);
+    foreach (array_merge($remoteRows, $transactions) as $row) {
+        $hash = trim((string)($row['hash'] ?? ''));
+        if ($hash !== '') $byHash[$hashKey($hash)] = $row;
+    }
+    // One bounded query also excludes remote transfers already claimed by another request.
+    if ($byHash && schema_object_exists($db, 'crypto_deposit_transactions')) {
+        $hashSql = "'" . implode("','", array_map(static fn(array $row): string => $db->escape((string)$row['hash']), array_values($byHash))) . "'";
+        foreach ((array)$db->select_full_user("SELECT transaction_hash, deposit_request_id FROM crypto_deposit_transactions WHERE transaction_hash IN ({$hashSql})") as $claim) {
+            $hash = $hashKey((string)($claim['transaction_hash'] ?? ''));
+            if (isset($byHash[$hash])) $byHash[$hash]['deposit_request_id'] = (int)($claim['deposit_request_id'] ?? 0);
         }
     }
-    $hasCandidate = false;
-    $candidateRow = null;
-    if ($linkedIndex !== null) {
-        $transactions[$linkedIndex]['candidate'] = true;
-        $hasCandidate = true;
-        $candidateRow = $transactions[$linkedIndex];
-        $bestIndex = $linkedIndex;
-        $bestPercent = (int)($transactions[$linkedIndex]['match_percent'] ?? 100);
-        $bestAnalysis = [
-            'title' => (string)($transactions[$linkedIndex]['match_title'] ?? ''),
-            'text' => (string)($transactions[$linkedIndex]['match_text'] ?? ''),
-            'tone' => (string)($transactions[$linkedIndex]['match_tone'] ?? 'success'),
-            'percent' => $bestPercent,
-        ];
-    } elseif ($bestIndex !== null && $bestPercent >= 70) {
-        $transactions[$bestIndex]['candidate'] = true;
-        $hasCandidate = true;
-        $candidateRow = $transactions[$bestIndex];
-    }
-
+    uasort($byHash, static fn(array $a, array $b): int => (int)($b['timestamp'] ?? 0) <=> (int)($a['timestamp'] ?? 0));
+    $classified = admin_crypto_accept_preview_classify_rows(array_values($byHash), $paymentRow, $messages, $windowHours);
+    $transactions = $classified['transactions'];
+    $candidateRow = $classified['candidate'];
+    $hasCandidate = count($transactions) > 0;
     $matchSummaryTitle = '';
     $matchSummaryText = '';
-    $matchSummaryTone = 'warning';
-    $matchSummaryPercent = $bestPercent >= 0 ? $bestPercent : 0;
-    if ($bestIndex !== null && is_array($bestAnalysis)) {
-        $matchSummaryTitle = (string)($bestAnalysis['title'] ?? '');
-        $matchSummaryText = (string)($bestAnalysis['text'] ?? '');
-        $matchSummaryTone = (string)($bestAnalysis['tone'] ?? 'warning');
-        if (!$hasCandidate) {
-            $matchSummaryTitle = admin_t($messages, 'payment_accept_modal_best_match_title', 'Najlepsze dopasowanie {percent}%', ['percent' => (string)$matchSummaryPercent]);
+    $matchSummaryTone = 'info';
+    if ($hasCandidate) {
+        $matchSummaryTitle = admin_t($messages, 'payment_accept_modal_found_title', 'Wpłata do sprawdzenia');
+        $matchSummaryText = admin_t($messages, 'payment_accept_modal_found_text', 'Czas i kwota mogą pasować. Sprawdź adres oraz potwierdzenia w explorerze przed akceptacją.');
+        if (count($transactions) > 1 && $candidateRow === null) {
+            $matchSummaryTitle = admin_t($messages, 'payment_accept_modal_multiple_title', 'Znaleziono kilka możliwych wpłat');
+            $matchSummaryText = admin_t($messages, 'payment_accept_modal_multiple_text', 'Sprawdź transakcje w explorerze i wpisz właściwą kwotę. Żadna wpłata nie została wybrana automatycznie.');
+        } elseif ($classified['linked']) {
+            $matchSummaryTitle = admin_t($messages, 'payment_accept_modal_linked_title', 'Transakcja przypisana do requestu');
+            $matchSummaryText = admin_t($messages, 'payment_accept_modal_linked_text', 'Sprawdź szczegóły transakcji i kwotę do zaksięgowania.');
         }
     }
+    $matchSummaryPercent = $candidateRow !== null ? (int)$candidateRow['match_percent'] : 0;
 
     $balance = admin_crypto_accept_preview_wallet_balance($paymentRow);
     $theme = admin_crypto_accept_preview_theme($assetCode);
@@ -13523,17 +13568,21 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
         'balance_title' => admin_t($messages, 'payment_accept_modal_wallet_balance', '{asset} balance', ['asset' => $assetCode !== '' ? $assetCode : 'Crypto']),
         'balance_crypto_label' => (string)($balance['crypto'] ?? ''),
         'balance_fiat_label' => (string)($balance['fiat'] ?? ''),
-        'transactions_title' => admin_t($messages, 'payment_accept_modal_transactions_title', 'Recent transactions'),
+        'transactions_title' => admin_t($messages, 'payment_accept_modal_transactions_title', 'Wpłaty dla tego requestu'),
         'has_candidate' => $hasCandidate ? 1 : 0,
         'match_summary_title' => $matchSummaryTitle,
         'match_summary_text' => $matchSummaryText,
         'match_summary_tone' => $matchSummaryTone,
         'match_summary_percent' => $matchSummaryPercent,
-        'candidate_warning_title' => admin_t($messages, 'payment_accept_modal_candidate_warning_title', 'Brak pewnego dopasowania transakcji'),
-        'candidate_warning_text' => admin_t($messages, 'payment_accept_modal_candidate_warning_text', 'Nie znaleziono transakcji, która jednoznacznie pasuje do czasu i kwoty tego requestu. Zweryfikuj adres, kwotę oraz godzinę w explorerze przed akceptacją.'),
+        'candidate_warning_title' => admin_t($messages, 'payment_accept_modal_candidate_warning_title', 'Nie znaleziono wpłaty dla tego requestu'),
+        'candidate_warning_text' => admin_t($messages, 'payment_accept_modal_candidate_warning_text', 'Brak pasującej wpłaty w pobranych danych. Jeśli klient wysłał środki, sprawdź explorer — dane mogą być opóźnione lub chwilowo niedostępne.'),
         'empty_title' => admin_t($messages, 'payment_accept_modal_recent_empty_title', 'No recent transactions'),
         'empty_text' => admin_t($messages, 'payment_accept_modal_recent_empty_text', 'No transactions from the last 24 hours were found for this address.'),
-        'candidate_badge' => admin_t($messages, 'payment_accept_modal_candidate_badge', 'Najlepsze dopasowanie'),
+        'candidate_badge' => admin_t($messages, 'payment_accept_modal_candidate_badge', 'Do weryfikacji'),
+        'history_title' => admin_t($messages, 'payment_accept_modal_history_title', 'Pozostała historia portfela'),
+        'history_hint' => admin_t($messages, 'payment_accept_modal_history_hint', 'Te transakcje nie zostały dopasowane do tego requestu.'),
+        'balance_hint' => admin_t($messages, 'payment_accept_modal_balance_hint', 'Saldo portfela nie potwierdza tej płatności.'),
+        'history' => $classified['history'],
         'match_badge_prefix' => admin_t($messages, 'payment_accept_modal_match_badge_prefix', 'Dopasowanie'),
         'candidate_crypto_amount' => $candidateRow !== null ? (string)($candidateRow['amount_crypto'] ?? '') : '',
         'candidate_crypto_label' => $candidateRow !== null ? (string)($candidateRow['amount_crypto_label'] ?? '') : '',
@@ -14348,6 +14397,74 @@ function admin_crypto_preview_network_status_rows_locked(array $messages = [], b
     return $rows;
 }
 
+function admin_render_crypto_accept_preview_transactions(array $transactions, array $preview): string
+{
+    ob_start();
+    ?>
+            <div class="admin-crypto-preview__list">
+                <?php foreach ($transactions as $row): ?>
+                    <?php
+                    $direction = strtolower(trim((string)($row['direction'] ?? 'incoming')));
+                    $isIncoming = $direction !== 'outgoing';
+                    $directionClass = $isIncoming ? 'is-incoming' : 'is-outgoing';
+                    $directionLabel = $isIncoming
+                        ? (string)($preview['direction_incoming'] ?? 'Incoming')
+                        : (string)($preview['direction_outgoing'] ?? 'Outgoing');
+                    ?>
+                    <article class="admin-crypto-preview__tx <?php echo admin_e($directionClass); ?><?php echo !empty($row['candidate']) ? ' is-candidate' : ''; ?>">
+                        <div class="admin-crypto-preview__tx-side">
+                            <div class="admin-crypto-preview__tx-icon">
+                                <i class="bi <?php echo admin_e((string)($row['direction_icon'] ?? ($isIncoming ? 'bi-arrow-down-left' : 'bi-arrow-up-right'))); ?>" aria-hidden="true"></i>
+                            </div>
+                            <div class="admin-crypto-preview__tx-left">
+                                <div class="admin-crypto-preview__tx-hash-row">
+                                    <?php if (!empty($row['hash_url'])): ?>
+                                        <a href="<?php echo admin_e((string)$row['hash_url']); ?>" target="_blank" rel="noopener noreferrer" class="admin-crypto-preview__tx-hash"><?php echo admin_e((string)($row['hash_compact'] ?? '—')); ?></a>
+                                    <?php else: ?>
+                                        <span class="admin-crypto-preview__tx-hash"><?php echo admin_e((string)($row['hash_compact'] ?? '—')); ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($row['candidate'])): ?>
+                                        <span class="admin-crypto-preview__candidate"><?php echo admin_e((string)($preview['candidate_badge'] ?? 'Best match')); ?></span>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="admin-crypto-preview__tx-time"><?php echo admin_e((string)($row['received_at_label'] ?? '')); ?></div>
+                                <?php if (!empty($row['history_reason'])): ?>
+                                    <div class="admin-crypto-preview__tx-match-text"><?php echo admin_e((string)$row['history_reason']); ?></div>
+                                <?php endif; ?>
+                                <?php if (!empty($row['from_label']) || !empty($row['to_label'])): ?>
+                                    <div class="admin-crypto-preview__tx-route">
+                                        <?php if (!empty($row['from_label'])): ?>
+                                            <span><?php echo admin_e((string)($preview['from_label'] ?? 'From')); ?> <?php echo admin_e((string)$row['from_label']); ?></span>
+                                        <?php endif; ?>
+                                        <?php if (!empty($row['to_label'])): ?>
+                                            <span><?php echo admin_e((string)($preview['to_label'] ?? 'To')); ?> <?php echo admin_e((string)$row['to_label']); ?></span>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="admin-crypto-preview__tx-right">
+                            <div class="admin-crypto-preview__tx-amount"><?php echo admin_e((string)($row['amount_crypto_label'] ?? '')); ?></div>
+                            <?php if (!empty($row['amount_fiat_label'])): ?>
+                                <div class="admin-crypto-preview__tx-fiat"><?php echo admin_e((string)$row['amount_fiat_label']); ?></div>
+                            <?php endif; ?>
+                            <div class="admin-crypto-preview__tx-meta">
+                                <span class="admin-crypto-preview__tx-direction"><?php echo admin_e($directionLabel); ?></span>
+                                <?php if (!empty($row['confirmations_label'])): ?>
+                                    <span><?php echo admin_e((string)$row['confirmations_label']); ?></span>
+                                <?php endif; ?>
+                            </div>
+                            <?php if (!empty($row['fee_label'])): ?>
+                                <div class="admin-crypto-preview__tx-fee"><?php echo admin_e((string)$row['fee_label']); ?></div>
+                            <?php endif; ?>
+                        </div>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+    <?php
+    return trim((string)ob_get_clean());
+}
+
 function admin_render_crypto_accept_explorer_panel(array $preview): string
 {
     $transactions = isset($preview['transactions']) && is_array($preview['transactions']) ? $preview['transactions'] : [];
@@ -14410,6 +14527,7 @@ function admin_render_crypto_accept_explorer_panel(array $preview): string
                 <?php if (!empty($preview['balance_fiat_label'])): ?>
                     <div class="admin-crypto-preview__balance-fiat"><?php echo admin_e((string)$preview['balance_fiat_label']); ?></div>
                 <?php endif; ?>
+                <div class="admin-crypto-preview__balance-hint"><?php echo admin_e((string)($preview['balance_hint'] ?? '')); ?></div>
             </div>
         <?php endif; ?>
 
@@ -14419,7 +14537,7 @@ function admin_render_crypto_accept_explorer_panel(array $preview): string
             <?php $matchTone = preg_replace('/[^a-z0-9_-]/i', '', (string)($preview['match_summary_tone'] ?? 'warning')); ?>
             <div class="admin-crypto-preview__match-alert is-<?php echo admin_e($matchTone !== '' ? $matchTone : 'warning'); ?>" role="status">
                 <div class="admin-crypto-preview__match-percent">
-                    <?php echo admin_e((string)((int)($preview['match_summary_percent'] ?? 0))); ?>%
+                    <i class="bi bi-info-circle" aria-hidden="true"></i>
                 </div>
                 <div class="admin-crypto-preview__match-copy">
                     <strong><?php echo admin_e((string)$preview['match_summary_title']); ?></strong>
@@ -14430,90 +14548,21 @@ function admin_render_crypto_accept_explorer_panel(array $preview): string
             </div>
         <?php endif; ?>
 
-        <?php if (empty($preview['has_candidate'])): ?>
-            <div class="alert admin-crypto-preview__warning" role="alert">
-                <div class="admin-crypto-preview__warning-icon">
-                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                </div>
-                <div class="admin-crypto-preview__warning-content">
-                    <div class="admin-crypto-preview__warning-title"><?php echo admin_e((string)($preview['candidate_warning_title'] ?? 'No matching transaction')); ?></div>
-                    <div class="admin-crypto-preview__warning-text"><?php echo admin_e((string)($preview['candidate_warning_text'] ?? 'No clearly matching transaction was found in the last 24 hours. If you have any doubts, verify the address manually in the explorer before accepting the payment.')); ?></div>
-                </div>
-            </div>
-        <?php endif; ?>
-
         <?php if (!$transactions): ?>
-            <div class="admin-crypto-preview__empty">
-                <div class="admin-crypto-preview__empty-title"><?php echo admin_e((string)($preview['empty_title'] ?? 'No recent transactions')); ?></div>
-                <div class="admin-crypto-preview__empty-text"><?php echo admin_e((string)($preview['empty_text'] ?? 'No transactions from the last 24 hours were found for this address.')); ?></div>
+            <div class="admin-crypto-preview__empty" role="status">
+                <span class="admin-crypto-preview__empty-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></span>
+                <div class="admin-crypto-preview__empty-title"><?php echo admin_e((string)($preview['candidate_warning_title'] ?? 'No payment found for this request')); ?></div>
+                <div class="admin-crypto-preview__empty-text"><?php echo admin_e((string)($preview['candidate_warning_text'] ?? 'No matching payment was found in the retrieved data. Verify in the explorer if funds were sent.')); ?></div>
             </div>
         <?php else: ?>
-            <div class="admin-crypto-preview__list">
-                <?php foreach ($transactions as $row): ?>
-                    <?php
-                    $direction = strtolower(trim((string)($row['direction'] ?? 'incoming')));
-                    $isIncoming = $direction !== 'outgoing';
-                    $directionClass = $isIncoming ? 'is-incoming' : 'is-outgoing';
-                    $directionLabel = $isIncoming
-                        ? (string)($preview['direction_incoming'] ?? 'Incoming')
-                        : (string)($preview['direction_outgoing'] ?? 'Outgoing');
-                    ?>
-                    <article class="admin-crypto-preview__tx <?php echo admin_e($directionClass); ?><?php echo !empty($row['candidate']) ? ' is-candidate' : ''; ?>">
-                        <div class="admin-crypto-preview__tx-side">
-                            <div class="admin-crypto-preview__tx-icon">
-                                <i class="bi <?php echo admin_e((string)($row['direction_icon'] ?? ($isIncoming ? 'bi-arrow-down-left' : 'bi-arrow-up-right'))); ?>" aria-hidden="true"></i>
-                            </div>
-                            <div class="admin-crypto-preview__tx-left">
-                                <div class="admin-crypto-preview__tx-hash-row">
-                                    <?php if (!empty($row['hash_url'])): ?>
-                                        <a href="<?php echo admin_e((string)$row['hash_url']); ?>" target="_blank" rel="noopener noreferrer" class="admin-crypto-preview__tx-hash"><?php echo admin_e((string)($row['hash_compact'] ?? '—')); ?></a>
-                                    <?php else: ?>
-                                        <span class="admin-crypto-preview__tx-hash"><?php echo admin_e((string)($row['hash_compact'] ?? '—')); ?></span>
-                                    <?php endif; ?>
-                                    <?php if (!empty($row['candidate'])): ?>
-                                        <span class="admin-crypto-preview__candidate"><?php echo admin_e((string)($preview['candidate_badge'] ?? 'Best match')); ?></span>
-                                    <?php endif; ?>
-                                    <?php if (isset($row['match_percent'])): ?>
-                                        <?php $rowMatchTone = preg_replace('/[^a-z0-9_-]/i', '', (string)($row['match_tone'] ?? 'warning')); ?>
-                                        <span class="admin-crypto-preview__match-badge is-<?php echo admin_e($rowMatchTone !== '' ? $rowMatchTone : 'warning'); ?>">
-                                            <?php echo admin_e((string)($preview['match_badge_prefix'] ?? 'Dopasowanie')); ?> <?php echo admin_e((string)((int)$row['match_percent'])); ?>%
-                                        </span>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="admin-crypto-preview__tx-time"><?php echo admin_e((string)($row['received_at_label'] ?? '')); ?></div>
-                                <?php if (!empty($row['match_text'])): ?>
-                                    <div class="admin-crypto-preview__tx-match-text"><?php echo admin_e((string)$row['match_text']); ?></div>
-                                <?php endif; ?>
-                                <?php if (!empty($row['from_label']) || !empty($row['to_label'])): ?>
-                                    <div class="admin-crypto-preview__tx-route">
-                                        <?php if (!empty($row['from_label'])): ?>
-                                            <span><?php echo admin_e((string)($preview['from_label'] ?? 'From')); ?> <?php echo admin_e((string)$row['from_label']); ?></span>
-                                        <?php endif; ?>
-                                        <?php if (!empty($row['to_label'])): ?>
-                                            <span><?php echo admin_e((string)($preview['to_label'] ?? 'To')); ?> <?php echo admin_e((string)$row['to_label']); ?></span>
-                                        <?php endif; ?>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        <div class="admin-crypto-preview__tx-right">
-                            <div class="admin-crypto-preview__tx-amount"><?php echo admin_e((string)($row['amount_crypto_label'] ?? '')); ?></div>
-                            <?php if (!empty($row['amount_fiat_label'])): ?>
-                                <div class="admin-crypto-preview__tx-fiat"><?php echo admin_e((string)$row['amount_fiat_label']); ?></div>
-                            <?php endif; ?>
-                            <div class="admin-crypto-preview__tx-meta">
-                                <span class="admin-crypto-preview__tx-direction"><?php echo admin_e($directionLabel); ?></span>
-                                <?php if (!empty($row['confirmations_label'])): ?>
-                                    <span><?php echo admin_e((string)$row['confirmations_label']); ?></span>
-                                <?php endif; ?>
-                            </div>
-                            <?php if (!empty($row['fee_label'])): ?>
-                                <div class="admin-crypto-preview__tx-fee"><?php echo admin_e((string)$row['fee_label']); ?></div>
-                            <?php endif; ?>
-                        </div>
-                    </article>
-                <?php endforeach; ?>
-            </div>
+            <?php echo admin_render_crypto_accept_preview_transactions($transactions, $preview); ?>
+        <?php endif; ?>
+        <?php if (!empty($preview['history'])): ?>
+            <details class="admin-crypto-preview__history">
+                <summary><span><i class="bi bi-clock-history" aria-hidden="true"></i> <?php echo admin_e((string)($preview['history_title'] ?? 'Other wallet history')); ?></span><span class="admin-crypto-preview__history-count"><?php echo count($preview['history']); ?></span></summary>
+                <p class="admin-crypto-preview__history-hint"><?php echo admin_e((string)($preview['history_hint'] ?? 'These transactions were not matched to this request.')); ?></p>
+                <?php echo admin_render_crypto_accept_preview_transactions($preview['history'], $preview); ?>
+            </details>
         <?php endif; ?>
     </div>
     <?php
@@ -18081,12 +18130,68 @@ function admin_delete_order(
     return ['ok' => true, 'message' => 'Order deleted successfully.'];
 }
 
+/** Validate the exact renewal reservation, including customer and full amount. */
+function admin_order_renewal_balance_state(Mysql_ks $db, array $renewal): string
+{
+    $id = (int)($renewal['id'] ?? 0);
+    $customerId = (int)($renewal['customer_id'] ?? 0);
+    $amount = round((float)($renewal['price_amount'] ?? 0), 2);
+    if ($id <= 0 || $customerId <= 0 || $amount <= 0 || !schema_object_exists($db, 'customer_balance_runtime_events')) return 'missing';
+    $events = $db->select_full_user("SELECT customer_id, amount FROM customer_balance_runtime_events
+        WHERE source_type = 'order_extension' AND direction = 'debit'
+          AND source_key IN ('renewal:{$id}', 'renewal:balance:{$id}') LIMIT 2");
+    if ($db->error) return 'invalid';
+    if (!$events) return 'missing';
+    foreach ($events as $event) {
+        if ((int)$event['customer_id'] !== $customerId || abs(round((float)$event['amount'], 2) - $amount) > 0.00001) return 'invalid';
+    }
+    return count($events) === 1 ? 'reserved' : 'invalid';
+}
+
+function admin_order_renewal_balance_reserved(Mysql_ks $db, array $renewal): bool
+{
+    return admin_order_renewal_balance_state($db, $renewal) === 'reserved';
+}
+
 function admin_extend_order(
     Mysql_ks $db,
     int $orderId,
     int $productId,
     bool $chargeCustomerBalance = true,
-    string $overrideExpiresAt = ''
+    string $overrideExpiresAt = '',
+    ?string $expectedExpiresAt = null,
+    int $expectedRenewalId = 0
+): array {
+    $order = admin_order_find($db, $orderId);
+    if (!$order) return ['ok' => false, 'message' => 'Order not found.'];
+    // Share the payment lock: approval and manual extension cannot race for one customer.
+    $key = 'payment:' . substr(hash('sha256', (string)getenv('DB_NAME')), 0, 16) . ':' . (int)$order['customer_id'];
+    $lock = $db->select_user("SELECT GET_LOCK('" . $db->escape($key) . "', 0) acquired");
+    if ((int)($lock['acquired'] ?? 0) !== 1) return ['ok' => false, 'message' => 'Another payment operation is in progress. Please retry shortly.'];
+    try {
+        $result = admin_extend_order_locked($db, $orderId, $productId, $chargeCustomerBalance, $overrideExpiresAt, $expectedExpiresAt, $expectedRenewalId);
+        $messageKeys = [
+            'This renewal has already been applied.' => 'order_extend_already_applied',
+            'The order changed after this form was opened. Refresh before extending it again.' => 'order_extend_changed',
+            'Renewal balance reservation does not match its customer or amount. Verify the payment before extending.' => 'order_extend_reservation_mismatch',
+            'Customer balance is too low for this action.' => 'order_extend_low_balance',
+            'Unable to complete subscription extension. Refresh the order and check the balance before retrying.' => 'order_extend_failed',
+        ];
+        if (isset($messageKeys[$result['message'] ?? ''])) $result['message_key'] = $messageKeys[$result['message']];
+        return $result;
+    } finally {
+        $db->select_user("SELECT RELEASE_LOCK('" . $db->escape($key) . "') released");
+    }
+}
+
+function admin_extend_order_locked(
+    Mysql_ks $db,
+    int $orderId,
+    int $productId,
+    bool $chargeCustomerBalance = true,
+    string $overrideExpiresAt = '',
+    ?string $expectedExpiresAt = null,
+    int $expectedRenewalId = 0
 ): array
 {
     $order = admin_order_find($db, $orderId);
@@ -18114,6 +18219,16 @@ function admin_extend_order(
     $orderPaymentStatus = strtolower(trim((string)($order['payment_status'] ?? '')));
     if (!in_array($orderStatus, ['active', 'expired'], true) || $orderPaymentStatus !== 'paid') {
         return ['ok' => false, 'message' => 'Only active or expired paid orders can be extended.'];
+    }
+
+    if ($expectedRenewalId > 0) {
+        $submittedRenewal = $db->select_user("SELECT status, product_id FROM order_renewals WHERE id = {$expectedRenewalId} AND order_id = {$orderId} LIMIT 1");
+        if (($submittedRenewal['status'] ?? '') === 'applied' && (int)$submittedRenewal['product_id'] === $productId) {
+            return ['ok' => true, 'already_applied' => true, 'message' => 'This renewal has already been applied.'];
+        }
+    }
+    if ($expectedExpiresAt !== null && trim((string)($order['expires_at'] ?? '')) !== trim($expectedExpiresAt)) {
+        return ['ok' => false, 'message' => 'The order changed after this form was opened. Refresh before extending it again.'];
     }
 
     $durationHours = (int)($product['duration_hours'] ?? 0);
@@ -18151,12 +18266,15 @@ function admin_extend_order(
             }
         }
 
+        $reservationState = admin_order_renewal_balance_state($db, $pendingRenewal);
+        if ($reservationState === 'invalid') return ['ok' => false, 'message' => 'Renewal balance reservation does not match its customer or amount. Verify the payment before extending.'];
         $applyResult = app_apply_pending_order_renewal(
             $db,
             (int)$pendingRenewal['id'],
             'admin',
             $adminUserId,
-            $ipAddress
+            $ipAddress,
+            $reservationState === 'reserved'
         );
         if (empty($applyResult['ok'])) {
             return $applyResult;
@@ -18190,72 +18308,94 @@ function admin_extend_order(
     $previousStatus = strtolower(trim((string)($order['status'] ?? '')));
     $nextStatus = strtotime($newExpiry) > time() ? 'active' : 'expired';
 
-    app_preserve_initial_order_sale($db, $orderId);
-
-    if ($chargeCustomerBalance && $extensionAmount > 0) {
-        $balanceDebitResult = admin_apply_customer_balance_runtime_event(
-            $db,
-            (int)($order['customer_id'] ?? 0),
-            $extensionAmount,
-            'debit',
-            'order_extension',
-            $orderId . ':' . $productId . ':' . $newExpiry,
-            'Extended order #' . $orderId . ' with package #' . $productId,
-            $adminUserId,
-            $ipAddress
-        );
-        if (empty($balanceDebitResult['ok'])) {
-            return $balanceDebitResult;
+    app_ensure_sales_runtime_columns($db);
+    app_ensure_order_renewal_runtime_columns($db);
+    app_ensure_customer_balance_runtime_table($db);
+    if (!$db->query('START TRANSACTION')) return ['ok' => false, 'message' => 'Unable to start extension.'];
+    try {
+        $lockedOrder = $db->select_user("SELECT expires_at, status, payment_status FROM orders WHERE id = {$orderId} FOR UPDATE");
+        if (!is_array($lockedOrder) || (string)($lockedOrder['expires_at'] ?? '') !== (string)($order['expires_at'] ?? '')
+            || !in_array((string)$lockedOrder['status'], ['active', 'expired'], true) || (string)$lockedOrder['payment_status'] !== 'paid') {
+            $db->query('ROLLBACK');
+            return ['ok' => false, 'message' => 'The order changed after this form was opened. Refresh before extending it again.'];
         }
-    }
+        app_preserve_initial_order_sale($db, $orderId);
 
-    $updated = $db->update_using_id(
-        ['product_id', 'total_amount', 'currency_id', 'expires_at', 'status'],
-        [
-            $productId,
-            number_format((float)($product['price_amount'] ?? 0), 2, '.', ''),
-            (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
-            $newExpiry,
-            $nextStatus,
-        ],
-        'orders',
-        $orderId
-    );
-
-    if ($updated && schema_object_exists($db, 'order_renewals')) {
-        app_ensure_order_renewal_runtime_columns($db);
-        $db->insert(
-            ['order_id', 'customer_id', 'product_id', 'price_amount', 'currency_id', 'duration_hours', 'status', 'requested_at', 'applied_at', 'paid_at', 'target_expires_at', 'renewal_note'],
-            [
-                $orderId,
+        if ($chargeCustomerBalance && $extensionAmount > 0) {
+            $balanceDebitResult = admin_apply_customer_balance_runtime_event(
+                $db,
                 (int)($order['customer_id'] ?? 0),
-                $productId,
                 $extensionAmount,
-                (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
-                $durationHours,
-                'applied',
-                app_current_datetime_string(),
-                app_current_datetime_string(),
-                app_current_datetime_string(),
-                $newExpiry,
-                $chargeCustomerBalance ? 'Extended from admin panel' : 'Extended from admin panel without charging customer balance',
-            ],
-            'order_renewals'
-        );
-    }
+                'debit',
+                'order_extension',
+                $orderId . ':' . $productId . ':' . $newExpiry,
+                'Extended order #' . $orderId . ' with package #' . $productId,
+                $adminUserId,
+                $ipAddress,
+                true
+            );
+            if (empty($balanceDebitResult['ok'])) {
+                $db->query('ROLLBACK');
+                return $balanceDebitResult;
+            }
+        }
 
-    if ($updated && schema_object_exists($db, 'order_status_events')) {
-        $db->insert(
-            ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
+        $updated = $db->update_using_id(
+            ['product_id', 'total_amount', 'currency_id', 'expires_at', 'status'],
             [
-                $orderId,
-                $adminUserId > 0 ? $adminUserId : null,
-                (string)($order['status'] ?? ''),
+                $productId,
+                number_format((float)($product['price_amount'] ?? 0), 2, '.', ''),
+                (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
+                $newExpiry,
                 $nextStatus,
-                'Order extended by ' . admin_duration_label_from_hours($durationHours) . ($chargeCustomerBalance ? '' : ' without charging customer balance')
             ],
-            'order_status_events'
+            'orders',
+            $orderId
         );
+
+        if (!$updated) throw new RuntimeException('Unable to update order expiry.');
+
+        if (schema_object_exists($db, 'order_renewals')) {
+            app_ensure_order_renewal_runtime_columns($db);
+            $renewalInserted = $db->insert(
+                ['order_id', 'customer_id', 'product_id', 'price_amount', 'currency_id', 'duration_hours', 'status', 'requested_at', 'applied_at', 'paid_at', 'target_expires_at', 'renewal_note'],
+                [
+                    $orderId,
+                    (int)($order['customer_id'] ?? 0),
+                    $productId,
+                    $chargeCustomerBalance ? $extensionAmount : 0,
+                    (int)($product['currency_id'] ?? ($order['product_currency_id'] ?? 1)),
+                    $durationHours,
+                    'applied',
+                    app_current_datetime_string(),
+                    app_current_datetime_string(),
+                    $chargeCustomerBalance ? app_current_datetime_string() : null,
+                    $newExpiry,
+                    $chargeCustomerBalance ? 'Extended from admin panel' : 'Extended from admin panel without charging customer balance',
+                ],
+                'order_renewals'
+            );
+            if (!$renewalInserted) throw new RuntimeException('Unable to record subscription extension.');
+        }
+
+        if ($updated && schema_object_exists($db, 'order_status_events')) {
+            $db->insert(
+                ['order_id', 'admin_user_id', 'old_status', 'new_status', 'event_note'],
+                [
+                    $orderId,
+                    $adminUserId > 0 ? $adminUserId : null,
+                    (string)($order['status'] ?? ''),
+                    $nextStatus,
+                    'Order extended by ' . admin_duration_label_from_hours($durationHours) . ($chargeCustomerBalance ? '' : ' without charging customer balance')
+                ],
+                'order_status_events'
+            );
+        }
+
+        if (!$db->query('COMMIT')) throw new RuntimeException('Unable to complete subscription extension.');
+    } catch (Throwable $exception) {
+        $db->query('ROLLBACK');
+        return ['ok' => false, 'message' => 'Unable to complete subscription extension. Refresh the order and check the balance before retrying.'];
     }
 
     if ($updated) {
@@ -27895,7 +28035,7 @@ function admin_page_cards(string $route, array $messages): array
         'pages' => ['title' => admin_t($messages, 'page_pages_card_title', 'Pages'), 'text' => admin_t($messages, 'page_pages_card_text', 'Edit static customer-facing pages like instructions and apps.')],
         'email-templates' => ['title' => admin_t($messages, 'page_email_templates_card_title', 'Email templates'), 'text' => admin_t($messages, 'page_email_templates_card_text', 'Prepare message templates and transactional content.')],
         'faq' => ['title' => admin_t($messages, 'page_faq_card_title', 'FAQ'), 'text' => admin_t($messages, 'page_faq_card_text', 'Edit quick questions and static help answers.')],
-        'help' => ['title' => admin_t($messages, 'page_help_card_title', 'Help'), 'text' => admin_t($messages, 'page_help_card_text', 'Edit the admin tutorial topics shown in the floating help modal.')],
+        'help' => ['title' => '', 'text' => ''],
         'settings' => ['title' => admin_t($messages, 'page_settings_card_title', 'Settings'), 'text' => admin_t($messages, 'page_settings_card_text', 'Configure site data, branding and feature switches.')],
     ];
 

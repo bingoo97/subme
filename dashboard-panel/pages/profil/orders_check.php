@@ -22,8 +22,9 @@ if (app_uses_v2_schema($db)) {
               orders.customer_id AS user_id,
               orders.product_id,
               orders.total_amount AS price,
-              orders.created_at,
-              orders.expires_at,
+	              orders.created_at,
+	              orders.started_at,
+	              orders.expires_at,
               orders.payment_status,
               orders.fulfillment_status,
               orders.payment_method,
@@ -91,6 +92,7 @@ $wygrane = $str->get_wartosci();
 
 $renewalHistoryMap = [];
 $pendingRenewalStateMap = [];
+$generatedPaymentRequestMap = [];
 if (app_uses_v2_schema($db) && $wygrane) {
     $orderIds = [];
     foreach ($wygrane as $orderRow) {
@@ -101,6 +103,15 @@ if (app_uses_v2_schema($db) && $wygrane) {
     }
     $renewalHistoryMap = app_load_order_renewal_history_map($db, $orderIds, 20);
     $pendingRenewalStateMap = app_load_order_pending_renewal_state_map($db, $orderIds);
+    if ($orderIds) {
+        $orderIdList = implode(',', $orderIds);
+        foreach (['crypto_deposit_requests', 'bank_transfer_requests'] as $requestTable) {
+            if (!schema_object_exists($db, $requestTable)) continue;
+            $requestRows = $db->select_full_user("SELECT DISTINCT order_id FROM {$requestTable}
+                WHERE customer_id = " . (int)$user['id'] . " AND order_id IN ({$orderIdList})");
+            foreach ((array)$requestRows as $requestRow) $generatedPaymentRequestMap[(int)$requestRow['order_id']] = true;
+        }
+    }
 }
 
 if ($wygrane) {
@@ -108,6 +119,12 @@ if ($wygrane) {
         if (app_uses_v2_schema($db)) {
             $orderId = (int)($wygrane[$i]['id'] ?? 0);
             $wygrane[$i]['extend'] = $renewalHistoryMap[$orderId] ?? [];
+            $wygrane[$i]['progress_started_at'] = !empty($wygrane[$i]['extend'][0]['date'])
+                ? (string)$wygrane[$i]['extend'][0]['date']
+                : '';
+            $wygrane[$i]['progress_duration_hours'] = !empty($wygrane[$i]['extend'][0]['duration_hours'])
+                ? (int)$wygrane[$i]['extend'][0]['duration_hours']
+                : 0;
             $pendingRenewalState = $pendingRenewalStateMap[$orderId] ?? null;
             $pendingRenewalStatus = is_array($pendingRenewalState)
                 ? strtolower(trim((string)($pendingRenewalState['status'] ?? '')))
@@ -153,6 +170,7 @@ if ($wygrane) {
             (string)($wygrane[$i]['currency_code'] ?? '')
         );
         $wygrane[$i]['progress'] = app_order_progress_data($wygrane[$i]);
+        $wygrane[$i]['czas_procent'] = (int)($wygrane[$i]['progress']['percent'] ?? 0);
         $wygrane[$i]['status_visual'] = app_order_status_visual($wygrane[$i]);
         $wygrane[$i]['can_self_extend_same_order'] = app_order_can_self_extend($wygrane[$i]) ? 1 : 0;
         $wygrane[$i]['can_open_renewal_payment'] = app_order_can_open_self_extension_payment($wygrane[$i]) ? 1 : 0;
@@ -162,9 +180,7 @@ if ($wygrane) {
             && strtolower(trim((string)($wygrane[$i]['payment_status'] ?? ''))) === 'paid'
             && (int)($wygrane[$i]['shipment'] ?? 0) === 0
         ) ? 1 : 0;
-        $wygrane[$i]['has_generated_payment_request'] = app_uses_v2_schema($db)
-            ? (app_order_has_generated_payment_request($db, (int)($wygrane[$i]['id'] ?? 0), (int)$user['id']) ? 1 : 0)
-            : 0;
+        $wygrane[$i]['has_generated_payment_request'] = !empty($generatedPaymentRequestMap[(int)($wygrane[$i]['id'] ?? 0)]) ? 1 : 0;
         $wygrane[$i]['can_delete_order'] = (
             (int)($wygrane[$i]['status'] ?? 0) === 0
             && (int)($wygrane[$i]['shipment'] ?? 0) === 0
@@ -172,17 +188,6 @@ if ($wygrane) {
             && empty($wygrane[$i]['has_generated_payment_request'])
         ) ? 1 : 0;
 
-        if ($usesExpiry && $wygrane[$i]['date_add_s'] < $wygrane[$i]['date_end_s']) {
-            $startDate = $wygrane[$i]['date_add_s'];
-            $endDate = $wygrane[$i]['date_end_s'];
-            $currentDate = $time_s;
-            $dateDivideBy = $endDate - $startDate;
-            $dateDivide = $currentDate - $startDate;
-            $divideProduct = $dateDivide / $dateDivideBy;
-            $wygrane[$i]['czas_procent'] = round($divideProduct * 100);
-        } else {
-            $wygrane[$i]['czas_procent'] = 100;
-        }
     }
 }
 

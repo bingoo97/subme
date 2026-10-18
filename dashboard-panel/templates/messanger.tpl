@@ -1,7 +1,7 @@
 {if $user.logged && ($settings.support_chat_effective_enabled|default:0 || $settings.support_chat_enabled)}
 <div class="messanger" id="messanger">
         <div class="panel">
-                <div class="panel-heading" id="panel-heading" data-user-id="{$user.id}" role="button" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle onclick="return toggleMessengerPanel();">
+                <div class="panel-heading" id="panel-heading" data-user-id="{$user.id}" role="button" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle>
                     <span class="messenger-heading-title">
                         <i class="fa fa-envelope-o" aria-hidden="true"></i>
                         <span>{if $chat_customer_full_messenger_enabled|default:false}Messenger{else}Technical Support{/if}</span>
@@ -14,15 +14,11 @@
                     <div class="btn-group pull-right">
                         {if $chat_customer_can_create_groups|default:false}
                         <button type="button" class="btn btn-default btn-xs messenger-group-action" data-messenger-group-open title="{$t.group_chat_create|default:'Create group'}">
-                            <i class="fa fa-plus" aria-hidden="true"></i>
+                            <i class="bi bi-person-plus" aria-hidden="true"></i>
                         </button>
                         {/if}
-                        <button type="button" class="btn btn-default btn-xs messenger-toggle-action{if $chat_nieprzeczytane > 0} is-unread is-attention{/if}" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle-button onclick="event.stopPropagation(); return toggleMessengerPanel();">
-                        {if $chat_nieprzeczytane > 0}
-                        	<span class="badge wow pulse messenger-unread-badge messenger-unread-badge--mobile" data-wow-iteration="infinite" data-wow-duration="1500ms">{$chat_nieprzeczytane}</span>
-                        {else}
-                            <span class="badge messenger-unread-badge messenger-unread-badge--mobile" style="display:none;">0</span>
-                        {/if}
+                        <button type="button" class="btn btn-default btn-xs messenger-toggle-action{if $chat_nieprzeczytane > 0} is-unread is-attention{/if}" aria-expanded="false" aria-controls="collapseOne" data-messenger-toggle-button onclick="event.stopPropagation(); return toggleMessengerPanel('inbox');">
+                            <span class="messenger-toggle-count messenger-unread-badge messenger-unread-badge--mobile"{if $chat_nieprzeczytane|default:0 lte 0} style="display:none;"{/if} data-count="{$chat_nieprzeczytane|default:0}">{$chat_nieprzeczytane|default:0}</span>
                             <i class="fa fa-angle-down messenger-toggle-icon" aria-hidden="true"></i>
                         </button>
                     </div>
@@ -37,6 +33,9 @@
                         window.MESSENGER_BOOTSTRAP.userId = {$user.id|default:0};
                         window.MESSENGER_BOOTSTRAP.endpoint = 'check_chat.php';
                         window.MESSENGER_BOOTSTRAP.csrfToken = '{$csrf_token|default:''|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.connectionErrorMessage = '{$t.chat_connection_error|default:"Unable to load the conversation. Try again."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.sendFailedMessage = '{$t.chat_send_failed|default:"Unable to confirm delivery. Your text has been kept."|escape:'javascript'}';
+                        window.MESSENGER_BOOTSTRAP.sendBusyMessage = '{$t.chat_send_busy|default:"Wait until the current message is sent."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.supportName = '{$chat_support_label|default:"Support"|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.linkPreviewLoading = '{$t.chat_link_preview_loading|default:"Loading link preview..."|escape:'javascript'}';
                         window.MESSENGER_BOOTSTRAP.linkPreviewRemove = '{$t.chat_link_preview_remove|default:"Send without preview"|escape:'javascript'}';

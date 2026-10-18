@@ -1,5 +1,55 @@
 document.addEventListener('DOMContentLoaded', function () {
     'use strict';
+    // Use CSS-pixel geometry so zoom, responsive SVG sizing and long currency labels stay consistent.
+    function salesTooltipPosition(plot, size, points, selected) {
+        var point = points[selected];
+        var gap = 16;
+        var minLeft = plot.left + 8;
+        var maxRight = plot.right - 8;
+        var minTop = plot.top + 8;
+        // Keep the date axis and the horizontal pointer path to neighbouring days clear.
+        var maxBottom = plot.top + plot.height * 228 / 252;
+        var maxTop = maxBottom - size.height;
+        if (maxTop < minTop || size.width > maxRight - minLeft) return null;
+        function clamp(value, min, max) { return Math.max(min, Math.min(value, max)); }
+        function overlaps(box, other, padding) {
+            return other.x > box.left - padding && other.x < box.left + size.width + padding
+                && other.y > box.top - padding && other.y < box.top + size.height + padding;
+        }
+        var candidates = [];
+        function add(left, top, side) {
+            if (left < minLeft || left + size.width > maxRight) return;
+            var box = {left: left, top: clamp(top, minTop, maxTop), side: side};
+            if (overlaps(box, point, gap)) return;
+            var score = 0;
+            points.forEach(function (other, index) {
+                if (overlaps(box, other, 9)) {
+                    // The next/previous point must remain visible even with sales on every day.
+                    score += Math.abs(index - selected) <= 1 ? 1000 : (other.sales > 0 ? 20 : 4);
+                }
+            });
+            score += Math.abs(box.top + size.height / 2 - point.y) / 1000;
+            candidates.push({box: box, score: score});
+        }
+        if (point.sales === 0) {
+            // A zero day sits at the baseline: prefer the familiar position above it.
+            var zeroLeft = clamp(point.x - size.width / 2, minLeft, maxRight - size.width);
+            if (point.y - gap - size.height >= minTop) add(zeroLeft, point.y - gap - size.height, 'above');
+        }
+        if (!candidates.length || candidates[0].score >= 1000) {
+            var step = points.length > 1 ? Math.abs(points[1].x - points[0].x) : 0;
+            var sideGap = Math.max(gap + 1, step + 10);
+            var tops = [point.y - size.height / 2, point.y - size.height - gap, point.y + gap, minTop, maxTop];
+            var sides = point.x < (plot.left + plot.right) / 2 ? ['right', 'left'] : ['left', 'right'];
+            sides.forEach(function (side) {
+                var left = side === 'right' ? point.x + sideGap : point.x - sideGap - size.width;
+                tops.forEach(function (top) { add(left, top, side); });
+            });
+        }
+        candidates.sort(function (a, b) { return a.score - b.score; });
+        // On a narrow/dense plot use the existing card below the SVG rather than cover selectable days.
+        return candidates.length && candidates[0].score < 1000 ? candidates[0].box : null;
+    }
     document.querySelectorAll('[data-sales-chart]').forEach(function (chart) {
         var svg = chart.querySelector('[data-sales-plot]');
         var points = Array.from(chart.querySelectorAll('[data-sales-point]'));
@@ -26,20 +76,34 @@ document.addEventListener('DOMContentLoaded', function () {
             return points.length > 1 ? 28 + index * (plotWidth - 56) / (points.length - 1) : plotWidth / 2;
         }
         function placeTooltip() {
-            if (tooltip.hidden || mobile.matches) return;
+            if (tooltip.hidden) return;
+            tooltip.classList.remove('is-below-plot');
+            tooltip.style.left = '';
+            tooltip.style.top = '';
+            if (mobile.matches) return;
             var bounds = svg.getBoundingClientRect();
             var parent = chart.getBoundingClientRect();
-            var x = pointX(selected) * bounds.width / plotWidth;
-            var y = Number(points[selected].dataset.y) * bounds.height / 252;
-            var top = bounds.top - parent.top + y - tooltip.offsetHeight - 14;
-            if (top < 30) top = bounds.top - parent.top + y + 16;
-            var minTop = bounds.top - parent.top + 8;
-            var maxTop = bounds.bottom - parent.top - tooltip.offsetHeight - 6;
-            tooltip.style.left = Math.max(8, Math.min(x - tooltip.offsetWidth / 2, chart.clientWidth - tooltip.offsetWidth - 8)) + 'px';
-            tooltip.style.top = Math.max(minTop, Math.min(top, Math.max(minTop, maxTop))) + 'px';
+            var plot = {left: bounds.left - parent.left, right: bounds.right - parent.left,
+                top: bounds.top - parent.top, height: bounds.height};
+            var positions = points.map(function (point, index) {
+                return {x: plot.left + pointX(index) * bounds.width / plotWidth,
+                    y: plot.top + Number(point.dataset.y) * bounds.height / 252,
+                    sales: Number(point.dataset.sales)};
+            });
+            var position = salesTooltipPosition(plot, {width: tooltip.offsetWidth, height: tooltip.offsetHeight}, positions, selected);
+            tooltip.classList.toggle('is-below-plot', !position);
+            if (position) {
+                tooltip.style.left = position.left + 'px';
+                tooltip.style.top = position.top + 'px';
+            }
         }
         function select(index, focus) {
-            selected = Math.max(0, Math.min(points.length - 1, index));
+            index = Math.max(0, Math.min(points.length - 1, index));
+            if (selected === index && !tooltip.hidden) {
+                if (focus) active.focus({preventScroll: true});
+                return;
+            }
+            selected = index;
             if (active) {
                 active.classList.remove('is-active');
                 active.setAttribute('tabindex', '-1');
@@ -99,7 +163,7 @@ document.addEventListener('DOMContentLoaded', function () {
             frame = requestAnimationFrame(resize);
         }
         function pointerSelect(event) {
-            if (event.type === 'pointermove' && event.pointerType !== 'mouse' && !event.buttons) return;
+            if (event.type === 'pointermove' && (mobile.matches || event.pointerType !== 'mouse')) return;
             var bounds = svg.getBoundingClientRect();
             var x = (event.clientX - bounds.left) * plotWidth / bounds.width;
             select(Math.round((x - 28) / Math.max(1, plotWidth - 56) * (points.length - 1)), false);
@@ -132,6 +196,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         if (window.ResizeObserver) new ResizeObserver(scheduleResize).observe(svg);
         else window.addEventListener('resize', scheduleResize);
+        if (mobile.addEventListener) mobile.addEventListener('change', scheduleResize);
         scheduleResize();
     });
 });

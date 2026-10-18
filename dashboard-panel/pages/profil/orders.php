@@ -8,7 +8,9 @@ switch ($site) {
 			}
 
 			if (app_uses_v2_schema($db)) {
-				app_delete_stale_unpaid_orders($db);
+				app_run_read_maintenance_once($db, 'stale-unpaid-orders', 60, static function () use ($db): void {
+					app_delete_stale_unpaid_orders($db);
+				});
 			}
 
 			$tenantId = tenant_current_id($user);
@@ -90,6 +92,11 @@ switch ($site) {
 			$smarty->assign('order_pending_activation_block_order', $pendingActivationOrder);
 
 			if (app_uses_v2_schema($db) && isset($_POST["order_note_save"])) {
+				if (!app_csrf_is_valid($_POST['_csrf'] ?? null)) {
+					$smarty->assign('alert_error', localization_translate($t, 'csrf_invalid'));
+					$smarty->display('alert.tpl');
+					break;
+				}
 				$orderId = isset($_POST["order_note_id"]) ? (int)$_POST["order_note_id"] : 0;
 				$note = trim((string)($_POST["order_note"] ?? ''));
 				$note = mb_substr($note, 0, 1000);
@@ -285,58 +292,12 @@ switch ($site) {
 	
 					////////// Usuń pakiet z listy
 								
-					if(isset($_GET["del_order"])) {
-						$id = (int)$_GET["del_order"];
+                    // Legacy links must never delete an order through a GET request.
+                    if (isset($_GET['del_order'])) {
+                        $smarty->assign('alert_error', localization_translate($t, 'orders_cancel_from_payment', 'Use the payment page to cancel an unpaid order.'));
+                        $smarty->display('alert.tpl');
+                    }
 
-						if (app_uses_v2_schema($db)) {
-							$check = $db->select_user(
-								"SELECT * FROM orders
-								 WHERE id = '{$id}'
-								   AND customer_id = '{$user["id"]}'
-								   AND status = 'pending_payment'
-								   AND payment_status = 'unpaid'
-								 LIMIT 1"
-							);
-
-							if ($check) {
-								if (app_order_has_generated_payment_request($db, $id, (int)$user["id"])) {
-									$smarty->assign(
-										"alert_error",
-										localization_translate(
-											$t,
-											'orders_delete_blocked_payment_generated',
-											'You cannot remove this order because a payment request has already been generated for it.'
-										)
-									);
-									$smarty->display("alert.tpl");
-								} else {
-									app_delete_unpaid_order_payment_requests($db, $id, (int)$user["id"]);
-									if (schema_object_exists($db, 'order_status_events')) {
-										app_delete_records_by_ids($db, 'order_status_events', 'order_id', [$id]);
-									}
-									$db->delete_using_id("orders", $id);
-									$smarty->assign("alert", "Removed.");
-									$smarty->display("alert.tpl");
-								}
-							}
-						} else {
-							$check = $db->select("products_users", "*", "WHERE id='$id' AND user_id='{$user["id"]}'");
-							
-							if($check){
-							
-								$notify = "Package #$id has been canceled.";		
-								
-								$db->insert(array("user", "date", "desc"), 
-											array($user["id"], $time, $notify), "history");
-												
-								$db->delete_using_id("products_users", $id); 
-								
-								$smarty->assign("alert", "Removed.");
-								$smarty->display("alert.tpl");
-							}
-						}
-					}
-					
 					if((isset($_GET["payment"])) or (isset($_POST["payment"]))){
 						if ((int)($settings["active_sale"] ?? 0) !== 1) {
 							$smarty->assign("alert_error", localization_translate($t, 'sales_disabled_notice', 'Sales are currently unavailable.'));
