@@ -27498,7 +27498,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
             <?php if ($orders): ?>
                 <section class="admin-search-section">
                     <h3 class="admin-search-section__label"><i class="bi bi-bag-check" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'search_section_orders', 'Orders')); ?></span><span class="admin-search-section__count"><?php echo count($orders); ?></span></h3>
-                    <div class="table-responsive">
+                    <div class="table-responsive admin-search-orders-scroll">
                         <table class="table admin-table admin-orders-table admin-orders-simple-table align-middle">
                             <thead>
                             <tr>
@@ -27547,9 +27547,10 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                 $orderProviderDashboardUrl = trim((string)($row['dashboard_url'] ?? ''));
                                 $showProviderQuickButton = $orderPaymentStatusRaw === 'paid' && !$isCompletedPaidOrder && $orderProviderDashboardUrl !== '';
                                 $orderVisibleSupportNote = admin_order_visible_support_note_text((string)($row['support_note'] ?? ''));
-                                $orderDetailsButtonClass = $isOrderExpired
-                                    ? 'btn-danger'
-                                    : ($orderPaymentStatusRaw === 'paid' ? 'btn-success admin-orders-simple-table__icon-btn--paid' : 'btn-dark');
+                                $orderNeedsAction = $orderPaymentStatusRaw === 'paid' && !$isCompletedPaidOrder
+                                    && !in_array($orderRowStatus, ['cancelled','refunded','failed','inactive','archived','expired'], true);
+                                $orderDetailsButtonClass = $orderNeedsAction ? 'btn-warning admin-orders-details--awaiting' : '';
+                                $orderDetailsLabel = admin_t($messages, $orderNeedsAction ? 'order_details_complete' : 'order_details_toggle', 'Show details');
                                 $orderDeliveryLinkMode = admin_order_delivery_link_mode($row);
                                 $orderDeliveryLinkLabel = $orderDeliveryLinkMode === 'url'
                                     ? admin_t($messages, 'order_delivery_link_full_url_badge', 'The customer sees the full material URL')
@@ -27562,7 +27563,7 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?>" class="<?php echo $isPendingOrder ? 'admin-order-cell-muted' : ''; ?>">
                                         <div class="admin-order-summary">
                                             <div class="admin-order-summary__title-row">
-                                                <strong class="<?php echo admin_e($orderProductClass); ?>"><?php echo admin_e($orderTitle); ?></strong>
+                                                <a class="admin-orders-title <?php echo admin_e($orderProductClass); ?>" href="<?php echo admin_e($orderUrl); ?>" title="<?php echo admin_e($orderTitle); ?>"><?php echo admin_e($orderTitle); ?></a>
                                                 <?php if ($orderDeliveryLinkMode !== ''): ?>
                                                     <span class="admin-order-summary__delivery-link-indicator admin-order-summary__delivery-link-indicator--<?php echo admin_e($orderDeliveryLinkMode); ?>" title="<?php echo admin_e($orderDeliveryLinkLabel); ?>" aria-label="<?php echo admin_e($orderDeliveryLinkLabel); ?>">
                                                         <i class="bi <?php echo $orderDeliveryLinkMode === 'url' ? 'bi-link-45deg' : 'bi-key'; ?>" aria-hidden="true"></i>
@@ -27628,29 +27629,25 @@ function admin_render_search_results_html(array $resultSets, array $messages, st
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'orders_simple_table_notes', 'Notes')); ?>">
                                         <div class="admin-orders-simple-table__notes">
-                                            <?php if ($showProviderQuickButton): ?>
-                                                <a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="btn btn-warning btn-xs admin-orders-simple-table__provider-btn" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>">
-                                                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
-                                                    <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
-                                                </a>
-                                            <?php endif; ?>
-                                            <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : (!$showProviderQuickButton ? '<span class="admin-orders-simple-table__empty">-</span>' : ''); ?></div>
+                                            <div class="admin-orders-simple-table__support-note"><?php echo $orderVisibleSupportNote !== '' ? nl2br(admin_e($orderVisibleSupportNote)) : '<span class="admin-orders-simple-table__empty">-</span>'; ?></div>
                                         </div>
                                     </td>
                                     <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                         <div class="admin-orders-simple-table__actions">
-                                            <a href="<?php echo admin_e($orderUrl); ?>" class="btn <?php echo admin_e($orderDetailsButtonClass); ?> btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_details_toggle', 'Show details')); ?>">
-                                                <i class="bi bi-search" aria-hidden="true"></i>
-                                            </a>
-                                            <button type="button" class="btn btn-primary btn-xs admin-orders-simple-table__icon-btn" data-admin-copy-value="<?php echo admin_e($orderCustomerHandle); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandle === '' ? ' disabled' : ''; ?>>
+                                            <a href="<?php echo admin_e($orderUrl); ?>" class="admin-orders-details admin-orders-simple-table__icon-btn <?php echo admin_e($orderDetailsButtonClass); ?>" title="<?php echo admin_e($orderDetailsLabel); ?>" aria-label="<?php echo admin_e($orderDetailsLabel); ?>"><i class="bi bi-eye" aria-hidden="true"></i></a>
+                                            <button type="button" class="admin-orders-menu-trigger" data-admin-orders-menu-toggle aria-controls="adminSearchOrderActions<?php echo $orderId; ?>" aria-expanded="false" aria-label="<?php echo admin_e(admin_t($messages, 'orders_row_more_actions', 'More actions for order') . ' #' . $orderId); ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                                            <div id="adminSearchOrderActions<?php echo $orderId; ?>" class="admin-orders-menu" data-admin-orders-menu hidden>
+                                            <button type="button" class="admin-orders-menu__item admin-orders-menu__item--label" data-admin-copy-value="<?php echo admin_e($orderCustomerHandle); ?>" title="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'orders_copy_customer_handle', 'Copy customer handle')); ?>"<?php echo $orderCustomerHandle === '' ? ' disabled' : ''; ?>>
                                                 <i class="bi bi-clipboard" aria-hidden="true"></i>
                                             </button>
-                                            <a href="<?php echo admin_e($orderCustomerProfileUrl); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
+                                            <a href="<?php echo admin_e($orderCustomerProfileUrl); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?>">
                                                 <i class="bi bi-person" aria-hidden="true"></i>
                                             </a>
-                                            <a href="<?php echo admin_e($orderCustomerOrdersUrl); ?>" class="btn btn-outline-dark btn-xs admin-orders-simple-table__icon-btn" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
+                                            <a href="<?php echo admin_e($orderCustomerOrdersUrl); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" title="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'customer_link_all_orders', 'All orders')); ?>">
                                                 <i class="bi bi-card-list" aria-hidden="true"></i>
                                             </a>
+                                                <?php if ($showProviderQuickButton): ?><a href="<?php echo admin_e($orderProviderDashboardUrl); ?>" class="admin-orders-menu__item admin-orders-menu__item--label" target="_blank" rel="noopener noreferrer" title="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?>"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a><?php endif; ?>
+                                            </div>
                                         </div>
                                     </td>
                                 </tr>

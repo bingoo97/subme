@@ -3994,8 +3994,6 @@ document.addEventListener('DOMContentLoaded', function () {
 	    }
 
     function initOrdersActionMenus() {
-        var triggers = qa('[data-admin-orders-menu-toggle]');
-        if (!triggers.length) return;
         var active = null;
         function closeMenu(restoreFocus) {
             if (!active) return;
@@ -4021,24 +4019,24 @@ document.addEventListener('DOMContentLoaded', function () {
             active.menu.style.left = Math.max(left + 12, Math.min(rect.right - size.width, left + width - size.width - 12)) + 'px';
             active.menu.style.top = Math.max(top + 12, y) + 'px';
         }
-        triggers.forEach(function (trigger) {
-            trigger.addEventListener('click', function () {
-                if (active && active.trigger === trigger) { closeMenu(false); return; }
-                closeMenu(false);
-                var menu = doc.getElementById(trigger.getAttribute('aria-controls'));
-                if (!menu) return;
-                var placeholder = doc.createComment('order actions');
-                menu.replaceWith(placeholder);
-                doc.body.appendChild(menu);
-                active = {menu: menu, trigger: trigger, placeholder: placeholder};
-                menu.hidden = false;
-                trigger.setAttribute('aria-expanded', 'true');
-                positionMenu();
-                var firstItem = q('a[href],button:not(:disabled),input:not(:disabled)', menu);
-                if (firstItem) firstItem.focus();
-            });
-        });
+        function toggleMenu(trigger) {
+            if (active && active.trigger === trigger) { closeMenu(false); return; }
+            closeMenu(false);
+            var menu = doc.getElementById(trigger.getAttribute('aria-controls'));
+            if (!menu) return;
+            var placeholder = doc.createComment('order actions');
+            menu.replaceWith(placeholder);
+            doc.body.appendChild(menu);
+            active = {menu: menu, trigger: trigger, placeholder: placeholder};
+            menu.hidden = false;
+            trigger.setAttribute('aria-expanded', 'true');
+            positionMenu();
+            var firstItem = q('a[href],button:not(:disabled),input:not(:disabled)', menu);
+            if (firstItem) firstItem.focus();
+        }
         doc.addEventListener('click', function (event) {
+            var trigger = closest(event.target, '[data-admin-orders-menu-toggle]');
+            if (trigger) { toggleMenu(trigger); return; }
             if (!active || active.trigger.contains(event.target)) return;
             if (!active.menu.contains(event.target)) { closeMenu(false); return; }
             if (closest(event.target, 'a, button')) closeMenu(false);

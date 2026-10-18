@@ -10696,7 +10696,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         ?>
                                         <div class="admin-user-detail">
                                             <div class="admin-user-detail__header">
-                                                <div>
+                                                <div class="admin-user-detail__identity">
+                                                    <?php $selectedUserAvatar = admin_search_customer_avatar_visual($selectedCustomer); ?>
+                                                    <span class="admin-user-detail__avatar admin-search-user-card__avatar<?php echo ($selectedUserAvatar['type'] ?? '') !== 'image' ? ' admin-search-user-card__avatar--initial ' . admin_e((string)($selectedUserAvatar['theme'] ?? 'theme-1')) : ''; ?>">
+                                                        <?php if (($selectedUserAvatar['type'] ?? '') === 'image'): ?>
+                                                            <img src="<?php echo admin_e((string)($selectedUserAvatar['src'] ?? '')); ?>" alt="" width="42" height="42">
+                                                        <?php else: ?><span><?php echo admin_e((string)($selectedUserAvatar['initial'] ?? 'U')); ?></span><?php endif; ?>
+                                                    </span>
+                                                    <div class="admin-user-detail__identity-copy">
                                                     <span class="admin-record-id">#<?php echo (int)$selectedCustomer['id']; ?></span>
                                                     <?php $selectedCustomerHeaderHandle = trim((string)($selectedCustomer['public_handle'] ?? '')); ?>
                                                     <?php if ($selectedCustomerHeaderHandle !== ''): ?>
@@ -10724,6 +10731,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </button>
                                                     </h3>
                                                     <p><?php echo admin_e(admin_t($messages, 'user_detail_intro', 'Customer account overview, orders and payments.')); ?></p>
+                                                    </div>
                                                 </div>
                                                 <a href="/admin/?page=users" class="btn btn-outline-dark btn-sm">
                                                     <i class="bi bi-arrow-left" aria-hidden="true"></i>
@@ -11180,7 +11188,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         }
                                                         ?>
                                                         <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
-                                                            <table class="table admin-table admin-user-detail-table align-middle">
+                                                            <table class="table admin-table admin-user-detail-table admin-user-detail-table--payments align-middle">
                                                                 <thead>
                                                                     <tr>
                                                                         <th><?php echo admin_e(admin_t($messages, 'payment_column_payment', 'Payment')); ?></th>
@@ -11968,14 +11976,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </div>
                                             </section>
                                         </div>
-                                        <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
+                                        <div class="table-responsive admin-users-table-scroll" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_users', 'Table')); ?>">
                                             <table class="table admin-table admin-users-table align-middle">
                                                 <thead>
                                                     <tr>
-                                                        <th>User</th>
-                                                        <th class="text-center">Orders</th>
-                                                        <th class="text-center">Last login</th>
-                                                        <th aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
+                                                        <th scope="col"><?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?></th>
+                                                        <th scope="col" class="text-center"><?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?></th>
+                                                        <th scope="col" class="text-center"><?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?></th>
+                                                        <th scope="col" class="text-center"><?php echo admin_e(admin_t($messages, 'user_summary_orders', 'Orders')); ?></th>
+                                                        <th scope="col" class="text-center"><?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?></th>
+                                                        <th scope="col" class="text-center"><?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?></th>
+                                                        <th scope="col" aria-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>"></th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -12002,7 +12013,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             : admin_t($messages, 'user_never_logged_in', 'No login yet');
                                                         ?>
                                                         <tr>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?>">
+                                                            <td class="admin-users-table__identity" data-label="<?php echo admin_e(admin_t($messages, 'col_customer', 'Customer')); ?>">
                                                                 <article class="admin-search-user-card admin-search-user-card--directory">
                                                                     <div class="admin-search-user-card__avatar-wrap">
                                                                         <?php if ((string)($rowAvatarVisual['type'] ?? 'image') === 'image'): ?>
@@ -12017,25 +12028,20 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <?php echo admin_chat_presence_dot_html($rowPresence); ?>
                                                                     </div>
                                                                     <div class="admin-search-user-card__body">
-                                                                        <a class="admin-search-user-card__email" href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>">
-                                                                            <?php echo admin_e((string)($row['email'] ?? '')); ?>
+                                                                        <a class="admin-user-row__identity-link" href="/admin/?page=users&amp;customer_id=<?php echo $rowCustomerId; ?>" title="<?php echo admin_e((string)($row['email'] ?? '')); ?>">
+                                                                            <span class="admin-user-row__primary"><?php echo admin_e(trim((string)($row['public_handle'] ?? '')) !== '' ? '@' . ltrim((string)$row['public_handle'], '@') : '#' . $rowCustomerId); ?></span>
+                                                                            <span class="admin-user-row__secondary"><?php echo admin_e((string)($row['email'] ?? '')); ?></span>
                                                                         </a>
-                                                                        <?php if (trim((string)($row['public_handle'] ?? '')) !== ''): ?>
-                                                                            <div class="admin-search-user-card__handle">@<?php echo admin_e((string)$row['public_handle']); ?></div>
-                                                                        <?php endif; ?>
-                                                                        <div class="admin-search-user-card__meta">
-                                                                            <img src="<?php echo admin_e($rowLocaleFlagUrl); ?>" alt="<?php echo admin_e($rowLocaleCode); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
-                                                                            <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($rowStatusClass); ?>">
-                                                                                <?php echo admin_e($rowStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : ucfirst($rowStatus)); ?>
-                                                                            </span>
-                                                                            <span class="admin-status-pill admin-status-pill--xs admin-status-pill--info">
-                                                                                <?php echo admin_e($rowCustomerTypeLabel); ?>
-                                                                            </span>
-                                                                        </div>
                                                                     </div>
                                                                 </article>
                                                             </td>
-                                                            <td data-label="Orders" class="text-center">
+                                                            <td class="admin-users-table__status text-center" data-label="<?php echo admin_e(admin_t($messages, 'col_status', 'Status')); ?>">
+                                                                <span class="admin-status-pill admin-status-pill--xs <?php echo admin_e($rowStatusClass); ?>"><?php echo admin_e($rowStatus === 'active' ? admin_t($messages, 'status_active', 'Active') : admin_t($messages, 'enum_' . $rowStatus, ucfirst($rowStatus))); ?></span>
+                                                            </td>
+                                                            <td class="admin-users-table__badges text-center" data-label="<?php echo admin_e(admin_t($messages, 'customer_type_label', 'User type')); ?>">
+                                                                <span class="admin-status-pill admin-status-pill--xs admin-status-pill--info"><?php echo admin_e($rowCustomerTypeLabel); ?></span>
+                                                            </td>
+                                                            <td class="admin-users-table__orders text-center" data-label="<?php echo admin_e(admin_t($messages, 'user_summary_orders', 'Orders')); ?>">
                                                                 <div class="admin-user-row__summary">
                                                                     <strong class="<?php echo (int)($row['orders_total'] ?? 0) === 0 ? 'text-danger' : ''; ?>"><?php echo admin_e((string)((int)($row['orders_total'] ?? 0))); ?></strong>
                                                                     <?php if ((int)($row['open_payments_total'] ?? 0) > 0): ?>
@@ -12043,12 +12049,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php endif; ?>
                                                                 </div>
                                                             </td>
-                                                            <td data-label="Last login" class="text-center">
+                                                            <td class="admin-users-table__login text-center" data-label="<?php echo admin_e(admin_t($messages, 'col_last_login', 'Last login')); ?>">
                                                                 <div class="admin-user-row__summary">
                                                                     <strong class="<?php echo trim((string)($row['last_login_at'] ?? '')) === '' ? 'text-danger' : ''; ?>"><?php echo admin_e($rowLastLoginLabel); ?></strong>
                                                                 </div>
                                                             </td>
-                                                            <td data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
+                                                            <td class="admin-users-table__locale text-center" data-label="<?php echo admin_e(admin_t($messages, 'col_locale', 'Locale')); ?>">
+                                                                <span class="admin-user-row__flag" title="<?php echo admin_e($rowLocaleCode); ?>"><img src="<?php echo admin_e($rowLocaleFlagUrl); ?>" alt="<?php echo admin_e($rowLocaleCode); ?>" width="22" height="22" loading="lazy"></span>
+                                                            </td>
+                                                            <td class="admin-users-table__actions" data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
                                                                 <div class="admin-user-row__actions"><a href="/admin/?page=users&amp;customer_id=<?php echo admin_e((string)$rowCustomerId); ?>" class="btn btn-dark btn-sm admin-user-row__icon-btn" title="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>" aria-label="<?php echo admin_e(admin_t($messages, 'user_action_manage', 'Manage')); ?>">
                                                                         <i class="bi bi-person-gear" aria-hidden="true"></i>
                                                                     </a>

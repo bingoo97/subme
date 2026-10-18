@@ -1,0 +1,6 @@
+dashboard-panel/admin/bootstrap.php
+dashboard-panel/admin/index.php
+dashboard-panel/admin/locales/en.php
+dashboard-panel/admin/locales/pl.php
+public_html/assets/css/admin.css
+public_html/assets/js/admin.js

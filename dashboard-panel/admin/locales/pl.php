@@ -1,6 +1,8 @@
 <?php
 
 return [
+    'order_payment_confirmed_short' => 'Płatność potwierdzona.',
+    'order_waiting_activation_short_line' => 'Oczekuje na aktywację.',
     'order_extend_already_applied' => 'To przedłużenie zostało już wykonane. Nie pobrano środków ponownie.',
     'order_extend_changed' => 'Zamówienie zmieniło się od otwarcia formularza. Odśwież stronę przed kolejnym przedłużeniem.',
     'order_extend_reservation_mismatch' => 'Rezerwacja salda nie pasuje do klienta lub kwoty przedłużenia. Najpierw zweryfikuj płatność.',

@@ -1,6 +1,8 @@
 <?php
 
 return [
+    'order_payment_confirmed_short' => 'Payment confirmed.',
+    'order_waiting_activation_short_line' => 'Waiting for activation.',
     'order_extend_already_applied' => 'This renewal has already been applied. No additional balance debit was made.',
     'order_extend_changed' => 'The order changed after this form was opened. Refresh before extending it again.',
     'order_extend_reservation_mismatch' => 'The balance reservation does not match the customer or renewal amount. Verify the payment first.',
