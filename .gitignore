@@ -1,4 +1,7 @@
 .DS_Store
 .codex-tmp/
+.subme-secrets/
 .windsurf/
 dashboard-panel/templates_c/
+
+dashboard-panel/storage/provider-remote-private/

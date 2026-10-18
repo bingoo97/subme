@@ -1,0 +1,12 @@
+dashboard-panel/admin/provider_remote.php
+dashboard-panel/admin/provider_browser.php
+dashboard-panel/admin/provider_remote_endpoint.php
+dashboard-panel/admin/provider_browser_endpoint.php
+dashboard-panel/admin/bootstrap.php
+dashboard-panel/admin/index.php
+public_html/assets/css/admin.css
+public_html/assets/js/admin.js
+public_html/assets/js/provider-browser.js
+public_html/admin/provider_remote.php
+public_html/admin/provider_browser.php
+dashboard-panel/migrations/040_provider_remote_login.sql

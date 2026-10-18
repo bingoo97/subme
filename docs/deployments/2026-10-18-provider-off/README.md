@@ -1,0 +1,9 @@
+# Provider module deployment — default OFF
+
+Targets: `demo.subme.pro` and `dashboard.subme.pro`, account `submtosl`. The 12-file runtime allowlist contains only the provider foundation, its PHP callers, JavaScript/CSS and additive schema migration. Other changes in the dirty local checkout are excluded. Source, tests and local Chromium/OCR service are archived in Git; the browser/OCR worker is not started or installed on shared hosting.
+
+Deploy an exact Git revision from the existing server repository into private staging; do not pull/reset its dirty checkout. Require live hashes to match the previous deployed revision or the new payload before replacing any file. Each site has its own backup and its own existing database connection. Keep database configuration, backend/public pointers, `.htaccess`, cron, uploads, sessions and secrets unchanged. Never import local data, credentials, environments, runtime flags or browser-worker tokens.
+
+The additive migration creates provider configuration storage and two settings with schema defaults `0`. Deployment explicitly sets both `provider_remote_login_enabled` and `provider_remote_subscriptions_enabled` to `0` on each target. Preserve other settings, including any automatic update timestamp; retain any existing encrypted provider configurations unchanged. Snapshot/verification compare unrelated settings by hash and configuration row count without exporting their contents.
+
+Deploy `demo` first and verify HTTP/login/assets before `dashboard`. Check both final flags directly on each target, the protected-file hashes, installed payload hashes, 30-day session cookie attributes and absence of new runtime errors. Do not test remote provider logins or invoke payment/renewal actions during deployment. On failure restore only allowlisted code from the same site's backup; additive columns/table can remain and the module stays OFF.

@@ -9,6 +9,8 @@ require_once dirname(__DIR__) . '/bootstrap/application.php';
 require_once dirname(__DIR__) . '/bootstrap/chat.php';
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/crypto_safety.php';
+require_once __DIR__ . '/provider_remote.php';
+require_once __DIR__ . '/provider_browser.php';
 
 $__adminBootstrapChatRuntimeDb = Mysql_ks::get_instance();
 chat_ensure_group_chat_runtime($__adminBootstrapChatRuntimeDb);

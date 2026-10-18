@@ -10750,3 +10750,225 @@ document.addEventListener('DOMContentLoaded', function () {
     renderSourceAudit();
     renderIssueChecklist();
 });
+
+document.addEventListener('DOMContentLoaded', () => {
+    const root = document.querySelector('[data-provider-remote]');
+    const node = document.getElementById('providerRemoteModal');
+    const form = node?.querySelector('[data-provider-remote-form]');
+    if (!root || !form || !window.bootstrap?.Modal) return;
+    const pl = root.dataset.locale === 'pl';
+    const modal = window.bootstrap.Modal.getOrCreateInstance(node);
+    const result = root.querySelector('[data-provider-remote-result]');
+    const modalResult = node.querySelector('[data-provider-remote-modal-result]');
+    const configure = root.querySelector('[data-provider-remote-config]');
+    const test = root.querySelector('[data-provider-remote-test]');
+    const save = node.querySelector('[data-provider-remote-save]');
+    const inspect = node.querySelector('[data-provider-remote-inspect]');
+    const inspectResult = node.querySelector('[data-provider-remote-inspect-result]');
+    const challengeBox = root.querySelector('[data-provider-remote-challenge]');
+    const answer = root.querySelector('[data-provider-remote-answer]');
+    const captchaImage = root.querySelector('[data-provider-remote-captcha-image]');
+    const complete = root.querySelector('[data-provider-remote-complete]');
+    const cancel = root.querySelector('[data-provider-remote-cancel]');
+    let challenge = '';
+    let challengeTimer = 0;
+    let busy = false;
+    let configurationLoaded = false;
+    const confirmationKind = form.elements.namedItem('success_kind');
+    const confirmationValue = form.elements.namedItem('success_value');
+    const detectionMode = form.elements.namedItem('mode');
+    const updateDetection = () => {
+        const automatic = detectionMode.value === 'auto';
+        form.querySelector('[data-provider-remote-manual-fields]').hidden = automatic;
+        form.querySelector('[data-provider-remote-detection-hint]').textContent = automatic
+            ? (pl ? 'Podaj login i hasło. Pola formularza i przycisk logowania rozpoznamy automatycznie na podstawie zapisanego URL providera.' : 'Enter your username and password. Login fields and the submit button are detected from the saved provider URL.')
+            : (pl ? 'Używasz ręcznej konfiguracji formularza. Możesz włączyć automatyczne rozpoznawanie w ustawieniach zaawansowanych.' : 'Manual form settings are active. Automatic detection is available in advanced settings.');
+    };
+    detectionMode.addEventListener('change', updateDetection);
+    updateDetection();
+    const updateConfirmation = () => {
+        const automatic = confirmationKind.value === 'auto';
+        confirmationValue.disabled = automatic;
+        confirmationValue.required = !automatic;
+        confirmationValue.hidden = automatic;
+        const hint = form.querySelector('[data-provider-remote-confirmation-hint]');
+        if (hint) hint.textContent = automatic
+            ? (pl ? 'Potwierdzenie logowania wykrywamy automatycznie. Własny warunek możesz ustawić w opcjach zaawansowanych.' : 'Login is detected automatically. A custom condition is available in advanced settings.')
+            : (pl ? 'Używasz własnego warunku potwierdzenia logowania z ustawień zaawansowanych.' : 'A custom login confirmation condition is configured in advanced settings.');
+    };
+    confirmationKind.addEventListener('change', updateConfirmation);
+    updateConfirmation();
+    const show = (target, message, ok = false, code = '') => {
+        const state = ok ? 'success' : code === 'pending' ? 'pending'
+            : ['rejected','captcha_rejected','connection','storage','browser_unavailable'].includes(code) ? 'error'
+            : code === 'cancelled' ? 'info' : 'warning';
+        const icons = {success:'bi-check-circle-fill',warning:'bi-exclamation-triangle-fill',error:'bi-x-circle-fill',info:'bi-info-circle-fill',pending:'bi-arrow-repeat'};
+        const icon = document.createElement('i');
+        icon.className = `bi ${icons[state]}`;
+        icon.setAttribute('aria-hidden','true');
+        const text = document.createElement('span');
+        text.textContent = message;
+        target.replaceChildren(icon,text);
+        target.classList.remove('is-success','is-warning','is-error','is-info','is-pending');
+        target.classList.add(`is-${state}`);
+        target.hidden = false;
+    };
+    const request = async (action, data = new FormData()) => {
+        data.set('_csrf', root.dataset.csrf);
+        data.set('provider_id', root.dataset.providerId);
+        data.set('action', action);
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), ['inspect','test','test_complete'].includes(action) ? 65000 : 10000);
+        try {
+        const response = await fetch('/admin/provider_remote.php', { method: 'POST', body: data, credentials: 'same-origin', cache: 'no-store', signal: controller.signal, headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+        let payload;
+        try { payload = await response.json(); }
+        catch { const error = new Error(pl ? 'Nie otrzymano poprawnej odpowiedzi. Spróbuj ponownie za chwilę.' : 'No valid response. Try again in a moment.'); error.code = 'connection'; throw error; }
+        if (!payload || typeof payload !== 'object') { const error = new Error(pl ? 'Nie otrzymano poprawnej odpowiedzi.' : 'No valid response.'); error.code = 'connection'; throw error; }
+        if (!response.ok) {
+            const error = new Error(payload.message || (pl ? 'Nie udało się wykonać operacji.' : 'Unable to complete the request.'));
+            error.code = payload.code; throw error;
+        }
+        return payload;
+        } catch (error) {
+            if (error.name === 'AbortError' || error instanceof TypeError) {
+                const failure = new Error(pl ? 'Brak odpowiedzi z serwera. Spróbuj ponownie za chwilę.' : 'No response from the server. Try again in a moment.');
+                failure.code = error.name === 'AbortError' ? 'limit' : 'connection'; throw failure;
+            }
+            throw error;
+        } finally { window.clearTimeout(timer); }
+    };
+    const clearChallenge = () => {
+        challenge = '';
+        window.clearTimeout(challengeTimer);
+        challengeBox.hidden = true;
+        captchaImage.removeAttribute('src');
+        answer.value = '';
+    };
+    const challengeData = () => { const data = new FormData(); data.set('challenge',challenge); return data; };
+    const cancelChallenge = async () => {
+        if (!challenge) return;
+        const data = challengeData(); clearChallenge();
+        try { await request('test_cancel',data); } catch { /* The worker also expires its memory-only session. */ }
+    };
+    const setBusy = value => {
+        busy = value;
+        [configure,test,save,inspect,complete,cancel].forEach(button => { if (button) button.disabled = value; });
+        if (save) save.disabled = value || !configurationLoaded;
+        root.setAttribute('aria-busy', String(value));
+    };
+    configure?.addEventListener('click', async () => {
+        if (busy) return;
+        configurationLoaded = false;
+        setBusy(true);
+        await cancelChallenge();
+        form.reset();
+        updateDetection();
+        form.querySelectorAll('details').forEach(details=>{details.open=false;});
+        updateConfirmation();
+        modalResult.hidden = true;
+        inspectResult.hidden = true;
+        node.querySelector('[data-provider-remote-scan-url]').textContent = document.getElementById('product_provider_dashboard_url')?.defaultValue || '';
+        modal.show();
+        try {
+            const payload = await request('load');
+            if (!payload.ok) { show(modalResult,payload.message,false,payload.code); return; }
+            configurationLoaded = true;
+            for (const [name,value] of Object.entries(payload.config || {})) {
+                const field = form.elements.namedItem(name);
+                if (!field) continue;
+                if (field.type === 'checkbox') field.checked = Boolean(value);
+                else field.value = String(value);
+            }
+            form.elements.namedItem('username').value = payload.username || '';
+            form.elements.namedItem('password').value = '';
+            updateConfirmation();
+            updateDetection();
+            node.querySelector('[data-provider-remote-password-hint]').textContent = payload.has_password
+                ? (pl ? 'Hasło zapisane. Pozostaw puste, aby go nie zmieniać.' : 'Password saved. Leave empty to keep it.')
+                : (pl ? 'Hasło będzie zapisane w postaci zaszyfrowanej.' : 'The password will be stored encrypted.');
+        } catch (error) { show(modalResult, error.message,false,error.code); }
+        finally { setBusy(false); }
+    });
+    inspect.addEventListener('click', async () => {
+        if (busy) return;
+        setBusy(true);
+        await cancelChallenge();
+        show(inspectResult, pl ? 'Sprawdzanie panelu…' : 'Checking panel…',false,'pending');
+        try {
+            const data = new FormData();
+            data.set('login_path', form.elements.namedItem('login_path').value);
+            const payload = await request('inspect', data);
+            if (payload.ok && payload.code === 'detected') {
+                for (const [name, value] of Object.entries(payload.config || {})) {
+                    const field = form.elements.namedItem(name);
+                    if (!field || ['username','password'].includes(name)) continue;
+                    if (field.type === 'checkbox') field.checked = Boolean(value);
+                    else field.value = String(value);
+                }
+                updateDetection(); updateConfirmation();
+                modalResult.hidden = true;
+            }
+            show(inspectResult, payload.message, payload.ok, payload.code);
+        } catch (error) { show(inspectResult, error.message,false,error.code); }
+        finally { setBusy(false); }
+    });
+    form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (busy || !configurationLoaded) return;
+        setBusy(true);
+        try {
+            const payload = await request('save',new FormData(form));
+            show(modalResult,payload.message,payload.ok,payload.code);
+            if (payload.ok) {
+                form.elements.namedItem('password').value = '';
+                result.hidden = true;
+                node.querySelector('[data-provider-remote-password-hint]').textContent = pl ? 'Pozostaw puste, aby zachować zapisane hasło.' : 'Leave empty to keep the saved password.';
+            }
+        } catch (error) { show(modalResult,error.message,false,error.code); }
+        finally { setBusy(false); }
+    });
+    test?.addEventListener('click', async () => {
+        if (busy) return;
+        setBusy(true);
+        await cancelChallenge();
+        show(result,pl?'Sprawdzanie logowania…':'Testing login…',false,'pending');
+        try {
+            const payload = await request('test'); show(result,payload.message,payload.ok,payload.code);
+            if (payload.code === 'captcha_required' && payload.challenge && payload.image?.startsWith('data:image/png;base64,')) {
+                challenge = payload.challenge;
+                captchaImage.src = payload.image;
+                challengeBox.hidden = false;
+                challengeTimer = window.setTimeout(() => { cancelChallenge(); show(result,pl?'Próba wygasła. Uruchom nowy test.':'The attempt expired. Start a new test.',false,'expired'); },120000);
+                answer.focus();
+            }
+        }
+        catch (error) { show(result,error.message,false,error.code); }
+        finally { setBusy(false); }
+    });
+    complete?.addEventListener('click', async () => {
+        if (busy || !challenge || !answer.value.trim()) return;
+        setBusy(true);
+        const data = challengeData(); data.set('answer',answer.value);
+        try { const payload = await request('test_complete',data); show(result,payload.message,payload.ok,payload.code); }
+        catch (error) { show(result,error.message,false,error.code); }
+        finally { clearChallenge(); setBusy(false); }
+    });
+    cancel?.addEventListener('click', async () => {
+        if (busy) return;
+        setBusy(true); await cancelChallenge(); setBusy(false);
+        show(result,pl?'Test anulowany.':'Test cancelled.',false,'cancelled');
+    });
+    answer?.addEventListener('keydown',event => { if (event.key==='Enter') { event.preventDefault(); complete.click(); } });
+    window.addEventListener('pagehide',() => {
+        if (!challenge) return;
+        const data = challengeData();
+        data.set('_csrf',root.dataset.csrf); data.set('provider_id',root.dataset.providerId); data.set('action','test_cancel');
+        navigator.sendBeacon('/admin/provider_remote.php',data);
+        clearChallenge();
+    });
+    node.addEventListener('hidden.bs.modal', () => {
+        form.elements.namedItem('password').value = '';
+        modalResult.hidden = true;
+    });
+});

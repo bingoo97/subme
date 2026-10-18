@@ -281,6 +281,10 @@ if (isset($_POST['admin_hinkal_transaction_notification'])) {
 }
 
 $route = admin_normalize_route($_GET['page'] ?? 'dashboard');
+if (in_array($route, ['products', 'settings'], true) && admin_user_can_access_route($adminUser, $route)) {
+    admin_provider_remote_ensure_schema($db);
+    $appSettings = admin_app_settings($db);
+}
 if (in_array($route, ['billing', 'settings'], true) && admin_user_can_access_route($adminUser, $route)) admin_billing_ensure_runtime_schema($db);
 $settingsAdminMode = strtolower(trim((string)($_GET['admin'] ?? ''))) === 'true';
 $settingsAdminUrlSuffix = $settingsAdminMode ? '&admin=true' : '';
@@ -1178,6 +1182,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $bankTransfersEnabled = isset($_POST['bank_transfers_enabled']) ? 1 : 0;
         $cryptoWalletSharedAssignmentsEnabled = isset($_POST['crypto_wallet_shared_assignments_enabled']) ? 1 : 0;
         $bankAccountSharedAssignmentsEnabled = isset($_POST['bank_account_shared_assignments_enabled']) ? 1 : 0;
+        $providerRemoteLoginEnabled = isset($_POST['provider_remote_login_enabled']) ? 1 : 0;
+        $providerRemoteSubscriptionsEnabled = isset($_POST['provider_remote_subscriptions_enabled']) ? 1 : 0;
         $billingEnabledInput = $billingSwitchCanManage
             ? (isset($_POST['billing_enabled']) ? 1 : 0)
             : (admin_billing_enabled($appSettings) ? 1 : 0);
@@ -1644,6 +1650,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'bank_transfers_enabled',
                     'crypto_wallet_shared_assignments_enabled',
                     'bank_account_shared_assignments_enabled',
+                    'provider_remote_login_enabled',
+                    'provider_remote_subscriptions_enabled',
                     'billing_enabled',
                     'billing_auto_issue_email_enabled',
                     'swap_converter_enabled',
@@ -1737,6 +1745,8 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $bankTransfersEnabled,
                     $cryptoWalletSharedAssignmentsEnabled,
                     $bankAccountSharedAssignmentsEnabled,
+                    $providerRemoteLoginEnabled,
+                    $providerRemoteSubscriptionsEnabled,
                     $billingEnabledInput,
                     $billingAutoIssueEmailEnabledInput,
                     $swapConverterEnabledInput,
@@ -9901,23 +9911,26 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                     <?php endif; ?>
                                                                                 </div>
                                                                             </div>
+                                                                            <?php $providerRemoteFlow = $usesSubscriptionTiming && admin_provider_browser_delivery_link((string)($row['delivery_link'] ?? '')) !== null && $providerDashboardUrl !== '' && !empty($appSettings['provider_remote_login_enabled']) && $paymentStatusRaw === 'paid' && admin_user_can_access_route($adminUser, 'products') && admin_provider_browser_local(); ?>
                                                                             <div class="admin-order-modal__next-steps">
                                                                                 <div class="admin-order-modal__next-step">
-                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_customer_profile_title', '1. Open the customer profile.') : admin_t($messages, 'order_next_step_provider_title', '1. Go to the provider dashboard.')); ?></strong>
+                                                                                    <?php if (!$providerRemoteFlow): ?><strong class="admin-order-modal__next-step-title"><?php echo admin_e(!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_customer_profile_title', '1. Open the customer profile.') : admin_t($messages, 'order_next_step_provider_title', '1. Go to the provider dashboard.')); ?></strong><?php endif; ?>
                                                                                     <?php if (!$usesSubscriptionTiming): ?>
                                                                                         <a href="<?php echo admin_e($customerProfileUrl); ?>" class="btn btn-dark btn-lg admin-order-modal__provider-btn">
                                                                                             <i class="bi bi-person-badge" aria-hidden="true"></i>
                                                                                             <span><?php echo admin_e(admin_t($messages, 'order_open_customer_profile', 'Open customer profile')); ?></span>
                                                                                         </a>
 	                                                                                <?php elseif ($providerDashboardUrl !== ''): ?>
+<?php if ($providerRemoteFlow): admin_provider_browser_render(0, $orderId, $csrfToken, $currentLocale); else: ?>
 	                                                                                     <a href="<?php echo admin_e($providerDashboardUrl); ?>" class="btn btn-warning btn-lg admin-order-modal__provider-btn admin-order-modal__provider-btn--left w-auto" target="_blank" rel="noopener noreferrer">
 	                                                                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
 	                                                                                        <span><?php echo admin_e(admin_t($messages, 'order_provider_dashboard_link', 'Provider dashboard')); ?></span>
 	                                                                                    </a>
+<?php endif; ?>
 	                                                                                <?php endif; ?>
                                                                                 </div>
                                                                                 <div class="admin-order-modal__next-step">
-                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_title', '2. Open Extend tab and apply package.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.'))); ?></strong>
+                                                                                    <strong class="admin-order-modal__next-step-title"><?php echo admin_e(preg_replace($providerRemoteFlow ? '/^2\./' : '/^$/', $providerRemoteFlow ? '3.' : '', $isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_title', '2. Open Extend tab and apply package.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_title', '2. Update the customer account and complete the order.') : admin_t($messages, 'order_next_step_approve_title', '2. Approve the selected order.')))); ?></strong>
                                                                                     <span class="admin-order-modal__next-step-copy"><?php echo admin_e($isPendingRenewalAwaitingExtension ? admin_t($messages, 'order_next_step_extend_copy', 'After manual extension in provider panel, use Extend tab and then verify order status below.') : (!$usesSubscriptionTiming ? admin_t($messages, 'order_next_step_account_update_copy', 'After updating the customer account, change the order status below.') : admin_t($messages, 'order_next_step_approve_copy', 'After sending the access data, update the order status below.'))); ?></span>
                                                                                 </div>
                                                                             </div>
@@ -10567,6 +10580,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </select>
                                                     </div>
                                                     <div class="col-12">
+                                                        <?php admin_provider_remote_render_section($productProviderEditor, $appSettings, $csrfToken, $currentLocale); ?>
+                                                    </div>
+                                                    <div class="col-12">
                                                         <label class="form-label" for="product_provider_description"><?php echo admin_e(admin_t($messages, 'product_provider_description_label', 'Description')); ?></label>
                                                         <textarea class="form-control" id="product_provider_description" name="description" rows="5"><?php echo admin_e((string)($productProviderEditor['description'] ?? '')); ?></textarea>
                                                     </div>
@@ -10635,6 +10651,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     </button>
                                                 </div>
                                             </form>
+                                            <?php admin_provider_remote_render_modal($currentLocale); ?>
                                         </div>
                                         <?php
                                         break;
@@ -16922,6 +16939,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <input type="email" class="form-control" id="crypto_daily_backup_email" name="crypto_daily_backup_email" value="<?php echo admin_e((string)($appSettings['crypto_daily_backup_email'] ?? '')); ?>" placeholder="<?php echo admin_e((string)($appSettings['support_email'] ?? 'support@example.com')); ?>">
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_crypto_daily_backup_email_help', 'Leave empty to use the main support/admin email from site settings.')); ?></small>
                                                 </div>
+                                                <?php admin_provider_remote_render_settings($appSettings, $currentLocale); ?>
                                                 <div class="col-12">
                                                     <div class="form-check form-switch">
                                                         <input class="form-check-input" type="checkbox" role="switch" id="history_cleanup_enabled" name="history_cleanup_enabled"<?php echo !empty($appSettings['history_cleanup_enabled']) ? ' checked' : ''; ?>>
@@ -21798,6 +21816,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
+    <script src="/assets/js/provider-browser.js?v=<?php echo admin_public_asset_version('assets/js/provider-browser.js'); ?>"></script>
     <?php if ($route === 'dashboard'): ?>
         <script src="/assets/js/admin-dashboard.js?v=<?php echo admin_public_asset_version('assets/js/admin-dashboard.js'); ?>"></script>
     <?php endif; ?>

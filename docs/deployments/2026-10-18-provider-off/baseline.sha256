@@ -1,0 +1,12 @@
+NEW  dashboard-panel/admin/provider_remote.php
+NEW  dashboard-panel/admin/provider_browser.php
+NEW  dashboard-panel/admin/provider_remote_endpoint.php
+NEW  dashboard-panel/admin/provider_browser_endpoint.php
+e8bd546629de25e2ab279c8a3ddfe7603623d210f2c0aed3e195bae57e42aa31  dashboard-panel/admin/bootstrap.php
+44edac11e63e8b2ccdc589ac69f66c464dba635f7ed7c1ec824ef047e15a1701  dashboard-panel/admin/index.php
+3721e95606597110f3e857e3e6969450a9e045df24504fa049535befc66a4fc0  public_html/assets/css/admin.css
+7fb1278621441a68a8b355f42c3875a15736fc99b041912f42ad80cf2090c473  public_html/assets/js/admin.js
+NEW  public_html/assets/js/provider-browser.js
+NEW  public_html/admin/provider_remote.php
+NEW  public_html/admin/provider_browser.php
+NEW  dashboard-panel/migrations/040_provider_remote_login.sql

@@ -1,0 +1,26 @@
+services:
+  provider_browser:
+    build: ../services/provider-browser
+    container_name: reseller_provider_browser_local
+    restart: unless-stopped
+    init: true
+    env_file: ../.subme-secrets/provider-browser/worker.env
+    read_only: true
+    user: pwuser
+    security_opt:
+      - seccomp=../services/provider-browser/seccomp_profile.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+      - /home/pwuser:size=67108864,uid=1000,gid=1000
+    shm_size: 256mb
+    mem_limit: 1g
+    pids_limit: 256
+    logging:
+      driver: none
+    networks: [reseller_local]
+networks:
+  reseller_local:
+    external: true
+    name: reseller_local_net
