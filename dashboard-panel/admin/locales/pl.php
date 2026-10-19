@@ -1,6 +1,10 @@
 <?php
 
 return [
+    'mobile_navigation_back' => 'Wróć do poprzedniej strony',
+    'mobile_navigation_orders' => 'Przejdź do zamówień',
+    'mobile_navigation_payments' => 'Przejdź do płatności',
+
     'payment_purpose_order' => 'Za zamówienie',
     'payment_archive_requires_approval' => 'Najpierw zweryfikuj i zatwierdź otrzymaną wpłatę. Dopiero potem możesz ją zarchiwizować.',
     'payment_archive_requires_fulfilment' => 'Najpierw dokończ realizację powiązanego zamówienia. Potem wypłać środki i przenieś płatność do archiwum.',

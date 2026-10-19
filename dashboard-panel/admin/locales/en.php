@@ -1,6 +1,10 @@
 <?php
 
 return [
+    'mobile_navigation_back' => 'Go back',
+    'mobile_navigation_orders' => 'Go to orders',
+    'mobile_navigation_payments' => 'Go to payments',
+
     'payment_purpose_order' => 'Order payment',
     'payment_archive_requires_approval' => 'Approve the received payment before archiving it.',
     'payment_archive_requires_fulfilment' => 'Complete the linked order before withdrawing funds and archiving the payment.',

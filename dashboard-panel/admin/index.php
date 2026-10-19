@@ -18150,6 +18150,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         </div>
     </div>
 
+    <?php require __DIR__ . '/partials/mobile-navigation.php'; ?>
+
     <?php if ($route === 'settings'): ?>
         <script>
             (() => {

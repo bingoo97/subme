@@ -1782,6 +1782,22 @@ document.addEventListener('DOMContentLoaded', function () {
         return '<span class="' + escapeHtml(className) + '" title="' + escapeHtml(label) + '" aria-label="' + escapeHtml(label) + '"></span>';
     }
 
+    function initMobileNavigation() {
+        var link = q('[data-admin-mobile-navigation]');
+        if (!link || link.getAttribute('data-navigation-mode') !== 'back') return;
+        link.addEventListener('click', function (event) {
+            if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            // Keep back navigation inside this admin panel. Direct visits use the normal href fallback.
+            try {
+                var previous = new URL(doc.referrer);
+                if (previous.origin !== window.location.origin || !/\/admin\/(?:index\.php)?$/.test(previous.pathname)
+                    || previous.href === window.location.href || window.history.length <= 1) return;
+            } catch (error) { return; }
+            event.preventDefault();
+            window.history.back();
+        });
+    }
+
     function initSidebarAndDropdowns() {
         doc.addEventListener('click', function (event) {
             var sidebarToggle = closest(event.target, '[data-admin-sidebar-toggle], [data-admin-menu-toggle]');
@@ -10036,6 +10052,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    initMobileNavigation();
     initSidebarAndDropdowns();
     initDangerForms();
     initSettingsBackupGenerator();

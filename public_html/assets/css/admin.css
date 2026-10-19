@@ -21145,3 +21145,26 @@ body.admin-app-page .admin-content--users .admin-user-detail .alert-info{border:
     .admin-chat-conversation__message.is-entering,
     .messenger-time-anchor.admin-chat-conversation__time-anchor.is-entering{opacity:1;transform:none;}
 }
+
+/* A quiet thumb shortcut, below every dialog and hidden while overlays or editing are active. */
+.admin-mobile-navigation{display:none;}
+@media(max-width:1279px), (hover:none) and (pointer:coarse){
+    body.admin-app-page .admin-content{padding-bottom:calc(82px + env(safe-area-inset-bottom,0px));}
+    .admin-mobile-navigation{position:fixed;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:1010;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:48px;height:48px;padding:0;border:1px solid #e0e5eb;border-radius:50%;background:#f1f3f6;color:#5d6a7d;box-shadow:none;text-decoration:none;touch-action:manipulation;transition:transform .15s ease,background-color .15s ease;}
+    .admin-mobile-navigation .bi{display:block;font-size:20px;line-height:1;}
+    .admin-mobile-navigation:hover{color:#455369;}
+    .admin-mobile-navigation:active{color:#455369;background:#e4e9ef;transform:scale(.94);box-shadow:none;}
+    .admin-mobile-navigation:focus-visible{outline:2px solid #94a3b8;outline-offset:3px;}
+    body.modal-open .admin-mobile-navigation,
+    body.admin-chat-docked-open .admin-mobile-navigation,
+    body:has(.modal.show,.modal-backdrop,dialog[open],.offcanvas.show,.offcanvas-backdrop,
+        [data-admin-chat-panel]:not([hidden]),[data-admin-topbar-flyout]:not([hidden]),
+        [data-admin-converter-modal]:not([hidden]),.admin-sidebar.is-open,
+        [data-admin-search-results]:not([hidden]),.dropdown-menu.show,
+        .admin-orders-menu:not([hidden]),input:focus,textarea:focus,[contenteditable="true"]:focus) .admin-mobile-navigation{visibility:hidden;pointer-events:none;}
+}
+
+@media(max-width:1279px) and (hover:hover) and (pointer:fine){
+    .admin-mobile-navigation:hover{background:#e9edf2;}
+}
+@media(prefers-reduced-motion:reduce){.admin-mobile-navigation{transition:none;}.admin-mobile-navigation:active{transform:none;}}
