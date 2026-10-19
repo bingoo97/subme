@@ -8708,12 +8708,14 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </div>
                                         </div>
                                     </section>
-                                    <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mb-4" role="alert">
+                                    <?php if ($openOrderCount > 0): ?>
+                                    <div id="adminOrdersOpenHelp" class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mb-4" role="alert">
 	                                        <i class="bi bi-info-circle mt-1" aria-hidden="true"></i>
 	                                        <div><?php echo admin_e(admin_t($messages, 'orders_open_help_alert', 'Jeśli klient dodał poniżej zamówienie, a nie widzisz płatności, kliknij w tabeli poniżej w @handle, aby sprawdzić jego profil. Zobaczysz tam, czy wygenerował już płatność, oraz czy jego przypisane portfele są puste i czy wpłynęła tam dzisiaj jakaś wpłata.')); ?></div>
 	                                    </div>
 	                                    <?php endif; ?>
-	                                    <?php if (!$orderHasFocusedFilter || $openOrderCount > 0): ?>
+	                                    <?php endif; ?>
+	                                    <?php if ($openOrderCount > 0): ?>
 	                                    <div class="admin-orders-header-row d-flex align-items-center justify-content-between gap-3 mt-4 mb-1">
 	                                        <h3 id="adminOrdersOpenHeading" class="mb-0 admin-orders-table-title"><?php echo admin_e(admin_t($messages, 'orders_open_table_title', 'Otwarte zamówienia')); ?></h3>
 	                                        <span class="admin-status-pill admin-status-pill--muted"><?php echo admin_e((string)$openOrderCount); ?></span>
@@ -8861,12 +8863,6 @@ function admin_render_table(array $headers, array $rows, array $messages): void
 		                                                </tbody>
 		                                            </table>
 		                                        </div>
-		                                    <?php else: ?>
-	                                        <?php if (!$orderHasFocusedFilter): ?>
-	                                        <div class="alert alert-warning" role="alert">
-	                                            <?php echo admin_e(admin_t($messages, 'orders_open_empty', 'Brak otwartych zamówień.')); ?>
-	                                        </div>
-	                                        <?php endif; ?>
 	                                    <?php endif; ?>
 	                                    <?php if (!$orderHasFocusedFilter): ?>
 	                                    <div class="alert alert-info admin-orders-help-alert d-flex align-items-start gap-2 mt-4 mb-3" role="alert">

@@ -13,7 +13,7 @@ if(($argv[1]??'')==='--page') {
     $warnings=[];set_error_handler(static function($level,$message,$file,$line)use(&$warnings):bool {if(error_reporting()&$level)$warnings[]=basename($file).':'.$line.' '.$message;return true;},E_WARNING|E_NOTICE|E_USER_WARNING);
     $started=microtime(true);ob_start();register_shutdown_function(static function()use($started,&$warnings):void {
         $html=ob_get_clean();$fatal=error_get_last();if(session_status()===PHP_SESSION_ACTIVE)session_destroy();
-        echo json_encode(['status'=>http_response_code()?:200,'queries'=>class_exists('Mysql_ks',false)?Mysql_ks::$licznik:0,'ms'=>round((microtime(true)-$started)*1000,1),'bytes'=>strlen((string)$html),'html'=>strpos((string)$html,'<html')!==false,'payment_type_filters'=>str_contains((string)$html,'admin-payments-filter-group--types'),'orders_guidance_hidden_initial'=>(bool)preg_match('/<body[^>]*class="[^"]*is-admin-orders-guidance-hidden/',(string)$html),'warnings'=>$warnings,'fatal'=>$fatal&&in_array($fatal['type'],[E_ERROR,E_PARSE,E_COMPILE_ERROR,E_CORE_ERROR])?$fatal:null]);
+        echo json_encode(['status'=>http_response_code()?:200,'queries'=>class_exists('Mysql_ks',false)?Mysql_ks::$licznik:0,'ms'=>round((microtime(true)-$started)*1000,1),'bytes'=>strlen((string)$html),'html'=>strpos((string)$html,'<html')!==false,'payment_type_filters'=>str_contains((string)$html,'admin-payments-filter-group--types'),'orders_guidance_hidden_initial'=>(bool)preg_match('/<body[^>]*class="[^"]*is-admin-orders-guidance-hidden/',(string)$html),'orders_open_heading'=>str_contains((string)$html,'id="adminOrdersOpenHeading"'),'orders_open_help'=>str_contains((string)$html,'id="adminOrdersOpenHelp"'),'orders_open_empty_alert'=>str_contains((string)$html,'Brak otwartych zamówień.'),'warnings'=>$warnings,'fatal'=>$fatal&&in_array($fatal['type'],[E_ERROR,E_PARSE,E_COMPILE_ERROR,E_CORE_ERROR])?$fatal:null]);
     });
     chdir(dirname(__DIR__));require $r['admin']?dirname(__DIR__).'/admin/index.php':dirname(__DIR__,2).'/public_html/index.php';exit;
 }
@@ -37,6 +37,7 @@ foreach([false=>['','orders','payments_crypto','history','settings','news','faq'
  $p=proc_open([PHP_BINARY,__FILE__,'--page',base64_encode(json_encode(['admin'=>(bool)$admin,'page'=>$page]))],[1=>['pipe','w'],2=>['pipe','w']],$pipes);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $pipe)fclose($pipe);$code=proc_close($p);$r=json_decode($out,true);
  if($code||!is_array($r)||$r['status']!==200||!$r['html']||$r['fatal']||$r['warnings'])throw new RuntimeException(($admin?'admin':'client').'/'.$page.': '.$out.$err);
  if($admin&&$page==='orders'&&!$r['orders_guidance_hidden_initial'])throw new RuntimeException('Orders guidance is visible in initial server HTML');
+ if($admin&&$page==='orders'&&($r['orders_open_heading']||$r['orders_open_help']||$r['orders_open_empty_alert']))throw new RuntimeException('Empty open-order block must not render');
  $checks++;echo ($admin?'admin':'client').'/'.($page?:'home').': '.$r['queries'].' SQL / '.$r['ms'].' ms / '.round($r['bytes']/1024)." KiB\n";
 }
 foreach([[1,0],[1,1],[0,1],[0,0]] as [$cryptoEnabled,$bankEnabled]){
@@ -45,4 +46,8 @@ foreach([[1,0],[1,1],[0,1],[0,0]] as [$cryptoEnabled,$bankEnabled]){
  if($code||!is_array($r)||$r['status']!==200||$r['fatal']||$r['warnings']||$r['payment_type_filters']!==($cryptoEnabled===1&&$bankEnabled===1))throw new RuntimeException('Payment type selector visibility failed: '.$out.$err);
  $checks++;
 }
+sql("UPDATE orders SET status='pending_payment',payment_status='unpaid',fulfillment_status='pending' WHERE id=1");
+$p=proc_open([PHP_BINARY,__FILE__,'--page',base64_encode(json_encode(['admin'=>true,'page'=>'orders']))],[1=>['pipe','w'],2=>['pipe','w']],$pipes);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $pipe)fclose($pipe);$code=proc_close($p);$r=json_decode($out,true);
+if($code||!is_array($r)||$r['status']!==200||$r['fatal']||$r['warnings']||!$r['orders_open_heading']||!$r['orders_open_help'])throw new RuntimeException('Nonempty open-order block must remain visible: '.$out.$err);
+$checks++;
 echo "PASS {$checks} complete page renders without PHP warnings\n";
