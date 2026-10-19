@@ -6343,10 +6343,14 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
+        function adminChatMotionReduced() {
+            return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        }
+
         function animateConversationMessageEntry(nodes) {
             var items = Array.isArray(nodes) ? nodes.filter(Boolean) : [];
 
-            if (!items.length) {
+            if (!items.length || doc.hidden || adminChatMotionReduced()) {
                 return;
             }
 
@@ -6359,14 +6363,14 @@ document.addEventListener('DOMContentLoaded', function () {
                     items.forEach(function (node) {
                         node.classList.add('is-entering-active');
                     });
+                    // Start cleanup after the animation starts, even on a busy frame.
+                    window.setTimeout(function () {
+                        items.forEach(function (node) {
+                            node.classList.remove('is-entering', 'is-entering-active');
+                        });
+                    }, 260);
                 });
             });
-
-            window.setTimeout(function () {
-                items.forEach(function (node) {
-                    node.classList.remove('is-entering', 'is-entering-active');
-                });
-            }, 340);
         }
 
         function animateNewConversationMessages(previousIds, previousConversationId, options) {
@@ -6443,7 +6447,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (messageNode) {
                 body.scrollTo({
                     top: Math.max(0, messageNode.offsetTop - 40),
-                    behavior: 'smooth'
+                    behavior: adminChatMotionReduced() ? 'auto' : 'smooth'
                 });
                 flashConversationMessage(messageNode);
                 return;
@@ -6561,6 +6565,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
             document.documentElement.style.setProperty('--admin-chat-viewport-height', Math.max(1, Math.round(viewportHeight)) + 'px');
             document.documentElement.style.setProperty('--admin-chat-viewport-offset-top', Math.max(0, Math.round(viewportOffsetTop)) + 'px');
+            // The visual viewport already ends at the keyboard. Do not add the home-indicator inset again.
+            var keyboardOpen = !!(window.visualViewport &&
+                (!window.visualViewport.scale || window.visualViewport.scale <= 1.05) &&
+                window.innerHeight - viewportHeight > 120);
+            document.documentElement.style.setProperty('--admin-chat-composer-bottom-space', keyboardOpen
+                ? '6px'
+                : '');
             syncAdminChatBodyLock();
         }
 
@@ -6938,14 +6949,24 @@ document.addEventListener('DOMContentLoaded', function () {
             }, 760);
         }
 
+        var conversationEntryAnimation = null;
+
         function playConversationEntryAnimation() {
-            if (!conversationView) {
+            if (conversationEntryAnimation) {
+                conversationEntryAnimation.cancel();
+                conversationEntryAnimation = null;
+            }
+            if (!conversationView || doc.hidden || adminChatMotionReduced()) {
                 return;
             }
 
-            conversationView.classList.remove('is-entering');
-            if (conversationView.offsetWidth) {
-                conversationView.offsetWidth;
+            // Native animation can restart without forcing a synchronous layout read.
+            if (typeof conversationView.animate === 'function') {
+                conversationEntryAnimation = conversationView.animate([
+                    { opacity: 0, transform: 'translateY(6px)' },
+                    { opacity: 1, transform: 'translateY(0)' }
+                ], { duration: 180, easing: 'ease-out' });
+                return;
             }
             conversationView.classList.add('is-entering');
             window.setTimeout(function () {

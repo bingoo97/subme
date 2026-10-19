@@ -6198,22 +6198,24 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </span>
                                                             <?php endif; ?>
                                                         </span>
-                                                        <span class="admin-chat-inbox__item-date"><?php echo admin_e($chatTimeLabel); ?></span>
                                                     </div>
                                                     <div class="admin-chat-inbox__item-body">
                                                         <p class="admin-chat-inbox__item-preview"><?php echo admin_e(admin_chat_message_preview($chatRow, $messages)); ?></p>
-                                                        <div class="admin-chat-inbox__meta">
-                                                            <span class="admin-chat-inbox__item-status"><?php echo admin_e((string)($chatRow['status'] ?? 'open')); ?></span>
-                                                            <button
-                                                                type="button"
-                                                                class="admin-chat-inbox__remove"
-                                                                data-admin-chat-remove
-                                                                data-conversation-id="<?php echo admin_e((string)$chatRow['id']); ?>"
-                                                                data-display-name="<?php echo admin_e($chatPrimaryLabel); ?>"
-                                                                aria-label="<?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove conversation')); ?>">
-                                                                <i class="bi bi-trash3" aria-hidden="true"></i>
-                                                            </button>
-                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="admin-chat-inbox__item-actions">
+                                                    <span class="admin-chat-inbox__item-date"><?php echo admin_e($chatTimeLabel); ?></span>
+                                                    <div class="admin-chat-inbox__meta">
+                                                        <span class="admin-chat-inbox__item-status"><?php echo admin_e((string)($chatRow['status'] ?? 'open')); ?></span>
+                                                        <button
+                                                            type="button"
+                                                            class="admin-chat-inbox__remove"
+                                                            data-admin-chat-remove
+                                                            data-conversation-id="<?php echo admin_e((string)$chatRow['id']); ?>"
+                                                            data-display-name="<?php echo admin_e($chatPrimaryLabel); ?>"
+                                                            aria-label="<?php echo admin_e(admin_t($messages, 'chat_remove_button', 'Remove conversation')); ?>">
+                                                            <i class="bi bi-trash3" aria-hidden="true"></i>
+                                                        </button>
                                                     </div>
                                                 </div>
                                             </div>
@@ -6851,10 +6853,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                         foreach ($periodCards as $card):
                             $periodMetric = $dashboardPeriodMetrics[$card['key']] ?? ['paid_orders' => 0, 'paid_revenue' => 0.0];
                             $periodRevenueLabel = admin_dashboard_revenue_label((array)($periodMetric['revenue_by_currency'] ?? []), $adminDefaultCurrencyCode);
+                            $periodRevenueState = admin_dashboard_revenue_state((array)($periodMetric['revenue_by_currency'] ?? []));
+                            $periodFromDay = substr((string)($periodMetric['from'] ?? ''),0,10);
+                            $periodToDay = substr((string)($periodMetric['to'] ?? ''),0,10);
+                            $periodRangeLabel = $periodFromDay === $periodToDay ? date('d.m.Y',strtotime($periodToDay)) : date('d.m',strtotime($periodFromDay)).' – '.date('d.m.Y',strtotime($periodToDay));
+
                         ?>
                             <article class="admin-metric-card admin-metric-card--<?php echo admin_e($card['tone']); ?>">
-                                <span class="admin-metric-card__label"><?php echo admin_e($card['label']); ?></span>
-                                <strong class="admin-metric-card__value<?php echo (float)($periodMetric['paid_revenue'] ?? 0) > 0 ? ' is-positive is-period-' . admin_e($card['key']) : ((float)($periodMetric['paid_revenue'] ?? 0) == 0 ? ' is-zero' : ''); ?>"><?php echo admin_e($periodRevenueLabel); ?></strong>
+                                <span class="admin-metric-card__label"><?php echo admin_e($card['label']); ?><small class="admin-metric-card__range"><?php echo admin_e($periodRangeLabel); ?></small></span>
+                                <strong class="admin-metric-card__value<?php echo ' '.admin_e($periodRevenueState).($periodRevenueState==='is-positive'?' is-period-'.admin_e($card['key']):''); ?>"><?php echo admin_e($periodRevenueLabel); ?></strong>
                                 <span class="admin-metric-card__meta">
                                     <?php echo str_replace(
                                         '{count}',
@@ -6993,7 +7000,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <div class="admin-dashboard-chart__summary">
                                             <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
                                                 <span><?php echo admin_e(sprintf(admin_t($messages, 'dashboard_chart_range_revenue', 'Revenue · %d days'), $dashboardSalesDays)); ?></span>
-                                                <strong><?php echo admin_e(admin_dashboard_revenue_label(admin_dashboard_revenue_sum($dashboardSalesSeries), $adminDefaultCurrencyCode)); ?></strong>
+                                                <strong class="<?php echo admin_dashboard_revenue_state(admin_dashboard_revenue_sum($dashboardSalesSeries)); ?>"><?php echo admin_e(admin_dashboard_revenue_label(admin_dashboard_revenue_sum($dashboardSalesSeries), $adminDefaultCurrencyCode)); ?></strong>
                                                 <small><?php echo admin_e((string)$chartTotalOrders . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
                                             </div>
                                             <div class="admin-dashboard-chart__summary-item">
@@ -7200,20 +7207,15 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     $monthlyAverageWeeklyOrders = $monthlyActiveWeeksCount > 0
                                         ? ($monthlyOrdersTotal / $monthlyActiveWeeksCount)
                                         : 0.0;
-                                    $monthlyAverageWeeklyOrdersLabel = abs($monthlyAverageWeeklyOrders - round($monthlyAverageWeeklyOrders)) < 0.05
-                                        ? number_format((float)round($monthlyAverageWeeklyOrders), 0, '.', '')
-                                        : number_format($monthlyAverageWeeklyOrders, 1, '.', '');
-                                    $monthlyAverageDailyOrdersLabel = abs($monthlyAverageDailyOrders - round($monthlyAverageDailyOrders)) < 0.05
-                                        ? number_format((float)round($monthlyAverageDailyOrders), 0, '.', '')
-                                        : number_format($monthlyAverageDailyOrders, 1, '.', '');
-                                    $monthlyAverageRevenue = $monthlyActiveMonthsCount > 0 ? ($monthlyRevenueTotal / $monthlyActiveMonthsCount) : 0.0;
+                                    $monthlyAverageWeeklyOrdersLabel = admin_dashboard_average_sales_label($monthlyAverageWeeklyOrders);
+                                    $monthlyAverageDailyOrdersLabel = admin_dashboard_average_sales_label($monthlyAverageDailyOrders);
                                     $monthlyAverageOrders = $monthlyActiveMonthsCount > 0 ? ($monthlyOrdersTotal / $monthlyActiveMonthsCount) : 0.0;
                                     ?>
                                     <div class="admin-dashboard-monthly">
                                         <div class="admin-dashboard-chart__summary admin-dashboard-chart__summary--compact">
                                             <div class="admin-dashboard-chart__summary-item admin-dashboard-chart__summary-item--emphasis">
                                                 <span><?php echo admin_e(admin_t($messages, 'dashboard_monthly_total_revenue', 'Revenue 12m')); ?></span>
-                                                <strong><?php echo admin_e(admin_dashboard_revenue_label($monthlyRevenueByCurrency, $adminDefaultCurrencyCode, 1)); ?></strong>
+                                                <strong class="<?php echo admin_dashboard_revenue_state($monthlyRevenueByCurrency); ?>"><?php echo admin_e(admin_dashboard_revenue_label($monthlyRevenueByCurrency, $adminDefaultCurrencyCode, 1)); ?></strong>
                                                 <small><?php echo admin_e((string)$monthlyOrdersTotal . ' ' . admin_t($messages, 'dashboard_chart_paid_orders', 'paid orders')); ?></small>
                                             </div>
                                             <div class="admin-dashboard-chart__summary-item">

@@ -50,6 +50,7 @@ foreach ($references as $reference) {
     $range = $month->modify('-11 months');
     $fixtures = [
         $today->modify('-1 second'), $today, $today->modify('+1 second'),
+        $today->modify('-6 days')->modify('-1 second'), $today->modify('-6 days'),
         $month->modify('-1 second'), $month, $month->modify('+1 second'),
         $year->modify('-1 second'), $year, $year->modify('+1 second'),
         $asOf, $asOf->modify('+1 second'),
@@ -70,6 +71,10 @@ foreach ($references as $reference) {
         }
     }
     $periods = admin_dashboard_period_metrics($db, $asOf);
+    check($periods['weekly']['from']===$today->modify('-6 days')->format('Y-m-d H:i:s'),"{$reference}: weekly starts six calendar days before today");
+    check($periods['weekly']['to']===$today->setTime(23,59,59)->format('Y-m-d H:i:s'),"{$reference}: weekly ends today, never on a future Sunday");
+    check($periods['monthly']['from']===$month->format('Y-m-d H:i:s'),"{$reference}: monthly starts on the first calendar day");
+    check($periods['monthly']['to']===$today->modify('last day of this month')->setTime(23,59,59)->format('Y-m-d H:i:s'),"{$reference}: monthly includes the whole calendar month");
     foreach ($periods as $key => $period) {
         $expected = array_values(array_filter($oracle, static fn(array $r): bool => $r['date'] >= $period['from'] && $r['date'] <= $period['to']));
         check($period['paid_orders'] === count($expected), "{$reference}: {$key} exact interval count");
@@ -242,3 +247,14 @@ foreach (['2024-03-01 12:00:00', '2026-10-25 12:00:00', '2027-01-01 00:00:00'] a
     }
 }
 echo "PASS: {$checks} assertions including rolling chart ranges\n";
+
+check(admin_dashboard_revenue_state([])==='is-zero','Empty revenue is red');
+check(admin_dashboard_revenue_state(['EUR'=>0])==='is-zero','Zero revenue is red');
+check(admin_dashboard_revenue_state(['EUR'=>0,'USD'=>10])==='is-positive','Foreign-currency income is positive even with no default-currency sales');
+check(admin_dashboard_revenue_state(['EUR'=>0.01])==='is-positive','Positive small revenue is green');
+echo "PASS {$checks} assertions including seven calendar days and multi-currency colours\n";
+
+check(admin_dashboard_average_sales_label(0)==='0','No sales average stays zero');
+check(admin_dashboard_average_sales_label(13/365)==='0.04','Small positive average never looks like no sales');
+check(admin_dashboard_average_sales_label(1/365)==='<0.01','Very small positive average has an explicit lower-than label');
+echo "PASS {$checks} assertions including small-average presentation\n";

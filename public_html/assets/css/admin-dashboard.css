@@ -31,22 +31,22 @@
 .admin-dashboard-sales .admin-dashboard-subscription-stats__item--expired{background:#fff9f8;border-color:#f5e6e3;}
 .admin-dashboard-sales .admin-dashboard-subscription-stats__item--expired span,
 .admin-dashboard-sales .admin-dashboard-subscription-stats__item--expired strong{color:#b45650;}
-.admin-dashboard-sales .admin-dashboard-tabs{gap:.3rem;padding:0 0 .7rem;margin-bottom:1rem;flex-wrap:nowrap;border-color:var(--sales-border);}
+.admin-dashboard-sales .admin-dashboard-tabs{gap:.3rem;padding:.7rem 0;margin-bottom:1rem;flex-wrap:nowrap;border-top:1px solid var(--sales-border);border-bottom:1px solid var(--sales-border);}
 .admin-dashboard-sales .admin-dashboard-tabs .nav-item{min-width:0;}
 .admin-dashboard-sales .admin-dashboard-tabs .nav-link{border:1px solid transparent;padding:.55rem .85rem;border-radius:8px;background:transparent;font-size:.76rem;font-weight:600;color:#748094;transition:background .15s,color .15s,box-shadow .15s;}
 .admin-dashboard-sales .admin-dashboard-tabs .nav-link:hover{background:#f3f5f8;color:#334155;}
-.admin-dashboard-sales .admin-dashboard-tabs .nav-link.active{background:#263244;border-color:#263244;color:#fff;box-shadow:0 2px 5px rgba(24,39,63,.12);}
+.admin-dashboard-sales .admin-dashboard-tabs .nav-link.active{background:#f0f3f7;border-color:#dfe5ed;color:#334155;box-shadow:none;}
 .admin-dashboard-sales .admin-dashboard-tabs .nav-link:focus-visible{outline:2px solid #94a3b8;outline-offset:3px;}
 .admin-dashboard-sales .admin-dashboard-chart{padding:1rem;border-radius:14px;background:linear-gradient(180deg,#fafbfd 0%,#fff 65%);border:1px solid var(--sales-border);box-shadow:none;gap:1.2rem;}
 .admin-dashboard-sales .admin-dashboard-chart__summary{gap:.65rem;grid-template-columns:repeat(4,minmax(0,1fr));}
 .admin-dashboard-sales .admin-dashboard-chart__summary-item{min-width:0;padding:.85rem .9rem;border-radius:11px;border:1px solid var(--sales-border);background:#fff;box-shadow:none;backdrop-filter:none;}
-.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis{background:linear-gradient(130deg,#263244,#3b485b);border-color:#334155;}
+.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis{background:#fff;border-color:#e5eaf0;}
 .admin-dashboard-sales .admin-dashboard-chart__summary-item span{font-size:.63rem;font-weight:600;letter-spacing:.045em;line-height:1.5;color:#8590a1;}
 .admin-dashboard-sales .admin-dashboard-chart__summary-item strong{margin-top:.35rem;font-size:1.08rem;font-weight:700;line-height:1.35;letter-spacing:-.025em;color:var(--sales-ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
 .admin-dashboard-sales .admin-dashboard-chart__summary-item small{margin-top:.3rem;font-size:.67rem;font-weight:450;line-height:1.5;color:#8590a1;overflow-wrap:anywhere;}
-.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis span{color:#bdc7d5;}
-.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis strong{color:#fff;}
-.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis small{color:#c9d1dd;}
+.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis span{color:#7a8495;}
+.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis strong{color:#263244;}
+.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis small{color:#8590a1;}
 .admin-dashboard-sales .admin-dashboard-chart__canvas{position:relative;padding:0;min-width:0;isolation:isolate;}
 .admin-dashboard-chart__heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.15rem .35rem .5rem;}
 .admin-dashboard-chart__controls{display:flex;align-items:center;gap:.4rem;margin:0;flex:none;}
@@ -280,3 +280,7 @@ body.admin-app-page .admin-dashboard-change-log-card .admin-table tbody td{paddi
 .admin-dashboard-period-grid .admin-metric-card__meta strong{font-size:inherit;color:inherit;font-weight:700;}
 
 .admin-dashboard-period-grid .admin-metric-card__meta strong.is-zero{color:#dc3545;}
+
+.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis strong.is-positive{color:#258653;}
+.admin-dashboard-sales .admin-dashboard-chart__summary-item--emphasis strong.is-zero{color:#dc3545;}
+.admin-dashboard-period-grid .admin-metric-card__range{display:block;margin-top:3px;color:#96a0af;font-size:.6rem;font-weight:400;line-height:1.4;letter-spacing:0;}

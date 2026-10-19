@@ -179,13 +179,29 @@ function admin_dashboard_revenue_label(array $totals, string $defaultCode = '', 
     return $labels ? implode(' + ', $labels) : admin_format_money_value_with_symbol(0, $defaultCode, $defaultCode);
 }
 
+/** Keep a small positive average visibly different from no sales. */
+function admin_dashboard_average_sales_label(float $value): string
+{
+    if($value<=0) return '0';
+    if($value<0.01) return '<0.01';
+    if($value<0.1) return number_format($value,2,'.','');
+    return abs($value-round($value))<0.05 ? number_format(round($value),0,'.','') : number_format($value,1,'.','');
+}
+
+/** Determine only the display state; never add different currencies into a financial total. */
+function admin_dashboard_revenue_state(array $totals): string
+{
+    foreach($totals as $amount) if((float)$amount>0) return 'is-positive';
+    return 'is-zero';
+}
+
 function admin_dashboard_period_metrics(Mysql_ks $db, ?DateTimeImmutable $asOf = null): array
 {
     $asOf = admin_dashboard_sales_now($asOf);
     $now = $asOf->setTime(0, 0);
     $periods = [
         'daily' => [$now, $now->modify('+1 day'), 'Today'],
-        'weekly' => [$now->modify('monday this week'), $now->modify('monday next week'), 'This week'],
+        'weekly' => [$now->modify('-6 days'), $now->modify('+1 day'), 'Last 7 days'],
         'monthly' => [$now->modify('first day of this month'), $now->modify('first day of next month'), 'This month'],
         'yearly' => [$now->setDate((int)$now->format('Y'), 1, 1), $now->setDate((int)$now->format('Y') + 1, 1, 1), 'This year'],
     ];
