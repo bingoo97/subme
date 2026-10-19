@@ -1,0 +1,15 @@
+public_html/assets/css/admin.css
+public_html/assets/css/style.css
+public_html/assets/js/admin.js
+public_html/assets/js/admin-crypto-quick.js
+public_html/assets/js/admin-crypto-reminder.js
+dashboard-panel/bootstrap/application.php
+dashboard-panel/admin/crypto_quick.php
+dashboard-panel/admin/views/crypto_quick.php
+dashboard-panel/admin/locales/pl.php
+dashboard-panel/admin/locales/en.php
+dashboard-panel/locales/pl.php
+dashboard-panel/locales/en.php
+dashboard-panel/templates/profil/orders.tpl
+dashboard-panel/admin/index.php
+dashboard-panel/migrations/044_admin_action_reminders.sql
