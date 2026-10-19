@@ -7,7 +7,7 @@ function setup(action = 'renew', currentFilter = 'expired') {
     let submit, resolve, loads = 0, selected = '', cleared = 0;
     const requests = [], result = { hidden: true, dataset: {} };
     const button = { disabled: false, setAttribute() {}, removeAttribute() {} };
-    const form = { action: 'http://localhost/admin/?page=payments', querySelector: () => button };
+    const form = { action: 'http://localhost/admin/?page=payments', getAttribute: () => '/admin/?page=payments', querySelector: () => button };
     const list = { setAttribute() {} }; let badgeCounts;
     const panel = { hidden: false, dataset: { error: 'Unable to renew' }, contains: f => f === form,
         querySelector: () => result, addEventListener: (name, fn) => { submit = fn; } };
@@ -19,7 +19,7 @@ function setup(action = 'renew', currentFilter = 'expired') {
         fetch: (url, options) => { requests.push({url,options}); return new Promise(r => { resolve = r; }); }
     });
     return { result, button, requests, list, get badgeCounts() { return badgeCounts; }, fire() { return submit({target:{closest:()=>form},preventDefault(){}}); },
-        reply(ok, data) { resolve({ok,json:async()=>data}); },
+        reply(ok, data) { resolve({ok,json:async()=>data}); }, replyMalformed() { resolve({ok:true,json:async()=>{throw new SyntaxError('The string did not match the expected pattern.');}}); },
         get loads() { return loads; }, get selected() { return selected; }, get cleared() { return cleared; } };
 }
 (async () => {
@@ -55,5 +55,10 @@ function setup(action = 'renew', currentFilter = 'expired') {
     deletion.reply(false,{ok:false,message:'Unable to delete'});await deletionFailed;
     assert.equal(deletion.loads,0);assert.equal(deletion.list.innerHTML,undefined);
     assert.equal(deletion.result.dataset.tone,'error');assert.equal(deletion.button.disabled,false);
+    const series=setup('archive','payout');
+    for(let i=3;i>=0;i--){const operation=series.fire();series.reply(true,{ok:true,message:'Archived',crypto_quick:{filter:'payout',counts:{payout:i},html:i?'next row':'empty view'}});await operation;assert.equal(series.badgeCounts.payout,i);assert.equal(series.button.disabled,false);}
+    assert.equal(series.requests.length,4);assert.equal(series.list.innerHTML,'empty view');
+    const malformed=setup('archive','payout'), unknown=malformed.fire();malformed.replyMalformed();await unknown;
+    assert.equal(malformed.requests.length,1);assert.equal(malformed.loads,1);assert.equal(malformed.result.dataset.tone,'error');assert.ok(!malformed.result.textContent.includes('expected pattern'));assert.equal(malformed.button.disabled,false);
     console.log('PASS: inline renew/cancel/archive/delete POST/CSRF, duplicate-submit guard, immediate list and badge updates, current-tab preservation, errors and button recovery. No real payment changed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

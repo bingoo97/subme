@@ -3,10 +3,10 @@
     const init = () => {
         const panel = document.querySelector('[data-crypto-quick]');
         const dialog = document.querySelector('[data-crypto-reminder]');
-        if (!panel || !dialog || typeof dialog.showModal !== 'function') return;
+        if (!panel || !dialog || dialog.dataset.enabled === '0' || typeof dialog.showModal !== 'function') return;
         // Keep it independent of responsive topbar wrappers and their visibility/overflow.
         document.body.appendChild(dialog);
-        const interval = 10 * 60 * 1000;
+        const interval = 30 * 60 * 1000;
         const key = `subme-crypto-reminder:${location.pathname}:${panel.dataset.adminId}:${interval}`;
         let fallback = Date.now() + interval, busy = false, stopped = false;
         const read = () => {
@@ -36,6 +36,7 @@
                 title.hidden = purpose.hidden = !approved;
                 title.textContent = row?.dataset.receiptTitle || '';
                 purpose.textContent = row?.dataset.receiptPurpose || '';
+                purpose.classList.toggle('admin-payment-topup-badge', row?.dataset.paymentKind === 'topup');
                 const orderId = row?.dataset.receiptOrderId || '';
                 if (approved && /^[1-9]\d*$/.test(orderId)) {
                     purpose.setAttribute('href', `/admin/?page=orders&order_id=${encodeURIComponent(orderId)}`);
@@ -144,8 +145,9 @@
                 body.set('crypto_quick_inline', '1');
                 body.set('crypto_reminder_inline', '1');
                 body.set('crypto_quick_filter', dialog.dataset.tone);
-                const response = await fetch(form.action, { method: 'POST', body, credentials: 'same-origin', headers: { Accept: 'application/json' }, signal: request.signal });
-                const data = await response.json();
+                const response = await fetch(form.getAttribute('action') || '/admin/?page=payments', { method: 'POST', body, credentials: 'same-origin', headers: { Accept: 'application/json' }, signal: request.signal });
+                const data = await response.json().catch(() => null);
+                if (!data || typeof data !== 'object') throw new Error(panel.dataset.actionError || panel.dataset.error);
                 if (!response.ok || !data.ok) throw new Error(data.message || panel.dataset.error);
                 document.dispatchEvent(new CustomEvent('admin:crypto-quick-updated', { detail: data.crypto_quick }));
                 // The admin may have closed this reminder, or another modal may have taken priority.
@@ -166,7 +168,7 @@
                     (payment.querySelector('[data-crypto-payment-more]') || primary).focus();
                 }
             } catch (failure) {
-                error.textContent = failure.name === 'AbortError' ? panel.dataset.error : failure.message;
+                error.textContent = failure.name === 'Error' ? (failure.message || panel.dataset.error) : (panel.dataset.actionError || panel.dataset.error);
                 error.dataset.tone = 'error';
                 error.hidden = false;
             } finally { clearTimeout(timeout); button.disabled = false; busy = false; }

@@ -404,6 +404,8 @@ return [
         'orders_note_empty' => 'No note added.',
         'orders_note_label' => 'Provide additional information below',
         'orders_note_placeholder' => 'e.g. provide MAC or application name ...',
+        'orders_waiting_extension_label' => 'Awaiting extension',
+        'orders_waiting_activation_label' => 'Awaiting activation',
         'orders_status_pending' => 'Pending',
         'orders_status_payment_confirmed' => 'Payment confirmed',
         'orders_status_payment_confirmed_short' => 'PAID',

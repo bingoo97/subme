@@ -103,6 +103,14 @@ foreach (['customer_type_switch_enabled','page_guidance_enabled','payment_test_m
 }
 ck(str_contains($normalHtml,'id="crypto_auto_accept_enabled"'),'Auto-accept toggle is available in ordinary Settings');
 ck(!str_contains($normalHtml,'id="crypto_auto_accept_min_amount_percent"'),'Advanced auto-accept thresholds remain protected');
+ck(str_contains($normalHtml,'id="admin_action_reminders_enabled"'),'Global reminder switch is available outside Admin Mode');
+$reminderPost=$post;$reminderPost['admin_action_reminders_enabled']='1';req(2,false,$reminderPost);
+ck((int)$db->select_user('SELECT admin_action_reminders_enabled FROM app_settings WHERE id=1')['admin_action_reminders_enabled']===1,'Global reminder ON persists through Settings handler');
+ck(str_contains(req(3,false,[],true)['html'],'data-crypto-reminder data-enabled="1"'),'Another administrator sees global ON on a new request');
+unset($reminderPost['admin_action_reminders_enabled']);req(2,false,$reminderPost);
+ck((int)$db->select_user('SELECT admin_action_reminders_enabled FROM app_settings WHERE id=1')['admin_action_reminders_enabled']===0,'Global reminder OFF persists through Settings handler');
+ck(str_contains(req(3,false,[],true)['html'],'data-crypto-reminder data-enabled="0"'),'Another administrator sees global OFF on a new request');
+
 $protectedBefore=$db->select_user('SELECT customer_type_switch_enabled,page_guidance_enabled,payment_test_mode_notice_enabled,crypto_auto_accept_window_minutes,crypto_auto_accept_min_amount_percent FROM app_settings WHERE id=1');
 $standardPost=$post;$standardPost['crypto_auto_accept_enabled']='1';$standardPost['crypto_auto_accept_min_amount_percent']='50';$standardPost['crypto_auto_accept_window_minutes']='5';
 foreach (['customer_type_switch_enabled','page_guidance_enabled','payment_test_mode_notice_enabled'] as $field) $standardPost[$field]=empty($protectedBefore[$field])?'1':'';
@@ -166,7 +174,7 @@ foreach(['new','expired','cancelled','payout'] as $category) {
  if(in_array($category,['expired','cancelled'],true)) ck(str_contains($menuHtml,'name="quick_action" value="renew"'),'Expired/cancelled requests can renew through existing handler');
  if($category==='cancelled') ck(!str_contains($menuHtml,'name="quick_action" value="cancel"')&&!str_contains($menuHtml,'value="archive"'),'Cancelled requests do not offer cancel/archive');
  ck(str_contains($menuHtml,'name="quick_action" value="delete"')===in_array($category,['expired','cancelled'],true),'Only expired/cancelled categories offer permanent deletion');
- if($category==='cancelled') ck(str_contains($menuHtml,'data-admin-confirm=')&&strpos($menuHtml,'value="delete"')>strpos($menuHtml,'value="renew"'),'Delete follows other actions and requires existing confirmation');
+ if($category==='cancelled') ck(!str_contains($menuHtml,'data-admin-confirm=')&&strpos($menuHtml,'value="delete"')>strpos($menuHtml,'value="renew"'),'Cancelled deletion follows other actions without a confirmation popup');
 }
 $elapsedRows=admin_crypto_quick_rows($db,'expired');$elapsedRows=array_values(array_filter($elapsedRows,fn($r)=>(int)$r['id']===100));
 ck(!str_contains(admin_crypto_quick_html($elapsedRows,'expired'), 'name="quick_action" value="renew"'),'Elapsed pending requests do not offer renewal before actual expired status');

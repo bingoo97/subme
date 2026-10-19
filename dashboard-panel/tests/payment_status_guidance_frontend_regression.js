@@ -19,3 +19,11 @@ select.value='pending';listeners.change();ck(nodes['[data-status-hint-text]'].te
 ck(!/fetch\(|\.submit\(|requestSubmit/.test(source.slice(start,end)),'Guidance does not save or send network requests');
 ck(source.includes("statusSelect.dispatchEvent(new Event('change', { bubbles: true }))"),'Blockchain result also triggers guidance refresh');
 console.log(`PASS ${n} payment status preview assertions`);
+
+const receivedStart=source.indexOf('    function initPaymentReceivedFields()'),receivedEnd=source.indexOf('    function initPaymentBlockchainCheck()',receivedStart);
+const received=[{hidden:true,value:'33.50'},{hidden:true,value:'0.00067'}];
+const receivedContext={qa(){return received;},setHidden(node,value){node.hidden=value;}};
+vm.createContext(receivedContext);vm.runInContext(source.slice(receivedStart,receivedEnd),receivedContext);
+receivedContext.initPaymentReceivedFields();
+assert.ok(received.every(field=>!field.hidden)&&received[0].value==='33.50'&&received[1].value==='0.00067','Received fields stay visible without overwriting manually corrected amounts');
+console.log('PASS editable received fields at every payment status');

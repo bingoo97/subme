@@ -2,8 +2,9 @@
     <div class="orders-header{if $order_catalog_product_type|default:'subscription' eq 'credits'} orders-header--history{/if}">
         <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.orders|default:'Orders'}</h1>
         {if $order_add_blocked_by_pending_activation|default:false}
-            <div class="alert alert-warning orders-header__warning">
-                {$t.orders_pending_activation_block_notice|default:'You already have a paid order waiting for activation. Wait until the admin activates it before adding another order.'}
+            <div class="alert alert-warning orders-header__warning" role="status">
+                <span class="orders-header__warning-icon" aria-hidden="true"><i class="fa fa-clock-o"></i></span>
+                <div><strong>{$t.orders_waiting_activation_label|default:'Waiting for activation'}</strong><p>{$t.orders_pending_activation_block_notice|default:'You already have a paid order waiting for activation. Wait until the admin activates it before adding another order.'}</p></div>
             </div>
         {elseif $order_sales_available && $order_catalog_has_products|default:false}
             <form action="" method="post">
@@ -135,10 +136,17 @@
                                             </div>
                                         </div>
                                     {/if}
+                                {if $wygrane[i].renewal_paid_pending_activation|default:0}
+                                    <span class="orders-user-awaiting"><i class="fa fa-clock-o" aria-hidden="true"></i><span>{$t.orders_waiting_extension_label|default:'Awaiting extension'}</span></span>
+                                {/if}
                                 {if $wygrane[i].status == 2}
                                     <span class="orders-user-expired"><i class="fa fa-clock-o" aria-hidden="true"></i> {$wygrane[i].expiry|default:$t.orders_status_expired|escape:'html'}</span>
                                 {elseif $wygrane[i].status != 1 || !$wygrane[i].progress.has_expiry}
-                                    <span class="orders-user-expiry-empty">{if $wygrane[i].payment_waiting_activation}{$t.orders_status_pending|default:'Pending'}{elseif $wygrane[i].product_type|default:'subscription' neq 'subscription'}—{else}{$t.order_no_expiry|default:'No expiry'}{/if}</span>
+                                    {if $wygrane[i].payment_waiting_activation}
+                                        <span class="orders-user-awaiting"><i class="fa fa-clock-o" aria-hidden="true"></i><span>{$t.orders_waiting_activation_label|default:'Waiting for activation'}</span></span>
+                                    {else}
+                                        <span class="orders-user-expiry-empty">{if $wygrane[i].product_type|default:'subscription' neq 'subscription'}—{else}{$t.order_no_expiry|default:'No expiry'}{/if}</span>
+                                    {/if}
                                 {/if}
                             </td>
                             <td data-label="{$t.orders_amount|default:'Amount'}" class="orders-user-table__amount-col">
@@ -157,8 +165,8 @@
                                     <i class="fa fa-credit-card" style="margin-left:-1px;" aria-hidden="true"></i>
                                 </a>
                                 {/if}
-                                <button type="button" class="btn {if $wygrane[i].payment_waiting_activation}btn-dark{elseif $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="{$t.orders_details_label|default:'Order details'}" title="{$t.orders_details_label|default:'Order details'}" style="width: 40px;">
-                                    <i class="fa {if $wygrane[i].payment_waiting_activation}fa-repeat fa-spin{else}fa-eye{/if}" aria-hidden="true"></i>
+                                <button type="button" class="btn {if $wygrane[i].payment_waiting_activation || ($wygrane[i].renewal_paid_pending_activation|default:0)}btn-light orders-user-awaiting-button{elseif $wygrane[i].status == 1}btn-success{elseif $wygrane[i].status == 2}btn-danger{else}btn-dark{/if} user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" aria-label="{$t.orders_details_label|default:'Order details'}" title="{$t.orders_details_label|default:'Order details'}" style="width: 40px;">
+                                    {if $wygrane[i].payment_waiting_activation || ($wygrane[i].renewal_paid_pending_activation|default:0)}<span class="orders-user-awaiting-spinner" aria-hidden="true"></span>{else}<i class="fa fa-search" aria-hidden="true"></i>{/if}
                                 </button>
                             </td>
                         </tr>

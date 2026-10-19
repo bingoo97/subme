@@ -1202,6 +1202,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
         $applicationInstructionsEnabled = isset($_POST['application_instructions_enabled']) ? 1 : 0;
         $pageGuidanceEnabled = isset($_POST['page_guidance_enabled']) ? 1 : 0;
         $paymentTestModeNoticeEnabled = isset($_POST['payment_test_mode_notice_enabled']) ? 1 : 0;
+        $adminActionRemindersEnabled = isset($_POST['admin_action_reminders_enabled']) ? 1 : 0;
         $cryptoAutoAcceptEnabled = isset($_POST['crypto_auto_accept_enabled']) ? 1 : 0;
         $cryptoAutoAcceptWindowMinutes = (int)($_POST['crypto_auto_accept_window_minutes'] ?? 60);
         $cryptoAutoAcceptWindowMinutes = max(5, min(240, $cryptoAutoAcceptWindowMinutes));
@@ -1574,6 +1575,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     'application_instructions_enabled',
                     'page_guidance_enabled',
                     'payment_test_mode_notice_enabled',
+                    'admin_action_reminders_enabled',
                     'crypto_auto_accept_enabled',
                     'crypto_auto_accept_window_minutes',
                     'crypto_auto_accept_min_amount_percent',
@@ -1662,6 +1664,7 @@ if ($route === 'settings' && isset($_POST['admin_save_feature_settings'])) {
                     $applicationInstructionsEnabled,
                     $pageGuidanceEnabled,
                     $paymentTestModeNoticeEnabled,
+                    $adminActionRemindersEnabled,
                     $cryptoAutoAcceptEnabled,
                     $cryptoAutoAcceptWindowMinutes,
                     $cryptoAutoAcceptMinAmountPercent,
@@ -4765,7 +4768,7 @@ if ($route === 'payments') {
             'payment_id' => $paymentEditorId,
             'order' => $orderPayload,
             'redirect_url' => $redirectUrl,
-        ]);
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
 
@@ -5486,7 +5489,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <?php endif; ?>
                                                             </strong>
 
-                                                                <span class="admin-topbar-notifications__topup-badge">
+                                                                <span class="admin-topbar-notifications__topup-badge<?php echo $paymentOrderId>0?'':' admin-payment-topup-badge'; ?>">
                                                                     <?php echo admin_e($paymentOrderId>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.$paymentOrderId:admin_t($messages,'payment_topup_badge','Balance top-up')); ?>
                                                                 </span>
 
@@ -5634,7 +5637,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <strong><?php echo admin_e($autoFiatLabel); ?></strong>
                                                             <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'topbar_auto_accepted_badge', 'Approved')); ?></span>
 
-                                                                <span class="admin-topbar-notifications__topup-badge">
+                                                                <span class="admin-topbar-notifications__topup-badge<?php echo $autoOrderId>0?'':' admin-payment-topup-badge'; ?>">
                                                                     <?php echo admin_e($autoOrderId>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.$autoOrderId:admin_t($messages,'payment_topup_badge','Balance top-up')); ?>
                                                                 </span>
 
@@ -6726,7 +6729,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <img src="" alt="" class="admin-topbar-notifications__title-logo" data-admin-crypto-accept-logo hidden>
                                                 <strong data-admin-crypto-accept-crypto-label></strong>
                                                 <span class="admin-status-pill admin-status-pill--warning" data-admin-crypto-accept-status></span>
-                                                <span class="admin-topbar-notifications__topup-badge" data-admin-crypto-accept-topup-badge hidden><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?></span>
+                                                <span class="admin-topbar-notifications__topup-badge admin-payment-topup-badge" data-admin-crypto-accept-topup-badge hidden><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?></span>
                                             </div>
                                             <div class="admin-crypto-accept-modal__identity">
                                                 <div class="admin-crypto-accept-modal__identity-line">
@@ -6756,7 +6759,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php echo admin_e(admin_t($messages, 'payment_accept_modal_underpaid_warning', 'Warning: if the customer paid less and you credit less balance, they may not have enough funds to buy the selected order.')); ?>
                                     </div>
 
-                                    <div class="admin-crypto-accept-modal__fields" data-admin-crypto-accept-amount-fields hidden>
+                                    <div class="admin-crypto-accept-modal__fields" data-admin-crypto-accept-amount-fields>
                                         <label class="admin-crypto-accept-modal__field">
                                             <span class="admin-crypto-accept-modal__field-label" data-admin-crypto-accept-crypto-input-label><?php echo admin_e(admin_t($messages, 'payment_accept_modal_received_crypto_label', 'Received {asset}', ['asset' => 'Crypto'])); ?></span>
                                             <input type="number" min="0.00000001" step="0.00000001" class="form-control form-control-lg" data-admin-crypto-accept-crypto-input inputmode="decimal">
@@ -6771,7 +6774,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         </label>
                                     </div>
 
-                                    <div class="admin-crypto-accept-modal__hint" data-admin-crypto-accept-amount-hint hidden><?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?></div>
+                                    <div class="admin-crypto-accept-modal__hint" data-admin-crypto-accept-amount-hint><?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?></div>
                                 </div>
 
                                 <aside class="admin-crypto-accept-modal__explorer-col">
@@ -9075,7 +9078,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         $pendingRenewalPaymentStatusLabel = $pendingRenewalPaymentStatusRaw !== ''
                                             ? admin_t($messages, 'enum_' . $pendingRenewalPaymentStatusRaw, ucfirst(str_replace('_', ' ', $pendingRenewalPaymentStatusRaw)))
                                             : '';
-                                        $modalOrderStatusLabel = admin_t($messages, 'enum_' . $orderStatusRaw, ucfirst(str_replace('_', ' ', (string)($row['status'] ?? ''))));
+                                        $modalOrderStatusLabel = $orderStatusRaw === 'active' ? admin_t($messages,'order_status_fulfilled_label','Fulfilled') : admin_t($messages, 'enum_' . $orderStatusRaw, ucfirst(str_replace('_', ' ', (string)($row['status'] ?? ''))));
                                         $modalOrderStatusClass = 'is-neutral';
                                         $modalOrderStatusIcon = 'bi bi-dot';
                                         $modalOrderStatusIconClass = '';
@@ -9193,7 +9196,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             ? '/admin/?page=billing&billing_tab=customers&edit_billing_customer=' . $orderBillingCustomerId
                                                             : '/admin/?page=billing&billing_tab=customers&billing_link_customer_id=' . (int)($row['customer_id'] ?? 0);
                                         ?>
-                                        <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>" tabindex="-1" aria-hidden="true">
+                                        <div class="modal fade admin-order-modal" id="<?php echo admin_e($modalId); ?>"<?php if($openExtendTabByDefault): ?> data-admin-order-default-tab="<?php echo admin_e($tabExtendId); ?>"<?php endif; ?> tabindex="-1" aria-hidden="true">
                                             <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-xl">
                                                 <div class="modal-content">
                                                     <div class="modal-header">
@@ -9262,6 +9265,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     method="post"
                                                                     class="admin-order-modal__form"
                                                                     data-admin-order-status-form
+                                                                    data-paid-renewal="<?php echo $isPendingRenewalAwaitingExtension?'1':'0'; ?>"
                                                                     data-label-payment-paid="<?php echo admin_e(admin_t($messages, 'enum_paid', 'Paid')); ?>"
                                                                     data-label-payment-unpaid="<?php echo admin_e(admin_t($messages, 'enum_unpaid', 'Unpaid')); ?>"
                                                                     data-label-payment-pending="<?php echo admin_e(admin_t($messages, 'enum_pending', 'Pending')); ?>"
@@ -9278,7 +9282,10 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <input type="hidden" value="<?php echo admin_e((string)($row['payment_status'] ?? '')); ?>" data-admin-order-payment-status-original>
                                                                     <input type="hidden" name="fulfillment_status" value="<?php echo admin_e((string)($row['fulfillment_status'] ?? '')); ?>" data-admin-order-fulfillment-status>
                                                                     <div class="admin-order-modal__stack">
-                                                                        <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert<?php echo in_array($orderStatusRaw, ['active', 'expired'], true) ? ' hidden' : ''; ?>>
+                                                                        <?php if($isPendingRenewalAwaitingExtension): ?>
+                                                                        <div class="alert alert-warning admin-order-modal__activation-alert" data-admin-order-renewal-alert role="alert"><strong><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i> <?php echo admin_e(admin_t($messages,'order_extend_paid_notice_title','Approved payment is waiting for manual extension.')); ?></strong><span><?php echo admin_e(admin_t($messages,'order_paid_renewal_action','Payment received and approved. Complete the renewal with the provider, then apply the selected package in the Extend tab. The current subscription remains valid until its existing expiry date.')); ?></span></div>
+                                                                        <?php endif; ?>
+                                                                        <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-activation-alert<?php echo in_array($orderStatusRaw, ['active', 'expired','cancelled','failed','inactive'], true) ? ' hidden' : ''; ?>>
                                                                             <strong><?php echo admin_e(admin_t($messages, 'order_activation_alert_title', 'Not completed yet.')); ?></strong>
                                                                             <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_alert_text', 'If the user has paid you and their subscription has already been extended in the provider dashboard, change the order status to ACTIVE.') : admin_t($messages, 'order_activation_alert_text_generic', 'If the user has paid you and the order has already been completed, change the order status to ACTIVE.')); ?></span>
                                                                         </div>
@@ -9286,7 +9293,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <strong><?php echo admin_e(admin_t($messages, 'order_expired_alert_title', 'The order has expired.')); ?></strong>
                                                                             <span><?php echo admin_e(admin_t($messages, 'order_expired_alert_text', 'Open the Extend tab, choose the appropriate package and extend the subscription to activate it again.')); ?></span>
                                                                         </div>
-                                                                        <?php if ($orderStatusRaw === 'active'): ?>
+                                                                        <?php if ($orderStatusRaw === 'active' && !$isPendingRenewalAwaitingExtension): ?>
                                                                             <div class="alert alert-success admin-order-modal__activation-alert admin-order-modal__activation-alert--success" role="alert" data-admin-order-active-alert>
                                                                                 <strong><?php echo admin_e(admin_t($messages, 'order_activation_success_title', 'Order has been completed.')); ?></strong>
                                                                                 <span><?php echo admin_e($usesSubscriptionTiming ? admin_t($messages, 'order_activation_success_text', 'The payment has been approved by the administrator and the subscription has also been extended in the provider dashboard.') : admin_t($messages, 'order_activation_success_text_generic', 'The payment has been approved by the administrator and the order has been completed.')); ?></span>
@@ -9369,7 +9376,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                             <select class="form-select admin-order-modal__main-status <?php echo admin_e($modalOrderStatusClass); ?>" name="status" data-admin-order-main-status>
                                                                                 <?php foreach (admin_order_status_options((string)($row['status'] ?? '')) as $statusOption): ?>
                                                                                     <?php
-                                                                                    $statusOptionLabel = admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)));
+                                                                                    $statusOptionLabel = $statusOption === 'active' ? admin_t($messages,'order_status_fulfilled_label','Fulfilled') : admin_t($messages, 'enum_' . $statusOption, ucfirst(str_replace('_', ' ', $statusOption)));
                                                                                     if ($statusOption === 'pending_payment' && $paymentStatusRaw === 'paid') {
                                                                                         $statusOptionLabel = admin_t($messages, 'order_status_waiting_activation_short', 'Waiting for activation');
                                                                                     }
@@ -9623,8 +9630,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <input type="hidden" name="extend_expected_renewal_id" value="<?php echo (int)($row['pending_renewal_id'] ?? 0); ?>">
                                                                         <div class="admin-order-modal__stack">
                                                                             <?php if ($isPendingRenewalAwaitingExtension): ?>
-                                                                                <div class="alert alert-success" role="alert">
-                                                                                    <strong><?php echo admin_e(admin_t($messages, 'order_extend_paid_notice_title', 'Approved payment is waiting for manual extension.')); ?></strong><br>
+                                                                                <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-extension-required>
+                                                                                    <strong><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i> <?php echo admin_e(admin_t($messages, 'order_extend_paid_notice_title', 'Approved payment is waiting for manual extension.')); ?></strong><span><?php echo admin_e(admin_t($messages,'order_paid_renewal_action','Payment received and approved. Complete the renewal with the provider, then apply the selected package in the Extend tab. The current subscription remains valid until its existing expiry date.')); ?></span><br>
                                                                                     <?php echo admin_e(admin_t($messages, 'order_extend_paid_notice_payment', 'Payment')); ?>:
                                                                                     <strong>#<?php echo admin_e((string)((int)($row['pending_renewal_payment_id'] ?? 0))); ?></strong>
                                                                                     <?php if (trim((string)($row['pending_renewal_payment_amount_label'] ?? '')) !== ''): ?>
@@ -12445,7 +12452,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php echo admin_e(admin_t($messages, 'payment_purpose_order', 'Order payment')); ?>:
                                                             <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$paymentEditorOrderId); ?>" class="admin-payments-summary-card__order-link">#<?php echo admin_e((string)$paymentEditorOrderId); ?></a>
                                                         <?php else: ?>
-                                                            <span class="admin-payments-summary-card__topup-badge"><i class="bi bi-wallet2" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Top-up')); ?></span></span>
+                                                            <span class="admin-payments-summary-card__topup-badge admin-payment-topup-badge"><i class="bi bi-wallet2" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Top-up')); ?></span></span>
                                                         <?php endif; ?>
                                                     </small>
                                                     <a href="<?php echo admin_e($paymentCustomerUrl); ?>" class="admin-payments-summary-card__handle"><?php echo admin_e($paymentEditorCustomerLabel); ?></a>
@@ -12511,7 +12518,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         </div>
                                                         <div class="col-12" data-admin-payment-received-field>
                                                             <label class="form-label" for="payment_received_fiat_amount"><?php echo admin_e(admin_t($messages, 'payment_received_amount_label', 'Received amount')); ?> - <?php echo admin_e($paymentEditorFiatLabel); ?>:</label>
-                                                            <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" id="payment_received_fiat_amount" name="received_fiat_amount" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['received_fiat_amount'] ?? '')); ?>">
+                                                            <input type="text" class="form-control<?php echo admin_e($paymentMismatchFieldClass); ?>" id="payment_received_fiat_amount" name="received_fiat_amount" inputmode="decimal" value="<?php echo admin_e((string)($paymentEditor['received_fiat_actual_amount'] ?? $paymentEditor['received_fiat_amount'] ?? '')); ?>">
                                                         </div>
                                                         <div class="col-12">
                                                             <label class="form-label" for="payment_amount_crypto"><?php echo admin_e(admin_t($messages, 'payment_requested_amount_label', 'Requested amount')); ?> - <?php echo admin_e($paymentEditorCryptoLabel); ?>:</label>
@@ -13043,7 +13050,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($paymentCryptoAmountLabel); ?></span>
                                                                                     <?php endif; ?>
                                                                                 </div>
-                                                                                <span class="admin-crypto-quick__purpose"><?php echo admin_e((int)($row['order_id']??0)>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.(int)$row['order_id']:admin_t($messages,'payment_topup_badge','Balance top-up')); ?></span>
+                                                                                <span class="admin-crypto-quick__purpose<?php echo (int)($row['order_id']??0)>0?'':' admin-payment-topup-badge'; ?>"><?php echo admin_e((int)($row['order_id']??0)>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.(int)$row['order_id']:admin_t($messages,'payment_topup_badge','Balance top-up')); ?></span>
                                                                                 <div class="admin-payment-summary__customer-row">
                                                                                     <a class="admin-inline-link admin-payment-summary__handle" href="<?php echo admin_e($paymentCustomerUrl); ?>">
                                                                                         <?php echo admin_e($paymentHandleLabel !== '' ? $paymentHandleLabel : (string)($row['customer_email'] ?? '')); ?>
@@ -16362,6 +16369,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <small class="text-muted"><?php echo admin_e(admin_t($messages, 'settings_payment_test_mode_notice_enabled_help', 'If ON, users still can generate bank and crypto payment requests, but a yellow warning says the service is in test mode and they should not send any money.')); ?></small>
                                                 </div>
                                                 <?php endif; ?>
+                                                    <div class="col-12">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" role="switch" id="admin_action_reminders_enabled" name="admin_action_reminders_enabled"<?php echo admin_setting_is_enabled($appSettings,'admin_action_reminders_enabled',true)?' checked':''; ?>>
+                                                            <label class="form-check-label" for="admin_action_reminders_enabled"><?php echo admin_e(admin_t($messages,'settings_admin_action_reminders','Przypomnienia o płatnościach i zamówieniach')); ?></label>
+                                                        </div>
+                                                        <small class="text-muted"><?php echo admin_e(admin_t($messages,'settings_admin_action_reminders_help','Modal co 30 minut przypomina o wymaganych działaniach. Środki do wypłaty przypominamy po 3 dniach od zatwierdzenia, od najstarszej wpłaty. OFF wyłącza te modale wszystkim administratorom; okienka powiadomień w topbarze pozostają dostępne.')); ?></small>
+                                                    </div>
                                                     <div class="col-12">
                                                         <div class="form-check form-switch">
                                                             <input class="form-check-input" type="checkbox" role="switch" id="crypto_auto_accept_enabled" name="crypto_auto_accept_enabled"<?php echo admin_crypto_auto_accept_enabled($appSettings) ? ' checked' : ''; ?>>

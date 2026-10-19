@@ -16,6 +16,9 @@ if (($argv[1] ?? '') === '--create') {
 }
 $checks = 0;
 function ck(bool $ok, string $message): void { global $checks; if (!$ok) throw new RuntimeException($message); $checks++; }
+ck(app_format_money_value(36,'EUR','EUR')==='36.00 €','Legacy EUR symbol is displayed as the euro sign');
+ck(app_format_money_value(18,'','USD')==='18.00 $','Missing symbol falls back to a known currency symbol');
+ck(app_format_money_value(12,'CHF','CHF')==='12.00 CHF','Currencies without a dedicated symbol keep their code');
 function sql(string $q): void { global $db; if (!$db->query($q)) throw new RuntimeException($db->error . ': ' . $q); }
 function bal(int $c): float { global $db; return (float)$db->select_user("SELECT balance_amount FROM customers WHERE id={$c}")['balance_amount']; }
 function orderFixture(int $id, string $status='active', float $balance=100): array {

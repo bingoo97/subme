@@ -2379,6 +2379,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function initOrderStatusForms() {
+        qa('[data-admin-order-default-tab]').forEach(function (modal) {
+            var target = modal.getAttribute('data-admin-order-default-tab');
+            if (!target) return;
+            modal.addEventListener('show.bs.modal', function () {
+                var tab = q('#' + target, modal);
+                if (tab && hasBootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
+            });
+        });
+
         function applyPill(node, statusValue, statusType, labels) {
             if (!node) {
                 return;
@@ -2448,6 +2457,8 @@ document.addEventListener('DOMContentLoaded', function () {
             var statusDirectionHint = q('[data-admin-order-status-hint]', form);
             var expiredAlert = q('[data-admin-order-expired-alert]', form);
             var activeAlert = q('[data-admin-order-active-alert]', form);
+            var renewalAlert = q('[data-admin-order-renewal-alert]', form);
+            var paidRenewal = form.getAttribute('data-paid-renewal') === '1';
 
             if (!statusField || !paymentField || !fulfillmentField) {
                 return;
@@ -2511,13 +2522,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 applyPill(paymentPill, paymentField.value, 'payment', paymentLabels);
                 applyPill(fulfillmentPill, fulfillmentField.value, 'fulfillment', fulfillmentLabels);
                 if (activationAlert) {
-                    setHidden(activationAlert, statusValue === 'active' || statusValue === 'expired');
+                    setHidden(activationAlert, paidRenewal || ['active','expired','cancelled','failed','inactive'].indexOf(statusValue) !== -1);
                 }
+                if (renewalAlert) setHidden(renewalAlert, ['cancelled','failed','inactive'].indexOf(statusValue) !== -1);
                 if (expiredAlert) {
                     setHidden(expiredAlert, statusValue !== 'expired');
                 }
                 if (activeAlert) {
-                    setHidden(activeAlert, statusValue !== 'active');
+                    setHidden(activeAlert, statusValue !== 'active' || paidRenewal);
                 }
             };
 
@@ -4190,24 +4202,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function initPaymentReceivedFields() {
-        var statusSelect = q('#payment_status');
-        var receivedFields = qa('[data-admin-payment-received-field]');
-
-        if (!statusSelect || !receivedFields.length) {
-            return;
-        }
-
-        function syncReceivedFields() {
-            var status = String(statusSelect.value || '').toLowerCase();
-            var shouldHide = status === 'pending' || status === 'pending_payment';
-
-            receivedFields.forEach(function (field) {
-                setHidden(field, shouldHide);
-            });
-        }
-
-        syncReceivedFields();
-        statusSelect.addEventListener('change', syncReceivedFields);
+        // Admins can enter or correct received amounts at every payment status.
+        qa('[data-admin-payment-received-field]').forEach(function (field) {
+            setHidden(field, false);
+        });
     }
 
     function initPaymentBlockchainCheck() {
@@ -4614,15 +4612,10 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             function syncAmountVisibility(previewUnavailable) {
-                var payload = state.payload || {};
-                var detected = parseNumeric((state.previewMeta || {}).candidate_crypto_amount) > 0;
-                var saved = parseNumeric(payload.received_crypto_amount) > 0;
-                // An unavailable preview is not evidence that no payment arrived:
-                // keep manual verification possible after a provider/network error.
-                var visible = !!previewUnavailable || detected || saved;
-                setHidden(amountFields, !visible);
-                setHidden(amountHint, !visible);
-                submitButton.disabled = !visible || state.submitting;
+                // Keep manual correction available even if the preview no longer finds an older transfer.
+                setHidden(amountFields, false);
+                setHidden(amountHint, false);
+                submitButton.disabled = state.submitting;
             }
 
             function syncCancelAvailability() {

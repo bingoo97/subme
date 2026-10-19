@@ -7544,3 +7544,21 @@ img.scan{
 }
 
 .customer-payment-history #tickets .table_ticket .status>span.is-cancelled{border-color:#f2b9c1;background:#fff0f2;color:#dc3545;}
+
+/* Paid customer orders awaiting fulfilment. */
+.orders-view .orders-header__warning{display:flex;align-items:flex-start;gap:11px;margin:18px 0 0;padding:13px 15px;border:1px solid #f0dfb3;border-radius:10px;background:#fffbf2;color:#846426;font-size:12px;font-weight:400;line-height:1.6;}
+.orders-view .orders-header__warning-icon{display:flex;align-items:center;justify-content:center;flex:0 0 30px;width:30px;height:30px;border-radius:8px;background:#fff0ce;color:#b17a1d;font-size:16px;}
+.orders-view .orders-header__warning>div{min-width:0;}
+.orders-view .orders-header__warning strong{display:block;margin:0 0 2px;font-size:12px;font-weight:600;color:#795b22;}
+.orders-view .orders-header__warning p{margin:0;font-size:11px;font-weight:400;line-height:1.6;}
+.orders-view .orders-user-awaiting{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:5px 7px;border:1px solid #f1e1bd;border-radius:5px;background:#fff8e9;color:#a17325;font-size:10px;font-weight:500;line-height:1.4;}
+.orders-view .orders-user-awaiting>.fa{flex:none;font-size:12px;}
+.orders-view .orders-user-summary__note--success{display:flex;align-items:baseline;gap:6px;color:#558c82;font-size:10px;line-height:1.5;}
+.orders-view .orders-user-summary__note--success>.fa{flex:none;font-size:10px;}
+@media(max-width:767px){.orders-view .orders-header__warning{gap:9px;margin-top:12px;padding:11px 12px;}.orders-view .orders-header__warning p{font-size:10px;}.orders-view .orders-user-awaiting{font-size:9px;padding:4px 6px;}}
+
+.orders-view .orders-user-table__actions-col .orders-user-awaiting-button{border-color:#f1e1bd;border-radius:5px;background:#fff8e9;color:#a17325;}
+.orders-view .orders-user-table__actions-col .orders-user-awaiting-button:is(:hover,:focus,:active){border-color:#e6cd98;background:#fff0d2;color:#8f611b;box-shadow:none;}
+.orders-user-awaiting-spinner{display:block;box-sizing:border-box;width:15px;height:15px;border:2px solid rgba(161,115,37,.22);border-top-color:currentColor;border-radius:50%;animation:orders-user-awaiting-spin .9s linear infinite;}
+@keyframes orders-user-awaiting-spin{to{transform:rotate(360deg);}}
+@media(prefers-reduced-motion:reduce){.orders-user-awaiting-spinner{animation:none;}}

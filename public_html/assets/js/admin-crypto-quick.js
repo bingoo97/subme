@@ -189,6 +189,7 @@
             if (renewalResult) renewalResult.hidden = true;
             const request = new AbortController();
             const timeout = setTimeout(() => request.abort(), 20000);
+            let uncertain = true;
             try {
                 const body = new FormData(form);
                 body.delete('admin_payment_quick_action');
@@ -197,11 +198,13 @@
                 const nextFilter = action === 'renew' ? 'new' : filter;
                 body.set('crypto_quick_inline', '1');
                 body.set('crypto_quick_filter', nextFilter);
-                const response = await fetch(form.action, {
+                const response = await fetch(form.getAttribute('action') || '/admin/?page=payments', {
                     method: 'POST', body, credentials: 'same-origin',
                     headers: { Accept: 'application/json' }, signal: request.signal,
                 });
-                const data = await response.json();
+                const data = await response.json().catch(() => null);
+                if (!data || typeof data !== 'object') throw new Error(panel.dataset.actionError || panel.dataset.error);
+                uncertain = false;
                 if (!response.ok || !data.ok) throw new Error(data.message || panel.dataset.error);
                 cache.clear();
                 if (renewalResult) {
@@ -228,8 +231,10 @@
                     await load(true);
                 }
             } catch (error) {
+                // A write may already have succeeded. Refresh only the read; never repeat the POST.
+                if (uncertain) { cache.clear(); await load(true); }
                 if (renewalResult) {
-                    renewalResult.textContent = error.name === 'AbortError' ? panel.dataset.error : (error.message || panel.dataset.error);
+                    renewalResult.textContent = uncertain || error.name !== 'Error' ? (panel.dataset.actionError || panel.dataset.error) : (error.message || panel.dataset.error);
                     renewalResult.dataset.tone = 'error';
                     renewalResult.hidden = false;
                 }

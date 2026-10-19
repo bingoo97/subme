@@ -7,19 +7,20 @@ if(($argv[1]??'')==='--endpoint') {
     $r=json_decode(base64_decode($argv[2]),true);admin_start_session();
     $_SESSION=['admin_user_id'=>$r['admin']??1,'admin_locale'=>'pl','admin_csrf_token'=>'notification-fixture'];
     $orderPage=isset($r['save_order'])||isset($r['order_page'])||isset($r['extend_order']);
-    $_SERVER['HTTP_HOST']='localhost';$_SERVER['REMOTE_ADDR']='127.0.0.1';$_SERVER['REQUEST_METHOD']=isset($r['payment'])||isset($r['save_order'])||isset($r['extend_order'])||isset($r['edit_payment'])?'POST':'GET';$_GET=['page'=>$orderPage?'orders':'payments'];$_POST=[];
+    $_SERVER['HTTP_HOST']='localhost';$_SERVER['REMOTE_ADDR']='127.0.0.1';$_SERVER['REQUEST_METHOD']=isset($r['payment'])||isset($r['save_order'])||isset($r['extend_order'])||isset($r['edit_payment'])||isset($r['crypto_inline_payment'])?'POST':'GET';$_GET=['page'=>$orderPage?'orders':'payments'];$_POST=[];
     if($orderPage)$_GET['order_id']=(int)($r['save_order']??$r['order_page']??$r['extend_order']);
     $_SERVER['REQUEST_URI']='/admin/?'.http_build_query($_GET);
-    if(isset($r['save_order']))$_POST=['admin_save_order_info'=>1,'order_id'=>$r['save_order'],'total_amount'=>'10','status'=>$r['order_status']??'active','payment_status'=>'paid','fulfillment_status'=>'pending','_csrf'=>'notification-fixture'];
+    if(isset($r['save_order']))$_POST=['admin_save_order_info'=>1,'order_id'=>$r['save_order'],'total_amount'=>'10','status'=>$r['order_status']??'active','payment_status'=>'paid','fulfillment_status'=>'pending','expires_at'=>$r['expiry']??'','_csrf'=>'notification-fixture'];
     if(isset($r['extend_order']))$_POST=['admin_extend_order'=>1,'order_id'=>$r['extend_order'],'extend_product_id'=>2,'extend_charge_balance'=>'1','extend_expected_expires_at'=>$r['expiry'],'extend_expected_renewal_id'=>$r['renewal'],'_csrf'=>'notification-fixture'];
-    if(isset($r['edit_payment']))$_POST=['admin_save_payment'=>1,'payment_type'=>$r['payment_type']??'bank','payment_id'=>$r['edit_payment'],'status'=>$r['payment_status'],'_csrf'=>'notification-fixture'];
-    if(isset($r['payment']))$_POST=['admin_payment_quick_action_ajax'=>1,'payment_type'=>'bank','payment_id'=>$r['payment'],'quick_action'=>'accept','_csrf'=>'notification-fixture'];
+    if(isset($r['edit_payment']))$_POST=['admin_save_payment'=>1,'payment_type'=>$r['payment_type']??'bank','payment_id'=>$r['edit_payment'],'status'=>$r['payment_status'],'_csrf'=>'notification-fixture']+($r['fields']??[]);
+    if(isset($r['crypto_inline_payment']))$_POST=['admin_payment_quick_action_ajax'=>1,'payment_type'=>'crypto','payment_id'=>$r['crypto_inline_payment'],'quick_action'=>'archive','crypto_quick_inline'=>'1','crypto_quick_filter'=>'payout','_csrf'=>'notification-fixture'];
+    if(isset($r['payment']))$_POST=['admin_payment_quick_action_ajax'=>1,'payment_type'=>$r['payment_type']??'bank','payment_id'=>$r['payment'],'quick_action'=>'accept','_csrf'=>'notification-fixture'];
     ob_start();register_shutdown_function(static function()use($orderPage):void {
         $body=ob_get_clean();$closed=session_status()!==PHP_SESSION_ACTIVE;
         if($closed && session_id()!=='')session_start();if(session_status()===PHP_SESSION_ACTIVE)session_destroy();
         echo json_encode(['status'=>http_response_code()?:200,'body'=>json_decode((string)$body,true),'html'=>$orderPage?$body:null,'raw'=>!$orderPage&&json_decode((string)$body,true)===null?substr((string)$body,0,1800):null,'closed'=>$closed]);
     });
-    require dirname(__DIR__).(isset($r['payment'])||isset($r['edit_payment'])||$orderPage?'/admin/index.php':'/admin/topbar_state.php');exit;
+    require dirname(__DIR__).(isset($r['payment'])||isset($r['edit_payment'])||isset($r['crypto_inline_payment'])||$orderPage?'/admin/index.php':'/admin/topbar_state.php');exit;
 }
 $checks=0;function ck(bool $ok,string $label):void {global $checks;if(!$ok)throw new RuntimeException($label);$checks++;}
 function sql(string $q):void {global $db;if(!$db->query($q))throw new RuntimeException($db->error.': '.$q);}
@@ -51,6 +52,8 @@ sql('SET FOREIGN_KEY_CHECKS=0');sql('INSERT IGNORE INTO app_settings(id) VALUES(
 sql("UPDATE app_settings SET maintenance_mode=0,bank_transfers_enabled=1,customer_global_group_enabled=0,admin_panel_subscription_paid_until='2035-12-31',manual_database_backup_last_downloaded_at=NOW(),default_currency_id=2,site_url='http://example.invalid'");
 sql("INSERT INTO admin_roles(id,name,slug,access_level) VALUES(3,'Limited','notification-limited',100) ON DUPLICATE KEY UPDATE access_level=100");
 sql("INSERT INTO admin_users(id,role_id,login_name,email,password_hash) VALUES(1,1,'fixture','fixture@example.invalid','unused'),(3,3,'limited','limited@example.invalid','unused')");
+sql("INSERT INTO admin_roles(id,name,slug,access_level) VALUES(904,'Payment operator','payment-edit-fixture',500) ON DUPLICATE KEY UPDATE access_level=500");
+sql("INSERT INTO admin_users(id,role_id,login_name,email,password_hash) VALUES(904,904,'paymentoperator','paymentoperator@example.invalid','unused')");
 sql("INSERT INTO product_providers(id,name,slug,dashboard_url,is_active) VALUES(1,'Fixture provider','notification-provider','https://provider.example.invalid/admin/',1)");
 sql("INSERT INTO products(id,provider_id,name,slug,price_amount,currency_id,duration_hours,is_active,product_type) VALUES(1,1,'Original','notification-original',10,2,720,1,'subscription'),(2,1,'Renewal','notification-renewal',30,2,2160,1,'subscription'),(3,1,'Credits','notification-credits',15,2,0,1,'credits')");
 sql("INSERT INTO customers(id,email,public_handle,password_hash,status,balance_amount) VALUES(1,'one@example.invalid','one','unused','active',0),(2,'two@example.invalid','two','unused','active',0)");
@@ -73,7 +76,7 @@ ck(ids()[0]===3,'Older unfinished task stays first after a newer approval');
 $r=endpoint(['payment'=>1]);ck(!empty($r['body']['ok'])&&in_array(1,ids(),true),'Actual initial approval creates an activation task');
 $task=admin_topbar_order_task(admin_topbar_notification_order_row_by_id($db,1),admin_load_messages('pl'));
 ck(str_contains($task['amount'],'10.00'),'Initial task displays the order price');
-ck($task['kind']==='activation'&&str_contains($task['step_two'],'AKTYWNE'),'Initial order receives activation instructions');
+ck($task['kind']==='activation'&&str_contains($task['step_two'],'Zrealizowane'),'Initial order receives activation instructions');
 ck(!in_array(4,ids(),true)&&!in_array(5,ids(),true)&&!in_array(6,ids(),true),'Cancelled, fulfilled and unpaid orders do not produce tasks');
 ck(admin_topbar_notification_order_count($db)===3,'Exactly one task per actionable order');
 // Reversal must synchronize unfinished work, without duplicating financial entries on re-approval.
@@ -196,6 +199,10 @@ foreach([300,301,302,303,304] as $paymentId){
 sql("INSERT INTO crypto_deposit_transactions(deposit_request_id,wallet_address_id,crypto_asset_id,transaction_hash,amount_crypto,status) VALUES(300,300,{$btc},'reminder-auto-proof',.0002,'auto_accepted')");
 $reminder=admin_crypto_reminder_view($db,'fixture',$messages);
 ck($reminder['filter']==='new'&&str_contains($reminder['html'],'Wykryto wpłatę'),'Detected receipt takes priority over unpaid tickets, paid orders and archiving');
+sql("UPDATE app_settings SET admin_action_reminders_enabled=0 WHERE id=1");
+ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']===null,'Global OFF suppresses urgent detected payment and order reminders too');
+sql("UPDATE app_settings SET admin_action_reminders_enabled=1 WHERE id=1");
+
 sql("UPDATE crypto_deposit_requests SET status='cancelled' WHERE id=304");
 $reminder=admin_crypto_reminder_view($db,'fixture',$messages);
 $blockedArchive=admin_payment_apply_quick_action($db,'crypto',300,'archive',1,'fixture');
@@ -215,13 +222,21 @@ foreach(['new','expired','cancelled','payout'] as $linkFilter){
  ck($linkXpath->query('//a//a')->length===0,'Purpose link never nests inside the payment link in '.$linkFilter);
  if(in_array($linkFilter,['expired','cancelled'],true)){
   ck($linkXpath->query('//form[@data-crypto-quick-action][input[@name="quick_action" and @value="delete"]]')->length===1,'Delete uses inline action in '.$linkFilter);
-  ck($linkXpath->query('//form[@data-crypto-quick-action]//button[@data-admin-confirm and contains(@class,"action--delete")]')->length===1,'Inline delete retains confirmation in '.$linkFilter);
+  ck($linkXpath->query('//form[@data-crypto-quick-action]//button[@data-admin-confirm and contains(@class,"action--delete")]')->length===($linkFilter==='cancelled'?0:1),'Cancelled inline deletion skips confirmation; expired retains it: '.$linkFilter);
  }
 }
 $linkRow['order_id']=null;
 $linkHtml=admin_crypto_quick_html([$linkRow],'payout',admin_crypto_quick_labels('pl'),'fixture',$messages);
 $linkDom=new DOMDocument();@$linkDom->loadHTML($linkHtml);$linkXpath=new DOMXPath($linkDom);
-ck($linkXpath->query('//span[@class="admin-crypto-quick__purpose"]')->length===1&&$linkXpath->query('//a[@class="admin-crypto-quick__purpose"]')->length===0,'Top-up purpose remains a plain badge');
+ck($linkXpath->query('//span[contains(@class,"admin-crypto-quick__purpose")]')->length===1&&$linkXpath->query('//a[@class="admin-crypto-quick__purpose"]')->length===0,'Top-up purpose remains a plain badge');
+
+ck($linkXpath->query('//a[contains(@class,"action--details") and contains(@href,"payment_id=300")]')->length===1,'Approved payout retains a payment details menu link');
+ck(str_contains($linkHtml,'Kwota żądana: ')&&str_contains($linkHtml,'€')&&!str_contains($linkHtml,' EUR'),'Payout shows requested amount with the currency symbol');
+ck(str_contains($linkHtml,'admin-payment-topup-badge'),'Top-up uses the shared acceptance badge style');
+ck($linkXpath->query('//div[contains(@class,"admin-crypto-quick__amount") and starts-with(@title,"Kwota ")]/strong[contains(.,"BTC")]')->length===1,'Payout shows crypto first with requested FIAT in the tooltip');
+ck($linkXpath->query('//div[contains(@class,"admin-crypto-quick__amount")]/small')->length===1,'Payout amount occupies exactly two lines');
+ck($linkXpath->query('//*[@data-crypto-payment-actions]/*[1][self::form]//input[@name="quick_action" and @value="archive"]')->length===1,'Archive is the first available menu action');
+
 
 ck(str_contains($reminder['html'],'Dokończ realizację')&&!str_contains($reminder['html'],'Saldo klienta zostało zasilone'),'Order payment suggests fulfilment rather than treating it as a top-up');
 sql("UPDATE orders SET status='active',fulfillment_status='delivered' WHERE id=100");
@@ -230,6 +245,24 @@ ck($reminder['filter']==='new'&&$reminder['workflow']==='payment','Completed ord
 sql("UPDATE crypto_deposit_requests SET status='cancelled' WHERE id=301");
 ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']==='expired','Expired verification precedes archiving');
 sql("UPDATE crypto_deposit_requests SET status='cancelled' WHERE id=302");
+sql("UPDATE crypto_deposit_requests SET confirmed_at=NOW() WHERE id IN(300,303)");
+ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']===null,'Fresh approved payments do not produce withdrawal reminders');
+ck(count(admin_crypto_quick_rows($db,'payout'))===2,'Fresh approved payments remain visible in topbar payout tab');
+sql("UPDATE crypto_deposit_requests SET confirmed_at=DATE_SUB(NOW(),INTERVAL 71 HOUR) WHERE id=303");
+ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']===null,'Withdrawal reminder stays silent before the three-day threshold');
+sql("UPDATE crypto_deposit_requests SET confirmed_at=DATE_SUB(NOW(),INTERVAL 4 DAY) WHERE id=300");
+sql("UPDATE crypto_deposit_requests SET confirmed_at=DATE_SUB(NOW(),INTERVAL 5 DAY) WHERE id=303");
+$reminder=admin_crypto_reminder_view($db,'fixture',$messages);
+ck(str_contains($reminder['html'],'payment_id=303'),'Oldest approved timestamp is selected ahead of newer approvals');
+sql("UPDATE crypto_deposit_requests SET confirmed_at=DATE_SUB(NOW(),INTERVAL 6 DAY) WHERE id=300");
+ck(str_contains(admin_crypto_reminder_view($db,'fixture',$messages)['html'],'payment_id=300'),'Oldest approval wins even when its payment ID is lower');
+ck((int)admin_crypto_quick_rows($db,'payout')[0]['id']===303,'Topbar keeps newest payment ordering independently of reminders');
+sql("UPDATE crypto_deposit_requests SET confirmed_at=DATE_SUB(NOW(),INTERVAL 4 DAY) WHERE id=300");
+
+sql("UPDATE app_settings SET admin_action_reminders_enabled=0 WHERE id=1");
+ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']===null,'Global OFF suppresses withdrawal reminder on the server');
+ck(count(admin_crypto_quick_rows($db,'payout'))===2,'Global reminder OFF leaves topbar payments available');
+sql("UPDATE app_settings SET admin_action_reminders_enabled=1 WHERE id=1");
 $reminder=admin_crypto_reminder_view($db,'fixture',$messages);
 ck($reminder['filter']==='payout'&&$reminder['workflow']==='payment','Only housekeeping remains after higher-priority work');
 ck(str_contains($reminder['html'],'Doładowanie konta')&&str_contains($reminder['html'],'Saldo klienta zostało zasilone'),'Top-up clearly states customer balance was credited');
@@ -258,5 +291,66 @@ foreach([700=>'expired',701=>'cancelled'] as $deleteId=>$deleteFilter){
  ck(str_contains($emptyHtml,'admin-crypto-quick__empty')&&str_contains($emptyHtml,'bi-wallet2')&&str_contains($emptyHtml,'Brak płatności w tej kategorii')&&str_contains($emptyHtml,'zobaczysz je tutaj'),'Last '.$deleteFilter.' deletion renders icon, title and helpful empty-state text');
 }
 ck(array_sum($deleteCounts)===0,'Deleting the final outstanding request clears every navbar category');
+foreach([800,801,802,803] as $archiveId){
+ sql("INSERT INTO crypto_wallet_addresses(id,crypto_asset_id,address,network_code,status) VALUES({$archiveId},{$btc},'archive-series-{$archiveId}','bitcoin','assigned')");
+ sql("INSERT INTO crypto_deposit_requests(id,customer_id,crypto_asset_id,wallet_address_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,received_crypto_amount,received_fiat_amount,status,confirmed_at) VALUES({$archiveId},1,{$btc},{$archiveId},10,2,50000,.0002,.0002,10,'approved',NOW())");
+}
+foreach([800,801,802,803] as $index=>$archiveId){
+ $seriesResult=endpoint(['crypto_inline_payment'=>$archiveId]);
+ ck($seriesResult['status']===200&&!empty($seriesResult['body']['ok']),'Sequential archive returns valid JSON success');
+ ck((int)$seriesResult['body']['crypto_quick']['counts']['payout']===3-$index,'Sequential archive returns current payout counter');
+ ck($db->select_user("SELECT status FROM crypto_deposit_requests WHERE id={$archiveId}")['status']==='archived','Sequential archive is saved exactly once');
+}
+ck(str_contains($seriesResult['body']['crypto_quick']['html'],'admin-crypto-quick__empty'),'Last archive returns the complete empty state');
+
+// Active access remains valid while a newly paid crypto renewal requires manual fulfilment.
+$cryptoExpiry=date('Y-m-d H:i:s',time()+2*86400);
+sql("INSERT INTO customers(id,email,password_hash,status,balance_amount) VALUES(900,'crypto-renewal@example.invalid','unused','active',0)");
+sql("INSERT INTO orders(id,customer_id,product_id,total_amount,currency_id,status,payment_status,fulfillment_status,expires_at,paid_at) VALUES(900,900,1,10,2,'active','paid','delivered','{$cryptoExpiry}',DATE_SUB(NOW(),INTERVAL 28 DAY))");
+sql("INSERT INTO crypto_wallet_addresses(id,crypto_asset_id,address,network_code,status) VALUES(900,{$btc},'crypto-renewal-fixture','bitcoin','assigned')");
+sql("INSERT INTO crypto_deposit_requests(id,customer_id,order_id,crypto_asset_id,wallet_address_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,received_crypto_amount,received_fiat_amount,status) VALUES(900,900,900,{$btc},900,30,2,50000,.0006,.0006,30,'pending')");
+sql("INSERT INTO order_renewals(id,order_id,customer_id,product_id,price_amount,currency_id,duration_hours,status,payment_request_type,payment_request_id) VALUES(900,900,900,2,30,2,2160,'pending_payment','crypto',900)");
+ck(!empty(endpoint(['payment'=>900,'payment_type'=>'crypto'])['body']['ok']),'Crypto renewal payment is approved through the real handler');
+$unchanged=$db->select_user('SELECT status,expires_at FROM orders WHERE id=900');
+ck($unchanged['status']==='active'&&$unchanged['expires_at']===$cryptoExpiry,'Approval preserves current active access and does not prematurely extend expiry');
+$page=endpoint(['order_page'=>900]);$dom=new DOMDocument();@$dom->loadHTML($page['html']);$x=new DOMXPath($dom);
+ck($x->query("//*[@id='adminOrderExtendTab900' and contains(@class,'active')]")->length===1,'Paid active crypto renewal opens the Extend tab by default');
+ck($x->query("//*[@id='adminOrderModal900']//*[@data-admin-order-extension-required and contains(@class,'alert-warning')]")->length===1,'Paid crypto renewal displays a warning with its payment details');
+ck($x->query("//*[@id='adminOrderModal900']//*[@data-admin-order-active-alert and not(@hidden)]")->length===0,'Old active subscription does not display misleading completion success');
+ck($x->query("//*[@id='adminOrderModal900']//option[@value='active' and normalize-space(.)='Zrealizowane']")->length===1,'Modal uses fulfilled label without changing internal active status');
+
+endpoint(['save_order'=>900,'order_status'=>'active','expiry'=>$cryptoExpiry]);
+ck($db->select_user('SELECT status FROM order_renewals WHERE id=900')['status']==='paid_pending_activation'&&$db->select_user('SELECT expires_at FROM orders WHERE id=900')['expires_at']===$cryptoExpiry,'Saving fulfilled base status cannot silently consume a paid renewal');
+$revoke=endpoint(['edit_payment'=>900,'payment_type'=>'crypto','payment_status'=>'awaiting_review']);
+ck($revoke['status']===302&&$db->select_user('SELECT status FROM order_renewals WHERE id=900')['status']==='pending_payment','Revoking crypto approval removes the paid renewal state');
+ck($db->select_user('SELECT status,expires_at FROM orders WHERE id=900')===$unchanged,'Revoking renewal approval preserves the existing two days of access');
+ck(!empty(endpoint(['payment'=>900,'payment_type'=>'crypto'])['body']['ok']),'Reapproving crypto restores pending renewal without duplicate balance credit');
+$renewed=endpoint(['extend_order'=>900,'expiry'=>$cryptoExpiry,'renewal'=>900]);
+ck($renewed['status']===200&&$db->select_user('SELECT status FROM order_renewals WHERE id=900')['status']==='applied','Paid crypto renewal is applied through the real Extend form');
+assert_completed_order_page(endpoint(['order_page'=>900]),900);
+$ledgerBefore=$db->select_user("SELECT COUNT(*) n FROM customer_balance_runtime_events WHERE customer_id=900")['n'];
+$newExpiry=$db->select_user('SELECT expires_at FROM orders WHERE id=900')['expires_at'];
+endpoint(['extend_order'=>900,'expiry'=>$cryptoExpiry,'renewal'=>900]);
+ck($db->select_user('SELECT expires_at FROM orders WHERE id=900')['expires_at']===$newExpiry&&$db->select_user("SELECT COUNT(*) n FROM customer_balance_runtime_events WHERE customer_id=900")['n']===$ledgerBefore,'Repeated crypto renewal submit neither extends nor charges twice');
+
+
+// Ordinary payment operators may correct values without Admin Mode or a second password.
+$editFields=['amount_value'=>'32,00','amount_crypto'=>'0,00064','received_fiat_amount'=>'33,50','received_crypto_amount'=>'0,00067'];
+$balanceBeforeEdit=$db->select_user('SELECT balance_amount FROM customers WHERE id=900')['balance_amount'];
+$editResult=endpoint(['admin'=>904,'edit_payment'=>900,'payment_type'=>'crypto','payment_status'=>'approved','fields'=>$editFields]);
+ck($editResult['status']===302,'Ordinary operator saves received/requested amounts without special permission');
+$edited=$db->select_user('SELECT requested_fiat_amount,requested_crypto_amount,received_fiat_amount,received_crypto_amount FROM crypto_deposit_requests WHERE id=900');
+ck((float)$edited['requested_fiat_amount']===32.0&&(float)$edited['received_fiat_amount']===33.5&&(float)$edited['requested_crypto_amount']===.00064&&(float)$edited['received_crypto_amount']===.00067,'FIAT and crypto corrections persist and accept decimal commas');
+ck($db->select_user('SELECT balance_amount FROM customers WHERE id=900')['balance_amount']===$balanceBeforeEdit,'Metadata correction never credits an already approved payment twice');
+$again=endpoint(['admin'=>904,'edit_payment'=>900,'payment_type'=>'crypto','payment_status'=>'approved','fields'=>$editFields]);
+ck($again['status']===302&&$db->select_user('SELECT balance_amount FROM customers WHERE id=900')['balance_amount']===$balanceBeforeEdit,'Repeated amount correction remains idempotent');
+
+$actualFields=$editFields;$actualFields['received_fiat_amount']='33,67';
+ck(endpoint(['admin'=>904,'edit_payment'=>900,'payment_type'=>'crypto','payment_status'=>'approved','fields'=>$actualFields])['status']===302,'Actual received cents can be corrected without permission barriers');
+$actual=$db->select_user('SELECT received_fiat_actual_amount,received_fiat_amount FROM crypto_deposit_requests WHERE id=900');
+ck((float)$actual['received_fiat_actual_amount']===33.67&&(float)$actual['received_fiat_amount']===33.5,'Actual receipt is preserved separately from the configured rounded credit');
+$denied=endpoint(['admin'=>3,'edit_payment'=>900,'payment_type'=>'crypto','payment_status'=>'approved','fields'=>['received_fiat_amount'=>'999']]);
+ck($denied['status']!==302&&(float)$db->select_user('SELECT received_fiat_amount FROM crypto_deposit_requests WHERE id=900')['received_fiat_amount']===33.5,'Account without payment access cannot forge a payment edit');
+
 session_destroy();
 echo "PASS {$checks} notification workflow, priority, completion and live-refresh assertions / {$queries} task-list query\n";

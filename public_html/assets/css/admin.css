@@ -21197,3 +21197,22 @@ a.admin-crypto-quick__purpose[href]:focus-visible{outline:2px solid #94a3b8;outl
 }
 
 .admin-content--payments .admin-payments-toolbar .admin-payments-filter--active[data-payment-scope="archived"] .admin-payments-filter__count{background:rgba(255,255,255,.16);color:#fff;}
+
+/* Shared balance top-up badge, matching the acceptance modal. */
+body.admin-app-page .admin-payment-topup-badge{
+    display:inline-flex;align-items:center;gap:5px;min-height:21px;padding:3px 6px;
+    border:1px solid #bce8f0;border-radius:var(--admin-badge-radius);
+    background:#cff4fc;color:#055160;font-size:.61rem;font-weight:550;line-height:1.35;
+    white-space:normal;
+}
+
+.admin-order-modal :is([data-admin-order-renewal-alert],[data-admin-order-extension-required]) strong>.bi{color:#b47d16;margin-right:4px;}
+
+/* Match the status badge dimensions while retaining the top-up colour. */
+body.admin-app-page .admin-crypto-quick__purpose.admin-payment-topup-badge{
+    min-height:0;padding:1px 4px;gap:4px;font-size:9px;font-weight:600;line-height:1.5;
+}
+body.admin-app-page .admin-crypto-quick__purpose.admin-payment-topup-badge>.bi{font-size:inherit;line-height:inherit;}
+@media(max-width:400px){
+    body.admin-app-page .admin-crypto-quick__purpose.admin-payment-topup-badge{padding:1px 3px;font-size:8px;}
+}

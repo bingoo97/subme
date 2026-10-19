@@ -34,10 +34,13 @@ async function run(){
  const payment=nodes['[data-admin-order-payment-status]']=makeNode('paid');
  const fulfillment=nodes['[data-admin-order-fulfillment-status]']=makeNode('pending');
  const hint=nodes['[data-admin-order-status-hint]']=makeNode();
- const form={getAttribute(){return null;}};
- const statusContext={q(selector){return nodes[selector]||null;},qa(){return [form];},setHidden(el,value){el.hidden=value;}};vm.createContext(statusContext);
+ let paidRenewal=false;const form={getAttribute(name){return name==='data-paid-renewal'&&paidRenewal?'1':null;}};
+ const activation=nodes['[data-admin-order-activation-alert]']=makeNode(),activeAlert=nodes['[data-admin-order-active-alert]']=makeNode(),renewalAlert=nodes['[data-admin-order-renewal-alert]']=makeNode();
+ const defaultTabModal=makeNode();defaultTabModal.getAttribute=()=> 'adminOrderExtendTab1';let tabOpens=0;nodes['#adminOrderExtendTab1']=makeNode();
+ const statusContext={hasBootstrap:true,window:{bootstrap:{Tab:{getOrCreateInstance(){return {show(){tabOpens++;}};}}}},q(selector){return nodes[selector]||null;},qa(selector){return selector==='[data-admin-order-default-tab]'?[defaultTabModal]:[form];},setHidden(el,value){el.hidden=value;}};vm.createContext(statusContext);
  const statusStart=source.indexOf('    function initOrderStatusForms()'),statusEnd=source.indexOf('    function initOrderExtendPreviews()',statusStart);
  vm.runInContext(source.slice(statusStart,statusEnd),statusContext);statusContext.initOrderStatusForms();
+ defaultTabModal.listeners['show.bs.modal']();defaultTabModal.listeners['show.bs.modal']();ck(tabOpens===2,'Every reopening restores Extend for a paid pending renewal');
  ck(status.classList.values.has('is-pending')&&!hint.hidden,'Awaiting order shows status attention and the animated direction hint');
  status.value='active';status.listeners.change();
  ck(status.classList.values.has('is-success')&&!status.classList.values.has('is-pending')&&hint.hidden&&payment.value==='paid'&&fulfillment.value==='delivered','Selecting Active stops pending status attention, hides the arrow and synchronizes fulfillment');
@@ -48,6 +51,12 @@ async function run(){
  status.value='pending_payment';status.listeners.change();payment.value='unpaid';payment.listeners.change();
  ck(!status.classList.values.has('is-action-required')&&hint.hidden,'Removing payment approval stops pending-status attention and hides the hint');
  payment.value='paid';payment.listeners.change();ck(status.classList.values.has('is-action-required')&&!hint.hidden,'Restored payment approval restores attention only for a pending order');
+ paidRenewal=true;status.value='active';statusContext.initOrderStatusForms();
+ ck(activeAlert.hidden&&!renewalAlert.hidden&&activation.hidden,'Paid renewal warning overrides success for an already active base subscription');
+ status.value='cancelled';status.listeners.change();
+ ck(activeAlert.hidden&&renewalAlert.hidden&&activation.hidden,'Cancelled preview does not suggest activation or extension');
+ status.value='active';status.listeners.change();
+ ck(activeAlert.hidden&&!renewalAlert.hidden,'Returning to fulfilled status does not pretend that the paid renewal was applied');
  console.log(`PASS ${checks} notification live-refresh/focus/concurrency assertions`);
 }
 run().catch(e=>{console.error(e);process.exitCode=1;});

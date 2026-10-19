@@ -405,6 +405,8 @@ return [
         'orders_note_empty' => 'Brak notatki.',
         'orders_note_label' => 'Podaj ponizej dodatkowe informacje',
         'orders_note_placeholder' => 'np. MAC lub nazwa aplikacji ...',
+        'orders_waiting_extension_label' => 'Oczekuje na przedłużenie',
+        'orders_waiting_activation_label' => 'Oczekuje na aktywację',
         'orders_status_pending' => 'Oczekujące',
         'orders_status_payment_confirmed' => 'Płatność potwierdzona',
         'orders_status_payment_confirmed_short' => 'OPŁACONE',

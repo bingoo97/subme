@@ -201,6 +201,8 @@ function app_format_money_value($amount, string $currencySymbol = '', string $cu
 {
     $formattedAmount = number_format((float)$amount, 2, '.', '');
     $suffix = trim($currencySymbol) !== '' ? trim($currencySymbol) : trim($currencyCode);
+    // Older currency rows used the code itself as the display symbol.
+    $suffix = match (strtoupper($suffix)) { 'EUR'=>'€', 'USD'=>'$', 'GBP'=>'£', 'PLN'=>'zł', default=>$suffix };
 
     return $suffix !== '' ? trim($formattedAmount . ' ' . $suffix) : $formattedAmount;
 }
@@ -6477,6 +6479,11 @@ function app_ensure_settings_runtime_columns(Mysql_ks $db): void
          SET bank_account_shared_assignments_enabled = COALESCE(bank_account_shared_assignments_enabled, 1)
          WHERE id = 1"
     );
+
+    if (!schema_column_exists($db, 'app_settings', 'admin_action_reminders_enabled')) {
+        @$db->query("ALTER TABLE app_settings ADD COLUMN admin_action_reminders_enabled TINYINT(1) NOT NULL DEFAULT 1");
+        schema_forget_column_cache('app_settings', 'admin_action_reminders_enabled');
+    }
 
     if (!schema_column_exists($db, 'app_settings', 'crypto_auto_accept_enabled')) {
         @$db->query(
