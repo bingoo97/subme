@@ -4751,10 +4751,17 @@ if ($route === 'payments') {
             }
         }
 
+        $cryptoReminderView = null;
+        if (!empty($_POST['crypto_reminder_inline']) && !empty($_POST['crypto_quick_inline']) && $paymentEditorType === 'crypto') {
+            try { $cryptoReminderView = admin_crypto_reminder_view($db, admin_csrf_token(), $messages, $cryptoQuickView['counts'] ?? null, $currentLocale); }
+            catch (Throwable $e) { /* The action is saved; the reminder can retry its read. */ }
+        }
+
         echo json_encode([
             'ok' => true,
             'message' => (string)($quickActionResult['message'] ?? admin_t($messages, 'payment_save_success', 'Payment request saved successfully.')),
             'crypto_quick' => $cryptoQuickView,
+            'crypto_reminder' => $cryptoReminderView,
             'payment_id' => $paymentEditorId,
             'order' => $orderPayload,
             'redirect_url' => $redirectUrl,
@@ -5478,11 +5485,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <?php echo admin_e(admin_t($messages, 'chat_bank_transfer_title', 'Bank transfer')); ?>
                                                                 <?php endif; ?>
                                                             </strong>
-                                                            <?php if ($paymentOrderId <= 0): ?>
+
                                                                 <span class="admin-topbar-notifications__topup-badge">
-                                                                    <?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?>
+                                                                    <?php echo admin_e($paymentOrderId>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.$paymentOrderId:admin_t($messages,'payment_topup_badge','Balance top-up')); ?>
                                                                 </span>
-                                                            <?php endif; ?>
+
                                                             <span class="admin-status-pill <?php echo admin_e(admin_payment_status_badge_class((string)($paymentRow['status'] ?? ''))); ?>"><?php if (admin_payment_status_is_archived((string)($paymentRow['status'] ?? ''))): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e($paymentStatusLabel); ?></span>
                                                         </div>
                                                         <?php if ($paymentOrderId <= 0): ?>
@@ -5626,11 +5633,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <?php endif; ?>
                                                             <strong><?php echo admin_e($autoFiatLabel); ?></strong>
                                                             <span class="admin-status-pill admin-status-pill--available"><?php echo admin_e(admin_t($messages, 'topbar_auto_accepted_badge', 'Approved')); ?></span>
-                                                            <?php if ($autoOrderId <= 0): ?>
+
                                                                 <span class="admin-topbar-notifications__topup-badge">
-                                                                    <?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Balance top-up')); ?>
+                                                                    <?php echo admin_e($autoOrderId>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.$autoOrderId:admin_t($messages,'payment_topup_badge','Balance top-up')); ?>
                                                                 </span>
-                                                            <?php endif; ?>
+
                                                         </div>
                                                         <p>
                                                             <?php if ($autoCustomerId > 0 && $autoCustomerDisplay !== ''): ?>
@@ -5645,6 +5652,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 <span class="admin-topbar-notifications__auto-time"><?php echo admin_e($autoReceivedLabel); ?></span>
                                                             <?php endif; ?>
                                                         </p>
+                                                        <?php if ($autoOrderId>0 && !empty($autoPaymentRow['order_needs_action'])): ?>
+                                                            <a class="admin-crypto-quick__next-step" href="/admin/?page=orders&amp;order_id=<?php echo $autoOrderId; ?>"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><?php echo admin_e(admin_t($messages,'topbar_task_open_order','Complete in Orders')); ?></a>
+                                                        <?php elseif($autoOrderId<=0): ?><span class="admin-crypto-quick__completed"><?php echo admin_e($currentLocale==='pl'?'Saldo klienta zostało zasilone.':'Customer balance has been credited.'); ?></span><?php endif; ?>
                                                         <?php if ($autoCryptoLabel !== ''): ?>
                                                             <div class="admin-topbar-notifications__auto-payment-line">
                                                                 <?php echo admin_e($autoCryptoLabel); ?>
@@ -6685,6 +6695,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                 data-fiat-hint="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_fiat_hint', 'This field is calculated from the locked rate from the payment creation time. If you edit FIAT manually, exactly that value will be saved and credited.')); ?>"
                 data-underpaid-warning="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_underpaid_warning', 'Warning: if the customer paid less and you credit less balance, they may not have enough funds to buy the selected order.')); ?>"
                 data-topup-badge="<?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Doładowanie konta')); ?>"
+                data-order-badge="<?php echo admin_e(admin_t($messages, 'payment_purpose_order', 'Order payment')); ?>"
                 data-cancel-text="<?php echo admin_e(admin_t($messages, 'close', 'Close')); ?>"
                 data-accept-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_submit', 'Accept payment')); ?>"
                 data-invalid-crypto-text="<?php echo admin_e(admin_t($messages, 'payment_accept_modal_invalid_crypto', 'Enter the amount of crypto you actually received.')); ?>"
@@ -12253,6 +12264,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             ? '/admin/?page=crypto-wallets&wallet_list_page=1&edit_wallet=' . (int)($paymentEditor['wallet_address_id'] ?? 0)
                                             : '';
                                         $paymentEditorOrderId = (int)($paymentEditor['order_id'] ?? 0);
+                                        $paymentEditorNeedsOrderAction = !empty($paymentEditor['order_needs_action']) && in_array((string)($paymentEditor['status'] ?? ''), admin_payment_success_statuses($paymentEditorType), true);
                                         $paymentEditorHandle = trim((string)($paymentEditor['public_handle'] ?? ''));
                                         $paymentEditorHandleLabel = $paymentEditorHandle !== '' ? '@' . ltrim($paymentEditorHandle, '@') : '';
                                         $paymentEditorEmail = trim((string)($paymentEditor['customer_email'] ?? ''));
@@ -12376,6 +12388,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         'payment_type_filter' => $paymentTypeFilter !== '' ? $paymentTypeFilter : null,
                                                         'saved_payment' => 1,
                                                     ])); ?>">
+                                                    <?php if ($paymentEditorNeedsOrderAction): ?><a class="btn btn-warning btn-sm" href="/admin/?page=orders&amp;order_id=<?php echo $paymentEditorOrderId; ?>"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i><?php echo admin_e(admin_t($messages,'topbar_task_open_order','Complete in Orders')); ?></a><?php endif; ?>
                                                     <?php if (in_array((string)($paymentEditor['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true)): ?>
                                                         <button type="submit" class="btn btn-success btn-sm admin-payment-accept-cta" name="quick_action" value="accept" data-admin-action-help title="<?php echo admin_e(admin_t($messages, 'payment_action_help_accept', '')); ?>"<?php if ($paymentEditorType === 'crypto'): ?> data-admin-crypto-accept-trigger="1" data-admin-crypto-accept-payload="<?php echo admin_e($paymentEditorAcceptPayloadJson); ?>"<?php endif; ?>>
                                                             <span><?php echo admin_e(admin_t($messages, 'accept', 'Accept')); ?></span>
@@ -12398,7 +12411,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             <span><?php echo admin_e(admin_t($messages, 'payment_action_check_blockchain', 'Check explorer')); ?></span>
                                                         </button>
                                                     <?php endif; ?>
-                                                    <?php if ($paymentEditorType !== 'crypto_topup' && in_array((string)($paymentEditor['status'] ?? ''), ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true)): ?>
+                                                    <?php if ($paymentEditorType !== 'crypto_topup' && !$paymentEditorNeedsOrderAction && in_array((string)($paymentEditor['status'] ?? ''), ['confirmed', 'approved', 'paid', 'completed'], true)): ?>
                                                         <?php $paymentArchiveNeedsWithdrawal = $paymentEditorType === 'crypto' && in_array((string)($paymentEditor['status'] ?? ''), ['confirmed','approved','paid','completed'], true); ?>
                                                         <button type="submit" class="btn btn-dark btn-sm<?php echo $paymentArchiveNeedsWithdrawal ? ' admin-payment-archive-cta' : ''; ?>" name="quick_action" value="archive" data-admin-action-help title="<?php echo admin_e($paymentArchiveNeedsWithdrawal ? (admin_current_locale()==='pl'?'Przenieś płatność do archiwum dopiero po wypłacie środków na swój główny portfel.':'Archive this payment only after transferring the funds to your main wallet.') : admin_t($messages, 'payment_action_help_archive', '')); ?>">
                                                             <span><?php echo admin_e($paymentArchiveNeedsWithdrawal ? (admin_current_locale()==='pl'?'Przenieś do Archiwum':'Move to archive') : admin_t($messages, 'payment_action_archive', 'Move to archive')); ?></span>
@@ -12431,7 +12444,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <div class="admin-payments-summary-card admin-payments-summary-card--customer">
                                                     <small>
                                                         <?php if ($paymentEditorOrderId > 0): ?>
-                                                            <?php echo admin_e(admin_t($messages, 'col_order', 'Order')); ?>:
+                                                            <?php echo admin_e(admin_t($messages, 'payment_purpose_order', 'Order payment')); ?>:
                                                             <a href="/admin/?page=orders&amp;order_id=<?php echo admin_e((string)$paymentEditorOrderId); ?>" class="admin-payments-summary-card__order-link">#<?php echo admin_e((string)$paymentEditorOrderId); ?></a>
                                                         <?php else: ?>
                                                             <span class="admin-payments-summary-card__topup-badge"><i class="bi bi-wallet2" aria-hidden="true"></i><span><?php echo admin_e(admin_t($messages, 'payment_topup_badge', 'Top-up')); ?></span></span>
@@ -12978,7 +12991,8 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                             $canCancel = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review', 'expired'], true);
                                                             $canRenew = $paymentType !== 'crypto_topup' && $isExpiredPayment;
                                                             $canDeleteCancelled = $paymentType !== 'crypto_topup' && $isCancelledPayment;
-                                                            $canArchive = $paymentType !== 'crypto_topup' && in_array($paymentStatus, ['awaiting_confirmation', 'awaiting_review', 'confirmed', 'approved', 'paid', 'completed'], true);
+                                                            $paymentNeedsOrderAction = !empty($row['order_needs_action']) && in_array($paymentStatus, admin_payment_success_statuses($paymentType), true);
+                                                            $canArchive = $paymentType !== 'crypto_topup' && !$paymentNeedsOrderAction && in_array($paymentStatus, ['confirmed', 'approved', 'paid', 'completed'], true);
                                                             $paymentAcceptPayloadJson = '{}';
                                                             if ($paymentType === 'crypto') {
                                                                 $paymentAcceptPayloadJsonRaw = json_encode(admin_build_crypto_accept_payload($row, $messages), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -13031,6 +13045,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                         <span class="admin-status-pill admin-status-pill--neutral"><?php echo admin_e($paymentCryptoAmountLabel); ?></span>
                                                                                     <?php endif; ?>
                                                                                 </div>
+                                                                                <span class="admin-crypto-quick__purpose"><?php echo admin_e((int)($row['order_id']??0)>0?admin_t($messages,'payment_purpose_order','Order payment').' #'.(int)$row['order_id']:admin_t($messages,'payment_topup_badge','Balance top-up')); ?></span>
                                                                                 <div class="admin-payment-summary__customer-row">
                                                                                     <a class="admin-inline-link admin-payment-summary__handle" href="<?php echo admin_e($paymentCustomerUrl); ?>">
                                                                                         <?php echo admin_e($paymentHandleLabel !== '' ? $paymentHandleLabel : (string)($row['customer_email'] ?? '')); ?>
@@ -13075,9 +13090,11 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </div>
                                                                 </td>
                                                                 <td class="admin-payments-table__actions-col" data-label="<?php echo admin_e(admin_t($messages, 'col_actions', 'Actions')); ?>">
-                                                                    <?php if ($paymentCanAccept || $canArchive || $canCancel || $canRenew): ?>
+                                                                    <?php if ($paymentCanAccept || $canArchive || $canCancel || $canRenew || $paymentNeedsOrderAction): ?>
                                                                         <div class="admin-topbar-notifications__task-list">
-                                                                            <?php if ($isExpiredPayment): ?>
+                                                                            <?php if ($paymentNeedsOrderAction): ?>
+                                                                                <a class="admin-crypto-quick__next-step" href="/admin/?page=orders&amp;order_id=<?php echo (int)$row['order_id']; ?>"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><?php echo admin_e(admin_t($messages,'topbar_task_open_order','Complete in Orders')); ?></a>
+                                                                            <?php elseif ($isExpiredPayment): ?>
                                                                                 <span>1. <?php echo admin_e(admin_t($messages, 'payment_expired_info_line_1', 'This payment request expired after the time limit, but you can still verify whether the funds arrived.')); ?></span>
                                                                                 <span>2. <?php echo admin_e(admin_t($messages, 'payment_expired_info_line_2', 'Approve it if the customer paid, renew it to recalculate the rate or cancel it to move it to cancelled queue.')); ?></span>
                                                                             <?php elseif ($paymentCanAccept): ?>
@@ -21205,7 +21222,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     <?php if (!empty($panelTiersConfig['enabled'])) require __DIR__ . '/views/panel_tiers_modal.php'; ?>
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
-    <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')): ?><script src="/assets/js/admin-crypto-quick.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-quick.js'); ?>"></script><?php endif; ?>
+    <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')): ?><script src="/assets/js/admin-crypto-quick.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-quick.js'); ?>"></script><script src="/assets/js/admin-crypto-reminder.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-reminder.js'); ?>"></script><?php endif; ?>
     <script src="/assets/js/provider-browser.js?v=<?php echo admin_public_asset_version('assets/js/provider-browser.js'); ?>"></script>
     <?php if ($route === 'dashboard'): ?>
         <script src="/assets/js/admin-dashboard.js?v=<?php echo admin_public_asset_version('assets/js/admin-dashboard.js'); ?>"></script>

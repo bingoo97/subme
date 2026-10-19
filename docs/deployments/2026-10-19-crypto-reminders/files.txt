@@ -1,0 +1,16 @@
+dashboard-panel/admin/bootstrap.php
+dashboard-panel/admin/crypto_quick.php
+dashboard-panel/admin/crypto_quick_endpoint.php
+dashboard-panel/admin/index.php
+dashboard-panel/admin/locales/en.php
+dashboard-panel/admin/locales/pl.php
+dashboard-panel/admin/partials/notification-order-tasks.php
+dashboard-panel/admin/views/crypto_quick.php
+dashboard-panel/locales/en.php
+dashboard-panel/locales/pl.php
+dashboard-panel/templates/profil/crypto_detected.tpl
+dashboard-panel/templates/profil/payments_crypto.tpl
+public_html/assets/css/admin.css
+public_html/assets/js/admin.js
+public_html/assets/js/admin-crypto-quick.js
+public_html/assets/js/admin-crypto-reminder.js

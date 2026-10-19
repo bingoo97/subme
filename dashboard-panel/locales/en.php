@@ -2,6 +2,7 @@
 
 return [
     'messages' => [
+        'payment_purpose_topup' => 'Balance top-up',
         'payment_history_latest' => 'Latest payments',
         'payment_history_older' => 'Older payments',
         'meta_language_name' => 'English',

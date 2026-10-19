@@ -13,9 +13,14 @@ $settings=$db->select_user('SELECT crypto_payments_enabled FROM app_settings WHE
 if(empty($settings['crypto_payments_enabled']))crypto_quick_reply(['ok'=>false],403);
 $filter=$_GET['filter']??'new';
 if(!is_string($filter)||!in_array($filter,['new','expired','cancelled','payout'],true))crypto_quick_reply(['ok'=>false],422);
+$reminder=($_GET['reminder']??'')==='1';
 $last=(float)($_SESSION['crypto_quick_'.$filter]??0);$now=microtime(true);
 if($now-$last<2){header('Retry-After: 2');crypto_quick_reply(['ok'=>false],429);}
-$labels=admin_crypto_quick_labels();$messages=admin_load_messages(admin_current_locale());$csrf=admin_csrf_token();
+$locale=admin_current_locale();$labels=admin_crypto_quick_labels($locale);$messages=admin_load_messages($locale);$csrf=admin_csrf_token();
 $_SESSION['crypto_quick_'.$filter]=$now;session_write_close();
-try{$rows=admin_crypto_quick_rows($db,$filter);crypto_quick_reply(['ok'=>true,'filter'=>$filter,'counts'=>admin_crypto_quick_counts($db),'html'=>admin_crypto_quick_html($rows,$filter,$labels,$csrf,$messages)]);}
+try{
+if($reminder){
+    crypto_quick_reply(admin_crypto_reminder_view($db,$csrf,$messages,null,$locale));
+}
+$rows=admin_crypto_quick_rows($db,$filter);crypto_quick_reply(['ok'=>true,'filter'=>$filter,'counts'=>admin_crypto_quick_counts($db),'html'=>admin_crypto_quick_html($rows,$filter,$labels,$csrf,$messages)]);}
 catch(Throwable $e){crypto_quick_reply(['ok'=>false],503);}

@@ -4882,8 +4882,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     statusNode.textContent = statusLabel;
                 }
                 if (topupBadge) {
-                    topupBadge.textContent = topupText;
-                    setHidden(topupBadge, !payload.is_topup);
+                    topupBadge.textContent = payload.is_topup ? topupText : (modalNode.getAttribute('data-order-badge') || 'Order payment') + ' #' + String(payload.order_id || '');
+                    setHidden(topupBadge, false);
                 }
 
                 if (logoNode && logoUrl !== '') {

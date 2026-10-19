@@ -2,6 +2,7 @@
  <div class="payment-wizard__section">
   <div class="alert alert-success" role="status">
    <strong><i class="fa fa-check-circle" aria-hidden="true"></i> {$t.payment_crypto_detected_title|default:'Payment detected'}</strong>
+   <p>{if $detected_request.order_id|default:0 > 0}{$t.payment_summary_order|default:'Order'|escape:'html'}: #{$detected_request.order_id}{else}{$t.payment_purpose_topup|default:'Balance top-up'|escape:'html'}{/if}</p>
    <p class="mb-2"><strong>{$t.payment_crypto_received|default:'Received'}: {$detected_request.receipt_received_label|escape:'html'}</strong></p>
    {if $detected_request.receipt_underpaid|default:false}
    <p><strong>{$t.payment_crypto_requested|default:'Requested'}: {$detected_request.receipt_requested_label|escape:'html'} · {$t.payment_crypto_shortfall|default:'Shortfall'}: {$detected_request.receipt_shortfall_label|escape:'html'}</strong></p>

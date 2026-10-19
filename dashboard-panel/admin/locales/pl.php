@@ -1,6 +1,10 @@
 <?php
 
 return [
+    'payment_purpose_order' => 'Za zamówienie',
+    'payment_archive_requires_approval' => 'Najpierw zweryfikuj i zatwierdź otrzymaną wpłatę. Dopiero potem możesz ją zarchiwizować.',
+    'payment_archive_requires_fulfilment' => 'Najpierw dokończ realizację powiązanego zamówienia. Potem wypłać środki i przenieś płatność do archiwum.',
+
     'order_payment_confirmed_short' => 'Płatność potwierdzona.',
     'order_waiting_activation_short_line' => 'Oczekuje na aktywację.',
     'order_extend_already_applied' => 'To przedłużenie zostało już wykonane. Nie pobrano środków ponownie.',

@@ -9475,9 +9475,12 @@ function admin_payment_rows(Mysql_ks $db, int $limit = 10, int $customerId = 0, 
                 crypto_assets.name AS asset_name,
                 crypto_assets.logo_url AS asset_logo_url,
                 currencies.code AS currency_code,
-                currencies.symbol AS currency_symbol
+                currencies.symbol AS currency_symbol,
+                (orders.id IS NOT NULL AND (".admin_topbar_order_task_where_sql().")) AS order_needs_action,
+                EXISTS(SELECT 1 FROM crypto_deposit_transactions tx WHERE tx.deposit_request_id=crypto_deposit_requests.id AND tx.status='auto_accepted') AS auto_accepted
              FROM crypto_deposit_requests
              LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
+             LEFT JOIN orders ON orders.id=crypto_deposit_requests.order_id
              LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
              LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
              LEFT JOIN crypto_wallet_addresses ON crypto_wallet_addresses.id = crypto_deposit_requests.wallet_address_id
@@ -9961,6 +9964,7 @@ function admin_topbar_notification_auto_accepted_crypto_payment_rows(Mysql_ks $d
             crypto_deposit_requests.order_id,
             crypto_deposit_requests.customer_id,
             crypto_deposit_requests.status AS payment_status,
+            (orders.id IS NOT NULL AND (".admin_topbar_order_task_where_sql().")) AS order_needs_action,
             {$txHashSql} AS transaction_hash,
             {$txReceivedAtSql} AS received_at,
             COALESCE({$receivedCryptoSql}, {$txAmountCryptoSql}, crypto_deposit_requests.requested_crypto_amount, 0) AS amount_crypto,
@@ -9977,6 +9981,7 @@ function admin_topbar_notification_auto_accepted_crypto_payment_rows(Mysql_ks $d
          INNER JOIN crypto_deposit_requests
            ON crypto_deposit_requests.id = crypto_deposit_transactions.deposit_request_id
          LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
+         LEFT JOIN orders ON orders.id=crypto_deposit_requests.order_id
          LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
          LEFT JOIN crypto_assets ON crypto_assets.id = crypto_deposit_requests.crypto_asset_id
          LEFT JOIN crypto_wallet_assignments AS payment_assignment
@@ -9985,7 +9990,7 @@ function admin_topbar_notification_auto_accepted_crypto_payment_rows(Mysql_ks $d
            ON direct_wallet.id = crypto_deposit_requests.wallet_address_id
          LEFT JOIN crypto_wallet_addresses AS assigned_wallet
            ON assigned_wallet.id = payment_assignment.wallet_address_id
-         WHERE {$txReceivedAtSql} IS NOT NULL
+         WHERE crypto_deposit_requests.status IN ('approved','archived') AND {$txReceivedAtSql} IS NOT NULL
            AND {$txReceivedAtSql} >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL {$hours} HOUR)
            {$txStatusSql}
          ORDER BY {$txReceivedAtSql} DESC, crypto_deposit_transactions.id DESC
@@ -10317,7 +10322,7 @@ function admin_payment_status_guidance(string $paymentType, string $status, ?str
         'awaiting_review' => ['info', 'bi-search', 'Wymaga weryfikacji', 'Needs review', 'Wpłata wymaga sprawdzenia. Zweryfikuj kwotę, odbiorcę i datę przed akceptacją. Wybierz, gdy płatność wymaga ręcznej oceny.', 'Check the amount, recipient and date before accepting. Use when the payment needs manual review.'],
         'awaiting_confirmation' => ['info', 'bi-hourglass-split', 'Oczekuje na potwierdzenie', 'Awaiting confirmation', 'Wybierz, gdy zgłoszona wpłata czeka jeszcze na potwierdzenie. Przed akceptacją upewnij się, że środki dotarły; przy krypto sprawdź też potwierdzenia sieci.', 'Use when a reported transfer still needs confirmation. Verify receipt before accepting; for crypto also check network confirmations.'],
         'expired' => ['danger', 'bi-exclamation-circle-fill', 'Termin płatności minął', 'Payment deadline passed', 'Termin prośby o wpłatę upłynął. Sprawdź także spóźnione przelewy, zanim poprosisz klienta o ponowną płatność. Wybierz, gdy termin minął i wpłata nie jest potwierdzona.', 'The request deadline has passed. Check for late transfers before asking the customer to pay again. Use when the deadline has passed without verified payment.'],
-        'approved' => ['success', 'bi-check-circle-fill', 'Płatność zatwierdzona', 'Payment approved', $crypto ? 'Wybierz dopiero po otrzymaniu wpłaty. Środki są na portfelu, na który wpłacił klient; przenieś płatność do archiwum po wypłacie na swój główny portfel.' : 'Wybierz dopiero po sprawdzeniu, że wpłata klienta dotarła i ma prawidłową kwotę. Realizację lub przedłużenie zamówienia dokończ w Zamówieniach.', $crypto ? 'Use only after receiving the payment. The funds are in the wallet used by the customer; archive the payment after transferring the funds to your main wallet.' : 'Use only after verifying receipt and the correct amount. Complete order fulfilment or renewal in Orders.'],
+        'approved' => ['success', 'bi-check-circle-fill', 'Płatność zatwierdzona', 'Payment approved', $crypto ? 'Wybierz dopiero po otrzymaniu wpłaty. Środki są na portfelu, na który wpłacił klient. Jeśli płatność dotyczy zamówienia, najpierw dokończ jego realizację w Zamówieniach. Następnie wypłać środki na swój główny portfel i przenieś płatność do archiwum.' : 'Wybierz dopiero po sprawdzeniu, że wpłata klienta dotarła i ma prawidłową kwotę. Realizację lub przedłużenie zamówienia dokończ w Zamówieniach.', $crypto ? 'Use only after receiving the payment. The funds are in the wallet used by the customer. For an order payment, first complete fulfilment in Orders. Then transfer funds to your main wallet and archive the payment.' : 'Use only after verifying receipt and the correct amount. Complete order fulfilment or renewal in Orders.'],
         'archived' => ['neutral', 'bi-archive', 'Płatność w archiwum', 'Payment archived', $crypto ? 'Wybierz po rozliczeniu płatności i wypłacie środków na swój główny portfel. Archiwizacja zachowuje historię, ale sama nie wykonuje przelewu.' : 'Wybierz po zakończeniu obsługi i rozliczeniu płatności. Archiwizacja zachowuje historię; nie wykonuje przelewu ani zwrotu.', $crypto ? 'Use after reconciliation and withdrawal to your main wallet. Archiving preserves history but does not transfer funds.' : 'Use after processing and reconciling the payment. Archiving preserves history and does not transfer or refund funds.'],
         'cancelled' => ['danger', 'bi-x-circle-fill', 'Płatność anulowana', 'Payment cancelled', 'Wybierz, gdy prośba o wpłatę nie będzie dalej realizowana. Anulowanie nie zwraca środków. Jeśli klient zdążył zapłacić, zweryfikuj wpłatę przed wystawieniem kolejnej prośby.', 'Use when the payment request will not proceed. Cancellation does not refund funds. Check any transfer already sent before creating another request.'],
         'failed' => ['danger', 'bi-exclamation-triangle-fill', 'Płatność nieudana', 'Payment failed', 'Wybierz po potwierdzeniu, że próba płatności się nie powiodła. Sprawdź rzeczywisty stan wpłaty, zanim poprosisz klienta o ponowienie.', 'Use after confirming the payment attempt failed. Verify the actual transfer before requesting another payment.'],
@@ -10399,7 +10404,9 @@ function admin_payment_find(Mysql_ks $db, string $paymentType, int $paymentId): 
                 COALESCE(direct_wallet.label, assigned_wallet.label) AS wallet_label,
                 COALESCE(direct_wallet.network_code, assigned_wallet.network_code) AS network_code,
                 COALESCE(direct_wallet.memo_tag, assigned_wallet.memo_tag) AS payment_reference,
-                orders.status AS order_status
+                orders.status AS order_status,
+                (orders.id IS NOT NULL AND (".admin_topbar_order_task_where_sql().")) AS order_needs_action,
+                EXISTS(SELECT 1 FROM crypto_deposit_transactions tx WHERE tx.deposit_request_id=crypto_deposit_requests.id AND tx.status='auto_accepted') AS auto_accepted
              FROM crypto_deposit_requests
              LEFT JOIN customers ON customers.id = crypto_deposit_requests.customer_id
              LEFT JOIN currencies ON currencies.id = crypto_deposit_requests.fiat_currency_id
@@ -10574,6 +10581,15 @@ function admin_save_payment_locked(
     $paymentType = strtolower((string)$payment['payment_type']);
     $status = strtolower(trim((string)($input['status'] ?? (string)($payment['status'] ?? ''))));
     $previousStatus = strtolower(trim((string)($payment['status'] ?? '')));
+    if ($status === 'archived' && $previousStatus !== 'archived' && $paymentType === 'crypto') {
+        if (!in_array($previousStatus, admin_payment_success_statuses($paymentType), true)) {
+            return ['ok'=>false,'message'=>admin_t($messages,'payment_archive_requires_approval','Approve the received payment before archiving it.')];
+        }
+        if (!empty($payment['order_needs_action'])) {
+            return ['ok'=>false,'message'=>admin_t($messages,'payment_archive_requires_fulfilment','Complete the linked order before withdrawing funds and archiving the payment.')];
+        }
+    }
+
     if (!in_array($status, admin_payment_status_options($paymentType, (string)($payment['status'] ?? '')), true)) {
         $status = (string)($payment['status'] ?? '');
     }

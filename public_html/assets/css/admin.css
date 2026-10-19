@@ -21089,3 +21089,71 @@ body.admin-app-page .admin-content--users .admin-user-detail .alert-info{border:
 
 .admin-panel-tier-modal [data-panel-notice-top] .admin-panel-tier-notice{margin-top:12px;}
 .admin-panel-tier-modal [data-panel-notice-payment] .admin-panel-tier-notice{margin-top:12px;}
+
+.admin-crypto-quick__heading-title{display:flex;align-items:center;gap:9px;min-width:0;}
+.admin-crypto-quick__category-count{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;min-width:24px;min-height:22px;padding:2px 7px;border:1px solid transparent;border-radius:var(--admin-badge-radius,5px);font-size:11px;font-weight:700;line-height:1.4;font-variant-numeric:tabular-nums;}
+.admin-crypto-quick__category-count[data-tone="new"]{background:#ffe3ad;border-color:#f8e4bd;color:#9b5d10;}
+.admin-crypto-quick__category-count[data-tone="expired"]{background:#ffd1d6;border-color:#f8d1d6;color:#bd3e4b;}
+.admin-crypto-quick__category-count[data-tone="cancelled"]{background:#efd0df;border-color:#ecd2df;color:#a34b70;}
+.admin-crypto-quick__category-count[data-tone="payout"]{background:#cfead9;border-color:#cee8d7;color:#2e7b51;}
+
+/* Periodic payment reminder: same payment rows, with a calm focused presentation. */
+.admin-crypto-reminder{--reminder-color:#a96511;--reminder-bg:#fff4e1;position:fixed;inset:0;width:min(540px,calc(100% - 32px));max-height:calc(100dvh - 40px);margin:auto;padding:32px 24px 20px;border:1px solid #e6ebf1;border-radius:20px;background:#fff;color:#273345;box-shadow:0 24px 80px #0f172a26;text-align:center;overflow:auto;overscroll-behavior:contain;}
+.admin-crypto-reminder::backdrop{background:#0f172a66;backdrop-filter:blur(3px);}
+.admin-crypto-reminder[data-tone="expired"]{--reminder-color:#bd3e4b;--reminder-bg:#fff0f2;}
+.admin-crypto-reminder[data-tone="payout"]{--reminder-color:#268453;--reminder-bg:#eaf8f0;}
+.admin-crypto-reminder__close{position:absolute;right:18px;top:18px;}
+.admin-crypto-reminder__icon{display:grid;place-items:center;width:76px;height:76px;margin:0 auto 18px;border-radius:24px;background:var(--reminder-bg);color:var(--reminder-color);font-size:34px;}
+.admin-crypto-reminder h2{margin:0 0 10px;font-size:21px;font-weight:700;letter-spacing:-.4px;}
+.admin-crypto-reminder__text{margin:0 auto 20px;max-width:450px;color:#68768a;font-size:13px;line-height:1.7;}
+.admin-crypto-reminder__payment{margin:0 0 22px;border:1px solid #e9edf3;border-radius:12px;padding:4px 10px;text-align:left;}
+.admin-crypto-reminder__payment .admin-crypto-quick__item{border:0;}
+.admin-crypto-reminder__primary{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;padding:10px 16px;border:1px solid var(--reminder-color);border-radius:10px;background:var(--reminder-color);color:#fff;font-size:13px;font-weight:600;}
+.admin-crypto-reminder__primary:hover,.admin-crypto-reminder__primary:focus-visible{background:var(--reminder-color);color:#fff;filter:brightness(.92);}
+.admin-crypto-reminder__later{display:block;width:100%;margin-top:12px;padding:10px;border:0;border-radius:8px;background:transparent;color:#748094;font-size:12px;}
+.admin-crypto-reminder__later:hover{background:#f5f7fa;color:#334155;}
+@media(max-width:575px){.admin-crypto-reminder{width:calc(100% - 24px);padding:28px 16px 16px;border-radius:16px;}.admin-crypto-reminder h2{font-size:19px;}.admin-crypto-reminder__text{font-size:12px;}.admin-crypto-reminder__payment{padding:2px 6px;}.admin-crypto-reminder__icon{width:66px;height:66px;font-size:30px;}}
+
+/* Keep the reminder usable on phones, tablets and short landscape viewports. */
+.admin-crypto-reminder{box-sizing:border-box;max-width:540px;max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);}
+@media(max-height:600px){.admin-crypto-reminder{padding:22px 16px 12px;}.admin-crypto-reminder__icon{width:48px;height:48px;margin-bottom:10px;border-radius:16px;font-size:25px;}.admin-crypto-reminder h2{font-size:18px;margin-bottom:8px;}.admin-crypto-reminder__text{margin-bottom:12px;font-size:12px;line-height:1.5;}.admin-crypto-reminder__payment{margin-bottom:12px;}.admin-crypto-reminder__later{margin-top:6px;}}
+.admin-crypto-reminder__receipt{display:flex;align-items:flex-start;gap:9px;margin:0 0 16px;padding:12px;border:1px solid #cee8d7;border-radius:10px;background:#eef9f2;color:#28784d;font-size:12px;font-weight:600;line-height:1.55;text-align:left;}
+.admin-crypto-reminder__receipt[hidden]{display:none;}.admin-crypto-reminder__receipt>i{flex:0 0 auto;margin-top:1px;font-size:15px;}
+.admin-crypto-quick__context{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:5px 7px;padding:0 0 11px 40px;min-width:0;}
+.admin-crypto-quick__purpose,.admin-crypto-quick__auto{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border-radius:var(--admin-badge-radius,5px);font-size:9px;font-weight:600;line-height:1.4;}
+.admin-crypto-quick__purpose{background:#f3f5f8;border:1px solid #e6eaf0;color:#67758b;}.admin-crypto-quick__auto{background:#edf8f1;border:1px solid #d6ecde;color:#2d8053;}
+.admin-crypto-quick__next-step,.admin-crypto-quick__completed{display:flex;align-items:flex-start;gap:5px;flex-basis:100%;font-size:10px;line-height:1.5;}
+.admin-crypto-quick__next-step{color:#a36916;text-decoration:none;font-weight:600;}.admin-crypto-quick__next-step:hover{color:#85510c;text-decoration:underline;}.admin-crypto-quick__completed{color:#728376;}
+@media(max-width:400px){.admin-crypto-quick__context{padding-left:31px;}}
+.admin-crypto-reminder[data-workflow="order"]{--reminder-color:#a96511;--reminder-bg:#fff4e1;}
+.admin-crypto-quick__status.is-action{background:#fff3dc;color:#a36916;}
+/* Separate payment purpose from its next step, keeping the whole card easy to scan. */
+.admin-crypto-quick__context{gap:8px;padding-top:2px;padding-bottom:13px;}
+.admin-crypto-quick__purpose,.admin-crypto-quick__auto{padding:4px 7px;font-size:10px;}
+.admin-crypto-quick__context .admin-crypto-quick__next-step{display:grid;grid-template-columns:14px minmax(0,1fr) 12px;align-items:start;gap:7px;width:100%;padding:9px 10px;border:1px solid #f1e4cb;border-radius:8px;background:#fff9ee;font-size:11px;line-height:1.55;}
+.admin-crypto-quick__context .admin-crypto-quick__next-step>i{margin-top:2px;}.admin-crypto-quick__context .admin-crypto-quick__completed{margin-top:1px;}
+.admin-crypto-reminder__receipt{gap:11px;padding:14px;margin-bottom:18px;}
+.admin-crypto-reminder__receipt-content{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;}
+.admin-crypto-reminder__receipt-content>strong{font-size:12px;line-height:1.4;}.admin-crypto-reminder__receipt-content>[data-reminder-receipt-text]{font-weight:400;font-size:12px;line-height:1.6;}
+.admin-crypto-reminder__receipt-content>.admin-crypto-quick__purpose{background:#fff9;color:#466657;border-color:#cfe4d7;}
+.admin-crypto-reminder__receipt-content{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:9px 12px;width:100%;}
+.admin-crypto-reminder__receipt-content>[data-reminder-receipt-title]{grid-column:1;grid-row:1;}
+.admin-crypto-reminder__receipt-content>[data-reminder-receipt-purpose]{grid-column:2;grid-row:1;justify-self:end;max-width:145px;text-align:right;}
+.admin-crypto-reminder__receipt-content>[data-reminder-receipt-text]{grid-column:1/-1;}
+@media(max-width:400px){.admin-crypto-reminder__receipt-content{gap:8px;}.admin-crypto-reminder__receipt-content>[data-reminder-receipt-purpose]{max-width:125px;font-size:9px;}}
+/* Compact spacing in the reminder and payment workflow rows. */
+.admin-crypto-reminder{padding-top:24px;padding-bottom:16px;}
+.admin-crypto-reminder__icon{margin-bottom:12px;}
+.admin-crypto-reminder h2{margin-bottom:7px;}
+.admin-crypto-reminder__text{margin-bottom:13px;line-height:1.55;}
+.admin-crypto-reminder__receipt{padding:10px 12px;margin-bottom:12px;gap:9px;}
+.admin-crypto-reminder__receipt-content{gap:1px 10px;}
+.admin-crypto-reminder__payment{margin-bottom:14px;}
+.admin-crypto-reminder__later{margin-top:7px;padding-block:8px;}
+.admin-crypto-quick__item--actions .admin-crypto-quick__main{padding-bottom:5px;}
+.admin-crypto-quick__context{padding-top:0;padding-bottom:9px;gap:6px 7px;}
+.admin-crypto-quick__context .admin-crypto-quick__next-step{padding:7px 8px;gap:6px;}
+@media(max-height:600px){.admin-crypto-reminder{padding-top:20px;padding-bottom:12px;}.admin-crypto-reminder__icon{margin-bottom:9px;}}
+.admin-crypto-quick__item--actions{row-gap:0;}
+
+.admin-crypto-reminder__receipt-content>[data-reminder-receipt-purpose]{padding-block:1px;}

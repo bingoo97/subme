@@ -3,7 +3,6 @@
         <span><i class="bi bi-exclamation-circle" aria-hidden="true"></i> <?php echo admin_e(admin_t($messages, 'topbar_tasks_title', 'To do')); ?></span>
         <span class="admin-status-pill admin-status-pill--warning" data-admin-topbar-orders-count><?php echo (int)$taskTotal; ?></span>
     </div>
-    <p class="admin-topbar-tasks__intro"><?php echo admin_e(admin_t($messages, 'topbar_tasks_intro', 'Paid orders that still need your action. Oldest first.')); ?></p>
     <div class="admin-topbar-notifications__list" data-admin-topbar-orders-list>
         <?php foreach ($taskRows as $taskRow): $task = admin_topbar_order_task($taskRow, $messages); $taskId = (int)$taskRow['id']; ?>
         <article class="admin-topbar-notifications__item admin-topbar-notifications__item--order admin-topbar-task" data-admin-topbar-order-item="<?php echo $taskId; ?>" data-task-kind="<?php echo admin_e($task['kind']); ?>">

@@ -183,4 +183,48 @@ ck(admin_topbar_notification_order_row_by_id($db,202)!==null,'Crypto approved or
 $cryptoReversed=endpoint(['edit_payment'=>202,'payment_type'=>'crypto','payment_status'=>'cancelled']);
 ck($cryptoReversed['status']===302&&$db->select_user('SELECT payment_status FROM orders WHERE id=202')['payment_status']==='unpaid','Crypto editor reversal synchronizes unpaid order state');
 assert_no_order_attention(endpoint(['order_page'=>202]),202);
+admin_start_session();$messages=admin_load_messages('pl');$_SESSION['admin_locale']='pl';
+// Payment reminders must put real receipts and unfinished paid orders ahead of archiving.
+require_once dirname(__DIR__).'/admin/crypto_quick.php';
+sql("UPDATE crypto_deposit_requests SET status='cancelled'");
+foreach([300,301,302,303,304] as $paymentId){
+ sql("INSERT INTO crypto_wallet_addresses(id,crypto_asset_id,address,network_code,status) VALUES({$paymentId},{$btc},'reminder-{$paymentId}','bitcoin','assigned')");
+ $state=[300=>'approved',301=>'pending',302=>'expired',303=>'approved',304=>'awaiting_review'][$paymentId];
+ $order=$paymentId===300?'100':'NULL';$received=in_array($paymentId,[300,303,304],true)?'.0002':'NULL';
+ sql("INSERT INTO crypto_deposit_requests(id,customer_id,order_id,crypto_asset_id,wallet_address_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,received_crypto_amount,received_fiat_amount,status,expires_at) VALUES({$paymentId},1,{$order},{$btc},{$paymentId},10,2,50000,.0002,{$received},10,'{$state}',NULL)");
+}
+sql("INSERT INTO crypto_deposit_transactions(deposit_request_id,wallet_address_id,crypto_asset_id,transaction_hash,amount_crypto,status) VALUES(300,300,{$btc},'reminder-auto-proof',.0002,'auto_accepted')");
+$reminder=admin_crypto_reminder_view($db,'fixture',$messages);
+ck($reminder['filter']==='new'&&str_contains($reminder['html'],'Wykryto wpłatę'),'Detected receipt takes priority over unpaid tickets, paid orders and archiving');
+sql("UPDATE crypto_deposit_requests SET status='cancelled' WHERE id=304");
+$reminder=admin_crypto_reminder_view($db,'fixture',$messages);
+$blockedArchive=admin_payment_apply_quick_action($db,'crypto',300,'archive',1,'fixture');
+ck(empty($blockedArchive['ok'])&&$db->select_user('SELECT status FROM crypto_deposit_requests WHERE id=300')['status']==='approved','Backend rejects archiving before order fulfilment');
+$blockedPending=admin_payment_apply_quick_action($db,'crypto',301,'archive',1,'fixture');
+ck(empty($blockedPending['ok'])&&$db->select_user('SELECT status FROM crypto_deposit_requests WHERE id=301')['status']==='pending','Archiving cannot bypass payment acceptance or credit an unpaid request');
+ck($reminder['workflow']==='order'&&$reminder['order_url']==='/admin/?page=orders&order_id=100','Paid unfinished order takes priority over unpaid tickets, expiry and archiving');
+ck(str_contains($reminder['html'],'Zatwierdzono automatycznie')&&str_contains($reminder['html'],'Za zamówienie'),'Automatically approved order has its source and purpose labels');
+ck(!str_contains($reminder['html'],'action--archive'),'Unfinished paid order does not suggest archiving before fulfilment');
+ck(str_contains($reminder['html'],'Dokończ realizację')&&!str_contains($reminder['html'],'Saldo klienta zostało zasilone'),'Order payment suggests fulfilment rather than treating it as a top-up');
+sql("UPDATE orders SET status='active',fulfillment_status='delivered' WHERE id=100");
+$reminder=admin_crypto_reminder_view($db,'fixture',$messages);
+ck($reminder['filter']==='new'&&$reminder['workflow']==='payment','Completed order no longer outranks other payments');
+sql("UPDATE crypto_deposit_requests SET status='cancelled' WHERE id=301");
+ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']==='expired','Expired verification precedes archiving');
+sql("UPDATE crypto_deposit_requests SET status='cancelled' WHERE id=302");
+$reminder=admin_crypto_reminder_view($db,'fixture',$messages);
+ck($reminder['filter']==='payout'&&$reminder['workflow']==='payment','Only housekeeping remains after higher-priority work');
+ck(str_contains($reminder['html'],'Doładowanie konta')&&str_contains($reminder['html'],'Saldo klienta zostało zasilone'),'Top-up clearly states customer balance was credited');
+ck(!str_contains($reminder['html'],'Zatwierdzono automatycznie'),'Manual approval is never labelled automatic just because the setting is enabled');
+sql("UPDATE crypto_deposit_requests SET status='archived' WHERE id=303");
+$reminder=admin_crypto_reminder_view($db,'fixture',$messages);
+ck(str_contains($reminder['html'],'action--archive'),'Fulfilled order offers archive action only after fulfilment');
+ck(!str_contains($reminder['html'],'Dokończ realizację'),'Already fulfilled order does not keep suggesting activation');
+session_write_close();
+$localised=admin_crypto_reminder_view($db,'fixture',$messages,null,'pl');
+ck(str_contains($localised['html'],'Za zamówienie')&&str_contains($localised['copy']['title'],'wypłaty'),'Reminder retains Polish after read endpoint releases session lock');
+admin_start_session();
+ck(!empty(admin_payment_apply_quick_action($db,'crypto',300,'archive',1,'fixture')['ok']),'Archiving is available once the linked order is fulfilled');
+ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']===null,'No reminder for cancelled or archived-only queues');
+session_destroy();
 echo "PASS {$checks} notification workflow, priority, completion and live-refresh assertions / {$queries} task-list query\n";

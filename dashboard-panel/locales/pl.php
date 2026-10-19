@@ -2,6 +2,7 @@
 
 return [
     'messages' => [
+        'payment_purpose_topup' => 'Doładowanie konta',
         'payment_history_latest' => 'Najnowsze płatności',
         'payment_history_older' => 'Starsze płatności',
         'meta_language_name' => 'Polski',

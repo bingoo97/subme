@@ -283,6 +283,7 @@ $(function () {
 				</form>
 				{/if}
 				<p class="title"><img src="../{$crypto_payments[i].crypto_logo_url}" class="img-responsive logo" alt="img" /> {$crypto_payments[i].crypto_name} ({$crypto_payments[i].crypto_symbol})</p>
+                <p class="customer-payment-history__purpose">{if $crypto_payments[i].order_id|default:0 > 0}{$t.payment_summary_order|default:'Order'|escape:'html'}: #{$crypto_payments[i].order_id}{else}{$t.payment_purpose_topup|default:'Balance top-up'|escape:'html'}{/if}</p>
 				<p>Zapłać po aktualnym kursie.</p>
 				<p>Po upływie czasu kurs wymiany zostanie ponownie zaktualizowany.</p>
 				<span class="date_end {if $crypto_payments[i].status == 0}active{/if}">00:00:00</span>
@@ -322,6 +323,8 @@ $(function () {
 					{$crypto_payments[i].date}
 					{if $crypto_payments[i].order_id|default:0 > 0}
 						&nbsp;&middot;&nbsp;{$t.payment_summary_order|default:'Order'}: #{$crypto_payments[i].order_id}
+                    {else}
+                        &nbsp;&middot;&nbsp;{$t.payment_purpose_topup|default:'Balance top-up'|escape:'html'}
 					{/if}
 				</p>
 				{if $crypto_payments[i].status == 2 && $crypto_payments[i].receipt_underpaid|default:false}

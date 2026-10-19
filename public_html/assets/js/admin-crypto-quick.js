@@ -49,9 +49,18 @@
         let counts = {}, labels = {};
         try { counts = JSON.parse(panel.dataset.counts || '{}'); labels = JSON.parse(panel.dataset.labels || '{}'); } catch (error) {}
         const badge = root.querySelector('[data-crypto-quick-badge]');
+        const categoryCount = panel.querySelector('[data-crypto-quick-category-count]');
+        const updateCategoryCount = () => {
+            if (!categoryCount) return;
+            const count = Math.max(0, Math.floor(Number(counts[filter]) || 0));
+            categoryCount.textContent = String(count);
+            categoryCount.dataset.tone = filter;
+            categoryCount.setAttribute('aria-label', `${labels[filter] || filter}: ${count}`);
+        };
         const priority = () => ['new', 'expired', 'payout', 'cancelled'].find(key => Number(counts[key]) > 0) || 'new';
         const updateBadge = data => {
             counts = Object.fromEntries(['new', 'expired', 'payout', 'cancelled'].map(key => [key, Math.max(0, Math.floor(Number(data[key]) || 0))]));
+            updateCategoryCount();
             const key = priority(), count = counts[key];
             if (badge) { badge.hidden = count === 0; badge.textContent = String(count); badge.dataset.tone = key; }
             if (labels.title) {
@@ -59,11 +68,19 @@
                 toggle.setAttribute('aria-label', text); toggle.setAttribute('title', text);
             }
         };
-        updateBadge(counts);
         let filter = priority(), controller = null, revision = 0;
+        updateBadge(counts);
+        document.addEventListener('admin:crypto-quick-updated', event => {
+            const view = event.detail;
+            if (!view || !view.counts) return;
+            cache.clear();
+            updateBadge(view.counts);
+            if (!panel.hidden) load(true);
+        });
         syncHints();
         const selectFilter = value => {
             filter = value;
+            updateCategoryCount();
             filters.forEach(item => item.setAttribute('aria-pressed', String(item.dataset.cryptoQuickFilter === value)));
         };
         const closeActions = () => {

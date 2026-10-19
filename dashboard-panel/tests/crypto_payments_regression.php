@@ -156,6 +156,7 @@ ck(finish(child('--ticket-status',base64_encode(json_encode(['customer'=>102,'ti
 ck(finish(child('--ticket-status',base64_encode(json_encode(['customer'=>102,'throttle'=>true]))))['status']===429,'Ticket status limits rapid requests');
 require_once dirname(__DIR__).'/admin/crypto_quick.php';
 $detectedRows=admin_crypto_quick_rows($db,'new');$detectedRows=array_values(array_filter($detectedRows,fn($r)=>(int)$r['id']===201));
+ck((int)admin_crypto_quick_rows($db,'new',1,true)[0]['id']===201,'Reminder surfaces the detected receipt ahead of unpaid new tickets');
 $detectedHtml=admin_crypto_quick_html($detectedRows,'new',admin_crypto_quick_labels('pl'));
 ck(str_contains($detectedHtml,'Wykryto wpłatę')&&!str_contains($detectedHtml,'data-crypto-quick-expires='),'Admin sees detected payment without a misleading send deadline');
 $manualPage=finish(child('--customer-page'));
