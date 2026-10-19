@@ -5225,7 +5225,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
         <link rel="stylesheet" href="/assets/css/admin-dashboard.css?v=<?php echo admin_public_asset_version('assets/css/admin-dashboard.css'); ?>">
     <?php endif; ?>
 </head>
-<body class="admin-app-page"
+<body class="admin-app-page<?php echo $route === 'orders' ? ' is-admin-orders-guidance-hidden' : ''; ?>"
     data-admin-sensitive-unlocked="<?php echo admin_sensitive_routes_unlocked() ? '1' : '0'; ?>"
     data-admin-sensitive-prompt="<?php echo admin_e(admin_t($messages, 'settings_sensitive_prompt', 'Enter the password to open this section:')); ?>"
     data-admin-sensitive-error="<?php echo admin_e(admin_t($messages, 'settings_sensitive_unlock_error', 'Incorrect password.')); ?>"
