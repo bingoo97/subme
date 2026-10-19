@@ -80,7 +80,7 @@ function admin_crypto_quick_html(array $rows, string $filter, ?array $labels = n
         $receiptDetails=$paid?$l[$orderId>0?($needsAction?'order_next':'order_done'):'topup_done']:'';
         $rawAmount=(string)$crypto;$amount=str_contains($rawAmount,'.')?rtrim(rtrim($rawAmount,'0'),'.'):$rawAmount;
         ?>
-        <article class="admin-crypto-quick__item admin-crypto-quick__item--actions" data-receipt-message="<?php echo admin_e($receiptMessage); ?>" data-receipt-title="<?php echo admin_e($receiptHeading); ?>" data-receipt-purpose="<?php echo admin_e($receiptPurpose); ?>" data-receipt-details="<?php echo admin_e($receiptDetails); ?>" data-payment-kind="<?php echo $orderId>0?'order':'topup'; ?>" data-auto-accepted="<?php echo $paid&&$autoAccepted?'1':'0'; ?>" data-order-needs-action="<?php echo $needsAction?'1':'0'; ?>"><a class="admin-crypto-quick__main" href="/admin/?page=payments&amp;payment_type=crypto&amp;payment_id=<?php echo $id; ?>" aria-label="<?php echo admin_e($l['details'].' #'.$id); ?>">
+        <article class="admin-crypto-quick__item admin-crypto-quick__item--actions" data-receipt-message="<?php echo admin_e($receiptMessage); ?>" data-receipt-title="<?php echo admin_e($receiptHeading); ?>" data-receipt-purpose="<?php echo admin_e($receiptPurpose); ?>" data-receipt-order-id="<?php echo $orderId>0?$orderId:0; ?>" data-receipt-details="<?php echo admin_e($receiptDetails); ?>" data-payment-kind="<?php echo $orderId>0?'order':'topup'; ?>" data-auto-accepted="<?php echo $paid&&$autoAccepted?'1':'0'; ?>" data-order-needs-action="<?php echo $needsAction?'1':'0'; ?>"><a class="admin-crypto-quick__main" href="/admin/?page=payments&amp;payment_type=crypto&amp;payment_id=<?php echo $id; ?>" aria-label="<?php echo admin_e($l['details'].' #'.$id); ?>">
             <img src="<?php echo admin_e(app_crypto_logo_by_code($code)); ?>" width="30" height="30" alt="" loading="lazy">
             <div class="admin-crypto-quick__identity"><div class="admin-crypto-quick__title"><strong title="<?php echo admin_e($identity); ?>"><?php echo admin_e($identity); ?></strong><span class="admin-crypto-quick__status is-<?php echo $paid&&$needsAction?'action':admin_e($filter); ?>"><?php echo admin_e($status); ?></span><?php if($filter==='new'&&!$detected): ?><span class="admin-crypto-quick__waiting" aria-hidden="true"></span><?php endif; ?></div><small><?php echo admin_e(admin_format_datetime_text((string)($paid?($row['confirmed_at']??$row['requested_at']):$row['requested_at']))); ?></small>
                 <?php if($detected): ?><span class="admin-crypto-quick__detected"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> <?php echo admin_e($l['detected']); ?></span><?php endif; ?>
@@ -124,7 +124,11 @@ function admin_crypto_quick_html(array $rows, string $filter, ?array $labels = n
                 <?php endif; ?>
             </div>
             <div class="admin-crypto-quick__context">
-                <span class="admin-crypto-quick__purpose"><i class="bi <?php echo $orderId>0?'bi-receipt':'bi-wallet2'; ?>" aria-hidden="true"></i><?php echo admin_e($l[$orderId>0?'purpose_order':'purpose_topup']); ?><?php if($orderId>0): ?> #<?php echo $orderId; ?><?php endif; ?></span>
+                <?php if($orderId>0): ?>
+                    <a class="admin-crypto-quick__purpose" href="/admin/?page=orders&amp;order_id=<?php echo $orderId; ?>"><i class="bi bi-receipt" aria-hidden="true"></i><?php echo admin_e($l['purpose_order']); ?> #<?php echo $orderId; ?></a>
+                <?php else: ?>
+                    <span class="admin-crypto-quick__purpose"><i class="bi bi-wallet2" aria-hidden="true"></i><?php echo admin_e($l['purpose_topup']); ?></span>
+                <?php endif; ?>
                 <?php if($paid&&$autoAccepted): ?><span class="admin-crypto-quick__auto"><i class="bi bi-check-circle" aria-hidden="true"></i><?php echo admin_e($l['auto_approved']); ?></span><?php endif; ?>
                 <?php if($paid): ?>
                     <?php if($orderId>0&&$needsAction): ?><a class="admin-crypto-quick__next-step" href="/admin/?page=orders&amp;order_id=<?php echo $orderId; ?>"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span><?php echo admin_e($l['order_next']); ?></span><i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>

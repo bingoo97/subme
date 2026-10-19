@@ -5,16 +5,16 @@ let checks=0;const ck=(ok,m)=>{assert.ok(ok,m);checks++;};
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function setup(storage=new Map(),hostname='example.com'){
  let now=1000,tick,pollDelay,block=false,reply,requestCount=0;const docEvents={};
- const el=(dataset={})=>({dataset,hidden:true,listeners:{},addEventListener(k,f){this.listeners[k]=f;},querySelector(){return null;},querySelectorAll(){return [];},focus(){this.focused=true;},matches(){return false;}});
+ const el=(dataset={})=>({dataset,hidden:true,listeners:{},setAttribute(k,v){this[k]=String(v);},removeAttribute(k){delete this[k];},addEventListener(k,f){this.listeners[k]=f;},querySelector(){return null;},querySelectorAll(){return [];},focus(){this.focused=true;},matches(){return false;}});
  const panel=el({url:'/quick',adminId:'7',error:'Network error'}),dialog=el(),payment=el(),primary=el({singleLabel:'Accept single'}),error=el(),receipt=el({detectedLabel:'Detected — approve',approvedLabel:'Approved — withdraw and archive'}),receiptText=el(),title=el(),text=el(),icon=el();
- receipt.querySelector=()=>receiptText;let accepted=0,removed=0;const more=el();payment.querySelectorAll=()=>[{}, {remove(){removed++;}}];const accept={click(){accepted++;}};payment.querySelector=s=>s==='[data-crypto-quick-accept]'?accept:s==='[data-crypto-payment-more]'?more:s==='.admin-crypto-quick__detected'&&payment.innerHTML?.includes('detected')?{}:null;
+ const receiptTitle=el(),receiptPurpose=el();let receiptRow=null;receipt.querySelector=s=>s==='[data-reminder-receipt-title]'?receiptTitle:s==='[data-reminder-receipt-purpose]'?receiptPurpose:receiptText;let accepted=0,removed=0;const more=el();payment.querySelectorAll=()=>[{}, {remove(){removed++;}}];const accept={click(){accepted++;}};payment.querySelector=s=>s==='article'?receiptRow:s==='[data-crypto-quick-accept]'?accept:s==='[data-crypto-payment-more]'?more:s==='.admin-crypto-quick__detected'&&payment.innerHTML?.includes('detected')?{}:null;
  dialog.querySelector=s=>({'[data-reminder-payment]':payment,'[data-reminder-primary]':primary,'[data-reminder-error]':error,'[data-reminder-receipt]':receipt,'[data-reminder-title]':title,'[data-reminder-text]':text,'[data-reminder-icon]':icon}[s]);
  dialog.showModal=()=>{dialog.open=true;};dialog.close=()=>{dialog.open=false;dialog.listeners.close();};
  const doc={body:{appendChild(node){node.movedToBody=true;}},readyState:'complete',hidden:false,activeElement:el(),querySelector:s=>s==='[data-crypto-quick]'?panel:s==='[data-crypto-reminder]'?dialog:block,addEventListener(k,f){docEvents[k]=f;},dispatchEvent(){}};
  const nav={onLine:true};
  vm.runInNewContext(source,{document:doc,navigator:nav,location:{pathname:'/admin/',hostname},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},window:{addEventListener(){},setInterval(f,delay){tick=f;pollDelay=delay;}},Date:{now:()=>now},setTimeout:()=>1,clearTimeout(){},AbortController,FormData:class{constructor(f){this.fields=new Map(f.fields);}delete(k){this.fields.delete(k);}set(k,v){this.fields.set(k,v);}get(k){return this.fields.get(k);}},CustomEvent:class{},fetch:async()=>{requestCount++;return new Promise(r=>{reply=r;});}});
  const actionButton=el();const actionForm={action:'/payments',fields:[['_csrf','token'],['quick_action','archive']],querySelector:()=>actionButton};
- return {receipt,receiptText,get pollDelay(){return pollDelay;},actionButton,more,get removed(){return removed;},fire(){return dialog.listeners.submit({target:{closest:()=>actionForm},preventDefault(){}});},docEvents,storage,dialog,payment,primary,error,doc,nav,get requests(){return requestCount;},get accepted(){return accepted;},set now(v){now=v;},set block(v){block=v;},tick:()=>tick(),reply(data,status=200){reply({ok:status===200,status,json:async()=>data});}};
+ return {receipt,receiptText,receiptPurpose,set row(value){receiptRow=value;},get pollDelay(){return pollDelay;},actionButton,more,get removed(){return removed;},fire(){return dialog.listeners.submit({target:{closest:()=>actionForm},preventDefault(){}});},docEvents,storage,dialog,payment,primary,error,doc,nav,get requests(){return requestCount;},get accepted(){return accepted;},set now(v){now=v;},set block(v){block=v;},tick:()=>tick(),reply(data,status=200){reply({ok:status===200,status,json:async()=>data});}};
 }
 const payload=(filter,counts)=>({ok:true,filter,counts,html:'safe server row',copy:{title:filter,text:'Instructions',action:'Open payments'}});
 (async()=>{
@@ -56,5 +56,12 @@ const payload=(filter,counts)=>({ok:true,filter,counts,html:'safe server row',co
  ck(priority.dialog.dataset.workflow==='order'&&priority.primary.href==='/admin/?page=orders&order_id=77','Unfinished paid order main action opens fulfilment, not archiving');
  const move=priority.fire();priority.reply({ok:true,message:'Saved',crypto_quick:{filter:'payout',counts:{payout:1},html:'old lower-priority row'},crypto_reminder:{...payload('new',{new:1,payout:1}),html:'detected receipt',workflow:'payment'}});await move;
  ck(priority.dialog.open&&priority.dialog.dataset.tone==='new'&&!priority.receipt.hidden,'After an inline action a newly detected receipt supersedes remaining archive tasks immediately');
+ const linked=setup();linked.row={dataset:{receiptOrderId:'10573',receiptPurpose:'Za zamówienie #10573',receiptTitle:'Płatność zatwierdzona',receiptDetails:'Dokończ zamówienie'}};
+ linked.now=601000;linked.tick();linked.reply(payload('payout',{payout:2}));await flush();
+ ck(linked.receiptPurpose.href==='/admin/?page=orders&order_id=10573','Receipt purpose links directly to its order');
+ linked.row={dataset:{receiptOrderId:'0',receiptPurpose:'Doładowanie konta'}};linked.now=661000;linked.tick();linked.reply(payload('payout',{payout:1}));await flush();
+ ck(!linked.receiptPurpose.href&&linked.receiptPurpose.textContent==='Doładowanie konta','Moving to a top-up clears the previous order link');
+ linked.row={dataset:{receiptOrderId:'javascript:alert(1)',receiptPurpose:'Invalid'}};linked.now=721000;linked.tick();linked.reply(payload('payout',{payout:1}));await flush();
+ ck(!linked.receiptPurpose.href,'Receipt links require a positive numeric order identifier');
  console.log(`PASS ${checks} reminder timing, priority destinations, cross-tab cooldown, offline/hidden/editing deferral and modal integration checks`);
 })().catch(e=>{console.error(e);process.exitCode=1;});

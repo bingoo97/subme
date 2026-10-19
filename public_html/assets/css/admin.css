@@ -19661,7 +19661,7 @@ body.admin-app-page .admin-panel-renewal-modal .admin-panel-renewal-modal__pay:f
 .admin-orders-actions{flex-direction:row;align-items:center;justify-content:flex-end;flex-wrap:nowrap;gap:8px;margin-bottom:18px;}
 .admin-orders-actions .admin-orders-add{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;border-radius:8px;min-height:36px;padding:8px 12px;}
 .admin-orders-menu-trigger{display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;padding:0;border:1px solid #e5eaf1;border-radius:8px;background:#fff;color:#68778c;font-size:18px;}
-.admin-orders-actions>.admin-orders-menu-trigger{flex-basis:36px;width:36px;height:36px;}
+.admin-orders-actions>.admin-orders-menu-trigger{flex-basis:36px;width:36px;height:36px;margin-inline-start:auto;}
 .admin-orders-menu-trigger:hover,.admin-orders-menu-trigger[aria-expanded="true"]{background:#f1f5f9;color:#273244;border-color:#dbe3ed;}
 .admin-orders-menu-trigger:focus-visible,.admin-orders-table-scroll:focus-visible{outline:2px solid #a9bbd5;outline-offset:2px;}
 .admin-orders-menu{position:fixed;z-index:1045;display:flex;flex-direction:column;gap:3px;width:248px;max-width:calc(100vw - 24px);padding:6px;overflow-y:auto;border:1px solid #e7ecf2;border-radius:12px;background:#fff;box-shadow:0 16px 36px rgba(15,23,42,.14);}
@@ -21004,7 +21004,7 @@ body.admin-app-page .admin-content--users .admin-user-detail .alert-info{border:
 @media(max-width:767.98px){
  .admin-content--payments .admin-payment-navigation{justify-content:flex-start;align-self:flex-start;width:100%;}
  .admin-content--payments .admin-payment-navigation>a.btn{min-height:40px;}
- .admin-payment-navigation>.admin-orders-menu-trigger{flex-basis:40px;width:40px;height:40px;min-width:40px;min-height:40px;margin-inline-start:auto;}
+ .admin-payment-navigation>.admin-orders-menu-trigger{flex-basis:40px;width:40px;height:40px;min-width:40px;min-height:40px;margin-inline-start:auto;border-radius:8px;}
 }
 
 /* Both modal decisions occupy equally sized controls. */
@@ -21168,3 +21168,8 @@ body.admin-app-page .admin-content--users .admin-user-detail .alert-info{border:
     .admin-mobile-navigation:hover{background:#e9edf2;border-color:#e9edf2;}
 }
 @media(prefers-reduced-motion:reduce){.admin-mobile-navigation{transition:none;}.admin-mobile-navigation:active{transform:none;}}
+
+/* Order-purpose badges keep their compact shape and act as explicit order links. */
+a.admin-crypto-quick__purpose[href]{text-decoration:none;cursor:pointer;}
+a.admin-crypto-quick__purpose[href]:hover{color:#2563b3;text-decoration:underline;text-underline-offset:2px;}
+a.admin-crypto-quick__purpose[href]:focus-visible{outline:2px solid #94a3b8;outline-offset:2px;}

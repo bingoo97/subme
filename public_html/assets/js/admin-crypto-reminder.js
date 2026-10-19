@@ -36,6 +36,12 @@
                 title.hidden = purpose.hidden = !approved;
                 title.textContent = row?.dataset.receiptTitle || '';
                 purpose.textContent = row?.dataset.receiptPurpose || '';
+                const orderId = row?.dataset.receiptOrderId || '';
+                if (approved && /^[1-9]\d*$/.test(orderId)) {
+                    purpose.setAttribute('href', `/admin/?page=orders&order_id=${encodeURIComponent(orderId)}`);
+                } else {
+                    purpose.removeAttribute('href');
+                }
             }
             receipt.querySelector('[data-reminder-receipt-text]').textContent = approved ? (title && row?.dataset.receiptDetails ? row.dataset.receiptDetails : summary || receipt.dataset.approvedLabel) : receipt.dataset.detectedLabel;
         };

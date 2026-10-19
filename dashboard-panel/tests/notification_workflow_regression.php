@@ -205,6 +205,20 @@ ck(empty($blockedPending['ok'])&&$db->select_user('SELECT status FROM crypto_dep
 ck($reminder['workflow']==='order'&&$reminder['order_url']==='/admin/?page=orders&order_id=100','Paid unfinished order takes priority over unpaid tickets, expiry and archiving');
 ck(str_contains($reminder['html'],'Zatwierdzono automatycznie')&&str_contains($reminder['html'],'Za zamówienie'),'Automatically approved order has its source and purpose labels');
 ck(!str_contains($reminder['html'],'action--archive'),'Unfinished paid order does not suggest archiving before fulfilment');
+$linkRows=admin_crypto_quick_rows($db,'payout',100);
+$linkRow=null;foreach($linkRows as $candidate)if((int)$candidate['id']===300)$linkRow=$candidate;
+ck(is_array($linkRow),'Order-payment fixture is available for purpose link checks');
+foreach(['new','expired','cancelled','payout'] as $linkFilter){
+ $linkHtml=admin_crypto_quick_html([$linkRow],$linkFilter,admin_crypto_quick_labels('pl'),'fixture',$messages);
+ $linkDom=new DOMDocument();@$linkDom->loadHTML($linkHtml);$linkXpath=new DOMXPath($linkDom);
+ ck($linkXpath->query('//a[@class="admin-crypto-quick__purpose" and @href="/admin/?page=orders&order_id=100"]')->length===1,'Order purpose is a separate link in '.$linkFilter);
+ ck($linkXpath->query('//a//a')->length===0,'Purpose link never nests inside the payment link in '.$linkFilter);
+}
+$linkRow['order_id']=null;
+$linkHtml=admin_crypto_quick_html([$linkRow],'payout',admin_crypto_quick_labels('pl'),'fixture',$messages);
+$linkDom=new DOMDocument();@$linkDom->loadHTML($linkHtml);$linkXpath=new DOMXPath($linkDom);
+ck($linkXpath->query('//span[@class="admin-crypto-quick__purpose"]')->length===1&&$linkXpath->query('//a[@class="admin-crypto-quick__purpose"]')->length===0,'Top-up purpose remains a plain badge');
+
 ck(str_contains($reminder['html'],'Dokończ realizację')&&!str_contains($reminder['html'],'Saldo klienta zostało zasilone'),'Order payment suggests fulfilment rather than treating it as a top-up');
 sql("UPDATE orders SET status='active',fulfillment_status='delivered' WHERE id=100");
 $reminder=admin_crypto_reminder_view($db,'fixture',$messages);
