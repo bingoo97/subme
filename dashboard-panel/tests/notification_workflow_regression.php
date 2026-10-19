@@ -244,5 +244,19 @@ ck(str_contains($localised['html'],'Za zamówienie')&&str_contains($localised['c
 admin_start_session();
 ck(!empty(admin_payment_apply_quick_action($db,'crypto',300,'archive',1,'fixture')['ok']),'Archiving is available once the linked order is fulfilled');
 ck(admin_crypto_reminder_view($db,'fixture',$messages)['filter']===null,'No reminder for cancelled or archived-only queues');
+// The final requests in each category must return the styled empty state and fresh zero counts.
+sql("UPDATE crypto_deposit_requests SET status='archived' WHERE status<>'archived'");
+foreach([700=>'expired',701=>'cancelled'] as $deleteId=>$deleteState){
+ sql("INSERT INTO crypto_wallet_addresses(id,crypto_asset_id,address,network_code,status) VALUES({$deleteId},{$btc},'last-delete-{$deleteId}','bitcoin','assigned')");
+ sql("INSERT INTO crypto_deposit_requests(id,customer_id,crypto_asset_id,wallet_address_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,status) VALUES({$deleteId},1,{$btc},{$deleteId},10,2,50000,.0002,'{$deleteState}')");
+}
+foreach([700=>'expired',701=>'cancelled'] as $deleteId=>$deleteFilter){
+ ck(!empty(admin_payment_apply_quick_action($db,'crypto',$deleteId,'delete',1,'fixture')['ok']),'Last '.$deleteFilter.' fixture can be deleted');
+ $deleteCounts=admin_crypto_quick_counts($db);
+ ck($deleteCounts[$deleteFilter]===0,'Last '.$deleteFilter.' deletion immediately produces a zero count');
+ $emptyHtml=admin_crypto_quick_html(admin_crypto_quick_rows($db,$deleteFilter),$deleteFilter,admin_crypto_quick_labels('pl'),'fixture',$messages);
+ ck(str_contains($emptyHtml,'admin-crypto-quick__empty')&&str_contains($emptyHtml,'bi-wallet2')&&str_contains($emptyHtml,'Brak płatności w tej kategorii')&&str_contains($emptyHtml,'zobaczysz je tutaj'),'Last '.$deleteFilter.' deletion renders icon, title and helpful empty-state text');
+}
+ck(array_sum($deleteCounts)===0,'Deleting the final outstanding request clears every navbar category');
 session_destroy();
 echo "PASS {$checks} notification workflow, priority, completion and live-refresh assertions / {$queries} task-list query\n";

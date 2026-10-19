@@ -1782,6 +1782,24 @@ document.addEventListener('DOMContentLoaded', function () {
         return '<span class="' + escapeHtml(className) + '" title="' + escapeHtml(label) + '" aria-label="' + escapeHtml(label) + '"></span>';
     }
 
+    function initPaymentToolbar() {
+        var groups = qa('.admin-payments-toolbar > .admin-payments-filter-group');
+        if (!groups.length) return;
+        var revealActive = function () {
+            groups.forEach(function (group) {
+                var active = q('.admin-payments-filter--active', group);
+                if (!active || group.scrollWidth <= group.clientWidth) return;
+                var bounds = group.getBoundingClientRect();
+                var selected = active.getBoundingClientRect();
+                if (selected.left < bounds.left || selected.right > bounds.right) {
+                    group.scrollLeft += selected.left - bounds.left - 8;
+                }
+            });
+        };
+        revealActive();
+        window.addEventListener('resize', debounce(revealActive, 120));
+    }
+
     function initMobileNavigation() {
         var link = q('[data-admin-mobile-navigation]');
         if (!link || link.getAttribute('data-navigation-mode') !== 'back') return;
@@ -10052,6 +10070,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    initPaymentToolbar();
     initMobileNavigation();
     initSidebarAndDropdowns();
     initDangerForms();

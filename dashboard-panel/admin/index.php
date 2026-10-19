@@ -12175,7 +12175,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     if ($bankTransfersVisibleInPayments) {
                                         $visiblePaymentTypeCount++;
                                     }
-                                    $showPaymentTypeFilters = $visiblePaymentTypeCount > 1;
+                                    $showPaymentTypeFilters = $bankTransfersVisibleInPayments && $visiblePaymentTypeCount > 1;
                                     $visibleCancelledPaymentsCount = $paymentTypeFilter === 'crypto'
                                         ? (int)($paymentSummary['crypto_cancelled_total'] ?? 0)
                                         : ($paymentTypeFilter === 'bank'
@@ -12671,7 +12671,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                     ?>
                                     <div class="admin-payments-page">
                                         <div class="admin-payments-toolbar">
-                                            <div class="admin-payments-filter-group">
+                                            <div class="admin-payments-filter-group admin-payments-filter-group--statuses">
                                                 <?php foreach ($paymentScopeOptions as $scopeValue => $scopeLabel): ?>
                                                     <?php
                                                     $scopeCount = match ($scopeValue) {
@@ -12685,7 +12685,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         default => 0,
                                                     };
                                                     ?>
-                                                    <a class="admin-payments-filter<?php echo $paymentScope === $scopeValue ? ' admin-payments-filter--active' : ''; ?>" href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => $scopeValue])); ?>">
+                                                    <a class="admin-payments-filter<?php echo $paymentScope === $scopeValue ? ' admin-payments-filter--active' : ''; ?>" data-payment-scope="<?php echo admin_e($scopeValue); ?>"<?php if ($paymentScope === $scopeValue): ?> aria-current="page"<?php endif; ?> href="<?php echo admin_e($buildPaymentsListUrl(['payment_scope' => $scopeValue])); ?>">
                                                         <?php echo admin_e($scopeLabel); ?>
                                                         <?php if ($scopeCount > 0): ?>
                                                             <span class="admin-payments-filter__count"><?php echo admin_e((string)$scopeCount); ?></span>
@@ -12694,7 +12694,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 <?php endforeach; ?>
                                             </div>
                                             <?php if ($showPaymentTypeFilters): ?>
-                                                <div class="admin-payments-filter-group">
+                                                <div class="admin-payments-filter-group admin-payments-filter-group--types">
                                                     <?php foreach ($paymentTypeOptions as $typeValue => $typeLabel): ?>
                                                         <?php
                                                         $typeCount = $typeValue === 'crypto'
