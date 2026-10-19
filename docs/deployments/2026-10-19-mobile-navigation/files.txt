@@ -1,0 +1,6 @@
+dashboard-panel/admin/partials/mobile-navigation.php
+dashboard-panel/admin/locales/en.php
+dashboard-panel/admin/locales/pl.php
+dashboard-panel/admin/index.php
+public_html/assets/css/admin.css
+public_html/assets/js/admin.js
