@@ -1,0 +1,5 @@
+dashboard-panel/admin/dashboard_sales.php
+dashboard-panel/admin/index.php
+public_html/assets/css/admin-dashboard.css
+public_html/assets/css/admin.css
+public_html/assets/js/admin.js
