@@ -39,7 +39,7 @@ function setup(action = 'renew', currentFilter = 'expired') {
     assert.equal(bad.result.textContent,'Rate unavailable'); assert.equal(bad.button.disabled,false);
     const template=fs.readFileSync('dashboard-panel/admin/crypto_quick.php','utf8');
     assert.ok(template.includes('data-crypto-quick-action'));
-    for (const [action, category] of [['cancel','new'],['cancel','expired'],['archive','payout']]) {
+    for (const [action, category] of [['cancel','new'],['cancel','expired'],['archive','payout'],['delete','expired'],['delete','cancelled']]) {
         const t=setup(action,category), pending=t.fire();
         const counts={new:0,expired:0,cancelled:action==='cancel'?1:0,payout:0};
         assert.equal(t.requests[0].options.body.fields.get('crypto_quick_filter'),category);
@@ -48,8 +48,12 @@ function setup(action = 'renew', currentFilter = 'expired') {
         assert.equal(t.list.innerHTML,'updated list');
         assert.deepEqual(t.badgeCounts,counts);
         assert.equal(t.loads,0); // Mutation response supplies list and badge without a second read.
-        assert.equal(t.selected,''); // Cancel/archive preserve the current tab.
+        assert.equal(t.selected,''); // Cancel/archive/delete preserve the current tab.
         assert.equal(t.button.disabled,false);
     }
-    console.log('PASS: inline renew/cancel/archive POST/CSRF, duplicate-submit guard, immediate list and badge updates, current-tab preservation, errors and button recovery. No real payment changed.');
+    const deletion=setup('delete','cancelled'), deletionFailed=deletion.fire();
+    deletion.reply(false,{ok:false,message:'Unable to delete'});await deletionFailed;
+    assert.equal(deletion.loads,0);assert.equal(deletion.list.innerHTML,undefined);
+    assert.equal(deletion.result.dataset.tone,'error');assert.equal(deletion.button.disabled,false);
+    console.log('PASS: inline renew/cancel/archive/delete POST/CSRF, duplicate-submit guard, immediate list and badge updates, current-tab preservation, errors and button recovery. No real payment changed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

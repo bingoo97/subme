@@ -128,7 +128,7 @@
         // Reuse the existing protected POST action and update the flyout on success.
         dialog.addEventListener('submit', async event => {
             const form = event.target.closest('[data-crypto-quick-action]');
-            if (!form) return; // Deletion retains the existing confirmation/navigation workflow.
+            if (!form) return;
             event.preventDefault();
             if (busy) return;
             busy = true;

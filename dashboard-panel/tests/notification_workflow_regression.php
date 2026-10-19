@@ -213,6 +213,10 @@ foreach(['new','expired','cancelled','payout'] as $linkFilter){
  $linkDom=new DOMDocument();@$linkDom->loadHTML($linkHtml);$linkXpath=new DOMXPath($linkDom);
  ck($linkXpath->query('//a[@class="admin-crypto-quick__purpose" and @href="/admin/?page=orders&order_id=100"]')->length===1,'Order purpose is a separate link in '.$linkFilter);
  ck($linkXpath->query('//a//a')->length===0,'Purpose link never nests inside the payment link in '.$linkFilter);
+ if(in_array($linkFilter,['expired','cancelled'],true)){
+  ck($linkXpath->query('//form[@data-crypto-quick-action][input[@name="quick_action" and @value="delete"]]')->length===1,'Delete uses inline action in '.$linkFilter);
+  ck($linkXpath->query('//form[@data-crypto-quick-action]//button[@data-admin-confirm and contains(@class,"action--delete")]')->length===1,'Inline delete retains confirmation in '.$linkFilter);
+ }
 }
 $linkRow['order_id']=null;
 $linkHtml=admin_crypto_quick_html([$linkRow],'payout',admin_crypto_quick_labels('pl'),'fixture',$messages);
