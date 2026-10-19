@@ -134,7 +134,7 @@ function admin_crypto_quick_html(array $rows, string $filter, ?array $labels = n
                 <?php if($paid&&$autoAccepted): ?><span class="admin-crypto-quick__auto"><i class="bi bi-check-circle" aria-hidden="true"></i><?php echo admin_e($l['auto_approved']); ?></span><?php endif; ?>
                 <?php if($paid): ?>
                     <?php if($orderId>0&&$needsAction): ?><a class="admin-crypto-quick__next-step" href="/admin/?page=orders&amp;order_id=<?php echo $orderId; ?>"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span><?php echo admin_e($l['order_next']); ?></span><i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>
-                    <?php else: ?><span class="admin-crypto-quick__completed"><?php echo admin_e($l[$orderId>0?'order_done':'topup_done']); ?></span><?php endif; ?>
+                    <?php else: ?><span class="admin-crypto-quick__completed"><?php if($orderId>0): ?><i class="bi bi-check-circle-fill text-success" aria-hidden="true"></i><?php endif; ?><?php echo admin_e($l[$orderId>0?'order_done':'topup_done']); ?></span><?php endif; ?>
                 <?php endif; ?>
             </div>
         </article>
