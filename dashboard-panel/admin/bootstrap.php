@@ -11104,6 +11104,25 @@ function admin_finalize_successful_payment(
     $pendingRenewalForPayment = $orderId > 0 ? app_order_find_pending_renewal($db, $orderId, $paymentType, $paymentId, true) : null;
     $balanceAlreadyAppliedForThisPayment = false;
 
+    if ($orderId > 0 && !$pendingRenewalForPayment
+        && schema_object_exists($db, 'customer_balance_runtime_events')) {
+        // An applied renewal has its own credited payment. Archiving/re-saving it must
+        // not treat it as a second payment for the original purchase or credit it again.
+        $appliedRenewal = $db->select_user("SELECT r.id FROM order_renewals r
+            INNER JOIN customer_balance_runtime_events e ON e.customer_id = r.customer_id
+                AND e.source_type = 'payment_approval' AND e.direction = 'credit'
+                AND e.source_key = '" . $db->escape($currentPaymentSourceKey) . "'
+            WHERE r.order_id = {$orderId} AND r.customer_id = {$customerId}
+                AND r.payment_request_type = '" . $db->escape($paymentType) . "'
+                AND r.payment_request_id = {$paymentId} AND r.status = 'applied'
+            LIMIT 1");
+        if ($db->error) return ['ok' => false, 'message' => 'Unable to verify the settled renewal payment.'];
+        if (!empty($appliedRenewal['id'])) {
+            return ['ok' => true, 'already_applied' => true, 'order_id' => $orderId,
+                'customer_id' => $customerId, 'underpaid_order' => false];
+        }
+    }
+
     if ($orderId > 0 && !$pendingRenewalForPayment) {
         $existingOrderCreditEvent = admin_find_order_payment_balance_credit_event($db, $orderId);
         if (is_array($existingOrderCreditEvent) && !empty($existingOrderCreditEvent['source_key'])) {
