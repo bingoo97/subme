@@ -1,0 +1,7 @@
+# Verified deployment: wallet sharing and creator links
+
+Both demo.subme.pro and dashboard.subme.pro run revision 860ae3d. Previous runtime was b4a346b. Six allowlisted application files were extracted directly from Git; no environment, config, uploads, sessions or database data were transferred from localhost. No migration or setting change.
+
+Both sites passed baseline comparison, staged/runtime SHA-256 verification, PHP lint, public client/admin HTTP checks, five public asset hash checks, authenticated Dashboard/Orders/Payments and quick-payment categories, and the retained Users import/CSRF checks. Hosting-side probes verified green wallet button markup, Users profile links, retained selected-customer links and shared-mode feedback implementation. Local tests before deployment covered 95 payment creation cases, including sharing ON/OFF, an assigned address with is_reusable=0 and old payment history, no duplicate addresses/assignments, and rejecting a competing open ticket. Local browser inspection verified the button's green background/white text and profile href after selection.
+
+Private file and database backups were created independently for each site under .subme-deploy-backups/wallet-polish-20261020-860ae3d. Database identities, app settings, provider/panel configuration, MySQL config, routing pointers, .htaccess and cron remained unchanged. Remote-provider features remain OFF. No production tickets, users, orders or emails were created by verification.

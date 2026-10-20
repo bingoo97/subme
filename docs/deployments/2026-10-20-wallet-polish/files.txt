@@ -1,0 +1,6 @@
+dashboard-panel/admin/bootstrap.php
+dashboard-panel/admin/crypto_quick.php
+dashboard-panel/admin/partials/crypto-create.php
+dashboard-panel/admin/search.php
+public_html/assets/css/admin.css
+public_html/assets/js/admin-crypto-create.js
