@@ -1,5 +1,5 @@
 <?php // Shared by the create/edit page forms. Values are validated again when saving. ?>
-<div class="col-12 admin-page-tile-settings">
+<div class="col-12 admin-page-tile-settings" data-page-tile-settings<?php echo ($pageTileSettings['menu_section'] ?? 'other') !== 'homepage' ? ' hidden' : ''; ?>>
     <fieldset>
         <legend><?php echo admin_e(admin_t($messages, 'page_tile_appearance', 'Homepage tile appearance')); ?></legend>
         <div class="admin-page-tile-icons">

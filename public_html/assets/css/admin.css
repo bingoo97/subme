@@ -21367,3 +21367,5 @@ button.admin-crypto-quick__footer{width:100%;margin:0;border:0;border-top:1px so
 .admin-page-tile-icon input:checked+span{background:#f1f5f9;border-color:#8191a4;color:#253447;}
 .admin-page-tile-icon input:focus-visible+span{outline:2px solid #7da8d7;outline-offset:2px;}
 .admin-page-tile-new{display:inline-flex;padding:2px 6px;border-radius:2px;background:#d7182a;color:#fff;font-size:10px;font-weight:600;vertical-align:middle;}
+
+.admin-page-tile-settings[hidden]{display:none!important;}

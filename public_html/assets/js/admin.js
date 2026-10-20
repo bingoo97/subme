@@ -10940,3 +10940,14 @@ document.addEventListener('DOMContentLoaded', () => {
         modalResult.hidden = true;
     });
 });
+
+// Tile appearance belongs only to customer homepage pages; retain selections when switching sections.
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-page-tile-settings]').forEach(function (settings) {
+        var section = settings.closest('form')?.querySelector('[name="menu_section"]');
+        if (!section) return;
+        function syncTileSettings() { settings.hidden = section.value !== 'homepage'; }
+        section.addEventListener('change', syncTileSettings);
+        syncTileSettings();
+    });
+});

@@ -434,7 +434,7 @@ if (!function_exists('app_ensure_static_pages_runtime_columns')) {
         }
 
         if (!schema_column_exists($db, 'static_pages', 'menu_icon')) {
-            $db->query("ALTER TABLE static_pages ADD COLUMN menu_icon VARCHAR(40) NOT NULL DEFAULT 'file-text-o'");
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_icon VARCHAR(40) NOT NULL DEFAULT 'play-circle-o'");
             schema_forget_column_cache('static_pages', 'menu_icon');
         }
         if (!schema_column_exists($db, 'static_pages', 'menu_badge_new')) {
@@ -10047,14 +10047,27 @@ function app_page_helper_content(string $site, bool $isLoggedIn = false, array $
 /** Allowlisted Font Awesome icons shared by the page editor and homepage. */
 function app_page_tile_icons(): array
 {
-    return ['file-text-o' => 'page_icon_document', 'book' => 'page_icon_book',
-        'graduation-cap' => 'page_icon_training', 'play-circle-o' => 'page_icon_video',
-        'info-circle' => 'page_icon_info', 'question-circle' => 'page_icon_help',
-        'calendar' => 'page_icon_calendar', 'gift' => 'page_icon_gift'];
+    return [
+        'play-circle-o' => 'page_icon_player',
+        'play' => 'page_icon_play',
+        'film' => 'page_icon_film',
+        'video-camera' => 'page_icon_camera',
+        'headphones' => 'page_icon_headphones',
+        'music' => 'page_icon_music',
+        'shopping-cart' => 'page_icon_shop',
+        'ticket' => 'page_icon_ticket',
+        'credit-card' => 'page_icon_card',
+        'tags' => 'page_icon_tags',
+        'bullhorn' => 'page_icon_ad',
+        'desktop' => 'page_icon_screen',
+        'laptop' => 'page_icon_pc',
+        'tablet' => 'page_icon_tablet',
+        'mobile' => 'page_icon_phone',
+    ];
 }
 function app_page_tile_icon(string $icon): string
 {
-    return array_key_exists($icon, app_page_tile_icons()) ? $icon : 'file-text-o';
+    return array_key_exists($icon, app_page_tile_icons()) ? $icon : 'play-circle-o';
 }
 
 /** Active pages explicitly placed on the customer homepage. */
