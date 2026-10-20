@@ -21231,13 +21231,16 @@ body.admin-app-page .admin-crypto-quick__purpose>.bi{font-size:inherit;line-heig
 .admin-crypto-create__steps>li.is-active>span{background:#293442;color:#fff;}
 .admin-crypto-create :is(.form-control,.form-select){font-size:12px;border-radius:7px;min-height:39px;}
 .admin-crypto-create [data-create-results]{margin-top:10px;}
-.admin-crypto-create .admin-search-results__grid{gap:8px;}
-.admin-crypto-create .admin-search-user-card{padding:10px;gap:9px;border:1px solid #e9edf2;border-radius:8px;background:#fff;}
+.admin-crypto-create .admin-search-results__grid{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;}
+.admin-crypto-create .admin-search-user-card{min-width:0;margin:0;padding:12px 10px;gap:10px;border:1px solid #e9edf2;border-radius:8px;background:#fff;}
 .admin-crypto-create .admin-search-user-card__body{display:flex;flex-direction:column;gap:2px;min-width:0;}
-.admin-crypto-create .admin-search-user-card__handle{order:-1;color:#0875ed;font-size:12px;}
+.admin-crypto-create .admin-search-user-card__handle{order:-1;color:#0875ed;font-size:12px;overflow-wrap:anywhere;}
+.admin-crypto-create .admin-search-user-card__handle:is(:link,:visited,:hover,:focus,:active){text-decoration:none;}
+.admin-crypto-create .admin-search-user-card__handle:focus-visible{outline:2px solid #9cb3cc;outline-offset:2px;border-radius:3px;}
 .admin-crypto-create .admin-search-user-card__email{font-size:11px;overflow-wrap:anywhere;}
-.admin-crypto-create .admin-search-user-card__meta{display:flex;flex-wrap:wrap;gap:4px;}
-.admin-crypto-create .admin-search-user-card__actions>.btn{font-size:11px;padding:7px 9px;}
+.admin-crypto-create .admin-search-user-card__meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:3px;}
+.admin-crypto-create .admin-search-user-card__actions{flex:0 0 auto;}
+.admin-crypto-create .admin-search-user-card__actions>.btn{font-size:11px;padding:7px 9px;border-radius:6px;}
 .admin-crypto-create .admin-search-user-card__actions .bi{display:none;}
 .admin-crypto-create [data-create-customer]{margin-bottom:12px;}
 .admin-crypto-create__choices{display:grid;gap:8px;}
