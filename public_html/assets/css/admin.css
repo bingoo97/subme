@@ -21345,7 +21345,7 @@ body.admin-app-page:has(.admin-payment-create-panel.is-creating) .admin-mobile-n
 @media(min-width:768px){.admin-payment-create-panel__result.is-cash{grid-template-columns:32px minmax(0,1fr) auto;align-items:center;}.admin-payment-create-panel__result.is-cash>.admin-cash-receipt__link{grid-column:3;grid-row:1;}}
 
 /* Three compact, consistent rows below the quick payment list. */
-.admin-crypto-quick__footer,.admin-crypto-quick__preferences{min-height:36px;padding:7px 16px;line-height:20px;flex-shrink:0;}
+.admin-crypto-quick__footer,.admin-crypto-quick__preferences{height:32px;min-height:32px;padding:5px 16px;line-height:20px;flex-shrink:0;}
 button.admin-crypto-quick__footer{width:100%;margin:0;border:0;border-top:1px solid #e9edf2;border-radius:0;background:#fff;text-align:left;cursor:pointer;}
 .admin-crypto-quick__footer>i{font-size:12px;line-height:1;}
 .admin-crypto-quick__footer:is(:hover,:focus-visible){background:#f7f9fb;color:#536779;text-decoration:none;}
