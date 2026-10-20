@@ -43,9 +43,12 @@ $newOrder=admin_order_find($db,$newId);cashCheck($newOrder['status']==='pending_
 cashCheck(cashBalance(32005)===118.0,'New cash order adds funds until fulfilment');
 cashCheck(count(admin_topbar_notification_order_rows($db,8,$newId))===1,'New paid cash order appears in work notifications');
 cashCheck(!empty(admin_order_balance_activation_context($db,$newOrder)['is_awaiting_activation']),'Open order suggests fulfilment');
-$activate=['status'=>'active','payment_status'=>'paid','fulfillment_status'=>'delivered','total_amount'=>'18','payment_method'=>'cash','expires_at'=>date('Y-m-d H:i:s',strtotime('+30 days'))];
+$activate=['status'=>'active','payment_status'=>'paid','fulfillment_status'=>'delivered','total_amount'=>'18','payment_method'=>'cash','expires_at'=>'','started_at'=>'','paid_at'=>''];
 $done=admin_save_order_info($db,$newId,$activate,1);cashCheck(!empty($done['ok'])&&cashBalance(32005)===100.0,'Fulfilment debits cash once: '.json_encode($done));
+$firstFulfilment=$db->select_user('SELECT started_at,expires_at,paid_at FROM orders WHERE id='.$newId);
+cashCheck(!empty($firstFulfilment['expires_at'])&&$firstFulfilment['expires_at']===app_subscription_expiry_from_base_timestamp(app_timestamp_from_runtime_datetime($firstFulfilment['started_at']),720),'Blank expiry derives package duration on fulfilment');
 $done=admin_save_order_info($db,$newId,$activate,1);cashCheck(!empty($done['ok'])&&cashBalance(32005)===100.0,'Repeated fulfilment does not debit again');
+cashCheck($db->select_user('SELECT started_at,expires_at,paid_at FROM orders WHERE id='.$newId)===$firstFulfilment,'Repeated blank dates preserve start, expiry and payment date');
 $paidAgain=cashCreate(32005,'new_order','c',['product_id'=>1]);cashCheck(!empty($paidAgain['already_applied'])&&cashBalance(32005)===100.0,'Replay after fulfilment preserves balance');
 // Existing unpaid order: paid from cash, without creating a second order.
 cashSql("INSERT INTO orders(id,customer_id,product_id,total_amount,currency_id,status,payment_status,fulfillment_status) VALUES(33001,32006,1,18,2,'pending_payment','unpaid','pending')");
@@ -84,4 +87,23 @@ $beforeFailure=(int)$db->select_user('SELECT COUNT(*) n FROM orders')['n'];
 $failedNew=cashCreate(32008,'new_order','6',['product_id'=>1]);cashCheck(empty($failedNew['ok'])&&cashBalance(32008)===100.0&&(int)$db->select_user('SELECT COUNT(*) n FROM orders')['n']===$beforeFailure,'Failed cash order rolls back order and balance');
 require_once dirname(__DIR__).'/bootstrap/localization.php';
 $history=app_customer_history_rows($db,32001,[]);cashCheck((bool)array_filter($history,static fn($entry)=>str_contains(json_encode($entry,JSON_UNESCAPED_UNICODE),'Gotówka')),'Customer History displays cash entry');
+// Reproduce the reported three-month cash order with an empty activation form.
+cashSql("INSERT INTO products(id,provider_id,name,slug,price_amount,currency_id,duration_hours,is_active) VALUES(44001,1,'Three months','cash-three-months',36,2,2160,1)");
+$three=cashCreate(32003,'new_order','acb',['product_id'=>44001]);cashCheck(!empty($three['ok']),'Three-month cash order created');
+$threeId=(int)$three['order_id'];$threeForm=array_merge($activate,['total_amount'=>'36','started_at'=>'2026-10-20 10:30:00']);
+$threeDone=admin_save_order_info($db,$threeId,$threeForm,1);$threeRow=$db->select_user('SELECT started_at,expires_at,paid_at FROM orders WHERE id='.$threeId);
+cashCheck(!empty($threeDone['ok'])&&$threeRow['expires_at']==='2027-01-20 10:30:00','Three calendar months start at fulfilment with no client-supplied expiry');
+$threeBalance=cashBalance(32003);admin_save_order_info($db,$threeId,$threeForm,1);
+cashCheck(cashBalance(32003)===$threeBalance&&$db->select_user('SELECT started_at,expires_at,paid_at FROM orders WHERE id='.$threeId)===$threeRow,'Three-month fulfilment replay preserves balance and dates');
+// Repair an already completed order with a missing expiry from its original start.
+cashSql("UPDATE orders SET expires_at=NULL WHERE id={$threeId}");
+$repair=admin_save_order_info($db,$threeId,array_merge($threeForm,['started_at'=>'']),1);
+cashCheck(!empty($repair['ok'])&&cashBalance(32003)===$threeBalance&&$db->select_user('SELECT expires_at FROM orders WHERE id='.$threeId)['expires_at']==='2027-01-20 10:30:00','Missing expiry repair uses stored start without charging again');
+$withExpiry=admin_order_find($db,$threeId);
+cashCheck(admin_order_progress_data($withExpiry)['has_expiry']&&app_order_progress_data($withExpiry)['has_expiry'],'Admin and customer counters both see the three-month expiry');
+$customExpiry='2027-02-01 12:00:00';
+$custom=admin_save_order_info($db,$threeId,array_merge($threeForm,['expires_at'=>$customExpiry]),1);
+cashCheck(!empty($custom['ok'])&&$db->select_user('SELECT expires_at FROM orders WHERE id='.$threeId)['expires_at']===$customExpiry,'Explicit custom expiry remains editable');
+admin_save_order_info($db,$threeId,array_merge($threeForm,['started_at'=>'','expires_at'=>'']),1);
+cashCheck(cashBalance(32003)===$threeBalance&&$db->select_user('SELECT expires_at FROM orders WHERE id='.$threeId)['expires_at']===$customExpiry,'Stale blank form does not erase or extend a custom expiry');
 echo "PASS {$checks} cash payment checks\n";

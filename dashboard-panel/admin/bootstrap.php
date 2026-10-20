@@ -18032,12 +18032,23 @@ function admin_save_order_info(
         $expiresAt = null;
     }
 
-    if ($usesExpiry && $status === 'active' && $startedAt === null) {
-        $startedAt = date('Y-m-d H:i:s');
+    if ($usesExpiry && $status === 'active') {
+        // Deferred orders start their package on fulfilment. Blank or stale forms
+        // must neither erase an established expiry nor restart the paid period.
+        $startedAt = $startedAt ?? admin_normalize_datetime_input($order['started_at'] ?? null) ?? date('Y-m-d H:i:s');
+        if ($expiresAt === null) {
+            $expiresAt = admin_normalize_datetime_input($order['expires_at'] ?? null);
+            if ($expiresAt === null && (int)($order['duration_hours'] ?? 0) > 0) {
+                $expiresAt = app_subscription_expiry_from_base_timestamp(
+                    app_timestamp_from_runtime_datetime($startedAt),
+                    (int)$order['duration_hours']
+                );
+            }
+        }
     }
 
     if ($paymentStatus === 'paid' && $paidAt === null) {
-        $paidAt = date('Y-m-d H:i:s');
+        $paidAt = admin_normalize_datetime_input($order['paid_at'] ?? null) ?? date('Y-m-d H:i:s');
     }
 
     $wasActiveBefore = strtolower(trim((string)($order['status'] ?? ''))) === 'active';
