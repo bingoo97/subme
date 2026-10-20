@@ -65,3 +65,11 @@ Testy używają odseparowanego schematu MySQL, fikcyjnych portfeli, zapisanych l
 The creator now honours global sharing for assigned addresses even when their old `is_reusable` flag is zero. Historical payments of another customer do not forbid an additional assignment when sharing is ON; OFF retains the existing exclusive-assignment/history restrictions. The creator still excludes addresses serving an open payment to prevent competing tickets on the same address. An empty shared-mode chooser explains temporary availability/rate constraints instead of claiming that the wallet pool is empty.
 
 Customer handles link to the Users profile both in search results and after customer selection. The Add wallet link uses the standard green btn-success style. Verified in the local browser, including its computed colours and the retained selected-customer profile URL. Regression suite: 95 checks, including ON/OFF sharing, history reuse, no duplicated addresses/assignments and rejection of a concurrent competing ticket. No live payments or deployment in this change.
+
+## Order creation and customer chat delivery verification
+
+Verified the shared backend used by both the New-category flyout and Payments page. New-order mode creates exactly one unpaid order and links its crypto ticket; existing-order mode links the selected order without duplication; balance top-up creates no order.
+
+The successful creation saves an unread structured crypto instruction in that customer's live-chat conversation, using the standard customer card builder. Tests compare the saved card's address, token amount, fiat amount/currency, network and payment link against the committed ticket. The actual customer check_chat.php endpoint renders these cards for the intended recipients and does not expose them to another customer. Messages saved while the chat feature is OFF become visible when it is enabled. Failed transactional creation sends no misleading instruction; repeated/parallel creation sends only one card.
+
+Local verification: 134 payment creation/workflow checks and the Payments creator frontend regression passed. Disposable schema and synthetic accounts only; no production messages or payments. This verification added regression coverage without changing application runtime code.

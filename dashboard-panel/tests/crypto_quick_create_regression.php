@@ -2,6 +2,14 @@
 /** Isolated database and cached rates only; never contact a payment network. */
 declare(strict_types=1);
 if(strpos((string)getenv('DB_NAME'),'_test_')===false)throw new RuntimeException('Isolated _test_ database required.');
+if(($argv[1]??'')==='--customer-chat') {
+ $GLOBALS['app_crypto_network_budget']=['deadline'=>0,'remaining'=>0];$r=json_decode(base64_decode($argv[2]),true);
+ $dir=getenv('APP_CRYPTO_CACHE_DIR').'/sessions';if(!is_dir($dir))mkdir($dir,0700,true);session_save_path($dir);session_start();
+ $_SESSION=['id'=>$r['customer'],'__csrf_frontend'=>'fixture','lang'=>'pl'];$_GET=array_merge(['format'=>'json'],$r['get']??[]);$_POST=[];
+ $_SERVER['REQUEST_METHOD']='GET';$_SERVER['HTTP_HOST']='localhost';$_SERVER['REQUEST_URI']='/check_chat.php';chdir(dirname(__DIR__));ob_start();
+ register_shutdown_function(static function(){ $out=ob_get_clean();if(session_status()===PHP_SESSION_ACTIVE)session_destroy();echo json_encode(['status'=>http_response_code()?:200,'body'=>json_decode($out,true),'raw'=>json_decode($out,true)===null?$out:null]); });
+ require dirname(__DIR__).'/check_chat.php';exit;
+}
 if(($argv[1]??'')==='--endpoint') {
  $r=json_decode(base64_decode($argv[2]),true);
  $dir=getenv('APP_CRYPTO_CACHE_DIR').'/sessions';if(!is_dir($dir))mkdir($dir,0700,true);session_save_path($dir);session_start();
@@ -51,6 +59,27 @@ function create(int $c,string $purpose,int $product=1,int $order=0,$amount=999):
  global $db,$btc;return admin_quick_create_crypto_payment_request($db,$c,$btc,$amount,1,[], $product,$purpose,$order);
 }
 function countRows(string $table,string $where):int {global $db;return (int)$db->select_user("SELECT COUNT(*) n FROM {$table} WHERE {$where}")['n'];}
+function checkClientInstructions(int $customerId,array $created,int $orderId):void {
+ global $db;
+ ck(!empty($created['live_chat_message_created']),'Creation reports chat card saved');
+ $request=$db->select_user('SELECT r.*,w.address,w.network_code,a.code,f.code AS currency_code,f.symbol AS currency_symbol FROM crypto_deposit_requests r JOIN crypto_wallet_addresses w ON w.id=r.wallet_address_id JOIN crypto_assets a ON a.id=r.crypto_asset_id JOIN currencies f ON f.id=r.fiat_currency_id WHERE r.id='.(int)$created['request_id']);
+ $row=$db->select_user("SELECT m.*,c.customer_id AS owner_id,c.conversation_type FROM support_messages m JOIN support_conversations c ON c.id=m.conversation_id WHERE c.customer_id={$customerId} ORDER BY m.id DESC LIMIT 1");
+ ck($row&&$row['sender_type']==='admin'&&(int)$row['owner_id']===$customerId&&$row['conversation_type']==='live_chat'&&(int)$row['is_read']===0,'Correct customer receives an unread support message');
+ $card=app_chat_card_decode($row['message_body']);ck($card&&$card['kind']==='payment_request'&&$card['payment_kind']==='crypto'&&$card['locale_code']==='pl','Message is the standard localized crypto payment card');
+ $values=array_column($card['fields'],'value');
+ ck(in_array($request['address'],$values,true)&&in_array(sprintf('%.8f',(float)$request['requested_crypto_amount']).' '.$request['code'],$values,true),'Card address and token amount equal the committed ticket');
+ ck(in_array(app_crypto_network_label($request['network_code']),$values,true),'Card names the receiving network');
+ ck(in_array(app_format_money_value($request['requested_fiat_amount'],$request['currency_symbol'],$request['currency_code']),$values,true),'Card fiat amount and currency equal committed ticket');
+ $suffix=$orderId>0?'/orders?payment='.$orderId:'/payments_crypto#tickets';ck(str_ends_with($card['button_url'],$suffix),'Card opens the correct order or balance payment');
+ $html=chat_format_message_html($row['message_body']);ck(str_contains($html,$request['address'])&&str_contains($html,'chat-payment-card'),'Client renderer displays the payment card');
+ $count=countRows('support_messages',"customer_id={$customerId}");
+ $retry=create($customerId,'topup',0,0,20);ck(empty($retry['ok'])&&countRows('support_messages',"customer_id={$customerId}")===$count,'Repeated create cannot duplicate the chat card');
+}
+function clientChat(int $customerId):array{
+ $payload=base64_encode(json_encode(['customer'=>$customerId,'get'=>['action'=>'fetch']]));
+ $p=proc_open([PHP_BINARY,__FILE__,'--customer-chat',$payload],[1=>['pipe','w'],2=>['pipe','w']],$pipes);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $f)fclose($f);$code=proc_close($p);$data=json_decode($out,true);ck(!$code&&is_array($data)&&$data['raw']===null,'Customer chat endpoint returns clean JSON: '.$out.$err);return $data;
+}
+
 sql("UPDATE app_settings SET crypto_payments_enabled=1,bank_transfers_enabled=0,support_chat_enabled=0");
 sql("UPDATE crypto_assets SET is_active=IF(code='BTC',1,0),current_rate_fiat=50000,rate_currency_code='EUR',rate_updated_at=UTC_TIMESTAMP()");
 sql("UPDATE crypto_deposit_requests SET status='cancelled'");
@@ -67,16 +96,16 @@ $options=endpoint(['get'=>['action'=>'crypto_quick_create_options','customer_id'
 ck(count($options['data']['product_options'])===1,'Only visible products are offered');
 $r=create(2,'topup',0,0,25);ck(!empty($r['ok']), 'Top-up created: '.json_encode($r));
 $row=$db->select_user('SELECT * FROM crypto_deposit_requests WHERE id='.(int)$r['request_id']);
-ck(empty($row['order_id'])&&(float)$row['requested_fiat_amount']===25.0,'Top-up amount and purpose stored');
+ck(empty($row['order_id'])&&(float)$row['requested_fiat_amount']===25.0,'Top-up amount and purpose stored');checkClientInstructions(2,$r,0);
 ck(strtotime($row['expires_at'])-strtotime($row['requested_at'])===3600,'Ticket lasts exactly 60 minutes');
 ck((float)$db->select_user('SELECT balance_amount FROM customers WHERE id=2')['balance_amount']===100.0,'Creation does not credit balance');
-$before=countRows('orders','customer_id=3');$r=create(3,'new_order');ck(!empty($r['ok']),'New order created: '.json_encode($r));
+$before=countRows('orders','customer_id=3');$apiNew=endpoint(['post'=>['action'=>'crypto_quick_create_submit','customer_id'=>3,'purpose'=>'new_order','product_id'=>1,'asset_id'=>$btc,'_csrf'=>'fixture']]);ck($apiNew['status']===200,'New order created through shared UI endpoint');$r=$apiNew['data'];ck(!empty($r['ok']),'New order created: '.json_encode($r));
 $row=$db->select_user('SELECT * FROM orders WHERE id='.(int)$r['order_id']);ck($row['status']==='pending_payment'&&$row['payment_status']==='unpaid'&&empty($row['expires_at'])&&(float)$row['total_amount']===18.0,'New order uses server price and awaits payment, with no running expiry');
-ck(countRows('orders','customer_id=3')===$before+1,'Exactly one new order');
+ck(countRows('orders','customer_id=3')===$before+1,'Exactly one new order');checkClientInstructions(3,$r,(int)$r['order_id']);
 ck(empty(create(3,'new_order')['ok'])&&countRows('orders','customer_id=3')===$before+1,'Repeated create does not duplicate order');
 sql("UPDATE orders SET status='pending_payment',payment_status='unpaid',paid_at=NULL,total_amount=31 WHERE id=4");
 $r=create(4,'existing_order',1,4);ck(!empty($r['ok'])&&(int)$r['order_id']===4,'Existing unpaid order linked: '.json_encode($r));
-$row=$db->select_user('SELECT * FROM crypto_deposit_requests WHERE id='.(int)$r['request_id']);ck((float)$row['requested_fiat_amount']===31.0,'Existing order server amount overrides posted product/amount');
+$row=$db->select_user('SELECT * FROM crypto_deposit_requests WHERE id='.(int)$r['request_id']);ck((float)$row['requested_fiat_amount']===31.0,'Existing order server amount overrides posted product/amount');checkClientInstructions(4,$r,4);
 ck(empty(create(5,'existing_order',1,4)['ok']),'Another customer order rejected');
 ck(empty(create(5,'existing_order',1,5)['ok']),'Already paid order rejected');
 app_ensure_customer_provider_visibility_runtime_table($db);sql("INSERT INTO customer_provider_visibility(customer_id,provider_id,is_visible) VALUES(6,1,0)");
@@ -86,10 +115,13 @@ $balance=(float)$db->select_user('SELECT balance_amount FROM customers WHERE id=
 $before=countRows('orders','customer_id=7');
 
 ck(empty(create(7,'new_order')['ok']),'Link failure reported');
-ck(countRows('orders','customer_id=7')===$before&&countRows('crypto_deposit_requests','customer_id=7')===0,'Link failure rolls back both request and order');
+ck(countRows('orders','customer_id=7')===$before&&countRows('crypto_deposit_requests','customer_id=7')===0,'Link failure rolls back both request and order');ck(countRows('support_messages','customer_id=7')===0,'Rolled-back payment never sends misleading payment instructions');
+sql('UPDATE app_settings SET support_chat_enabled=1');
+foreach([2,3,4] as $clientId){$chat=clientChat($clientId);ck(!empty($chat['body']['ok'])&&str_contains($chat['body']['html'],'fixture-quick-wallet-'.$clientId),'Actual client messenger fetch contains the committed wallet instructions');}
+$private=clientChat(5);ck(!str_contains($private['body']['html'],'fixture-quick-wallet-3'),'Other clients cannot read the order payment instructions');sql('UPDATE app_settings SET support_chat_enabled=0');
 $children=[];for($i=0;$i<4;$i++){$p=proc_open([PHP_BINARY,__FILE__,'--race'],[1=>['pipe','w'],2=>['pipe','w']],$pipes);$children[]=[$p,$pipes];}
 $success=0;foreach($children as [$p,$pipes]){$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $f)fclose($f);ck(proc_close($p)===0,'Concurrent request completes: '.$err);$success+=!empty(json_decode($out,true)['ok'])?1:0;}
-ck($success===1&&countRows('crypto_deposit_requests','customer_id=8')===1&&countRows('orders','customer_id=8')===2,'Parallel clicks create one ticket and one order');
+ck($success===1&&countRows('crypto_deposit_requests','customer_id=8')===1&&countRows('orders','customer_id=8')===2,'Parallel clicks create one ticket and one order');ck(countRows('support_messages','customer_id=8')===1,'Parallel clicks create only one customer instruction card');
 $r=endpoint(['post'=>['action'=>'crypto_quick_create_submit','customer_id'=>9,'purpose'=>'topup','asset_id'=>$btc,'amount'=>20,'_csrf'=>'wrong']]);ck($r['status']===403&&countRows('crypto_deposit_requests','customer_id=9')===0,'CSRF blocks mutation');
 $r=endpoint(['post'=>['action'=>'crypto_quick_create_submit','customer_id'=>9,'purpose'=>'topup','asset_id'=>$btc,'amount'=>20,'_csrf'=>'fixture']]);ck($r['status']===200&&!empty($r['data']['ok'])&&str_contains($r['data']['crypto_quick']['html'],'@smoke9'),'Endpoint returns fresh list and counts');file_put_contents($dir.'/created.json',json_encode($r['data']));
 sql("UPDATE crypto_deposit_requests SET status='awaiting_review',received_crypto_amount=.00001,expires_at=DATE_SUB(NOW(),INTERVAL 4 HOUR) WHERE customer_id=9");
