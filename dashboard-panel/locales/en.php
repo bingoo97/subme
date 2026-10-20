@@ -387,6 +387,8 @@ return [
         'payment_save_note' => 'Save note',
         'payment_choose_method_title' => 'Choose payment method',
         'payment_choose_method_intro' => 'Choose one of the available payment methods.',
+        'payment_balance_available_notice' => 'You can pay using your account balance.',
+        'payment_crypto_only_notice' => 'Payment is available only in cryptocurrency',
         'payment_method_crypto' => 'Pay with crypto',
         'payment_method_bank' => 'Pay by bank transfer',
         'payment_method_balance' => 'Pay with balance',

@@ -1210,8 +1210,8 @@ if (app_uses_v2_schema($db)) {
                     exit;
                 }
 
+                // orders_payment.tpl renders this notice once, also when headers were already sent.
                 $smarty->assign('alert', localization_translate($t, 'orders_cancelled', 'Order removed.'));
-                $smarty->display('alert.tpl');
                 $smarty->assign('selected', null);
                 return;
             }
@@ -1259,6 +1259,7 @@ if (app_uses_v2_schema($db)) {
             && $selectedProductPrice > 0
             && $customerBalanceAmount + 0.00001 >= $selectedProductPrice;
 
+        $smarty->assign('payment_summary_amount_display', app_format_money_value($selected['price'] ?? 0, (string)($selected['currency_symbol'] ?? ''), (string)($selected['currency_code'] ?? '')));
         $smarty->assign('selected', $selected);
         $smarty->assign('payment_can_request', $canRequestPayment);
         $smarty->assign('payment_selected_method', $selectedMethod);
@@ -1297,6 +1298,7 @@ if (app_uses_v2_schema($db)) {
     $selected = $db->select_user($ask);
     if ($selected) {
         $selected['date_end_s'] = strtotime($selected['date_end']);
+        $smarty->assign('payment_summary_amount_display', app_format_money_value($selected['price'] ?? 0, (string)($selected['currency_symbol'] ?? $reseller['currency_symbol'] ?? ''), (string)($selected['currency_code'] ?? $reseller['currency_short'] ?? '')));
         $smarty->assign('selected', $selected);
     }
 }

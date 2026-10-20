@@ -385,6 +385,8 @@ return [
         'payment_save_note' => 'Zapisz notatkę',
         'payment_choose_method_title' => 'Wybierz metodę płatności',
         'payment_choose_method_intro' => 'Wybierz jedną z dostępnych metod płatności.',
+        'payment_balance_available_notice' => 'Dostępna jest płatność z salda konta.',
+        'payment_crypto_only_notice' => 'Dostępna jest płatność jedynie kryptowalutami',
         'payment_method_crypto' => 'Zapłać kryptowalutą',
         'payment_method_bank' => 'Zapłać przelewem bankowym',
         'payment_method_balance' => 'Zapłać z salda',

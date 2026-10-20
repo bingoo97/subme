@@ -15,7 +15,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
 
     <div class="payment-wizard__summary-table-wrap">
         <div class="payment-summary-bar">
-            <div class="payment-summary-item">
+            <div class="payment-summary-item payment-summary-item--order">
                 <span class="payment-summary-item__label">{$t.payment_summary_order|default:'Order'}</span>
                 <span class="payment-summary-item__value">#{$selected.id}</span>
             </div>
@@ -25,9 +25,9 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     {if $selected.provider_name}<span class="provider">{$selected.provider_name}</span> {/if}{$selected.name}
                 </span>
             </div>
-            <div class="payment-summary-item">
+            <div class="payment-summary-item payment-summary-item--amount">
                 <span class="payment-summary-item__label">{$t.payment_summary_amount|default:'Amount'}</span>
-                <span class="payment-summary-item__value">{$selected.price} {$selected.currency_symbol|default:$selected.currency_code|default:$reseller.currency_symbol}</span>
+                <span class="payment-summary-item__value">{$payment_summary_amount_display|escape:'html'}</span>
             </div>
         </div>
     </div>
@@ -59,7 +59,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     </div>
                 {/if}
                 {if $payment_can_use_crypto || $payment_can_use_bank || $payment_can_use_balance}
-                    <div class="payment-method-start{if $payment_selected_method neq ''} is-hidden{/if}" data-payment-start>
+                    <div class="payment-method-start{if $payment_can_use_crypto && !$payment_can_use_bank && !$payment_can_use_balance} payment-method-start--crypto-only{/if}{if $payment_selected_method neq ''} is-hidden{/if}" data-payment-start>
                         <div class="payment-method-start__buttons">
                         {if $payment_can_use_crypto}
                             <button type="button" class="payment-method-start__button" data-payment-target="crypto">
@@ -77,6 +77,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             </button>
                         {/if}
                         </div>
+                        {if $payment_can_use_balance}
+                        <p class="payment-method-start__balance-note"><i class="bi bi-wallet2" aria-hidden="true"></i><strong>{$t.payment_balance_available_notice|escape:'html'}</strong></p>
+                        {elseif $payment_can_use_crypto && !$payment_can_use_bank}
+                        <p class="payment-method-start__crypto-only-note"><strong>*** {$t.payment_crypto_only_notice|escape:'html'}</strong></p>
+                        {/if}
                         <div class="payment-method-hero">
                             <img src="/img/package.jpg" alt="Payment package" class="payment-method-hero__image" />
                         </div>

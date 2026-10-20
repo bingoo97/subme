@@ -642,3 +642,31 @@
 .balance-topup-modal .balance-topup-modal__pending-payment{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;margin:16px 0 0;animation:customer-topup-pending-pulse 3s ease-in-out infinite;}
 @keyframes customer-topup-pending-pulse{0%,100%{box-shadow:0 0 0 0 rgba(220,53,69,0);}45%{box-shadow:0 0 0 4px rgba(220,53,69,.14);}75%{box-shadow:0 0 0 7px rgba(220,53,69,0);}}
 @media(prefers-reduced-motion:reduce){.balance-topup-modal .balance-topup-modal__pending-payment{animation:none;}}
+
+/* Quiet order selection summary, with a smaller footprint on phones. */
+.payment-wizard .payment-wizard__summary-table-wrap{margin:16px 0 22px;}
+.payment-wizard .payment-summary-bar{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px 20px;padding:13px 15px;border:1px solid #e6ebf1;border-radius:8px;background:#fff;box-shadow:none;}
+.payment-wizard .payment-summary-item{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 7px;width:auto;min-height:0;padding:0;border:0;background:transparent;}
+.payment-wizard .payment-summary-item__label{color:#8a97a8;font-size:10px;font-weight:400;letter-spacing:0;}
+.payment-wizard .payment-summary-item__value{color:#52677f;font-size:12px;font-weight:500;line-height:1.65;}
+.payment-wizard .payment-summary-item__value .provider{padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:inherit;font-weight:600;}
+.payment-wizard .payment-summary-item--amount{justify-content:flex-end;}
+.payment-wizard .payment-summary-item--amount .payment-summary-item__value{color:#29805a;font-size:13px;font-weight:600;white-space:nowrap;}
+.payment-wizard .payment-method-start--crypto-only .payment-method-start__buttons{margin-bottom:10px;}
+.payment-wizard .payment-method-start--crypto-only [data-payment-target="crypto"]{animation:customer-crypto-method-pulse 3s ease-in-out infinite;}
+.payment-wizard .payment-method-start__crypto-only-note{margin:0 0 18px;color:#c24758;font-size:11px;line-height:1.7;}
+.payment-wizard .payment-method-start__crypto-only-note strong{font-weight:600;}
+@keyframes customer-crypto-method-pulse{0%,100%{box-shadow:0 0 0 0 rgba(32,37,46,0);}45%{box-shadow:0 0 0 4px rgba(32,37,46,.13);}75%{box-shadow:0 0 0 7px rgba(32,37,46,0);}}
+@media(max-width:767px){
+    .payment-wizard .payment-summary-bar{grid-template-columns:minmax(0,1fr) auto;gap:9px 12px;padding:11px 12px;}
+    .payment-wizard .payment-summary-item--order{grid-column:1;grid-row:1;}
+    .payment-wizard .payment-summary-item--amount{grid-column:2;grid-row:1;}
+    .payment-wizard .payment-summary-item--subscription{grid-column:1/-1;grid-row:2;flex:none;padding-top:9px;border-top:1px solid #eef1f5;}
+    .payment-wizard .payment-summary-item--subscription .payment-summary-item__label{flex-basis:100%;}
+    .payment-wizard .payment-summary-item__value{font-size:11px;}
+    .payment-wizard .payment-summary-item--amount .payment-summary-item__value{font-size:12px;}
+}
+@media(prefers-reduced-motion:reduce){.payment-wizard .payment-method-start--crypto-only [data-payment-target="crypto"]{animation:none;}}
+.payment-wizard .payment-method-start__balance-note{display:flex;align-items:baseline;gap:7px;margin:0 0 18px;color:#29805a;font-size:11px;line-height:1.7;}
+.payment-wizard .payment-method-start__balance-note>.bi{flex:none;font-size:14px;}
+.payment-wizard .payment-method-start__balance-note strong{font-weight:600;}
