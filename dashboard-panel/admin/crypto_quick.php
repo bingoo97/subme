@@ -213,7 +213,7 @@ function admin_crypto_reminder_view(Mysql_ks $db, string $csrf, array $messages,
 
 function admin_crypto_create_labels(): array {
     return admin_current_locale()==='pl' ? [
-        'no_wallet'=>'Brak dostępnej kryptowaluty z wolnym lub przypisanym portfelem i aktualnym kursem. Dodaj portfel lub sprawdź kursy w ustawieniach.', 'add_wallet'=>'Dodaj portfel', 'assigned'=>'Przypisany portfel', 'title'=>'Nowa płatność', 'user'=>'Klient', 'purpose'=>'Cel płatności', 'details'=>'Szczegóły',
+        'no_wallet_shared'=>'Współdzielenie portfeli jest włączone. Sprawdź aktywne płatności, dostępność adresów i aktualne kursy — chwilowo nie można wygenerować płatności.', 'no_wallet'=>'Brak dostępnej kryptowaluty z wolnym lub przypisanym portfelem i aktualnym kursem. Dodaj portfel lub sprawdź kursy w ustawieniach.', 'add_wallet'=>'Dodaj portfel', 'assigned'=>'Przypisany portfel', 'title'=>'Nowa płatność', 'user'=>'Klient', 'purpose'=>'Cel płatności', 'details'=>'Szczegóły',
         'search'=>'Wyszukaj po @handle lub e-mailu…', 'back'=>'Wstecz', 'choose'=>'Wybierz',
         'topup'=>'Doładowanie konta', 'order'=>'Płatność za zamówienie', 'new'=>'Nowe zamówienie', 'existing'=>'Istniejące zamówienie',
         'product'=>'Wybierz produkt', 'asset'=>'Wybierz kryptowalutę', 'amount'=>'Kwota doładowania',
@@ -225,7 +225,7 @@ function admin_crypto_create_labels(): array {
         'new_help'=>'Zamówienie zostanie utworzone jako oczekujące na płatność. Realizację potwierdzisz osobno.',
         'payment_details'=>'Szczegóły płatności', 'payment_list'=>'Lista nowych płatności', 'change'=>'Zmień klienta', 'review'=>'Sprawdź wybór i utwórz ticket. Płatność pojawi się na liście Nowe.',
     ] : [
-        'no_wallet'=>'No cryptocurrency with an available or assigned wallet and a current rate. Add a wallet or check rates in settings.', 'add_wallet'=>'Add wallet', 'assigned'=>'Assigned wallet', 'title'=>'New payment','user'=>'Customer','purpose'=>'Purpose','details'=>'Details','search'=>'Search @handle or email…','back'=>'Back','choose'=>'Choose',
+        'no_wallet_shared'=>'Wallet sharing is enabled. Check active payments, address availability and current rates — a payment cannot be created at the moment.', 'no_wallet'=>'No cryptocurrency with an available or assigned wallet and a current rate. Add a wallet or check rates in settings.', 'add_wallet'=>'Add wallet', 'assigned'=>'Assigned wallet', 'title'=>'New payment','user'=>'Customer','purpose'=>'Purpose','details'=>'Details','search'=>'Search @handle or email…','back'=>'Back','choose'=>'Choose',
         'topup'=>'Balance top-up','order'=>'Order payment','new'=>'New order','existing'=>'Existing order','product'=>'Choose product','asset'=>'Choose cryptocurrency','amount'=>'Top-up amount',
         'create'=>'Create payment · 60 min','loading'=>'Loading…','success'=>'Payment created. The ticket is valid for 60 minutes.',
         'pending'=>'This customer already has a pending payment. Review or cancel it first.','error'=>'Unable to complete this action. Please try again.',

@@ -168,7 +168,7 @@
             customer.replaceChildren();
             const card=button.closest('.admin-search-user-card').cloneNode(true);
             card.querySelector('.admin-search-user-card__actions')?.remove();
-            card.querySelectorAll('a').forEach(link=>{link.removeAttribute('href');});
+            card.querySelectorAll('a:not([data-create-customer-profile])').forEach(link=>{link.removeAttribute('href');});
             customer.append(card);
             wizard.querySelectorAll('[data-create-purpose]').forEach(node=>{node.disabled=true;});
             try {
@@ -188,7 +188,7 @@
                 get('pending').hidden=!data.has_pending_payment||!data.pending_payment_id;
                 if(data.pending_payment_id) get('pending').href='/admin/?page=payments&payment_type=crypto&payment_id='+Number(data.pending_payment_id);
                 get('wallet').hidden=!!data.items?.length||!data.can_wallet;
-                showNotice(data.has_pending_payment?copy.pending:!data.items?.length?copy.no_wallet:'',true);
+                showNotice(data.has_pending_payment?copy.pending:!data.items?.length?(data.wallet_shared?copy.no_wallet_shared:copy.no_wallet):'',true);
             }catch(error){if(error.name!=='AbortError')showNotice(copy.error,true);}
         });
         wizard.querySelectorAll('[data-create-purpose]').forEach(button=>button.addEventListener('click',()=>details(button.dataset.createPurpose==='topup'?'topup':'new_order')));

@@ -61,6 +61,7 @@ for($i=1;$i<=20;$i++){
 }
 $dir='/tmp/subme-quick-create-preview';if(!is_dir($dir))mkdir($dir,0700,true);
 $search=endpoint(['get'=>['action'=>'crypto_quick_create_search','q'=>'smoke']]);ck($search['status']===200&&str_contains($search['data']['html'],'data-admin-payment-customer-select'),'Search contains selectable customer cards');
+ck(str_contains($search['data']['html'],'data-create-customer-profile href="/admin/?page=users&amp;customer_id='),'Customer handles link to Users profile');
 file_put_contents($dir.'/search.json',json_encode($search['data']));
 $options=endpoint(['get'=>['action'=>'crypto_quick_create_options','customer_id'=>2]]);ck($options['status']===200&&count($options['data']['items'])===1&&$options['data']['items'][0]['has_existing_assignment']===1,'Assigned wallet appears without a free pool');file_put_contents($dir.'/options.json',json_encode($options['data']));
 ck(count($options['data']['product_options'])===1,'Only visible products are offered');
@@ -188,6 +189,24 @@ sql('UPDATE app_settings SET crypto_payments_enabled=0');
 $options=endpoint(['get'=>['action'=>'crypto_quick_create_options','customer_id'=>13]]);
 ck(empty($options['data']['ok']),'Disabled crypto returns clean JSON without undefined fields');
 sql('UPDATE app_settings SET crypto_payments_enabled=1');
+// Shared mode must reuse assigned addresses without requiring the old reusable flag.
+$walletStates=$db->select_full_user('SELECT id,status,disabled_at FROM crypto_wallet_addresses');
+sql("UPDATE crypto_wallet_addresses SET status='disabled',disabled_at=NOW()");
+sql("INSERT INTO customers(id,email,public_handle,password_hash,status) VALUES(31001,'shared-one@example.invalid','shared-one','unused','active'),(31002,'shared-two@example.invalid','shared-two','unused','active')");
+sql("INSERT INTO crypto_wallet_addresses(id,crypto_asset_id,address,status,network_code,is_reusable) VALUES(900,{$btc},'fixture-shared-wallet','assigned','bitcoin',0)");
+sql("INSERT INTO crypto_wallet_assignments(wallet_address_id,customer_id,status) VALUES(900,2,'active')");
+sql("INSERT INTO crypto_deposit_requests(customer_id,crypto_asset_id,wallet_address_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,status,requested_at,expires_at) VALUES(2,{$btc},900,20,2,50000,.0004,'archived',DATE_SUB(NOW(),INTERVAL 3 DAY),DATE_SUB(NOW(),INTERVAL 3 DAY))");
+sql("UPDATE app_settings SET crypto_wallet_shared_assignments_enabled=0");
+$off=admin_quick_crypto_payment_data($db,31001);ck($off['items']===[]&&!$off['wallet_shared'],'OFF does not reuse another customer address/history');
+sql("UPDATE app_settings SET crypto_wallet_shared_assignments_enabled=1");
+$on=endpoint(['get'=>['action'=>'crypto_quick_create_options','customer_id'=>31001]]);ck($on['status']===200&&$on['data']['wallet_shared']&&count($on['data']['items'])===1,'ON offers assigned shared wallet despite empty free pool and reusable=0');
+$shared=create(31001,'topup',0,0,23);ck(!empty($shared['ok']),'Shared wallet with old history creates a ticket: '.json_encode($shared));
+$sharedRow=$db->select_user('SELECT * FROM crypto_deposit_requests WHERE id='.(int)$shared['request_id']);ck((int)$sharedRow['wallet_address_id']===900,'Existing wallet reused; no duplicated address');
+ck(countRows('crypto_wallet_assignments',"wallet_address_id=900 AND customer_id=31001 AND status='active'")===1&&countRows('crypto_wallet_assignments',"wallet_address_id=900 AND customer_id=2 AND status='active'")===1,'Sharing retains old assignment and creates only one new assignment');
+$busy=admin_quick_crypto_payment_data($db,31002);ck($busy['wallet_shared']&&$busy['items']===[],'Occupied shared address is not offered to a second concurrent ticket');
+ck(empty(create(31002,'topup',0,0,23)['ok']),'Concurrent competing ticket stays blocked');
+foreach($walletStates as $wallet){$db->update_using_id(['status','disabled_at'],[$wallet['status'],$wallet['disabled_at']],'crypto_wallet_addresses',(int)$wallet['id']);}
+sql("UPDATE crypto_wallet_addresses SET status='disabled',disabled_at=NOW() WHERE id=900");sql("UPDATE app_settings SET crypto_wallet_shared_assignments_enabled=0");
 echo "PASS {$checks} quick payment creation, linking, wallet reuse, concurrency and endpoint checks\n";
 
 if(getenv('APP_UI_EXPORT')==='1'){

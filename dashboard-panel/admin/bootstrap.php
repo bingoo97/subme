@@ -19548,10 +19548,6 @@ function admin_chat_available_crypto_wallet_for_asset(Mysql_ks $db, int $assetId
                       AND open_request.status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
                     LIMIT 1
                )
-               AND (
-                    crypto_wallet_addresses.status = 'available'
-                    OR crypto_wallet_addresses.is_reusable = 1
-               )
              ORDER BY
                   CASE WHEN crypto_wallet_addresses.status = 'available' THEN 0 ELSE 1 END ASC,
                   crypto_wallet_addresses.is_reusable DESC,
@@ -21262,13 +21258,13 @@ function admin_assign_crypto_wallet_customer(Mysql_ks $db, int $walletId, int $c
         return ['ok' => false, 'message' => 'Disabled wallet cannot be assigned.'];
     }
 
-    if (function_exists('app_crypto_wallet_has_non_cancelled_history_for_other_customer')
+    $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
+    if (!$sharedEnabled && function_exists('app_crypto_wallet_has_non_cancelled_history_for_other_customer')
         && app_crypto_wallet_has_non_cancelled_history_for_other_customer($db, $walletId, $customerId)
     ) {
         return ['ok' => false, 'message' => 'This wallet already has payment history for another customer and cannot be assigned again.'];
     }
 
-    $sharedEnabled = admin_crypto_wallet_shared_assignments_enabled($settings);
     if (!$sharedEnabled) {
         if (app_crypto_wallet_has_active_assignment_for_other_customer($db, $walletId, $customerId)) {
             return ['ok' => false, 'message' => 'This wallet is already assigned to another customer.'];
@@ -27755,7 +27751,7 @@ function admin_render_payment_customer_search_results_html(array $customers, arr
                                 <?php echo admin_e($email !== '' ? $email : '—'); ?>
                             </a>
                             <?php if ($publicHandle !== ''): ?>
-                                <div class="admin-search-user-card__handle">@<?php echo admin_e($publicHandle); ?></div>
+                                <a class="admin-search-user-card__handle" data-create-customer-profile href="/admin/?page=users&amp;customer_id=<?php echo (int)($row['id'] ?? 0); ?>">@<?php echo admin_e($publicHandle); ?></a>
                             <?php endif; ?>
                             <div class="admin-search-user-card__meta">
                                 <img src="<?php echo admin_e($localeFlagUrl); ?>" alt="<?php echo admin_e($localeFlagAlt !== '' ? $localeFlagAlt : 'EN'); ?>" class="admin-search-user-card__locale-flag" loading="lazy">
@@ -27809,6 +27805,7 @@ function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $m
         return $payload;
     }
 
+    $payload['wallet_shared'] = admin_crypto_wallet_shared_assignments_enabled(admin_app_settings($db));
     $payload['customer'] = [
         'id' => (int)($customer['id'] ?? 0),
         'email' => (string)($customer['email'] ?? ''),

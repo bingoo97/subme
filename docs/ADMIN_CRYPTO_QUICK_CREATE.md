@@ -59,3 +59,9 @@ Poprawki:
 - Zastępowany nieopłacony ticket pozostaje wygasły; nie trafia do archiwum oznaczającego rozliczenie. Wspólne porządkowanie po utworzeniu/odnowieniu zachowuje anulowane zgłoszenia przez 72h, a zapisanych wpłat nie usuwa tą ścieżką.
 
 Testy używają odseparowanego schematu MySQL, fikcyjnych portfeli, zapisanych lokalnie kursów i transakcji testowych. Nie wysyłają środków ani wiadomości do prawdziwych klientów. Bez deployu.
+
+## Shared wallets and customer links
+
+The creator now honours global sharing for assigned addresses even when their old `is_reusable` flag is zero. Historical payments of another customer do not forbid an additional assignment when sharing is ON; OFF retains the existing exclusive-assignment/history restrictions. The creator still excludes addresses serving an open payment to prevent competing tickets on the same address. An empty shared-mode chooser explains temporary availability/rate constraints instead of claiming that the wallet pool is empty.
+
+Customer handles link to the Users profile both in search results and after customer selection. The Add wallet link uses the standard green btn-success style. Verified in the local browser, including its computed colours and the retained selected-customer profile URL. Regression suite: 95 checks, including ON/OFF sharing, history reuse, no duplicated addresses/assignments and rejection of a concurrent competing ticket. No live payments or deployment in this change.

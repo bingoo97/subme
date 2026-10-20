@@ -79,6 +79,7 @@ if (str_starts_with($action, 'crypto_quick_create_')) {
                     'Selected product is not available for this user.'=>'Ten produkt nie jest dostępny dla wybranego klienta.',
                     'Crypto asset not available.'=>'Ta kryptowaluta nie ma dostępnego portfela lub aktualnego kursu. Sprawdź portfele i kursy.',
                     'No wallet available for this asset.'=>'Brak wolnego portfela dla tej kryptowaluty. Dodaj portfel i spróbuj ponownie.',
+                    'This wallet already has an active payment request.'=>'Ten portfel obsługuje już inną płatność. Poczekaj na jej zakończenie albo wybierz inną kryptowalutę.',
                     'Wallet is no longer available.'=>'Portfel został już zajęty lub wyłączony. Wybierz kryptowalutę ponownie.',
                 ];
                 $result['message']=$errors[$result['message']??'']??'Nie udało się utworzyć płatności. Sprawdź dane i spróbuj ponownie.';

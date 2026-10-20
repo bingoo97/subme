@@ -21271,7 +21271,8 @@ body.admin-app-page .admin-crypto-quick__purpose>.bi{font-size:inherit;line-heig
 .admin-crypto-create .admin-search-user-card__handle{font-weight:600;}
 .admin-crypto-create .admin-search-user-card__email{color:#8390a2;text-decoration:none!important;}
 
-.admin-crypto-create .admin-crypto-create__wallet-link{display:inline-flex;align-items:center;gap:7px;padding:9px 12px;border:1px solid #d9e0e8;border-radius:7px;line-height:1.4;background:#fff;color:#52657e;text-decoration:none;}
+.admin-crypto-create .admin-crypto-create__wallet-link{display:inline-flex;align-items:center;gap:7px;padding:9px 12px;border-radius:7px;line-height:1.4;text-decoration:none;}
+.admin-crypto-create .admin-crypto-create__wallet-link:not(.btn-success){border:1px solid #d9e0e8;background:#fff;color:#52657e;}
 
 /* The Payments page uses the same three-step creator as the topbar. */
 .admin-payment-create-panel{margin:12px 0 18px;min-width:0;}
