@@ -1,0 +1,2 @@
+public_html/assets/css/admin.css
+dashboard-panel/admin/views/crypto_quick.php
