@@ -17862,7 +17862,7 @@ function admin_create_order(Mysql_ks $db, array $input, ?float $quotedAmount = n
     }
 
     $durationHours = (int)($product['duration_hours'] ?? 0);
-    $expiresAt = admin_product_type_uses_expiry($product['product_type'] ?? 'subscription') && $durationHours > 0
+    $expiresAt = empty($input['defer_expiry']) && admin_product_type_uses_expiry($product['product_type'] ?? 'subscription') && $durationHours > 0
         ? app_subscription_expiry_from_base_timestamp(time(), $durationHours)
         : null;
     $orderReference = 'ADM-' . date('YmdHis') . '-' . $customerId;
@@ -19984,11 +19984,12 @@ function admin_chat_payment_bank_preview_html(array $preview, array $messages): 
     return trim((string)ob_get_clean());
 }
 
-function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $assetId, $amount, array $messages): array
+function admin_chat_crypto_payment_preview(Mysql_ks $db, int $customerId, int $assetId, $amount, array $messages, bool $serverQuotedAmount = false): array
 {
     $settings = admin_app_settings($db);
     $currencyContext = admin_chat_payment_currency_context($db);
-    $amountValue = admin_chat_payment_amount_normalize($amount);
+    $amountValue = $serverQuotedAmount && is_numeric($amount) && is_finite((float)$amount) && (float)$amount > 0 && (float)$amount <= 99999999.99
+        ? round((float)$amount, 2) : admin_chat_payment_amount_normalize($amount);
     if ($customerId <= 0 || $assetId <= 0 || $amountValue <= 0) {
         return ['ok' => false, 'message' => 'Invalid crypto payment preview payload.'];
     }
@@ -27997,6 +27998,14 @@ function admin_render_payment_customer_search_results_html(array $customers, arr
     return trim((string)ob_get_clean());
 }
 
+function admin_quick_payment_has_open_receipt(Mysql_ks $db, int $customerId): bool
+{
+    if (admin_customer_has_pending_crypto_payment($db, $customerId)) return true;
+    return (bool)$db->select_user("SELECT id FROM crypto_deposit_requests WHERE customer_id={$customerId}
+        AND status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review')
+        AND (status IN ('awaiting_confirmation','awaiting_review') OR COALESCE(received_crypto_amount,0)>0) LIMIT 1");
+}
+
 function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $messages = []): array
 {
     $customer = $customerId > 0 ? app_find_customer_by_id($db, $customerId) : null;
@@ -28006,7 +28015,8 @@ function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $m
 
     $payload = admin_chat_payment_modal_data($db, 'crypto', $customerId, $messages);
     if (empty($payload['ok'])) {
-        return $payload;
+        $payload['product_presets']=$payload['product_options'];
+    return $payload;
     }
 
     $payload['customer'] = [
@@ -28014,20 +28024,30 @@ function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $m
         'email' => (string)($customer['email'] ?? ''),
         'public_handle' => (string)($customer['public_handle'] ?? ''),
     ];
-    $payload['has_pending_payment'] = admin_customer_has_pending_crypto_payment($db, $customerId) ? 1 : 0;
+    $payload['has_pending_payment'] = admin_quick_payment_has_open_receipt($db, $customerId) ? 1 : 0;
     $visibleProviderIds = admin_customer_visible_provider_ids($db, $customerId);
     $payload['visible_provider_ids'] = $visibleProviderIds;
     $payload['product_options'] = array_values(array_filter(
-        admin_chat_payment_product_presets($db, admin_chat_payment_currency_context($db)),
+        $payload['product_presets'] ?? [],
         static function (array $preset) use ($visibleProviderIds): bool {
-            if ($visibleProviderIds === []) {
-                return true;
-            }
-            return in_array((int)($preset['provider_id'] ?? 0), $visibleProviderIds, true);
+            $providerId=(int)($preset['provider_id'] ?? 0);
+            return $providerId===0 || in_array($providerId, $visibleProviderIds, true);
         }
     ));
 
+    $payload['product_presets']=$payload['product_options'];
     return $payload;
+}
+
+function admin_quick_payment_unpaid_order(Mysql_ks $db, int $customerId, int $orderId, bool $lock = false): ?array
+{
+    $currency = admin_chat_payment_currency_context($db);
+    $currencyId = (int)$currency['currency_id'];
+    $row = $db->select_user("SELECT o.* FROM orders o INNER JOIN products p ON p.id=o.product_id
+        WHERE o.id={$orderId} AND o.customer_id={$customerId} AND o.payment_status='unpaid'
+          AND o.status='pending_payment' AND o.total_amount>0 AND o.currency_id={$currencyId}".($lock?' FOR UPDATE':''));
+    if (!$row || !app_customer_provider_is_visible($db, $customerId, (int)(admin_product_basic_row($db, (int)$row['product_id'])['provider_id'] ?? 0))) return null;
+    return $row;
 }
 
 function admin_quick_create_crypto_payment_request(
@@ -28037,21 +28057,40 @@ function admin_quick_create_crypto_payment_request(
     $amount,
     int $adminUserId,
     array $messages = [],
-    int $productId = 0
+    int $productId = 0,
+    string $purpose = 'topup',
+    int $orderId = 0
 ): array {
     $settings = admin_app_settings($db);
     if (empty($settings['crypto_payments_enabled'])) {
         return ['ok' => false, 'message' => 'Crypto payments are disabled.'];
     }
 
+    if (!in_array($purpose, ['topup', 'new_order', 'existing_order'], true)) {
+        return ['ok'=>false, 'message'=>'Invalid payment purpose.'];
+    }
+    $currency = admin_chat_payment_currency_context($db);
+    $order = null;
+    if ($purpose === 'existing_order') {
+        $order = admin_quick_payment_unpaid_order($db, $customerId, $orderId);
+        if (!$order) return ['ok'=>false, 'message'=>'Selected order is unavailable or already paid.'];
+        $productId = 0;
+        $amount = (float)$order['total_amount'];
+    }
+    if ($purpose === 'new_order' && $productId <= 0) return ['ok'=>false, 'message'=>'Choose a product.'];
     if ($productId > 0) {
         $product = admin_product_find($db, $productId);
-        if (!is_array($product) || empty($product['id']) || empty($product['is_active']) || !empty($product['is_trial'])) {
+        if (!is_array($product) || empty($product['id']) || empty($product['is_active']) || !empty($product['is_trial']) || (int)$product['currency_id'] !== (int)$currency['currency_id']) {
             return ['ok' => false, 'message' => 'Selected product is unavailable.'];
         }
 
         if (!app_customer_provider_is_visible($db, $customerId, (int)($product['provider_id'] ?? 0))) {
             return ['ok' => false, 'message' => 'Selected product is not available for this user.'];
+        }
+
+        $providerId = (int)($product['provider_id'] ?? 0);
+        if ($providerId > 0 && !$db->select_user("SELECT id FROM product_providers WHERE id={$providerId} AND is_active=1")) {
+            return ['ok'=>false, 'message'=>'Selected product is unavailable.'];
         }
 
         $productAmount = (float)($product['price_amount'] ?? 0);
@@ -28062,11 +28101,11 @@ function admin_quick_create_crypto_payment_request(
         $amount = $productAmount;
     }
 
-    if (admin_customer_has_pending_crypto_payment($db, $customerId)) {
+    if (admin_quick_payment_has_open_receipt($db, $customerId)) {
         return ['ok' => false, 'message' => 'pending_crypto_payment'];
     }
 
-    $preview = admin_chat_crypto_payment_preview($db, $customerId, $assetId, $amount, $messages);
+    $preview = admin_chat_crypto_payment_preview($db, $customerId, $assetId, $amount, $messages, $productId > 0 || $purpose === 'existing_order');
     if (empty($preview['ok'])) {
         return $preview;
     }
@@ -28077,10 +28116,28 @@ function admin_quick_create_crypto_payment_request(
     }
 
     $db->start();
+    try {
+    $lockedCustomer = $db->select_user("SELECT id FROM customers WHERE id={$customerId} AND status='active' FOR UPDATE");
+    if (!$lockedCustomer || admin_quick_payment_has_open_receipt($db, $customerId)) {
+        $db->query('ROLLBACK'); return ['ok'=>false, 'message'=>'pending_crypto_payment'];
+    }
+    if ($purpose === 'existing_order') {
+        $lockedOrder = admin_quick_payment_unpaid_order($db, $customerId, $orderId, true);
+        if (!$lockedOrder || (float)$lockedOrder['total_amount'] !== (float)$order['total_amount']) {
+            $db->query('ROLLBACK'); return ['ok'=>false, 'message'=>'Order changed. Select it again.'];
+        }
+        $otherRequest = $db->select_user("SELECT id FROM crypto_deposit_requests WHERE order_id={$orderId} AND status NOT IN ('cancelled','expired','archived') LIMIT 1");
+        $bankRequest = $db->select_user("SELECT id FROM bank_transfer_requests WHERE order_id={$orderId} AND status NOT IN ('cancelled','expired','archived') LIMIT 1");
+        if ($otherRequest || $bankRequest) {
+            $db->query('ROLLBACK'); return ['ok'=>false, 'message'=>'This order already has a payment request.'];
+        }
+    }
+    $lockedWallet = $db->select_user("SELECT id FROM crypto_wallet_addresses WHERE id={$walletAddressId} AND disabled_at IS NULL AND status<>'disabled' FOR UPDATE");
+    if (!$lockedWallet) { $db->query('ROLLBACK'); return ['ok'=>false, 'message'=>'Wallet is no longer available.']; }
 
     $walletAssignmentId = (int)($preview['wallet_assignment_id'] ?? 0);
     if ($walletAssignmentId <= 0) {
-        $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings);
+        $assignResult = admin_assign_crypto_wallet_customer($db, $walletAddressId, $customerId, $adminUserId, $settings, '', false);
         if (empty($assignResult['ok'])) {
             $db->query('ROLLBACK');
             return ['ok' => false, 'message' => (string)($assignResult['message'] ?? 'Unable to assign wallet.')];
@@ -28111,7 +28168,8 @@ function admin_quick_create_crypto_payment_request(
         "UPDATE crypto_deposit_requests
          SET status = 'archived'
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+           AND status IN ('pending', 'pending_payment')
+           AND COALESCE(received_crypto_amount,0)=0
            AND expires_at IS NOT NULL
            AND expires_at < '{$now}'"
     );
@@ -28208,12 +28266,26 @@ function admin_quick_create_crypto_payment_request(
 
     app_delete_cancelled_crypto_requests_for_asset($db, $customerId, $assetId);
 
-    $db->commit();
-    $liveChatMessageCreated = admin_queue_crypto_payment_request_live_chat_card($db, $customerId, $preview);
+    if ($purpose === 'new_order') {
+        $created = admin_create_order($db, ['customer_id'=>$customerId, 'product_id'=>$productId, 'defer_expiry'=>true], (float)$preview['fiat_amount']);
+        $orderId = (int)($created['order_id'] ?? 0);
+        if (empty($created['ok']) || $orderId <= 0) throw new RuntimeException('Order creation failed.');
+    }
+    if ($purpose !== 'topup' && !$db->update_using_id(['order_id'], [$orderId], 'crypto_deposit_requests', $requestId)) {
+        throw new RuntimeException('Unable to link order.');
+    }
+    if (!$db->query('COMMIT')) throw new RuntimeException('Payment commit failed.');
+    } catch (Throwable $error) {
+        $db->query('ROLLBACK');
+        return ['ok'=>false, 'message'=>'Unable to create crypto payment request.'];
+    }
+    $paymentUrl = $purpose !== 'topup' ? rtrim((string)($settings['site_url'] ?? ''), '/') . '/orders?payment=' . $orderId : '';
+    $liveChatMessageCreated = admin_queue_crypto_payment_request_live_chat_card($db, $customerId, $preview, $paymentUrl);
 
     return [
         'ok' => true,
         'request_id' => $requestId,
+        'order_id' => $purpose !== 'topup' ? $orderId : 0,
         'payment_type' => 'crypto',
         'payment_url' => '/admin/?page=payments&payment_type=crypto&payment_id=' . $requestId,
         'live_chat_message_created' => $liveChatMessageCreated ? 1 : 0,

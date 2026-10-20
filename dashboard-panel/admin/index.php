@@ -21238,7 +21238,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     <?php if (!empty($panelTiersConfig['enabled'])) require __DIR__ . '/views/panel_tiers_modal.php'; ?>
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
-    <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')): ?><script src="/assets/js/admin-crypto-quick.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-quick.js'); ?>"></script><script src="/assets/js/admin-crypto-reminder.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-reminder.js'); ?>"></script><?php endif; ?>
+    <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')): ?><script src="/assets/js/admin-crypto-quick.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-quick.js'); ?>"></script><script src="/assets/js/admin-crypto-create.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-create.js'); ?>"></script><script src="/assets/js/admin-crypto-reminder.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-reminder.js'); ?>"></script><?php endif; ?>
     <script src="/assets/js/provider-browser.js?v=<?php echo admin_public_asset_version('assets/js/provider-browser.js'); ?>"></script>
     <?php if ($route === 'dashboard'): ?>
         <script src="/assets/js/admin-dashboard.js?v=<?php echo admin_public_asset_version('assets/js/admin-dashboard.js'); ?>"></script>

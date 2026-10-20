@@ -59,7 +59,7 @@ function admin_crypto_quick_html(array $rows, string $filter, ?array $labels = n
     if($filter==='new'&&!$messages) $messages=admin_load_messages(admin_current_locale());
     ob_start();
     if(!$rows){ ?>
-        <div class="admin-crypto-quick__empty"><span><i class="bi bi-wallet2" aria-hidden="true"></i></span><strong><?php echo admin_e($l['empty']); ?></strong><p><?php echo admin_e($l['empty_help']); ?></p></div>
+        <div class="admin-crypto-quick__empty"><span><i class="bi bi-wallet2" aria-hidden="true"></i></span><strong><?php echo admin_e($l['empty']); ?></strong><p><?php echo admin_e($l['empty_help']); ?></p><?php if($filter==='new'): ?><button type="button" class="btn btn-dark btn-sm" data-crypto-create-open><i class="bi bi-plus-lg" aria-hidden="true"></i> <?php echo admin_e(admin_current_locale()==='pl'?'Dodaj nową płatność':'Add new payment'); ?></button><?php endif; ?></div>
     <?php }
     foreach($rows as $row){
         $orderId=(int)($row['order_id']??0);$needsAction=!empty($row['order_needs_action']);$autoAccepted=!empty($row['auto_accepted']);
@@ -207,4 +207,28 @@ function admin_crypto_reminder_view(Mysql_ks $db, string $csrf, array $messages,
     $html=$rows?admin_crypto_quick_html($rows,$category,admin_crypto_quick_labels($locale),$csrf,$messages):'';
     $html=str_replace('cryptoQuickActions','cryptoReminderActions',$html);
     return ['ok'=>true,'filter'=>$category,'counts'=>$counts,'html'=>$html,'copy'=>$content,'workflow'=>$workflow,'order_url'=>$orderUrl];
+}
+
+function admin_crypto_create_labels(): array {
+    return admin_current_locale()==='pl' ? [
+        'no_wallet'=>'Brak dostępnej kryptowaluty z wolnym lub przypisanym portfelem i aktualnym kursem. Dodaj portfel lub sprawdź kursy w ustawieniach.', 'add_wallet'=>'Dodaj portfel', 'assigned'=>'Przypisany portfel', 'title'=>'Nowa płatność', 'user'=>'Klient', 'purpose'=>'Cel płatności', 'details'=>'Szczegóły',
+        'search'=>'Wyszukaj po @handle lub e-mailu…', 'back'=>'Wstecz', 'choose'=>'Wybierz',
+        'topup'=>'Doładowanie konta', 'order'=>'Płatność za zamówienie', 'new'=>'Nowe zamówienie', 'existing'=>'Istniejące zamówienie',
+        'product'=>'Wybierz produkt', 'asset'=>'Wybierz kryptowalutę', 'amount'=>'Kwota doładowania',
+        'create'=>'Utwórz płatność · 60 min', 'loading'=>'Pobieranie…', 'success'=>'Płatność utworzona. Ticket jest ważny przez 60 minut.',
+        'pending'=>'Ten klient ma już oczekującą płatność. Najpierw sprawdź lub anuluj poprzednią.',
+        'error'=>'Nie udało się wykonać operacji. Spróbuj ponownie.', 'uncertain'=>'Nie udało się potwierdzić wyniku. Sprawdź listę przed kolejną próbą.',
+        'empty'=>'Brak dostępnych opcji.', 'order_help'=>'Wybierz nieopłacone zamówienie. Przedłużenia opłaconych zamówień wykonasz w zakładce Przedłuż.',
+        'topup_help'=>'Wpłata zasili saldo klienta po zatwierdzeniu. Nie tworzy zamówienia.',
+        'new_help'=>'Zamówienie zostanie utworzone jako oczekujące na płatność. Realizację potwierdzisz osobno.',
+        'change'=>'Zmień klienta', 'review'=>'Sprawdź wybór i utwórz ticket. Płatność pojawi się na liście Nowe.',
+    ] : [
+        'no_wallet'=>'No cryptocurrency with an available or assigned wallet and a current rate. Add a wallet or check rates in settings.', 'add_wallet'=>'Add wallet', 'assigned'=>'Assigned wallet', 'title'=>'New payment','user'=>'Customer','purpose'=>'Purpose','details'=>'Details','search'=>'Search @handle or email…','back'=>'Back','choose'=>'Choose',
+        'topup'=>'Balance top-up','order'=>'Order payment','new'=>'New order','existing'=>'Existing order','product'=>'Choose product','asset'=>'Choose cryptocurrency','amount'=>'Top-up amount',
+        'create'=>'Create payment · 60 min','loading'=>'Loading…','success'=>'Payment created. The ticket is valid for 60 minutes.',
+        'pending'=>'This customer already has a pending payment. Review or cancel it first.','error'=>'Unable to complete this action. Please try again.',
+        'uncertain'=>'Unable to confirm the result. Check the list before trying again.','empty'=>'No available options.',
+        'order_help'=>'Choose an unpaid order. Renew paid orders using the Renew tab.','topup_help'=>'Once approved, the payment credits the customer balance. No order is created.',
+        'new_help'=>'Creates an order awaiting payment. Fulfilment is confirmed separately.','change'=>'Change customer','review'=>'Review your selection and create the ticket. It will appear under New.',
+    ];
 }

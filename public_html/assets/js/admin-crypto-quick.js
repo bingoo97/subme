@@ -176,6 +176,20 @@
             selectFilter(button.dataset.cryptoQuickFilter);
             load();
         }));
+        panel.addEventListener('crypto-quick-created', event => {
+            cache.clear(); ++revision;
+            if (controller) controller.abort();
+            controller = null;
+            selectFilter('new');
+            const view = event.detail;
+            if (view?.counts) updateBadge(view.counts);
+            if (view?.filter === 'new' && typeof view.html === 'string') {
+                list.innerHTML = view.html;
+                cache.set('new', {html:view.html,time:Date.now()});
+                list.setAttribute('aria-busy','false');
+                syncHints(); startCountdown();
+            } else load(true);
+        });
         let renewing = false;
         const renewalResult = panel.querySelector('[data-crypto-quick-result]');
         panel.addEventListener('submit', async event => {
