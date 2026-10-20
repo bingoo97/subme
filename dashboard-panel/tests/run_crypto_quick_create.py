@@ -15,7 +15,8 @@ try:
  # Trigger only rejects linking customer 7; install with DB-owner privileges in this disposable schema.
  trigger="CREATE TRIGGER reject_quick_link BEFORE UPDATE ON crypto_deposit_requests FOR EACH ROW BEGIN IF NEW.customer_id=7 AND NEW.order_id IS NOT NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fixture rollback'; END IF; END"
  sql(f"USE `{name}`;\nDELIMITER $$\n{trigger}$$\nDELIMITER ;\n")
- for test in ['crypto_quick_create_regression.php']:
+ sql(f"USE `{name}`;\nDELIMITER $$\nCREATE TRIGGER reject_cash_history BEFORE INSERT ON customer_activity_logs FOR EACH ROW BEGIN IF NEW.customer_id=32008 AND NEW.action_key='cash_payment_received' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fixture cash rollback'; END IF; END$$\nDELIMITER ;\n")
+ for test in ['crypto_quick_create_regression.php','cash_payments_regression.php']:
   r=subprocess.run(['docker','exec','-e','DB_NAME='+name,'-e','APP_CRYPTO_CACHE_DIR='+cache,'reseller_web_local','php','/var/www/html/dashboard-panel/tests/'+test],capture_output=True,text=True)
   print(test+': '+r.stdout+r.stderr,flush=True)
   if r.returncode:raise RuntimeError('Regression failed')

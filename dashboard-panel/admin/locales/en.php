@@ -2020,6 +2020,7 @@ return [
     'enum_archived' => 'Archived',
     'enum_pending' => 'Pending',
     'enum_delivered' => 'Delivered',
+    'enum_cash' => 'Cash',
     'enum_crypto' => 'Crypto',
     'enum_bank_transfer' => 'Bank transfer',
     'users_short_label' => 'users',

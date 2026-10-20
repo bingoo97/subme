@@ -10,15 +10,17 @@
             <div data-create-screen="purpose" hidden class="admin-crypto-create__choices">
                 <button type="button" data-create-purpose="topup"><i class="bi bi-wallet2" aria-hidden="true"></i><strong><?php echo admin_e($createCopy['topup']); ?></strong><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
                 <button type="button" data-create-purpose="order"><i class="bi bi-box-seam" aria-hidden="true"></i><strong><?php echo admin_e($createCopy['order']); ?></strong><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                <div class="admin-crypto-create__guide"><i class="bi bi-info-circle" aria-hidden="true"></i><div><?php echo admin_e($createCopy['purpose_help']); ?></div></div>
             </div>
             <form data-create-screen="details" data-create-form hidden>
                 <div class="admin-crypto-create__segmented" data-create-order-mode><button type="button" data-create-mode="new_order"><?php echo admin_e($createCopy['new']); ?></button><button type="button" data-create-mode="existing_order"><?php echo admin_e($createCopy['existing']); ?></button></div>
                 <p class="admin-crypto-create__help" data-create-help></p>
-                <label data-create-product-wrap><?php echo admin_e($createCopy['product']); ?><select class="form-select" data-create-product></select></label>
                 <label data-create-order-wrap hidden><?php echo admin_e($createCopy['existing']); ?><select class="form-select" data-create-order></select></label>
+                <label data-create-product-wrap><span data-create-product-label><?php echo admin_e($createCopy['product']); ?></span><select class="form-select" data-create-product></select></label>
                 <label data-create-amount-wrap hidden><span data-create-amount-label><?php echo admin_e($createCopy['amount']); ?></span><input class="form-control" type="number" min="1" max="200" step="0.01" inputmode="decimal" data-create-amount></label>
                 <fieldset><legend><?php echo admin_e($createCopy['asset']); ?></legend><div class="admin-crypto-create__assets" data-create-assets></div></fieldset>
-                <p class="admin-crypto-create__help"><?php echo admin_e($createCopy['review']); ?></p>
+                <label class="admin-crypto-create__renewal-choice" data-create-renewal-wrap hidden><input type="checkbox" data-create-apply-renewal><span><strong><?php echo admin_e($createCopy['renewal_apply']); ?></strong><small><?php echo admin_e($createCopy['renewal_apply_help']); ?></small></span></label>
+                <p class="admin-crypto-create__help" data-create-review><?php echo admin_e($createCopy['review']); ?></p>
                 <button type="submit" class="btn btn-dark admin-crypto-create__submit" data-create-submit disabled><i class="bi bi-plus-lg" aria-hidden="true"></i> <?php echo admin_e($createCopy['create']); ?></button>
             </form>
         </section>

@@ -6830,6 +6830,16 @@ function admin_order_pending_renewal_context(Mysql_ks $db, array $order): array
             }
         }
 
+        if ($paymentType === 'cash' && $paymentId > 0 && schema_object_exists($db, 'admin_cash_payments')) {
+            $cash = $db->select_user('SELECT amount,created_at FROM admin_cash_payments WHERE id='.$paymentId.' AND customer_id='.(int)$order['customer_id'].' AND renewal_id='.(int)$pendingRenewal['id']);
+            if ($cash) {
+                $context['payment_type']='cash'; $context['payment_id']=$paymentId; $context['payment_status']='approved';
+                $context['payment_amount']=(float)$cash['amount'];
+                $context['payment_amount_label']=admin_format_money_value($cash['amount'],(string)($order['currency_code']??''));
+                $context['payment_approved_at']=(string)$cash['created_at'];
+            }
+        }
+
         $customerId = (int)($order['customer_id'] ?? $pendingRenewal['customer_id'] ?? 0);
         if ($customerId > 0 && schema_object_exists($db, 'customers') && schema_column_exists($db, 'customers', 'balance_amount')) {
             $customerRow = $db->select_user(
@@ -15879,6 +15889,7 @@ function admin_chat_payment_product_presets(Mysql_ks $db, array $currencyContext
             $label .= ' (' . $providerName . ')';
         }
         $presets[] = [
+            'duration_hours' => (int)($row['duration_hours'] ?? 0),
             'product_id' => (int)($row['id'] ?? 0),
             'provider_id' => (int)($row['provider_id'] ?? 0),
             'amount' => $amount,

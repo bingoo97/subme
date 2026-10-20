@@ -42,12 +42,13 @@ const fragment=source.slice(source.indexOf('        let pageListRequest'),source
  // An invalid top-up amount must not block the subsequent order form.
  const readyFragment=source.slice(source.indexOf('        const ready ='),source.indexOf('        const screen ='));
  const topupButton={dataset:{createPurpose:'topup'}},orderButton={dataset:{createPurpose:'order'}};
- const readyContext={busy:false,purpose:'topup',amount:{value:'250'},product:{value:'1',options:[1]},order:{value:'',options:[]},submit:{},payload:{items:[1],can_order:true},userId:19,assetId:'1',wizard:{querySelectorAll:()=>[topupButton,orderButton]}};
+ const readyContext={cashRenewal:()=>false,busy:false,purpose:'topup',amount:{value:'250'},product:{value:'1',options:[1]},order:{value:'',options:[]},submit:{},payload:{items:[1],can_order:true},userId:19,assetId:'1',wizard:{querySelectorAll:()=>[topupButton,orderButton]}};
  vm.createContext(readyContext);vm.runInContext(readyFragment+'\nthis.ready=ready;',readyContext);
  readyContext.ready();assert.equal(readyContext.submit.disabled,true);assert.equal(readyContext.amount.disabled,false);
  readyContext.purpose='new_order';readyContext.ready();assert.equal(readyContext.amount.disabled,true);assert.equal(readyContext.submit.disabled,false);
  readyContext.purpose='existing_order';readyContext.ready();assert.equal(readyContext.submit.disabled,true);assert.equal(readyContext.order.disabled,true);
  readyContext.payload.can_order=false;readyContext.ready();assert.equal(orderButton.disabled,true);assert.equal(topupButton.disabled,false);
+ readyContext.payload.can_order=true;readyContext.payload.items=[];readyContext.purpose='topup';readyContext.assetId='cash';readyContext.amount.value='25';readyContext.ready();assert.equal(topupButton.disabled,false);assert.equal(readyContext.submit.disabled,false,'Cash works without crypto wallets');
  // Cancelled older reads are silent; a timeout of the current read is actionable.
  const readFragment=source.slice(source.indexOf('        const read ='),source.indexOf('        const options ='));
  const reads=[],readContext={revision:0,reading:null,AbortController,URLSearchParams,setTimeout:()=>1,clearTimeout:()=>{},copy:{error:'Retry loading options'},fetch:()=>new Promise((resolve,reject)=>reads.push({resolve,reject}))};

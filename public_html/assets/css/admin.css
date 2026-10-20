@@ -21320,3 +21320,15 @@ body.admin-app-page:has(.admin-payment-create-panel.is-creating) .admin-mobile-n
 @media(max-width:767px){.admin-customer-import__preview{padding:11px;}.admin-customer-import__stats{grid-template-columns:repeat(2,minmax(0,1fr));}.admin-customer-import__preview th,.admin-customer-import__preview td{padding:9px 7px;}}
 
 @media(max-width:575px){.admin-customer-import__preview thead{display:none;}.admin-content--users .admin-customer-import__preview :is(table,tbody){display:block;min-width:0;width:100%;}.admin-customer-import__preview tr{display:grid;grid-template-columns:auto 1fr;border-bottom:1px solid #edf0f4;padding:7px 0;}.admin-customer-import__preview tr:last-child{border-bottom:0;}.admin-customer-import__preview td{display:block;border:0;width:auto!important;min-width:0;white-space:normal;}.admin-customer-import__preview td:first-child{grid-column:1/-1;padding-bottom:2px;}.admin-customer-import__preview td:last-child{text-align:right;}}
+
+/* Compact payment methods and cash explanation in both admin payment creators. */
+.admin-crypto-create__guide{grid-column:1/-1;display:flex;align-items:flex-start;gap:9px;padding:11px 12px;border:1px solid #dce7f0;border-radius:8px;background:#f5f9fd;color:#58728c;font-size:11px;line-height:1.65;}
+.admin-crypto-create__guide>i{flex:none;font-size:15px;margin-top:1px;}
+.admin-crypto-create__asset>span{display:flex!important;align-items:center;gap:8px;min-height:46px;}
+.admin-crypto-create__asset>span>img{width:20px;height:20px;object-fit:contain;flex:none;}
+.admin-crypto-create__asset>span>i{font-size:19px;color:#508668;flex:none;}
+
+.admin-crypto-create label.admin-crypto-create__renewal-choice{display:flex;align-items:flex-start;gap:10px;background:#f5f9fd;border:1px solid #dce7f0;border-radius:8px;padding:11px 12px;margin:12px 0;}
+.admin-crypto-create__renewal-choice>input{width:16px;height:16px;flex:none;margin:2px 0 0;accent-color:#27825b;}
+.admin-crypto-create__renewal-choice strong{display:block;font-size:12px;color:#405971;line-height:1.5;}
+.admin-crypto-create__renewal-choice small{display:block;margin-top:4px;font-size:11px;color:#718399;line-height:1.6;font-weight:400;}

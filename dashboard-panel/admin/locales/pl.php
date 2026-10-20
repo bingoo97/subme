@@ -2021,6 +2021,7 @@ return [
     'enum_archived' => 'Zarchiwizowane',
     'enum_pending' => 'Oczekujące',
     'enum_delivered' => 'Dostarczone',
+    'enum_cash' => 'Gotówka',
     'enum_crypto' => 'Krypto',
     'enum_bank_transfer' => 'Przelew bankowy',
     'users_short_label' => 'userów',

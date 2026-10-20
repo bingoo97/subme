@@ -49,10 +49,10 @@
             finally { clearTimeout(timeout); if (token === pageListRevision) pageListRequest = null; }
         };
         if (pageMode) document.addEventListener('crypto-quick-created', refreshPageList);
-        const feedback = (text, tone, requestId = 0) => {
+        const feedback = (text, tone, requestId = 0, cash = false) => {
             result.replaceChildren();
             const message = document.createElement('span'); message.textContent = text; result.append(message);
-            if (pageMode) {
+            if (pageMode && !cash) {
                 if (requestId > 0) {
                     const link = document.createElement('a'); link.className = 'btn btn-outline-dark btn-sm';
                     link.href = '/admin/?page=payments&payment_type=crypto&payment_id=' + requestId;
@@ -65,6 +65,8 @@
             result.dataset.tone = tone; result.hidden = false;
         };
         let step = 'user', userId = 0, purpose = '', assetId = '', payload = null;
+        let operationKey = '';
+        const cashRenewal = () => assetId === 'cash' && purpose === 'existing_order' && !!payload?.cash_orders?.find(item => String(item.id) === order.value)?.requires_renewal;
         let timer = null, reading = null, revision = 0, busy = false;
         const showNotice = (text = '', error = false) => {
             notice.textContent = text; notice.hidden = !text;
@@ -74,13 +76,13 @@
         const ready = () => {
             // Hidden fields must not block native form validation after changing purpose.
             amount.disabled = busy || purpose !== 'topup';
-            product.disabled = busy || purpose !== 'new_order' || !product.options.length;
+            product.disabled = busy || (purpose !== 'new_order' && !cashRenewal()) || !product.options.length;
             order.disabled = busy || purpose !== 'existing_order' || !order.options.length;
             wizard.querySelectorAll('[data-create-purpose]').forEach(node => {
-                node.disabled = busy || !payload || !!payload.has_pending_payment || !payload.items?.length
+                node.disabled = busy || !payload || !!payload.has_pending_payment
                     || (node.dataset.createPurpose === 'order' && !payload.can_order);
             });
-            const choice = purpose === 'topup' ? Number(amount.value) >= 1 && Number(amount.value) <= 200 : purpose === 'new_order' ? !!product.value : !!order.value;
+            const choice = purpose === 'topup' ? Number(amount.value) >= 1 && Number(amount.value) <= 200 : purpose === 'new_order' ? !!product.value : !!order.value && (!cashRenewal() || !!product.value);
             submit.disabled = busy || !payload || !userId || !assetId || !choice || !!payload?.has_pending_payment;
         };
         const screen = next => {
@@ -101,8 +103,8 @@
         };
         const open = () => {
             if (busy) return;
-            stopRead(); userId=0;purpose='';assetId='';payload=null;
-            search.value=''; results.replaceChildren(); customer.replaceChildren(); amount.value='';
+            stopRead(); userId=0;purpose='';assetId='';payload=null;operationKey=crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
+            search.value=''; results.replaceChildren(); customer.replaceChildren(); amount.value='';get('apply-renewal').checked=false;
             result.hidden=true;toggle?.setAttribute('aria-expanded','true');
             wizard.hidden=false;list.hidden=true;panel.classList.add('is-creating');get('wallet').hidden=true;get('pending').hidden=true;showNotice();screen('user');search.focus();
         };
@@ -125,6 +127,30 @@
             items.forEach(item=>select.add(new Option(item.label,String(item[idKey]))));
             select.disabled=!items.length;
         };
+        const syncDetails = (resetOrders = false) => {
+            if (!payload) return;
+            if (resetOrders) options(order, assetId === 'cash' ? payload.cash_orders || [] : payload.orders || [], 'id');
+            const renewal = cashRenewal();
+            get('renewal-wrap').hidden = !renewal;
+            get('product-label').textContent = renewal ? copy.renewal_product : copy.product;
+            get('wallet').hidden = assetId === 'cash' || !!payload.items?.length || !payload.can_wallet;
+            if(!renewal)get('apply-renewal').checked=false;
+            const previous = product.value;
+            let packages = payload.product_options || [];
+            if (renewal) {
+                const selected = payload.cash_orders.find(item => String(item.id) === order.value);
+                packages = packages.filter(item => Number(item.provider_id) === Number(selected.provider_id) && Number(item.duration_hours) > 0);
+            }
+            options(product, packages, 'product_id');
+            if (packages.some(item => String(item.product_id) === previous)) product.value = previous;
+            get('product-wrap').hidden = purpose !== 'new_order' && !renewal;
+            get('help').textContent = assetId === 'cash' ? copy[renewal ? 'cash_renewal' : purpose === 'topup' ? 'cash_topup' : 'cash_order'] : copy[purpose === 'topup' ? 'topup_help' : purpose === 'new_order' ? 'new_help' : 'order_help'];
+            get('review').textContent = assetId === 'cash' ? copy.cash_review : copy.review;
+            submit.replaceChildren();
+            const icon = document.createElement('i'); icon.className = assetId === 'cash' ? 'bi bi-check-lg' : 'bi bi-plus-lg'; icon.setAttribute('aria-hidden', 'true');
+            submit.append(icon, document.createTextNode(' ' + (assetId === 'cash' ? copy.cash_create : copy.create)));
+            ready();
+        };
         const details = mode => {
             purpose=mode;screen('details');showNotice();
             get('order-mode').hidden=mode==='topup';
@@ -136,6 +162,7 @@
                 button.classList.toggle('is-active',button.dataset.createMode===mode);
                 button.setAttribute('aria-pressed',String(button.dataset.createMode===mode));
             });
+            syncDetails();
             if(mode==='existing_order'&&!order.options.length || mode==='new_order'&&!product.options.length)showNotice(copy.empty,true);
             ready();
         };
@@ -178,13 +205,18 @@
                 get('amount-label').textContent=copy.amount+' ('+amount.min+'–'+amount.max+(currency?' '+currency:'')+')';
                 options(product,data.product_options||[],'product_id');options(order,data.orders||[],'id');
                 assets.replaceChildren();
-                (data.items||[]).forEach(item=>{
+                [...(data.items||[]), {id:'cash',code:copy.cash}].forEach(item=>{
                     const label=document.createElement('label');label.className='admin-crypto-create__asset';
                     const input=document.createElement('input');input.type='radio';input.name='quick_create_asset_'+instance;input.value=String(item.id);
                     const text=document.createElement('span');text.textContent=[item.code,item.network_label||item.name].filter(Boolean).join(' · ')+(item.has_existing_assignment?' · '+copy.assigned:'');
+                    if (item.id === 'cash') {
+                        const icon=document.createElement('i');icon.className='bi bi-cash-stack';icon.setAttribute('aria-hidden','true');text.prepend(icon);
+                    } else if (item.logo_url?.startsWith('/img/crypto/')) {
+                        const img=document.createElement('img');img.src=item.logo_url;img.alt='';img.width=20;img.height=20;img.loading='lazy';text.prepend(img);
+                    }
                     label.append(input,text);assets.append(label);
                 });
-                wizard.querySelectorAll('[data-create-purpose]').forEach(node=>{node.disabled=!!data.has_pending_payment||!data.items?.length||(node.dataset.createPurpose==='order'&&!data.can_order);});
+                wizard.querySelectorAll('[data-create-purpose]').forEach(node=>{node.disabled=!!data.has_pending_payment||(node.dataset.createPurpose==='order'&&!data.can_order);});
                 get('pending').hidden=!data.has_pending_payment||!data.pending_payment_id;
                 if(data.pending_payment_id) get('pending').href='/admin/?page=payments&payment_type=crypto&payment_id='+Number(data.pending_payment_id);
                 get('wallet').hidden=!!data.items?.length||!data.can_wallet;
@@ -193,7 +225,8 @@
         });
         wizard.querySelectorAll('[data-create-purpose]').forEach(button=>button.addEventListener('click',()=>details(button.dataset.createPurpose==='topup'?'topup':'new_order')));
         wizard.querySelectorAll('[data-create-mode]').forEach(button=>button.addEventListener('click',()=>details(button.dataset.createMode)));
-        assets.addEventListener('change',event=>{assetId=event.target.value;ready();});
+        assets.addEventListener('change',event=>{assetId=event.target.value;showNotice();syncDetails(true);});
+        order.addEventListener('change',()=>syncDetails());
         [product,order,amount].forEach(node=>{node.addEventListener('input',ready);node.addEventListener('change',ready);});
         get('form').addEventListener('submit',async event=>{
             event.preventDefault();ready();if(submit.disabled)return;
@@ -202,15 +235,20 @@
             const abort=new AbortController();const timeout=setTimeout(()=>abort.abort(),25000);
             let uncertain=true;
             try {
-                const body=new URLSearchParams({action:'crypto_quick_create_submit',_csrf:wizard.dataset.csrf,customer_id:userId,purpose,asset_id:assetId,product_id:purpose==='new_order'?product.value:'0',order_id:purpose==='existing_order'?order.value:'0',amount:purpose==='topup'?amount.value:''});
+                const body=new URLSearchParams({action:'crypto_quick_create_submit',_csrf:wizard.dataset.csrf,customer_id:userId,purpose,asset_id:assetId,payment_method:assetId==='cash'?'cash':'crypto',operation_key:operationKey,apply_renewal:cashRenewal()&&get('apply-renewal').checked?'1':'0',expected_expiry:cashRenewal()?(payload.cash_orders.find(item=>String(item.id)===order.value)?.expires_at||''):'',product_id:purpose==='new_order'||cashRenewal()?product.value:'0',order_id:purpose==='existing_order'?order.value:'0',amount:purpose==='topup'?amount.value:''});
                 const response=await fetch('/admin/search.php',{method:'POST',body,credentials:'same-origin',signal:abort.signal,headers:{Accept:'application/json'}});
                 const data=await response.json();uncertain=false;
                 if(!response.ok||!data.ok)throw new Error(data.message==='pending_crypto_payment'?copy.pending:(data.message||copy.error));
                 busy=false;hide();
                 notifyCreated(data.crypto_quick);
-                feedback(copy.success,'success',Number(data.request_id)||0);
+                feedback(data.cash ? (data.renewal_applied ? copy.cash_renewed : data.renewal ? copy.cash_renewal_pending : data.order_id ? copy.cash_pending : copy.cash_success) : copy.success,'success',Number(data.request_id)||0,!!data.cash);
+                if(data.cash) {
+                    const link=document.createElement('a');link.className='btn btn-outline-dark btn-sm';
+                    link.href=data.order_id ? '/admin/?page=orders&order_id='+Number(data.order_id) : '/admin/?page=users&customer_id='+Number(data.customer_id);
+                    link.textContent=data.order_id ? copy.cash_details : copy.customer_details; result.append(link);
+                }
             }catch(error){
-                if(uncertain){busy=false;hide();notifyCreated();feedback(copy.uncertain,'error');}
+                if(uncertain){if(assetId==='cash')showNotice(copy.cash_uncertain,true);else{busy=false;hide();notifyCreated();feedback(copy.uncertain,'error');}}
                 else showNotice(error.message||copy.error,true);
             }finally {
                 clearTimeout(timeout);busy=false;wizard.removeAttribute('aria-busy');

@@ -28,9 +28,10 @@ $action = is_string($rawAction) ? trim($rawAction) : '';
 
 if (str_starts_with($action, 'crypto_quick_create_')) {
     require_once __DIR__.'/crypto_quick.php';
+    require_once __DIR__.'/cash_payments.php';
     if (!admin_user_can_access_route($adminUser, 'payments')) { http_response_code(403); echo json_encode(['ok'=>false]); exit; }
     header('Cache-Control: no-store');
-    foreach(['q','customer_id','asset_id','product_id','order_id','purpose','amount','_csrf'] as $field) {
+    foreach(['q','customer_id','asset_id','product_id','order_id','purpose','amount','_csrf','payment_method','operation_key','apply_renewal','expected_expiry'] as $field) {
         if(isset($_POST[$field])&&!is_scalar($_POST[$field]) || isset($_GET[$field])&&!is_scalar($_GET[$field])) {http_response_code(422);echo json_encode(['ok'=>false]);exit;}
     }
     $customerId = (int)($_POST['customer_id'] ?? $_GET['customer_id'] ?? 0);
@@ -45,12 +46,15 @@ if (str_starts_with($action, 'crypto_quick_create_')) {
         $data['can_order'] = admin_user_can_access_route($adminUser,'orders');
         $data['can_wallet'] = admin_user_can_access_route($adminUser,'crypto-wallets');
         $data['orders'] = [];
+        $data['cash_orders'] = [];
+        foreach($data['items']??[] as $i=>$asset)$data['items'][$i]['logo_url']=admin_crypto_asset_logo_url((string)$asset['code']);
         foreach($data['product_options']??[] as $i=>$product) {
             $code=(string)($data['currency']['code']??'');
             $oldAmount=number_format((float)$product['amount'],2,'.','').' '.$code;
-            $data['product_options'][$i]['label']=str_replace($oldAmount,admin_format_money_value($product['amount'],$code),$product['label']);
+            $data['product_options'][$i]['label']=str_replace($oldAmount,admin_format_money_value($product['amount'],$code),$product['label']).((int)($product['duration_hours']??0)>0?' · '.admin_duration_label_from_hours((int)$product['duration_hours']):'');
         }
         if (!empty($data['ok']) && $data['can_order']) {
+            foreach(admin_cash_payment_orders($db,$customerId) as $o) $data['cash_orders'][]=['id'=>(int)$o['id'],'provider_id'=>(int)$o['provider_id'],'requires_renewal'=>app_order_can_self_extend($o),'expires_at'=>(string)($o['expires_at']??''),'label'=>'#'.$o['id'].' · '.$o['product_name'].(app_order_can_self_extend($o)?' · Przedłużenie':' · Do opłacenia')];
             $currency=(int)admin_chat_payment_currency_context($db)['currency_id'];
             $orders=$db->select_full_user("SELECT o.id,o.total_amount,p.name,p.provider_id,c.code FROM orders o
                 INNER JOIN products p ON p.id=o.product_id INNER JOIN currencies c ON c.id=o.currency_id
@@ -65,6 +69,14 @@ if (str_starts_with($action, 'crypto_quick_create_')) {
         if (($_SERVER['REQUEST_METHOD']??'')!=='POST' || !admin_csrf_is_valid($_POST['_csrf']??'')) { http_response_code(403); echo json_encode(['ok'=>false]); exit; }
         $purpose=(string)($_POST['purpose']??'');
         if ($purpose !== 'topup' && !admin_user_can_access_route($adminUser,'orders')) { http_response_code(403); echo json_encode(['ok'=>false]); exit; }
+        $method=(string)($_POST['payment_method']??'crypto');
+        if(!in_array($method,['cash','crypto'],true)){http_response_code(422);echo json_encode(['ok'=>false]);exit;}
+        if($method==='cash') {
+            $result=admin_create_cash_payment($db,$customerId,(int)$adminUser['id'],$_POST);
+            if(empty($result['ok']))http_response_code(422);
+            else $result['crypto_quick']=['filter'=>'new','counts'=>admin_crypto_quick_counts($db),'html'=>admin_crypto_quick_html(admin_crypto_quick_rows($db,'new'),'new',null,admin_csrf_token(),$messages)];
+            echo json_encode($result);exit;
+        }
         $key='admin_quick_crypto_payment_'.$customerId;
         if(time()-(int)($_SESSION[$key]??0)<5) {http_response_code(429);echo json_encode(['ok'=>false,'message'=>'Poczekaj chwilę i sprawdź listę płatności.']);exit;}
         $_SESSION[$key]=time();
