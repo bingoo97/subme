@@ -433,6 +433,15 @@ if (!function_exists('app_ensure_static_pages_runtime_columns')) {
             schema_forget_column_cache('static_pages', 'menu_logo_url');
         }
 
+        if (!schema_column_exists($db, 'static_pages', 'menu_icon')) {
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_icon VARCHAR(40) NOT NULL DEFAULT 'file-text-o'");
+            schema_forget_column_cache('static_pages', 'menu_icon');
+        }
+        if (!schema_column_exists($db, 'static_pages', 'menu_badge_new')) {
+            $db->query("ALTER TABLE static_pages ADD COLUMN menu_badge_new TINYINT(1) NOT NULL DEFAULT 0");
+            schema_forget_column_cache('static_pages', 'menu_badge_new');
+        }
+
         if (!schema_column_exists($db, 'static_pages', 'menu_sort_order')) {
             $db->query("ALTER TABLE static_pages ADD COLUMN menu_sort_order INT NOT NULL DEFAULT 100 AFTER menu_logo_url");
             schema_forget_column_cache('static_pages', 'menu_sort_order');
@@ -10035,7 +10044,20 @@ function app_page_helper_content(string $site, bool $isLoggedIn = false, array $
     return $map[$site] ?? $map['default'];
 }
 
-/** Active pages explicitly placed on the customer homepage; no additional schema. */
+/** Allowlisted Font Awesome icons shared by the page editor and homepage. */
+function app_page_tile_icons(): array
+{
+    return ['file-text-o' => 'page_icon_document', 'book' => 'page_icon_book',
+        'graduation-cap' => 'page_icon_training', 'play-circle-o' => 'page_icon_video',
+        'info-circle' => 'page_icon_info', 'question-circle' => 'page_icon_help',
+        'calendar' => 'page_icon_calendar', 'gift' => 'page_icon_gift'];
+}
+function app_page_tile_icon(string $icon): string
+{
+    return array_key_exists($icon, app_page_tile_icons()) ? $icon : 'file-text-o';
+}
+
+/** Active pages explicitly placed on the customer homepage. */
 function app_customer_homepage_pages(Mysql_ks $db, string $localeCode): array
 {
     if (!schema_object_exists($db, 'static_pages')) {
@@ -10044,7 +10066,7 @@ function app_customer_homepage_pages(Mysql_ks $db, string $localeCode): array
     app_ensure_static_pages_runtime_columns($db);
     $locale = $db->escape(app_static_page_normalize_locale($localeCode));
     $rows = $db->select_full_user(
-        "SELECT slug, title, menu_title, menu_logo_url FROM static_pages
+        "SELECT slug, title, menu_title, menu_logo_url, menu_icon, menu_badge_new FROM static_pages
          WHERE page_type = 'page' AND is_active = 1
            AND menu_section = 'homepage' AND locale_code = '{$locale}'
          ORDER BY menu_sort_order ASC, id ASC"
@@ -10053,6 +10075,8 @@ function app_customer_homepage_pages(Mysql_ks $db, string $localeCode): array
         'href' => '/' . app_static_page_base_slug((string)$row['slug']),
         'title' => trim((string)($row['menu_title'] ?? '')) ?: $row['title'],
         'logo' => (string)($row['menu_logo_url'] ?? ''),
+        'icon' => app_page_tile_icon((string)($row['menu_icon'] ?? '')),
+        'badge_new' => !empty($row['menu_badge_new']),
     ], $rows ?: []);
 }
 

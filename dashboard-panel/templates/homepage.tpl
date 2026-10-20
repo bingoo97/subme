@@ -68,11 +68,12 @@
     {foreach from=$homepage_custom_pages|default:[] item=custom_page}
     <div class="col-sm-12">
         <a href="{$custom_page.href|escape:'html'}" title="{$custom_page.title|escape:'html'}">
-            <div class="one_box one_box--custom-page">
+            <div class="one_box one_box--custom-page{if $custom_page.badge_new} has-new-badge{/if}">
+                {if $custom_page.badge_new}<span class="one_box__new-badge">NEW</span>{/if}
                 {if $custom_page.logo}
                     <img class="one_box__page-logo" src="{$custom_page.logo|escape:'html'}" alt="">
                 {else}
-                    <i class="fa fa-file-text-o" aria-hidden="true"></i>
+                    <i class="fa fa-{$custom_page.icon|escape:'html'}" aria-hidden="true"></i>
                 {/if}
                 <p class="title">{$custom_page.title|escape:'html'}</p>
             </div>

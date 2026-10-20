@@ -21355,3 +21355,15 @@ button.admin-crypto-quick__footer{width:100%;margin:0;border:0;border-top:1px so
 .admin-crypto-quick__footer:focus-visible{outline:2px solid #9cb3cc;outline-offset:-2px;}
 .admin-crypto-quick__preferences .form-check{flex:0 0 32px;width:32px;padding:0;justify-content:center;}
 .admin-crypto-quick__preferences .form-check-input{float:none;margin:0;}
+
+/* Per-page homepage tile appearance controls. */
+.admin-page-tile-settings fieldset{padding:12px;border:1px solid #e9edf2;border-radius:8px;min-width:0;}
+.admin-page-tile-settings legend{float:none;width:auto;margin:0 0 10px;font-size:12px;font-weight:600;color:#46556a;}
+.admin-page-tile-icons{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:7px;}
+.admin-page-tile-icon{position:relative;cursor:pointer;min-width:0;}
+.admin-page-tile-icon input{position:absolute;opacity:0;width:1px;height:1px;}
+.admin-page-tile-icon>span{display:flex;align-items:center;gap:7px;padding:9px;border:1px solid #e5e9ee;border-radius:6px;font-size:11px;color:#64748b;background:#fff;}
+.admin-page-tile-icon i{font-size:16px;width:20px;text-align:center;}
+.admin-page-tile-icon input:checked+span{background:#f1f5f9;border-color:#8191a4;color:#253447;}
+.admin-page-tile-icon input:focus-visible+span{outline:2px solid #7da8d7;outline-offset:2px;}
+.admin-page-tile-new{display:inline-flex;padding:2px 6px;border-radius:2px;background:#d7182a;color:#fff;font-size:10px;font-weight:600;vertical-align:middle;}

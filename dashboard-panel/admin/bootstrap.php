@@ -25934,7 +25934,7 @@ function admin_page_all_rows(Mysql_ks $db): array
     admin_ensure_static_pages_locale_runtime($db);
 
     $rows = $db->select_full_user(
-        "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
+        "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_icon, menu_badge_new, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE page_type = 'page'
          ORDER BY is_system DESC, id ASC"
@@ -25985,7 +25985,7 @@ function admin_page_find(Mysql_ks $db, int $pageId): ?array
     admin_page_seed_system_rows($db);
     admin_ensure_static_pages_locale_runtime($db);
     $row = $db->select_user(
-        "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
+        "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_icon, menu_badge_new, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
          FROM static_pages
          WHERE id = {$pageId}
            AND page_type = 'page'
@@ -26242,8 +26242,8 @@ function admin_create_page(Mysql_ks $db, array $input, array $files = [], int $a
 
     $slug = admin_page_locale_aware_slug($db, $title, $slugInput, $localeCode);
     $inserted = $db->insert(
-        ['slug', 'title', 'body', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_sort_order', 'page_type', 'is_system', 'is_active'],
-        [$slug, $title, $body, $localeCode, $menuSection, $menuTitle, $menuLogoUrl !== '' ? $menuLogoUrl : null, $menuSortOrder, 'page', 0, $isActive],
+        ['slug', 'title', 'body', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_icon', 'menu_badge_new', 'menu_sort_order', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, $menuSection, $menuTitle, $menuLogoUrl !== '' ? $menuLogoUrl : null, app_page_tile_icon((string)($input['menu_icon'] ?? '')), isset($input['menu_badge_new']) && (string)$input['menu_badge_new'] === '1' ? 1 : 0, $menuSortOrder, 'page', 0, $isActive],
         'static_pages'
     );
 
@@ -26309,8 +26309,8 @@ function admin_save_page(Mysql_ks $db, int $pageId, array $input, array $files =
 
     $slug = admin_page_locale_aware_slug($db, $title, $slugInput, $localeCode, $pageId);
     $updated = $db->update_using_id(
-        ['slug', 'title', 'body', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_sort_order', 'page_type', 'is_system', 'is_active'],
-        [$slug, $title, $body, $localeCode, $menuSection, $menuTitle, $menuLogoUrl !== '' ? $menuLogoUrl : null, $menuSortOrder, 'page', (int)($page['is_system'] ?? 0), $isActive],
+        ['slug', 'title', 'body', 'locale_code', 'menu_section', 'menu_title', 'menu_logo_url', 'menu_icon', 'menu_badge_new', 'menu_sort_order', 'page_type', 'is_system', 'is_active'],
+        [$slug, $title, $body, $localeCode, $menuSection, $menuTitle, $menuLogoUrl !== '' ? $menuLogoUrl : null, app_page_tile_icon((string)($input['menu_icon'] ?? '')), isset($input['menu_badge_new']) && (string)$input['menu_badge_new'] === '1' ? 1 : 0, $menuSortOrder, 'page', (int)($page['is_system'] ?? 0), $isActive],
         'static_pages',
         $pageId
     );

@@ -2651,6 +2651,8 @@ $pageFormState = [
     'title' => '',
     'slug' => '',
     'menu_section' => 'homepage',
+    'menu_icon' => 'file-text-o',
+    'menu_badge_new' => 0,
     'menu_title' => '',
     'menu_logo_url' => '',
     'menu_sort_order' => 100,
@@ -3625,6 +3627,8 @@ if ($route === 'pages') {
             'title' => trim((string)($_POST['title'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
             'menu_section' => admin_page_normalize_section((string)($_POST['menu_section'] ?? 'other')),
+            'menu_icon' => app_page_tile_icon((string)($_POST['menu_icon'] ?? '')),
+            'menu_badge_new' => isset($_POST['menu_badge_new']) && (string)$_POST['menu_badge_new'] === '1' ? 1 : 0,
             'menu_title' => trim((string)($_POST['menu_title'] ?? '')),
             'menu_logo_url' => trim((string)($_POST['existing_menu_logo_url'] ?? '')),
             'menu_sort_order' => max(0, (int)($_POST['menu_sort_order'] ?? 100)),
@@ -3657,6 +3661,8 @@ if ($route === 'pages') {
             'title' => trim((string)($_POST['title'] ?? '')),
             'slug' => trim((string)($_POST['slug'] ?? '')),
             'menu_section' => admin_page_normalize_section((string)($_POST['menu_section'] ?? 'other')),
+            'menu_icon' => app_page_tile_icon((string)($_POST['menu_icon'] ?? '')),
+            'menu_badge_new' => isset($_POST['menu_badge_new']) && (string)$_POST['menu_badge_new'] === '1' ? 1 : 0,
             'menu_title' => trim((string)($_POST['menu_title'] ?? '')),
             'menu_logo_url' => '',
             'menu_sort_order' => max(0, (int)($_POST['menu_sort_order'] ?? 100)),
@@ -15298,6 +15304,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <input type="number" class="form-control" id="content_page_menu_sort_order" name="menu_sort_order" value="<?php echo admin_e((string)($pageDraft['menu_sort_order'] ?? 100)); ?>" min="0" step="1">
                                                         <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_sort_order_help', 'Lower number means earlier display in the user instruction tiles.')); ?></div>
                                                     </div>
+                                                    <?php $pageTileSettings = $pageDraft; require __DIR__ . '/partials/page-tile-settings.php'; ?>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="content_page_menu_title"><?php echo admin_e(admin_t($messages, 'page_menu_title_label', 'Tile name')); ?></label>
                                                         <input type="text" class="form-control" id="content_page_menu_title" name="menu_title" value="<?php echo admin_e((string)($pageDraft['menu_title'] ?? '')); ?>" placeholder="<?php echo admin_e((string)($pageDraft['title'] ?? '')); ?>">
@@ -15394,6 +15401,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <input type="number" class="form-control" id="content_page_menu_sort_order" name="menu_sort_order" value="<?php echo admin_e((string)($pageEditor['menu_sort_order'] ?? 100)); ?>" min="0" step="1">
                                                         <div class="form-text"><?php echo admin_e(admin_t($messages, 'page_menu_sort_order_help', 'Lower number means earlier display in the user instruction tiles.')); ?></div>
                                                     </div>
+                                                    <?php $pageTileSettings = $pageEditor; require __DIR__ . '/partials/page-tile-settings.php'; ?>
                                                     <div class="col-md-6">
                                                         <label class="form-label" for="content_page_menu_title"><?php echo admin_e(admin_t($messages, 'page_menu_title_label', 'Tile name')); ?></label>
                                                         <input type="text" class="form-control" id="content_page_menu_title" name="menu_title" value="<?php echo admin_e((string)($pageEditor['menu_title'] ?? '')); ?>" placeholder="<?php echo admin_e((string)($pageEditor['title'] ?? '')); ?>">

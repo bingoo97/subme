@@ -23,6 +23,30 @@ ck(!empty($custom['ok']),'A regular page can be created as a customer homepage t
 $customId=(int)$custom['page_id'];$tiles=app_customer_homepage_pages($db,'pl');
 ck(count($tiles)===1&&$tiles[0]['title']==='New materials'&&$tiles[0]['href']==='/training-news','Homepage tile uses its custom title and public URL');
 ck(app_customer_homepage_pages($db,'en')===[],'Homepage tiles respect customer language');
+ck($tiles[0]['icon']==='file-text-o'&&!$tiles[0]['badge_new'],'Existing pages default to document icon and no NEW badge');
+foreach(array_keys(app_page_tile_icons()) as $icon){
+ $saved=admin_save_page($db,$customId,['title'=>'Training news','body'=>'<p>Content</p>','menu_section'=>'homepage','locale_code'=>'pl','is_active'=>'1','menu_icon'=>$icon,'menu_badge_new'=>'1']);
+ $tile=app_customer_homepage_pages($db,'pl')[0];$stored=admin_page_find($db,$customId);
+ ck(!empty($saved['ok'])&&$tile['icon']===$icon&&$tile['badge_new']&&(int)$stored['menu_badge_new']===1,'Chosen icon and NEW persist: '.$icon);
+}
+admin_save_page($db,$customId,['title'=>'Training news','body'=>'<p>Content</p>','menu_section'=>'homepage','locale_code'=>'pl','is_active'=>'1','menu_icon'=>'bad" onclick="alert(1)']);
+$tile=app_customer_homepage_pages($db,'pl')[0];
+ck($tile['icon']==='file-text-o'&&!$tile['badge_new'],'Untrusted icons fall back safely and unchecked NEW is removed');
+$second=admin_create_page($db,['title'=>'Other tile','body'=>'<p>Other</p>','menu_section'=>'homepage','locale_code'=>'pl','is_active'=>'1','menu_icon'=>'gift','menu_badge_new'=>'1']);
+$other=admin_page_find($db,(int)$second['page_id']);
+ck($other['menu_icon']==='gift'&&(int)$other['menu_badge_new']===1,'Create persists independent tile settings');
+ck(!admin_page_find($db,$customId)['menu_badge_new'],'Changing a second page does not enable NEW on another page');
+$template=file_get_contents(dirname(__DIR__).'/templates/homepage.tpl');
+$start=strpos($template,'{foreach from=$homepage_custom_pages');$end=strpos($template,'{/foreach}',$start)+strlen('{/foreach}');
+require_once dirname(__DIR__).'/vendor/autoload.php';
+$smarty=new \Smarty\Smarty();$smarty->setCompileDir(app_crypto_runtime_dir());
+$smarty->assign('homepage_custom_pages',app_customer_homepage_pages($db,'pl'));
+$rendered=$smarty->fetch('string:'.substr($template,$start,$end-$start));
+ck(substr_count($rendered,'one_box__new-badge')===1&&str_contains($rendered,'fa fa-gift'),'Homepage renders NEW only for the enabled page and uses its selected icon');
+ck(str_contains($rendered,'fa fa-file-text-o'),'Another homepage page keeps its separate icon');
+
+admin_delete_page($db,(int)$second['page_id']);
+
 sql("UPDATE static_pages SET is_active=0 WHERE id={$customId}");ck(app_customer_homepage_pages($db,'pl')===[],'Disabled page disappears from homepage');
 sql("UPDATE static_pages SET is_active=1 WHERE id={$customId}");ck(!empty(admin_delete_page($db,$customId)['ok'])&&app_customer_homepage_pages($db,'pl')===[],'Deleting a regular page removes its homepage tile');
 ck(!app_static_page_find_for_route($db,'training-news','pl'),'Deleted custom page cannot be opened through its old route');
