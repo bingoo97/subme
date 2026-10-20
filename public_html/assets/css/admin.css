@@ -21343,3 +21343,11 @@ body.admin-app-page:has(.admin-payment-create-panel.is-creating) .admin-mobile-n
 .admin-cash-receipt__link>i{flex:none;font-size:13px;}.admin-cash-receipt__link>i:last-child{margin-left:3px;font-size:10px;}
 :is(.admin-crypto-quick__result,.admin-payment-create-panel__result).is-cash>.admin-cash-receipt__link:is(:hover,:focus-visible){background:#eaf5ee;border-color:#a8c9b4;color:#235f3c;text-decoration:none;}
 @media(min-width:768px){.admin-payment-create-panel__result.is-cash{grid-template-columns:32px minmax(0,1fr) auto;align-items:center;}.admin-payment-create-panel__result.is-cash>.admin-cash-receipt__link{grid-column:3;grid-row:1;}}
+
+/* Three compact, consistent rows below the quick payment list. */
+.admin-crypto-quick__footer,.admin-crypto-quick__preferences{min-height:36px;padding:7px 16px;line-height:20px;flex-shrink:0;}
+button.admin-crypto-quick__footer{width:100%;margin:0;border:0;border-top:1px solid #e9edf2;border-radius:0;background:#fff;text-align:left;cursor:pointer;}
+.admin-crypto-quick__footer>i{font-size:12px;line-height:1;}
+.admin-crypto-quick__footer:is(:hover,:focus-visible){background:#f7f9fb;color:#536779;text-decoration:none;}
+.admin-crypto-quick__footer:focus-visible{outline:2px solid #9cb3cc;outline-offset:-2px;}
+.admin-crypto-quick__preferences .form-check-input{margin-bottom:0;}

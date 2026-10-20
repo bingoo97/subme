@@ -17,6 +17,7 @@ foreach(['new'=>'bi-clock-history','expired'=>'bi-exclamation-circle-fill','canc
         <p class="admin-crypto-quick__result" data-crypto-quick-result role="status" hidden></p>
         <div class="admin-crypto-quick__list" data-crypto-quick-list aria-live="polite"></div>
         <?php require __DIR__.'/../partials/crypto-create.php'; ?>
+        <button type="button" class="admin-crypto-quick__footer admin-crypto-quick__footer--create" data-crypto-create-open aria-expanded="false"><?php echo admin_e(admin_t($messages,'payment_customer_search_open','Add new payment')); ?><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
         <a class="admin-crypto-quick__footer" href="/admin/?page=payments&amp;payment_type_filter=crypto"><?php echo admin_e($cryptoQuickLabels['all']); ?><i class="bi bi-arrow-up-right" aria-hidden="true"></i></a>
         <div class="admin-crypto-quick__preferences">
             <label for="adminCryptoQuickHints"><?php echo admin_e($cryptoQuickLabels['show_hints']); ?></label>
