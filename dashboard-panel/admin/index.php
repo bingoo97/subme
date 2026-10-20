@@ -2980,7 +2980,7 @@ if ($route === 'orders') {
             $pageAlert = admin_t($messages, 'order_extend_stale_form', 'Refresh this page before extending the order.');
             $pageAlertType = 'warning';
         } else {
-            $requestedExtendedExpiry = trim((string)($_POST['extend_predicted_expiry'] ?? ''));
+            $requestedExtendedExpiry = admin_order_extension_requested_expiry($_POST);
             $extendResult = admin_extend_order(
                 $db,
                 (int)($_POST['order_id'] ?? 0),
@@ -9628,6 +9628,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                         <input type="hidden" name="order_id" value="<?php echo admin_e((string)$orderId); ?>">
                                                                         <input type="hidden" name="extend_expected_expires_at" value="<?php echo admin_e((string)($row['expires_at'] ?? '')); ?>">
                                                                         <input type="hidden" name="extend_expected_renewal_id" value="<?php echo (int)($row['pending_renewal_id'] ?? 0); ?>">
+                                                                        <input type="hidden" name="extend_automatic_expiry" value="" data-admin-order-extend-automatic>
                                                                         <div class="admin-order-modal__stack">
                                                                             <?php if ($isPendingRenewalAwaitingExtension): ?>
                                                                                 <div class="alert alert-warning admin-order-modal__activation-alert" role="alert" data-admin-order-extension-required>

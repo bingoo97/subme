@@ -18429,6 +18429,14 @@ function admin_extend_order(
     }
 }
 
+/** Automatic previews are hints; calculate the real expiry when applying the renewal. */
+function admin_order_extension_requested_expiry(array $input): string
+{
+    $requested = is_string($input['extend_predicted_expiry'] ?? null) ? trim($input['extend_predicted_expiry']) : '';
+    $automatic = is_string($input['extend_automatic_expiry'] ?? null) ? trim($input['extend_automatic_expiry']) : '';
+    return $automatic !== '' && $requested === $automatic ? '' : $requested;
+}
+
 function admin_extend_order_locked(
     Mysql_ks $db,
     int $orderId,
@@ -18513,6 +18521,17 @@ function admin_extend_order_locked(
                     (int)($pendingRenewal['id'] ?? 0)
                 );
             }
+        }
+
+        // Payment may have arrived days before provider fulfilment. Apply a full
+        // package from the current expiry, or from now when that date has passed.
+        if (trim($overrideExpiresAt) === '') {
+            $paidPackage = $product;
+            $paidPackage['duration_hours'] = (int)($pendingRenewal['duration_hours'] ?? $durationHours);
+            $targetExpiry = app_order_extension_target_expiry($order, $paidPackage);
+            if ($targetExpiry === null || ($targetExpiry !== (string)($pendingRenewal['target_expires_at'] ?? '') && !$db->update_using_id(
+                ['target_expires_at'], [$targetExpiry], 'order_renewals', (int)$pendingRenewal['id']
+            ))) return ['ok' => false, 'message' => 'Unable to calculate the renewal expiry.'];
         }
 
         $reservationState = admin_order_renewal_balance_state($db, $pendingRenewal);

@@ -2632,6 +2632,7 @@ document.addEventListener('DOMContentLoaded', function () {
         qa('[data-admin-order-extend-form]').forEach(function (form) {
             var productField = q('[data-admin-order-extend-product]', form);
             var previewField = q('[data-admin-order-extend-preview]', form);
+            var automaticField = q('[data-admin-order-extend-automatic]', form);
             var selectionSummary = q('[data-admin-order-extend-selection]', form);
             var noteField = q('[data-admin-order-extend-note]', form);
             var noteInput = noteField ? q('textarea', noteField) : null;
@@ -2653,10 +2654,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 if (durationHours <= 0) {
                     previewField.value = '';
+                    if (automaticField) automaticField.value = '';
                     return;
                 }
 
                 previewField.value = formatDateTimeInput(addDuration(baseDate, durationHours));
+                if (automaticField) automaticField.value = previewField.value;
             };
 
             productField.addEventListener('change', sync);

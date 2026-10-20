@@ -106,4 +106,44 @@ $custom=admin_save_order_info($db,$threeId,array_merge($threeForm,['expires_at'=
 cashCheck(!empty($custom['ok'])&&$db->select_user('SELECT expires_at FROM orders WHERE id='.$threeId)['expires_at']===$customExpiry,'Explicit custom expiry remains editable');
 admin_save_order_info($db,$threeId,array_merge($threeForm,['started_at'=>'','expires_at'=>'']),1);
 cashCheck(cashBalance(32003)===$threeBalance&&$db->select_user('SELECT expires_at FROM orders WHERE id='.$threeId)['expires_at']===$customExpiry,'Stale blank form does not erase or extend a custom expiry');
+// Renewal expiry bases: active versus expired, immediate versus deferred cash.
+foreach([[false,false],[false,true],[true,false],[true,true],[true,false,'active']] as $caseIndex=>$variant) {
+ [$expired,$immediateMode]=$variant;
+ $caseId=35001+$caseIndex;$orderCase=$caseId+1000;
+ $baseExpiry=date('Y-m-d H:i:s',strtotime($expired?'-10 days':'+10 days'));$state=$variant[2]??($expired?'expired':'active');
+ cashSql("INSERT INTO customers(id,email,public_handle,password_hash,status,locale_code,balance_amount) VALUES({$caseId},'renew{$caseId}@example.invalid','renew{$caseId}','unused','active','pl',100)");
+ cashSql("INSERT INTO orders(id,customer_id,product_id,total_amount,currency_id,status,payment_status,fulfillment_status,started_at,paid_at,expires_at) VALUES({$orderCase},{$caseId},1,18,2,'{$state}','paid','delivered',DATE_SUB(NOW(),INTERVAL 1 MONTH),DATE_SUB(NOW(),INTERVAL 1 MONTH),'{$baseExpiry}')");
+ $beforeProgress=admin_order_progress_data(admin_order_find($db,$orderCase));
+ $token=dechex($caseId);$params=['order_id'=>$orderCase,'product_id'=>44001,'expected_expiry'=>$baseExpiry,'apply_renewal'=>$immediateMode?'1':'0'];
+ $beforeTime=time();$receipt=cashCreate($caseId,'existing_order',$token,$params);
+ cashCheck(!empty($receipt['ok']),'Cash renewal matrix creation: '.json_encode($receipt));
+ $renewalCase=$db->select_user("SELECT * FROM order_renewals WHERE order_id={$orderCase} ORDER BY id DESC LIMIT 1");
+ if(!$immediateMode) {
+  cashCheck(cashBalance($caseId)===136.0&&$db->select_user("SELECT expires_at FROM orders WHERE id={$orderCase}")['expires_at']===$baseExpiry,'Deferred cash keeps funds and old expiry until fulfilment');
+  if($expired) {
+   $oldTarget=app_subscription_expiry_from_base_timestamp(strtotime('-2 days'),2160);
+   cashSql("UPDATE order_renewals SET target_expires_at='{$oldTarget}',requested_at=DATE_SUB(NOW(),INTERVAL 2 DAY),paid_at=DATE_SUB(NOW(),INTERVAL 2 DAY) WHERE id=".(int)$renewalCase['id']);
+  }
+  if($expired)cashSql("UPDATE products SET duration_hours=720 WHERE id=44001");
+  $beforeTime=time();$automaticPreview=['extend_predicted_expiry'=>$expired?$oldTarget:'2035-01-01T12:00','extend_automatic_expiry'=>$expired?$oldTarget:'2035-01-01T12:00'];
+  $applied=admin_extend_order($db,$orderCase,44001,true,admin_order_extension_requested_expiry($automaticPreview),$baseExpiry,(int)$renewalCase['id']);
+  cashCheck(!empty($applied['ok']),'Deferred cash renewal matrix fulfilment: '.json_encode($applied));
+  if($expired)cashSql("UPDATE products SET duration_hours=2160 WHERE id=44001");
+ }
+ $afterTime=time();$renewedCase=admin_order_find($db,$orderCase);
+ if($expired) {
+  $earliest=app_subscription_expiry_from_base_timestamp($beforeTime,2160);$latest=app_subscription_expiry_from_base_timestamp($afterTime,2160);
+  cashCheck($renewedCase['expires_at']>=$earliest&&$renewedCase['expires_at']<=$latest,'Expired cash renewal starts on actual fulfilment day, including delayed fulfilment');
+ } else cashCheck($renewedCase['expires_at']===app_subscription_expiry_from_base_timestamp(app_timestamp_from_runtime_datetime($baseExpiry),2160),'Active cash renewal adds three months to existing expiry');
+ cashCheck($renewedCase['status']==='active'&&cashBalance($caseId)===100.0,'Cash renewal activates and debits only its received amount');
+ $adminProgress=admin_order_progress_data($renewedCase);$userProgress=app_order_progress_data($renewedCase);
+ cashCheck($adminProgress['has_expiry']&&$userProgress['has_expiry']&&$adminProgress['remaining_seconds']>$beforeProgress['remaining_seconds']&&abs($adminProgress['remaining_seconds']-$userProgress['remaining_seconds'])<=2,'Renewed admin/client countdowns agree and increase');
+ $repeatReceipt=cashCreate($caseId,'existing_order',$token,$params);
+ $repeatApply=admin_extend_order($db,$orderCase,44001,true,'',$baseExpiry,(int)$renewalCase['id']);
+ cashCheck(!empty($repeatReceipt['already_applied'])&&!empty($repeatApply['already_applied'])&&cashBalance($caseId)===100.0&&admin_order_find($db,$orderCase)['expires_at']===$renewedCase['expires_at'],'Replaying cash receipt and renewal does not debit or extend again');
+ cashCheck((int)$db->select_user("SELECT COUNT(*) n FROM customer_balance_runtime_events WHERE customer_id={$caseId} AND direction='debit' AND source_type='order_extension'")['n']===1,'Exactly one debit for each cash renewal variant');
+}
+cashCheck(admin_order_extension_requested_expiry(['extend_predicted_expiry'=>'2027-02-01T12:00','extend_automatic_expiry'=>'2027-02-01T12:00'])==='','Unmodified automatic date is recomputed on server');
+cashCheck(admin_order_extension_requested_expiry(['extend_predicted_expiry'=>'2027-03-01T12:00','extend_automatic_expiry'=>'2027-02-01T12:00'])==='2027-03-01T12:00','Manually edited expiry remains an explicit override');
+cashCheck(admin_order_extension_requested_expiry(['extend_predicted_expiry'=>'2027-03-01T12:00'])==='2027-03-01T12:00','Older forms keep explicit date override compatibility');
 echo "PASS {$checks} cash payment checks\n";
