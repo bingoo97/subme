@@ -14,7 +14,8 @@
         const toggle = panel.querySelector('[data-crypto-create-open]');
         const notifyCreated = detail => {
             const flyout = pageMode ? document.querySelector('[data-crypto-quick]') : panel;
-            flyout?.dispatchEvent(new CustomEvent('crypto-quick-created', {detail}));
+            if (flyout) flyout.dispatchEvent(new CustomEvent('crypto-quick-created', {detail, bubbles:true}));
+            else if (pageMode) refreshPageList();
         };
         let pageListRequest = null, pageListRevision = 0;
         const refreshPageList = async () => {
@@ -47,13 +48,16 @@
             } catch (_) { /* The saved ticket remains available through its details link. */ }
             finally { clearTimeout(timeout); if (token === pageListRevision) pageListRequest = null; }
         };
+        if (pageMode) document.addEventListener('crypto-quick-created', refreshPageList);
         const feedback = (text, tone, requestId = 0) => {
             result.replaceChildren();
             const message = document.createElement('span'); message.textContent = text; result.append(message);
-            if (pageMode && requestId > 0) {
-                const link = document.createElement('a'); link.className = 'btn btn-outline-dark btn-sm';
-                link.href = '/admin/?page=payments&payment_type=crypto&payment_id=' + requestId;
-                link.textContent = copy.payment_details; result.append(link);
+            if (pageMode) {
+                if (requestId > 0) {
+                    const link = document.createElement('a'); link.className = 'btn btn-outline-dark btn-sm';
+                    link.href = '/admin/?page=payments&payment_type=crypto&payment_id=' + requestId;
+                    link.textContent = copy.payment_details; result.append(link);
+                }
                 const all = document.createElement('a'); all.className = 'btn btn-light btn-sm';
                 all.href = '/admin/?page=payments&payment_type_filter=crypto&payment_scope=new';
                 all.textContent = copy.payment_list; result.append(all);
@@ -68,8 +72,16 @@
         };
         const stopRead = () => { ++revision; if (reading) reading.abort(); reading = null; clearTimeout(timer); };
         const ready = () => {
+            // Hidden fields must not block native form validation after changing purpose.
+            amount.disabled = busy || purpose !== 'topup';
+            product.disabled = busy || purpose !== 'new_order' || !product.options.length;
+            order.disabled = busy || purpose !== 'existing_order' || !order.options.length;
+            wizard.querySelectorAll('[data-create-purpose]').forEach(node => {
+                node.disabled = busy || !payload || !!payload.has_pending_payment || !payload.items?.length
+                    || (node.dataset.createPurpose === 'order' && !payload.can_order);
+            });
             const choice = purpose === 'topup' ? Number(amount.value) >= 1 && Number(amount.value) <= 200 : purpose === 'new_order' ? !!product.value : !!order.value;
-            submit.disabled = busy || !userId || !assetId || !choice || !!payload?.has_pending_payment;
+            submit.disabled = busy || !payload || !userId || !assetId || !choice || !!payload?.has_pending_payment;
         };
         const screen = next => {
             step = next;
@@ -88,10 +100,11 @@
             toggle?.setAttribute('aria-expanded', 'false');
         };
         const open = () => {
+            if (busy) return;
             stopRead(); userId=0;purpose='';assetId='';payload=null;
             search.value=''; results.replaceChildren(); customer.replaceChildren(); amount.value='';
             result.hidden=true;toggle?.setAttribute('aria-expanded','true');
-            wizard.hidden=false;list.hidden=true;panel.classList.add('is-creating');get('wallet').hidden=true;showNotice();screen('user');search.focus();
+            wizard.hidden=false;list.hidden=true;panel.classList.add('is-creating');get('wallet').hidden=true;get('pending').hidden=true;showNotice();screen('user');search.focus();
         };
         const read = async params => {
             stopRead(); const token = revision; reading = new AbortController(); const request=reading;
@@ -102,6 +115,9 @@
                 if(token!==revision)return null;
                 if(!response.ok||!data.ok)throw new Error(copy.error);
                 return data;
+            } catch (error) {
+                if (token !== revision) return null;
+                throw error.name === 'AbortError' ? new Error(copy.error) : error;
             } finally { clearTimeout(timeout); if(token===revision)reading=null; }
         };
         const options = (select, items, idKey) => {
@@ -130,7 +146,7 @@
         get('back').addEventListener('click',()=>{
             if(busy)return;
             stopRead();showNotice();
-            get('wallet').hidden=true;
+            get('wallet').hidden=true;get('pending').hidden=true;
             if(step==='user')hide();else screen(step==='details'?'purpose':'user');
         });
         search.addEventListener('input',()=>{
@@ -159,7 +175,7 @@
                 const data=await read({action:'crypto_quick_create_options',customer_id:userId});if(!data)return;
                 payload=data;
                 const currency={EUR:'€',USD:'$',GBP:'£',PLN:'zł'}[data.currency?.code]||data.currency?.symbol||data.currency?.code||'';
-                get('amount-label').textContent=copy.amount+(currency?' ('+currency+')':'');
+                get('amount-label').textContent=copy.amount+' ('+amount.min+'–'+amount.max+(currency?' '+currency:'')+')';
                 options(product,data.product_options||[],'product_id');options(order,data.orders||[],'id');
                 assets.replaceChildren();
                 (data.items||[]).forEach(item=>{
@@ -169,6 +185,8 @@
                     label.append(input,text);assets.append(label);
                 });
                 wizard.querySelectorAll('[data-create-purpose]').forEach(node=>{node.disabled=!!data.has_pending_payment||!data.items?.length||(node.dataset.createPurpose==='order'&&!data.can_order);});
+                get('pending').hidden=!data.has_pending_payment||!data.pending_payment_id;
+                if(data.pending_payment_id) get('pending').href='/admin/?page=payments&payment_type=crypto&payment_id='+Number(data.pending_payment_id);
                 get('wallet').hidden=!!data.items?.length||!data.can_wallet;
                 showNotice(data.has_pending_payment?copy.pending:!data.items?.length?copy.no_wallet:'',true);
             }catch(error){if(error.name!=='AbortError')showNotice(copy.error,true);}
@@ -191,7 +209,6 @@
                 busy=false;hide();
                 notifyCreated(data.crypto_quick);
                 feedback(copy.success,'success',Number(data.request_id)||0);
-                refreshPageList();
             }catch(error){
                 if(uncertain){busy=false;hide();notifyCreated();feedback(copy.uncertain,'error');}
                 else showNotice(error.message||copy.error,true);

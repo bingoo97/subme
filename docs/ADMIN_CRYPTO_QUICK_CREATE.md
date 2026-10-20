@@ -43,3 +43,19 @@ Po zapisie lista Payments jest odświeżana jednym żądaniem GET z zachowaniem 
 Weryfikacja lokalna: scenariusze doładowania, nowego i istniejącego zamówienia, ponowne otwarcie oraz cofanie kroków; podgląd 320, 390, 768 i 1440 px; testy endpointów na izolowanej bazie oraz pełne renderowanie stron. Bez zmian danych produkcyjnych.
 
 Dodatkowa regresja przeglądarkowego zapisu: `node dashboard-panel/tests/payments_create_frontend_regression.js` — zachowanie filtrów, odrzucanie spóźnionych odpowiedzi, bezpieczne nieudane odświeżenie i modal akceptacji w nowych wierszach.
+
+## Audyt pełnego workflow — 2026-10-20
+
+Rozszerzono zestaw do 86 sprawdzeń. Obejmuje wspólną blokadę duplikatu w obu kreatorach, czyste odpowiedzi JSON po wyłączeniu krypto i dla nieaktywnych klientów, otwarcie administratorowego ticketu w rzeczywistym handlerze klienta, zatwierdzenie tylko raz, oczekiwanie na realizację, realizację i archiwizację bez ponownego księgowania. Sprawdzono też częściową wpłatę, ponowienie dla tego samego zamówienia po anulowaniu i odnowienie wygasłego ticketu za pakiet przekraczający limit ręcznego doładowania.
+
+Poprawki:
+- Kwoty w tabeli i podglądzie płatności używają symboli walut także dla starszych rekordów zapisujących kod jako symbol.
+- Ukryta nieprawidłowa kwota doładowania nie blokuje walidacji po przejściu do płatności za zamówienie. Limit kwoty jest jawny przy polu.
+- Bieżący timeout pobierania opcji pokazuje błąd zamiast pozostawiać „Pobieranie…”. Stare odpowiedzi są ignorowane.
+- Otwarta płatność ma bezpośredni link do szczegółów, a niepewny wynik zapisu daje dostęp do listy i odświeża ją bez powtarzania POST.
+- Utworzenie ticketu w topbarze odświeża również otwartą listę Payments jednym GET; utworzenie z Payments synchronizuje oba widoki.
+- Nowe i przypisane zamówienie zapisuje metodę crypto w tej samej transakcji. Akceptacja wpłaty nie wykonuje realizacji u providera.
+- Częściowo opłacone zamówienie zachowuje status nieopłaconego i dostaje informację o dopłacie zamiast komunikatu o zakończeniu.
+- Zastępowany nieopłacony ticket pozostaje wygasły; nie trafia do archiwum oznaczającego rozliczenie. Wspólne porządkowanie po utworzeniu/odnowieniu zachowuje anulowane zgłoszenia przez 72h, a zapisanych wpłat nie usuwa tą ścieżką.
+
+Testy używają odseparowanego schematu MySQL, fikcyjnych portfeli, zapisanych lokalnie kursów i transakcji testowych. Nie wysyłają środków ani wiadomości do prawdziwych klientów. Bez deployu.

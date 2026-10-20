@@ -3421,26 +3421,15 @@ function app_delete_cancelled_crypto_requests_for_asset(
         return 0;
     }
 
-    $rows = $db->select_full_user(
-        "SELECT id
-         FROM crypto_deposit_requests
-         WHERE customer_id = {$customerId}
-           AND crypto_asset_id = {$assetId}
-           AND status IN ('cancelled', 'rejected', 'failed')"
-    );
-    if (!$rows) {
-        return 0;
-    }
-
-    $deletedTotal = 0;
-    foreach ($rows as $row) {
-        $requestId = (int)($row['id'] ?? 0);
-        if ($requestId > 0 && $db->delete_using_id('crypto_deposit_requests', $requestId)) {
-            $deletedTotal++;
-        }
-    }
-
-    return $deletedTotal;
+    // Replacing a ticket must retain the same 72-hour review window as maintenance.
+    $safeNow = $db->escape(date('Y-m-d H:i:s'));
+    $deleted = $db->query("DELETE FROM crypto_deposit_requests
+        WHERE customer_id = {$customerId} AND crypto_asset_id = {$assetId}
+          AND status IN ('cancelled','rejected','failed')
+          AND cancelled_at IS NOT NULL
+          AND cancelled_at <= DATE_SUB('{$safeNow}', INTERVAL 72 HOUR)
+          AND COALESCE(received_crypto_amount,0)=0");
+    return $deleted ? (int)$db->affected_rows : 0;
 }
 
 function app_release_cancelled_crypto_request_assignments_for_customer(

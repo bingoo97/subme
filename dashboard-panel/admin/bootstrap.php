@@ -7555,6 +7555,7 @@ function admin_format_money_value_with_symbol($amount, string $currencyCode = ''
     $currencyCode = trim($currencyCode);
     $currencySymbol = trim($currencySymbol);
     $currencyLabel = $currencySymbol !== '' ? $currencySymbol : $currencyCode;
+    $currencyLabel = match (strtoupper($currencyLabel)) { 'EUR'=>'€', 'USD'=>'$', 'GBP'=>'£', 'PLN'=>'zł', default=>$currencyLabel };
 
     if (!is_numeric($amount)) {
         return trim('— ' . $currencyLabel);
@@ -14906,7 +14907,7 @@ function admin_payment_renew_crypto_request(Mysql_ks $db, array $payment, int $a
         return ['ok' => false, 'message' => 'Payment payload is incomplete.'];
     }
 
-    $preview = admin_chat_crypto_payment_preview($db, $customerId, $assetId, $amountValue, []);
+    $preview = admin_chat_crypto_payment_preview($db, $customerId, $assetId, $amountValue, [], $orderId > 0);
     if (empty($preview['ok'])) {
         return ['ok' => false, 'message' => (string)($preview['message'] ?? 'Unable to renew crypto payment request.')];
     }
@@ -28016,14 +28017,13 @@ function admin_quick_payment_has_open_receipt(Mysql_ks $db, int $customerId): bo
 function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $messages = []): array
 {
     $customer = $customerId > 0 ? app_find_customer_by_id($db, $customerId) : null;
-    if (!$customer) {
-        return ['ok' => false, 'message' => 'Customer not found.'];
+    if (!$customer || ($customer['status'] ?? '') !== 'active') {
+        return ['ok' => false, 'message' => 'Customer is unavailable.'];
     }
 
     $payload = admin_chat_payment_modal_data($db, 'crypto', $customerId, $messages);
     if (empty($payload['ok'])) {
-        $payload['product_presets']=$payload['product_options'];
-    return $payload;
+        return $payload;
     }
 
     $payload['customer'] = [
@@ -28032,6 +28032,15 @@ function admin_quick_crypto_payment_data(Mysql_ks $db, int $customerId, array $m
         'public_handle' => (string)($customer['public_handle'] ?? ''),
     ];
     $payload['has_pending_payment'] = admin_quick_payment_has_open_receipt($db, $customerId) ? 1 : 0;
+    $payload['pending_payment_id'] = 0;
+    if ($payload['has_pending_payment']) {
+        $pending = $db->select_user("SELECT id FROM crypto_deposit_requests WHERE customer_id={$customerId}
+            AND status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review','expired')
+            AND (COALESCE(received_crypto_amount,0)>0 OR status IN ('awaiting_confirmation','awaiting_review')
+                 OR (status<>'expired' AND (expires_at IS NULL OR expires_at>NOW())))
+            ORDER BY COALESCE(received_crypto_amount,0)>0 DESC,id DESC LIMIT 1");
+        $payload['pending_payment_id'] = (int)($pending['id'] ?? 0);
+    }
     $visibleProviderIds = admin_customer_visible_provider_ids($db, $customerId);
     $payload['visible_provider_ids'] = $visibleProviderIds;
     $payload['product_options'] = array_values(array_filter(
@@ -28173,7 +28182,7 @@ function admin_quick_create_crypto_payment_request(
     $expiresAt = date('Y-m-d H:i:s', strtotime('+1 hour'));
     $db->query(
         "UPDATE crypto_deposit_requests
-         SET status = 'archived'
+         SET status = 'expired'
          WHERE customer_id = {$customerId}
            AND status IN ('pending', 'pending_payment')
            AND COALESCE(received_crypto_amount,0)=0
@@ -28280,6 +28289,9 @@ function admin_quick_create_crypto_payment_request(
     }
     if ($purpose !== 'topup' && !$db->update_using_id(['order_id'], [$orderId], 'crypto_deposit_requests', $requestId)) {
         throw new RuntimeException('Unable to link order.');
+    }
+    if ($purpose !== 'topup' && !$db->update_using_id(['payment_method'], ['crypto'], 'orders', $orderId)) {
+        throw new RuntimeException('Unable to record payment method.');
     }
     if (!$db->query('COMMIT')) throw new RuntimeException('Payment commit failed.');
     } catch (Throwable $error) {
