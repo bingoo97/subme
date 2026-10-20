@@ -633,6 +633,24 @@ $(function () {
         return false;
     });
 
+    var cryptoPaymentScrollFrame = null;
+    $(document).off('click.paymentCryptoScroll change.paymentCryptoScroll', '.crypto-choice-card');
+    $(document).on('click.paymentCryptoScroll change.paymentCryptoScroll', '.crypto-choice-card', function () {
+        var form = this.closest('form');
+        var button = form && form.querySelector('button[name="create_crypto_payment"]');
+        if (!button || button.disabled) {
+            return;
+        }
+        if (cryptoPaymentScrollFrame !== null) {
+            window.cancelAnimationFrame(cryptoPaymentScrollFrame);
+        }
+        cryptoPaymentScrollFrame = window.requestAnimationFrame(function () {
+            cryptoPaymentScrollFrame = null;
+            var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            button.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+        });
+    });
+
     $(document).off('click.paymentSwitch', '[data-payment-target]');
     $(document).on('click.paymentSwitch', '[data-payment-target]', function () {
         var target = $(this).data('payment-target');

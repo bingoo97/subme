@@ -463,7 +463,7 @@
 .payment-wizard .package-choice-chip>span{position:relative;padding-right:28px;}
 .payment-wizard .package-choice-chip input:checked+span{border-color:#79b898;background:#f0faf4;color:#397e5b;box-shadow:inset 0 0 0 1px #79b898;}
 .payment-wizard .package-choice-chip input:checked+span::after{content:'';position:absolute;right:12px;top:calc(50% - 5px);width:6px;height:10px;border-right:2px solid #4b986f;border-bottom:2px solid #4b986f;transform:rotate(45deg);}
-.payment-wizard button[name="create_crypto_payment"]{min-height:48px;border:1px solid #efc700;background:#ffd400;color:#3c330f;font-weight:600;animation:customer-checkout-pay-pulse 2.8s ease-in-out infinite;}
+.payment-wizard .payment-step__actions>button[name="create_crypto_payment"]{min-height:48px;border:1px solid #efc700;background:#ffd400;color:#3c330f;font-size:16px;font-weight:700;scroll-margin-bottom:80px;animation:customer-checkout-pay-pulse 2.8s ease-in-out infinite;}
 .payment-wizard button[name="create_crypto_payment"]:hover{border-color:#e2b900;background:#ffdf38;color:#352c0c;}
 .payment-wizard button[name="create_crypto_payment"]:focus-visible{outline:2px solid #d9b52d;outline-offset:3px;}
 .payment-wizard button[name="create_crypto_payment"]:disabled{animation:none;}
