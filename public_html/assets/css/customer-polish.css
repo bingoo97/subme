@@ -606,7 +606,7 @@
 .orders-view .orders-user-expiry-empty{display:inline-flex;align-items:center;gap:6px;padding:5px 7px;border:1px solid #e3e9f0;border-radius:6px;background:#f7f9fc;color:#8290a3;font-size:10px;font-weight:400;line-height:1.6;white-space:nowrap;}
 .orders-view .orders-user-expiry-empty>.fa{flex:none;color:#94a1b2;font-size:12px;}
 @media(max-width:767px){
-    .orders-view .orders-user-table{width:calc(100% + 338px);min-width:0;}
+    .orders-view .orders-user-table{width:calc(100% + 302px);min-width:0;}
     .orders-view .orders-user-table .orders-user-table__id-col{width:76px;}
     .orders-view .orders-user-table .orders-user-table__product-col{width:auto;}
     .orders-view .orders-user-table .orders-user-table__expiry-col{width:180px;}
@@ -614,10 +614,6 @@
     .orders-view .orders-user-table .orders-user-table__actions-col{width:112px!important;}
     .orders-view .orders-user-table thead th,.orders-view .orders-user-table tbody td{padding-left:10px;padding-right:10px;}
     .orders-view .orders-user-summary__title-row{width:100%;max-width:100%;}
-}
-@media(max-width:767px){
-    .orders-view .orders-user-expiry-empty{position:relative;justify-content:center;width:30px;height:30px;padding:0;border-radius:8px;}
-    .orders-view .orders-user-expiry-empty>span{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
 }
 
 /* Simple activity history: one description and one date, also on phones. */
