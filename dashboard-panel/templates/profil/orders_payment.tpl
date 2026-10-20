@@ -331,6 +331,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
         </div>
     {/if}
 
+    {if $payment_active_request_method neq 'crypto' && $payment_crypto_request && $payment_crypto_request.status eq 'expired'}
+        <div data-customer-crypto-ticket="{$payment_crypto_request.id|escape:'html'}" data-ticket-status="expired" data-ticket-detected="0"></div>
+        <script src="/assets/js/customer-crypto-ticket-status.js" defer></script>
+    {/if}
+
     {if $payment_active_request_method eq 'crypto' && $payment_crypto_request}
         <div data-customer-crypto-ticket="{$payment_crypto_request.id|escape:'html'}" data-ticket-status="{$payment_crypto_request.status|escape:'html'}" data-ticket-detected="{if $payment_crypto_request.payment_detected|default:false}1{else}0{/if}"></div>
         <script src="/assets/js/customer-crypto-ticket-status.js" defer></script>

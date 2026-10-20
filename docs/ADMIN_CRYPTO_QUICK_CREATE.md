@@ -25,3 +25,11 @@ Search is debounced by 300 ms, starts at two characters and aborts superseded re
 - Existing crypto lifecycle suite: 69 assertions; existing quick-payment frontend cache/badge/mutation/countdown/acceptance suites passed.
 - 67 complete application page renders without PHP warnings.
 - Browser tests at 320×568, 390×844, 768×1024 and 1440×900. Created synthetic new-order, existing-order and top-up tickets through the actual local endpoint backed by a disposable database. Verified immediate list/badge updates, 60-minute remaining time, no-wallet message/link and no horizontal wizard overflow.
+
+## Manual verification after the sending deadline
+
+The receipt state is independent of the 60-minute sending deadline. A recorded positive incoming amount remains open for administrator verification; expiry cleanup repairs older open receipts that still carry a deadline. The quick flyout, reminders, customer payment screen and status endpoint agree on receipt detection, including legacy expired receipts. Customer cancellation and stale Expired delete actions cannot discard a detected receipt.
+
+The scanner also revisits expired requests from the last 24 hours, behind current open tickets, using the existing per-run network budget/row limit and 120-second recheck interval. Its transaction-history lookback can cover the request's age, but matching still requires a verified incoming transaction within the original payment window. Delayed discovery is not permission to match unrelated older transfers. OFF only records the receipt and queues manual verification; it never credits the customer. Partial receipts follow the same rule. Already detected OFF receipts are not repeatedly scanned.
+
+Recent expired customer screens retain the existing visible-tab-only 30-second status watcher so a later detection can replace the screen automatically. No chain queries are performed by this customer status endpoint. Extended crypto lifecycle regression suite: 82 assertions, including late discovery, old-deadline repair, partial transfer, no premature credit, category classification, cancellation/deletion guards and preservation days later.

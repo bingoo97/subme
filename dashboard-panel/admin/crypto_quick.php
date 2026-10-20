@@ -9,8 +9,8 @@ function admin_crypto_quick_labels(?string $locale = null): array
 function admin_crypto_quick_conditions(): array
 {
     return [
-        'new'=>"r.status IN ('pending','awaiting_confirmation','awaiting_review') AND (r.expires_at IS NULL OR r.expires_at>NOW())",
-        'expired'=>"(r.status='expired' OR (r.status IN ('pending','awaiting_confirmation','awaiting_review') AND r.expires_at<=NOW()))",
+        'new'=>"((r.status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review') AND (r.expires_at IS NULL OR r.expires_at>NOW() OR COALESCE(r.received_crypto_amount,0)>0)) OR (r.status='expired' AND COALESCE(r.received_crypto_amount,0)>0))",
+        'expired'=>"COALESCE(r.received_crypto_amount,0)=0 AND (r.status='expired' OR (r.status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review') AND r.expires_at<=NOW()))",
         'cancelled'=>"r.status='cancelled'",
         'payout'=>"r.status='approved'",
     ];
@@ -22,7 +22,7 @@ function admin_crypto_quick_counts(Mysql_ks $db): array
         $parts[] = "COALESCE(SUM(CASE WHEN {$condition} THEN 1 ELSE 0 END),0) AS `{$filter}`";
     }
     // Only actionable requests, without joins, histories or external API calls.
-    $row = $db->select_user("SELECT " . implode(',', $parts) . " FROM crypto_deposit_requests r WHERE r.status IN ('pending','awaiting_confirmation','awaiting_review','expired','approved','cancelled')");
+    $row = $db->select_user("SELECT " . implode(',', $parts) . " FROM crypto_deposit_requests r WHERE r.status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review','expired','approved','cancelled')");
     $counts = [];
     foreach (array_keys(admin_crypto_quick_conditions()) as $filter) {
         $counts[$filter] = max(0, (int)($row[$filter] ?? 0));
@@ -39,7 +39,7 @@ function admin_crypto_quick_priority(array $counts): string
 function admin_crypto_quick_rows(Mysql_ks $db, string $filter, int $limit = 10, bool $detectedFirst = false, int $requestId = 0): array
 {
     $limit=max(1,min(10,$limit));
-    $order=$detectedFirst&&$filter==='new'?"CASE WHEN r.status='awaiting_review' AND r.received_crypto_amount>0 THEN 0 ELSE 1 END,r.id DESC":"r.id DESC";
+    $order=$detectedFirst&&$filter==='new'?"CASE WHEN r.received_crypto_amount>0 THEN 0 ELSE 1 END,r.id DESC":"r.id DESC";
     $conditions=admin_crypto_quick_conditions();
     if(!isset($conditions[$filter]))throw new InvalidArgumentException('Invalid filter.');
     $where=$conditions[$filter].($requestId>0?" AND r.id=".(int)$requestId:"");
@@ -64,11 +64,11 @@ function admin_crypto_quick_html(array $rows, string $filter, ?array $labels = n
     foreach($rows as $row){
         $orderId=(int)($row['order_id']??0);$needsAction=!empty($row['order_needs_action']);$autoAccepted=!empty($row['auto_accepted']);
         $id=(int)$row['id'];$code=(string)$row['asset_code'];$paid=$filter==='payout';
-        $detected=$filter==='new'&&(string)$row['status']==='awaiting_review'&&(float)($row['received_crypto_amount']??0)>0;
+        $detected=$filter==='new'&&app_crypto_request_has_detected_payment($row);
         $crypto=($paid||$detected)?($row['received_crypto_amount']??$row['requested_crypto_amount']):$row['requested_crypto_amount'];
         $fiat=($paid||$detected)?($row['received_fiat_amount']??$row['requested_fiat_amount']):$row['requested_fiat_amount'];
         $handle=trim((string)($row['public_handle']??''));$identity=$handle!==''?'@'.$handle:(string)($row['email']??'#'.$row['customer_id']);
-        $status=in_array($row['status'],['awaiting_review','awaiting_confirmation'],true)&&$filter==='new'?$l['review']:$l[$filter];
+        $status=($detected||in_array($row['status'],['awaiting_review','awaiting_confirmation'],true))&&$filter==='new'?$l['review']:$l[$filter];
         if($paid&&$orderId>0&&$needsAction)$status=$l['order_action_status'];
         $expiresTimestamp=0;
         if($filter==='new'&&trim((string)($row['expires_at']??''))!==''){
@@ -178,7 +178,7 @@ function admin_crypto_reminder_view(Mysql_ks $db, string $csrf, array $messages,
     $counts=$counts??admin_crypto_quick_counts($db);
     $category=null;$rows=[];$workflow='payment';$orderUrl='';
     $newRows=!empty($counts['new'])?admin_crypto_quick_rows($db,'new',1,true):[];
-    if($newRows&&(string)$newRows[0]['status']==='awaiting_review'&&(float)($newRows[0]['received_crypto_amount']??0)>0){
+    if($newRows&&app_crypto_request_has_detected_payment($newRows[0])){
         $category='new';$rows=$newRows;
     } else {
         if(!empty($counts['payout'])){

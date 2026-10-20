@@ -438,7 +438,7 @@ return [
         'payment_crypto_approved_help' => 'Twoja wpłata została zatwierdzona. Poniżej znajdziesz faktycznie zaksięgowaną kwotę i status płatności.',
         'payment_crypto_history_title' => 'Historia płatności',
         'payment_crypto_detected_title' => 'Wykryto wpłatę',
-        'payment_crypto_detected_help' => 'Wykryliśmy Twoją wpłatę. Oczekuje na weryfikację administratora. Saldo i zamówienie zaktualizują się po zatwierdzeniu. Nie wysyłaj kolejnej wpłaty.',
+        'payment_crypto_detected_help' => 'Wykryliśmy Twoją wpłatę. Administrator zweryfikuje ją ręcznie. Saldo i zamówienie zaktualizują się po zatwierdzeniu. Nie wysyłaj kolejnej wpłaty.',
         'payment_crypto_verification_pending' => 'Oczekuje na weryfikację administratora',
         'payment_ticket_status_paid' => 'Opłacone',
         'payment_ticket_status_approved' => 'Approved',

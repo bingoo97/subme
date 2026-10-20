@@ -2949,7 +2949,8 @@ function app_cancel_crypto_deposit_requests(
     Mysql_ks $db,
     string $whereSql,
     string $releaseNote = 'Released after crypto payment request cancellation',
-    ?string $cancelledAt = null
+    ?string $cancelledAt = null,
+    bool $preserveDetected = false
 ): int {
     $whereSql = trim($whereSql);
     if (
@@ -2966,10 +2967,11 @@ function app_cancel_crypto_deposit_requests(
     }
     $safeNowSql = $db->escape($safeNow);
 
+    $receiptGuard = $preserveDetected ? " AND COALESCE(received_crypto_amount,0)=0" : "";
     $rows = $db->select_full_user(
         "SELECT id, wallet_assignment_id
          FROM crypto_deposit_requests
-         WHERE {$whereSql}"
+         WHERE ({$whereSql}){$receiptGuard}"
     );
     if (!$rows) {
         return 0;
@@ -2995,12 +2997,13 @@ function app_cancel_crypto_deposit_requests(
                  WHEN cancelled_at IS NULL THEN '{$safeNowSql}'
                  ELSE cancelled_at
              END
-         WHERE id IN ({$requestIdList})"
+         WHERE id IN ({$requestIdList}){$receiptGuard}"
     );
     if (!$updated) {
         return 0;
     }
 
+    $cancelledCount = (int)$db->affected_rows;
     $settings = app_fetch_settings($db);
     $sharedEnabled = !empty($settings['crypto_wallet_shared_assignments_enabled']);
 
@@ -3011,7 +3014,7 @@ function app_cancel_crypto_deposit_requests(
         }
     }
 
-    return count($requestIds);
+    return $cancelledCount;
 }
 
 function app_payment_open_crypto_statuses(): array
@@ -3146,6 +3149,13 @@ function app_ensure_payment_request_runtime_columns(Mysql_ks $db): void
     }
 }
 
+/** A recorded incoming amount is a receipt to review, not an unpaid ticket deadline. */
+function app_crypto_request_has_detected_payment(array $request): bool
+{
+    return in_array((string)($request['status'] ?? ''), ['pending','pending_payment','awaiting_confirmation','awaiting_review','expired'], true)
+        && (float)($request['received_crypto_amount'] ?? 0) > 0;
+}
+
 function app_expire_crypto_deposit_requests(
     Mysql_ks $db,
     string $whereSql,
@@ -3162,11 +3172,15 @@ function app_expire_crypto_deposit_requests(
     }
 
     $statusSql = "'" . implode("','", array_map([$db, 'escape'], app_payment_open_crypto_statuses())) . "'";
+    // Repair older detected tickets that still carry a send deadline before expiring unpaid rows.
+    $db->query("UPDATE crypto_deposit_requests SET status='awaiting_review', expires_at=NULL
+        WHERE status IN ({$statusSql}) AND COALESCE(received_crypto_amount,0)>0 AND ({$whereSql})");
     $updated = $db->query(
         "UPDATE crypto_deposit_requests
          SET status = 'expired'
          WHERE status IN ({$statusSql})
-           AND {$whereSql}"
+           AND COALESCE(received_crypto_amount,0)=0
+           AND ({$whereSql})"
     );
 
     return $updated ? (int)$db->affected_rows : 0;
@@ -3789,8 +3803,9 @@ function app_create_crypto_deposit_request($db, array $payload, bool $joinTransa
         // Current reads see requests committed while a parallel submit waited for the customer lock.
         $open = $db->select_user("SELECT id FROM crypto_deposit_requests
             WHERE (customer_id = {$customerId} OR wallet_address_id = {$walletId})
-              AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
-              AND (expires_at IS NULL OR expires_at > '{$now}') LIMIT 1 FOR UPDATE");
+              AND ((status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+                    AND (expires_at IS NULL OR expires_at > '{$now}' OR COALESCE(received_crypto_amount,0)>0))
+                   OR (status='expired' AND COALESCE(received_crypto_amount,0)>0)) LIMIT 1 FOR UPDATE");
         if ($open) return 0;
         $id = app_create_crypto_deposit_request_locked($db, $payload);
         if ($id > 0 && $ownsTransaction) {
@@ -11347,6 +11362,7 @@ function app_archive_expired_payment_requests(Mysql_ks $db, ?string $now = null)
                        SELECT order_id
                        FROM crypto_deposit_requests
                        WHERE status = 'expired'
+                         AND COALESCE(received_crypto_amount,0)=0
                          AND expires_at IS NOT NULL
                          AND expires_at <= '{$safeNowSql}'
                        UNION
@@ -11394,6 +11410,7 @@ function app_cancel_stale_expired_payment_requests(Mysql_ks $db, ?string $now = 
             "SELECT id, order_id
              FROM crypto_deposit_requests
              WHERE status = 'expired'
+               AND COALESCE(received_crypto_amount,0)=0
                AND expires_at IS NOT NULL
                AND expires_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)"
         );
@@ -11401,10 +11418,12 @@ function app_cancel_stale_expired_payment_requests(Mysql_ks $db, ?string $now = 
             $cancelledCrypto = app_cancel_crypto_deposit_requests(
                 $db,
                 "status = 'expired'
+                 AND COALESCE(received_crypto_amount,0)=0
                  AND expires_at IS NOT NULL
                  AND expires_at <= DATE_SUB('{$safeNowSql}', INTERVAL 24 HOUR)",
                 'Released after expired crypto payment request was moved to cancelled queue',
-                $safeNow
+                $safeNow,
+                true
             );
 
             foreach ($expiredCryptoRows as $row) {
@@ -13495,11 +13514,12 @@ function app_crypto_request_receipt_labels(array $request): array
 {
     $requested=round((float)($request['requested_fiat_amount']??0),2);
     $received=round((float)($request['received_fiat_amount']??0),2);
-    $currency=trim((string)($request['currency_symbol']??$request['currency_code']??''));
+    $symbol=(string)($request['currency_symbol']??'');
+    $code=(string)($request['currency_code']??'');
     return [
-        'receipt_requested_label'=>number_format($requested,2,'.','').' '.$currency,
-        'receipt_received_label'=>number_format($received,2,'.','').' '.$currency,
-        'receipt_shortfall_label'=>number_format(max(0,$requested-$received),2,'.','').' '.$currency,
+        'receipt_requested_label'=>app_format_money_value($requested,$symbol,$code),
+        'receipt_received_label'=>app_format_money_value($received,$symbol,$code),
+        'receipt_shortfall_label'=>app_format_money_value(max(0,$requested-$received),$symbol,$code),
         'receipt_underpaid'=>$received>0&&$received+0.004<$requested,
     ];
 }

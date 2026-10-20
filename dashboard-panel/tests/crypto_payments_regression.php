@@ -162,7 +162,21 @@ ck(str_contains($detectedHtml,'Wykryto wpłatę')&&!str_contains($detectedHtml,'
 $manualPage=finish(child('--customer-page'));
 file_put_contents('/tmp/subme-detected-customer-ui.html',$manualPage['html']);
 ck(str_contains($manualPage['html'],'Payment detected')&&str_contains($manualPage['html'],'awaiting verification')&&!str_contains($manualPage['html'],'data-copy-text'),'Customer sees receipt pending verification instead of payment instructions');
+// An already detected receipt must survive expiry and keep the same client/admin presentation.
+sql("UPDATE crypto_deposit_requests SET expires_at=DATE_SUB(NOW(),INTERVAL 2 HOUR) WHERE id=201");
+app_expire_crypto_deposit_requests($db,"id=201 AND expires_at<=NOW()");
+$preserved=$db->select_user('SELECT * FROM crypto_deposit_requests WHERE id=201');
+ck($preserved['status']==='awaiting_review'&&$preserved['expires_at']===null,'Deadline cleanup preserves a detected receipt and repairs the legacy deadline');
+$afterDeadline=finish(child('--customer-page'));ck(str_contains($afterDeadline['html'],'Payment detected')&&!str_contains($afterDeadline['html'],'data-copy-text'),'Detected receipt remains the customer screen after its old deadline');
+sql("UPDATE crypto_deposit_requests SET status='expired',expires_at=DATE_SUB(NOW(),INTERVAL 2 HOUR) WHERE id=201");
+ck(count(admin_crypto_quick_rows($db,'new',10,false,201))===1&&count(admin_crypto_quick_rows($db,'expired',10,false,201))===0,'Legacy expired receipt is classified in New, never Expired');
+ck(admin_customer_has_pending_crypto_payment($db,102),'A recorded receipt cannot be bypassed by creating a replacement ticket after its old deadline');
+ck(empty(admin_delete_payment($db,'crypto',201)['ok']),'A stale Expired delete action cannot remove a detected receipt');
+$legacyPage=finish(child('--customer-page'));ck(str_contains($legacyPage['html'],'Payment detected')&&!str_contains($legacyPage['html'],'data-copy-text'),'Legacy expired receipt shows review notice rather than QR/payment instructions');
+ck(app_cancel_crypto_deposit_requests($db,'id=201','Customer guard fixture',null,true)===0&&$db->select_user('SELECT status FROM crypto_deposit_requests WHERE id=201')['status']==='expired','Customer cancellation guard preserves an existing receipt');
+sql("UPDATE crypto_deposit_requests SET status='awaiting_review',expires_at=NULL WHERE id=201");
 sql("UPDATE crypto_deposit_requests SET blockchain_checked_at=NULL WHERE id=201");
+ck(!str_contains($legacyPage['html'],'class="row active_ticket"')&&!str_contains($legacyPage['html'],'Zapłać po aktualnym kursie.'),'Detected history row contains no second QR, expired countdown or repeated payment instructions');
 $manualAgain=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>0]),['limit'=>1]);
 ck($manualAgain['checked']===0,'OFF does not repeatedly scan an already detected ticket');
 $automatic=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>1]),['limit'=>1]);
@@ -171,6 +185,25 @@ ck((float)$db->select_user('SELECT balance_amount FROM customers WHERE id=102')[
 sql("UPDATE crypto_deposit_requests SET blockchain_checked_at=NULL WHERE id=201");
 $automaticAgain=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>1]),['limit'=>1]);
 ck($automaticAgain['accepted']===0&&(float)$db->select_user('SELECT balance_amount FROM customers WHERE id=102')['balance_amount']===$manualBefore+100,'Repeated scanner never credits an approved request twice');
+
+// A timely transaction discovered after the sending deadline still enters manual verification.
+no_remote_btc('crypto-audit-wallet-208');
+sql("INSERT INTO crypto_wallet_addresses(id,crypto_asset_id,address,network_code,status) VALUES(208,{$btc},'crypto-audit-wallet-208','bitcoin','assigned')");
+sql("INSERT INTO crypto_wallet_assignments(id,wallet_address_id,customer_id,status) VALUES(208,208,101,'active')");
+sql("INSERT INTO crypto_deposit_requests(id,customer_id,crypto_asset_id,wallet_address_id,wallet_assignment_id,requested_fiat_amount,fiat_currency_id,exchange_rate,requested_crypto_amount,status,requested_at,expires_at) VALUES(208,101,{$btc},208,208,100,2,50000,.002,'expired',DATE_SUB(NOW(),INTERVAL 180 MINUTE),DATE_SUB(NOW(),INTERVAL 120 MINUTE))");
+$lateHash=str_repeat('9',64);
+sql("INSERT INTO crypto_deposit_transactions(wallet_address_id,crypto_asset_id,transaction_hash,amount_crypto,amount_fiat,confirmations,received_at) VALUES(208,{$btc},'{$lateHash}',.0005,25,2,DATE_SUB(UTC_TIMESTAMP(),INTERVAL 125 MINUTE))");
+$lateBalance=(float)$db->select_user('SELECT balance_amount FROM customers WHERE id=101')['balance_amount'];
+$late=admin_crypto_auto_accept_recent_payments($db,array_merge($settings,['crypto_auto_accept_enabled'=>0]),['limit'=>1]);
+$lateRow=$db->select_user('SELECT * FROM crypto_deposit_requests WHERE id=208');
+ck($late['detected']===1&&$late['accepted']===0&&$lateRow['status']==='awaiting_review'&&$lateRow['expires_at']===null,'Expired ticket is recovered from a timely confirmed transfer even after a scanner delay');
+ck((float)$lateRow['received_crypto_amount']===.0005&&(float)$lateRow['received_fiat_amount']===25.0,'Partial transfer also waits for review with actual amounts');
+ck((float)$db->select_user('SELECT balance_amount FROM customers WHERE id=101')['balance_amount']===$lateBalance,'Late/partial detection never credits balance in OFF mode');
+app_archive_expired_payment_requests($db,date('Y-m-d H:i:s',time()+4*86400));
+ck($db->select_user('SELECT status FROM crypto_deposit_requests WHERE id=208')['status']==='awaiting_review','Detected receipt never expires days later while waiting for admin');
+ck($db->select_user('SELECT status FROM crypto_deposit_requests WHERE id=202')['status']==='expired','A truly unpaid ticket still expires normally');
+// Restore unrelated fixture deadlines after the future-time cleanup check.
+sql("UPDATE crypto_deposit_requests SET status='pending',expires_at=DATE_ADD(NOW(),INTERVAL 60 MINUTE) WHERE id BETWEEN 202 AND 207");
 
 // Clear only this suite's remaining pending requests to exercise fair queue rotation.
 sql('UPDATE crypto_deposit_requests SET blockchain_checked_at=NULL WHERE id BETWEEN 201 AND 207');

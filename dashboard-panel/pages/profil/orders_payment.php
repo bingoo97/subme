@@ -268,16 +268,18 @@ if (!function_exists('orders_payment_crypto_qr_url')) {
 }
 
 if (!function_exists('orders_payment_cancel_open_crypto_requests')) {
-    function orders_payment_cancel_open_crypto_requests($db, int $customerId, int $orderId): void
+    function orders_payment_cancel_open_crypto_requests($db, int $customerId, int $orderId): int
     {
         $safeNow = date('Y-m-d H:i:s');
-        app_cancel_crypto_deposit_requests(
+        return app_cancel_crypto_deposit_requests(
             $db,
             "customer_id = {$customerId}
              AND order_id = {$orderId}
-             AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')",
+             AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+             AND COALESCE(received_crypto_amount,0)=0",
             'Released after customer cancelled order crypto payment request',
-            $safeNow
+            $safeNow,
+            true
         );
     }
 }
@@ -614,12 +616,12 @@ if (app_uses_v2_schema($db)) {
                  WHERE customer_id = " . (int)$user['id'] . "
                    AND order_id = " . (int)$selected['id'] . "
                    AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+                   AND COALESCE(received_crypto_amount,0)=0
                  ORDER BY id DESC
                  LIMIT 1"
             );
 
-            if ($openCryptoRequest) {
-                orders_payment_cancel_open_crypto_requests($db, (int)$user['id'], (int)$selected['id']);
+            if ($openCryptoRequest && orders_payment_cancel_open_crypto_requests($db, (int)$user['id'], (int)$selected['id']) > 0) {
                 $db->update_using_id(['payment_method'], [null], 'orders', (int)$selected['id']);
                 if ($isSameOrderRenewalFlow) {
                     app_order_cancel_pending_renewal(
@@ -1117,7 +1119,7 @@ if (app_uses_v2_schema($db)) {
         );
         if ($cryptoRequest) {
                 $cryptoRequest=array_merge($cryptoRequest,app_crypto_request_receipt_labels($cryptoRequest));
-                $cryptoRequest['payment_detected'] = (string)($cryptoRequest['status'] ?? '') === 'awaiting_review' && (float)($cryptoRequest['received_crypto_amount'] ?? 0) > 0;
+                $cryptoRequest['payment_detected'] = app_crypto_request_has_detected_payment($cryptoRequest);
             $cryptoRequest['crypto_logo_path'] = orders_payment_crypto_logo_by_code((string)($cryptoRequest['crypto_code'] ?? ''), (string)($cryptoRequest['crypto_logo_url'] ?? ''));
             $cryptoRequest['qr_code_url'] = orders_payment_crypto_qr_url($cryptoRequest);
             $cryptoRequest['wallet_network_label'] = orders_payment_crypto_network_label((string)($cryptoRequest['wallet_network_code'] ?? ''));
@@ -1157,7 +1159,7 @@ if (app_uses_v2_schema($db)) {
             $bankRequest = null;
         }
 
-        $hasActiveCryptoRequest = $cryptoRequest && in_array((string)($cryptoRequest['status'] ?? ''), ['pending', 'awaiting_confirmation', 'awaiting_review'], true);
+        $hasActiveCryptoRequest = $cryptoRequest && (app_crypto_request_has_detected_payment($cryptoRequest) || in_array((string)($cryptoRequest['status'] ?? ''), ['pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review'], true));
         $hasActiveBankRequest = $bankRequest && in_array((string)($bankRequest['status'] ?? ''), ['pending_payment', 'awaiting_review'], true);
         $activeRequestMethod = '';
 

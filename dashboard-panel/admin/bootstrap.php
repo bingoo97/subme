@@ -11360,8 +11360,9 @@ function admin_delete_payment(
             ? " AND NOT EXISTS (SELECT 1 FROM customer_balance_runtime_events e WHERE e.source_type='payment_approval' AND e.source_key='crypto:{$paymentId}' AND e.direction='credit')"
             : '';
         $result = $db->query("DELETE FROM crypto_deposit_requests WHERE id={$paymentId}
-            AND (status IN ('cancelled','rejected','failed','expired')
-                 OR (status IN ('pending','awaiting_confirmation','awaiting_review') AND expires_at IS NOT NULL AND expires_at<=NOW())){$creditGuard}");
+            AND (status IN ('cancelled','rejected','failed')
+                 OR (COALESCE(received_crypto_amount,0)=0 AND (status='expired'
+                     OR (status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review') AND expires_at IS NOT NULL AND expires_at<=NOW())))){$creditGuard}");
         $deleted = $result && (int)$db->affected_rows > 0;
     } else {
         $deleted = $db->delete_using_id($tableName, $paymentId);
@@ -13803,6 +13804,8 @@ function admin_crypto_accept_preview_payload(Mysql_ks $db, array $paymentRow, ar
 function admin_crypto_auto_accept_transaction_rows(Mysql_ks $db, array $paymentRow, int $windowMinutes): array
 {
     $windowHours = max(1, min(72, (int)ceil(max(5, $windowMinutes) / 60) + 1));
+    $requestedAt = app_timestamp_from_runtime_datetime((string)($paymentRow['requested_at'] ?? ''));
+    if ($requestedAt > 0) $windowHours = max($windowHours, min(26, (int)ceil(max(0,time()-$requestedAt)/3600)+1));
     $assetCode = strtoupper(trim((string)($paymentRow['asset_code'] ?? '')));
     $networkCode = admin_crypto_accept_preview_normalize_network_code((string)($paymentRow['network_code'] ?? ''), $assetCode);
     $rows = [];
@@ -14194,21 +14197,24 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
     // Each status uses the complete queue index order; only a bounded union is sorted.
     $manualQueueFilter = $autoAccept ? '' : "AND NOT (status='awaiting_review' AND COALESCE(received_crypto_amount,0)>0)";
     $queues = [];
-    foreach (app_payment_open_crypto_statuses() as $status) {
+    foreach (array_unique(array_merge(app_payment_open_crypto_statuses(), ['expired'])) as $status) {
         $safeStatus = $db->escape($status);
-        $queues[] = "(SELECT id, blockchain_checked_at, requested_at
+        // Revisit recently expired tickets too: a transfer sent before the deadline may confirm later.
+        $queueBackMinutes = $status === 'expired' ? 1440 : $scanBackMinutes;
+        $queuePriority = $status === 'expired' ? 1 : 0;
+        $queues[] = "(SELECT id, blockchain_checked_at, requested_at, {$queuePriority} AS queue_priority
             FROM crypto_deposit_requests
             WHERE status = '{$safeStatus}'
               {$manualQueueFilter}
               AND (blockchain_checked_at IS NULL OR blockchain_checked_at < DATE_SUB('{$safeNowSql}', INTERVAL 120 SECOND))
               AND requested_at <= '{$safeNowSql}'
-              AND requested_at >= DATE_SUB('{$safeNowSql}', INTERVAL {$scanBackMinutes} MINUTE)
+              AND requested_at >= DATE_SUB('{$safeNowSql}', INTERVAL {$queueBackMinutes} MINUTE)
             ORDER BY blockchain_checked_at ASC, requested_at ASC, id ASC
             LIMIT {$limit})";
     }
     $rows = $db->select_full_user(
         'SELECT id FROM (' . implode(' UNION ALL ', $queues) . ") AS scan_queue
-         ORDER BY blockchain_checked_at ASC, requested_at ASC, id ASC
+         ORDER BY queue_priority ASC, blockchain_checked_at ASC, requested_at ASC, id ASC
          LIMIT {$limit}"
     );
 
@@ -14257,7 +14263,7 @@ function admin_crypto_auto_accept_recent_payments_locked(Mysql_ks $db, array $se
             $saved = $db->query("UPDATE crypto_deposit_requests SET status='awaiting_review',
                 received_crypto_amount='" . $db->escape(admin_decimal_input_value($amountCrypto,8)) . "',
                 received_fiat_amount='" . $db->escape(number_format($amountFiat,2,'.','')) . "', expires_at=NULL
-                WHERE id={$paymentId} AND status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review')");
+                WHERE id={$paymentId} AND status IN ('pending','pending_payment','awaiting_confirmation','awaiting_review','expired')");
             if ($saved && $db->affected_rows > 0) $detected++; else $skipped++;
             continue;
         }
@@ -19456,8 +19462,9 @@ function admin_customer_has_pending_crypto_payment(Mysql_ks $db, int $customerId
         "SELECT COUNT(*) AS total
          FROM crypto_deposit_requests
          WHERE customer_id = {$customerId}
-           AND status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
-           AND (expires_at IS NULL OR expires_at > NOW())"
+           AND ((status IN ('pending', 'pending_payment', 'awaiting_confirmation', 'awaiting_review')
+                 AND (expires_at IS NULL OR expires_at > NOW() OR COALESCE(received_crypto_amount,0)>0))
+                OR (status='expired' AND COALESCE(received_crypto_amount,0)>0))"
     );
     return (int)($row['total'] ?? 0) > 0;
 }

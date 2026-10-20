@@ -22,7 +22,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET' && isset($_GET['ticket_status']
         INNER JOIN customers c ON c.id=r.customer_id AND c.status='active'
         WHERE r.id=".(int)$ticket." AND r.customer_id={$customerId} LIMIT 1");
     if(!$row){http_response_code(404);exit;}
-    echo json_encode(['ok'=>true,'status'=>(string)$row['status'],'detected'=>$row['status']==='awaiting_review'&&(float)$row['received_crypto_amount']>0]);exit;
+    echo json_encode(['ok'=>true,'status'=>(string)$row['status'],'detected'=>app_crypto_request_has_detected_payment($row)]);exit;
 }
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') { http_response_code(405); header('Allow: POST'); exit; }

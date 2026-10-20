@@ -4,6 +4,11 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
 </script>
 {/if}
 
+{if !$active_v2_crypto_request && $crypto_watch_ticket|default:null}
+<div data-customer-crypto-ticket="{$crypto_watch_ticket.id|escape:'html'}" data-ticket-status="{$crypto_watch_ticket.status_raw|escape:'html'}" data-ticket-detected="0"></div>
+<script src="/assets/js/customer-crypto-ticket-status.js" defer></script>
+{/if}
+
 {if $active_v2_crypto_request}
 <div data-customer-crypto-ticket="{$active_v2_crypto_request.id|escape:'html'}" data-ticket-status="{$active_v2_crypto_request.status|escape:'html'}" data-ticket-detected="{if $active_v2_crypto_request.payment_detected|default:false}1{else}0{/if}"></div>
 <script src="/assets/js/customer-crypto-ticket-status.js" defer></script>
@@ -260,7 +265,7 @@ $(function () {
     </div>
 	<div id="tickets">
 		{section name=i loop=$crypto_payments}
-		{if $crypto_payments[i].status == 0}
+		{if $crypto_payments[i].status == 0 && !($crypto_payments[i].payment_detected|default:false)}
 		<div class="row active_ticket">
 		  <div class="col-md-8 one_ticket">
 			<div class="col-sm-3 col-md-4">
