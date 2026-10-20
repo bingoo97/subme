@@ -1,0 +1,3 @@
+dashboard-panel/admin/bootstrap.php
+public_html/assets/js/admin.js
+dashboard-panel/admin/index.php
