@@ -43,6 +43,8 @@ sql("INSERT INTO products (id,name,slug,price_amount,currency_id,duration_hours,
     (2,'Renewal package','sales-test-renewal',30,2,2160,1)");
 $yesterday = date('Y-m-d 12:00:00', strtotime('-1 day'));
 $now = date('Y-m-d H:i:s');
+// Keep MySQL fixtures in the same second as the report snapshot across slow CI runs.
+sql('SET timestamp = ' . strtotime($now));
 sql("INSERT INTO orders (id,customer_id,product_id,total_amount,currency_id,status,payment_status,paid_at,created_at)
     VALUES (1,1,1,10,2,'active','paid','{$yesterday}','{$yesterday}')");
 check(todaySales()['paid_orders'] === 0, 'Old purchase must not count today.');
