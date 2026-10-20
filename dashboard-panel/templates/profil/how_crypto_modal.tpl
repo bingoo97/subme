@@ -20,7 +20,7 @@
 			 <p class="desc-title">6. Wprowadź dane Bingoo</p>
 			 <p class="desc-note">Po kliknięciu w przycisk "Send" wprowadź naszę dane na które chcesz przesłać płatnośc. Adres oraz kwotę płatności otrzymasz po utworzeniu polecenia płatności po aktualnym kursie. Skopiuj dane do płatnosci albo zeskanuj QR kod w swoim portfelu kryptowalutowym. Płatność po aktualnym kursie jest ważna tylko przez 30 min. Po upływie czasu kurs wymiany zostanie zaktualizowany.</p>
 			 <img src="/img/crypto/trust/4.jpg" class="img-responsive phone-img" alt="" />
-			 <iframe width="560" height="315" src="https://www.youtube.com/embed/R9gINS1qdIQ" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+			 <iframe loading="lazy" width="560" height="315" src="https://www.youtube.com/embed/R9gINS1qdIQ" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
           </div>
           <div class="modal-footer">
 		    <a href="https://trustwallet.com/" target="_blank" class="btn btn-blue btn-lg btn-block border-radius">

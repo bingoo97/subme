@@ -538,6 +538,13 @@ switch ($site) {
         }
 
         if ($cryptoPayments) {
+            foreach ($cryptoPayments as $index => $payment) {
+                $cryptoPayments[$index]['history_fiat_label'] = app_format_money_value(
+                    $payment['discount_price'] ?? 0,
+                    (string)($payment['currency_symbol'] ?? $reseller['currency_symbol'] ?? ''),
+                    (string)($payment['currency_code'] ?? $reseller['currency_short'] ?? '')
+                );
+            }
             usort($cryptoPayments, static function (array $left, array $right): int {
                 return (int)($right['date_s'] ?? 0) <=> (int)($left['date_s'] ?? 0);
             });
