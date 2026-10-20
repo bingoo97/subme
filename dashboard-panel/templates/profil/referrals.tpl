@@ -1,4 +1,4 @@
-<div class="content-box referrals-page">
+<div class="content-box referrals-page customer-secondary-page">
     <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.referrals_title}</h1>
 
     <div class="alert alert-dismissible alert-info">
@@ -31,11 +31,11 @@
         <table class="table table-bordered table-responsive center">
             <thead class="strong">
                 <tr>
-                    <td class="hidden-xs"></td>
-                    <td class="text-left">{$t.referrals_name}</td>
-                    <td class="hidden-xs">{$t.referrals_date}</td>
-                    <td>{$t.referrals_purchases}</td>
-                    <td>{$t.referrals_status}</td>
+                    <th scope="col" class="hidden-xs"></th>
+                    <th scope="col" class="text-left">{$t.referrals_name}</th>
+                    <th scope="col" class="hidden-xs">{$t.referrals_date}</th>
+                    <th scope="col">{$t.referrals_purchases}</th>
+                    <th scope="col">{$t.referrals_status}</th>
                 </tr>
             </thead>
             <tbody>
@@ -54,6 +54,6 @@
         </table>
     </div>
 {else}
-    <p>{$t.referrals_empty}</p>
+    <div class="customer-secondary-empty"><i class="fa fa-users" aria-hidden="true"></i><p>{$t.referrals_empty}</p></div>
 {/if}
 </div>

@@ -1,16 +1,17 @@
-<div class="content-box">
+<div class="content-box customer-apps customer-secondary-page">
     <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.apps_title|default:'Apps'}</h1>
     <p>{$t.apps_intro|default:'Choose an app for your device and open its official download page. After installation, use your login details or stream link from the subscription modal.'}</p>
     {if $apps_fallback_to_global_url && $apps_url neq ''}
     <p>{$t.apps_download_from|default:'You can download apps directly from'}: <a href="{$apps_url}" target="_blank" rel="noopener noreferrer">{$apps_url}</a></p>
     {/if}
     <hr/>
+    <div class="table-responsive">
     <table class="table table-bordered table-striped">
         <thead>
             <tr class="center">
-                <td style="width: 50px;"></td>
-                <td class="text-left">Name</td>
-                <td></td>
+                <th scope="col" style="width: 50px;"></th>
+                <th scope="col" class="text-left">Name</th>
+                <th scope="col"></th>
             </tr>
         </thead>
         <tbody>
@@ -39,4 +40,5 @@
         {/foreach}
         </tbody>
     </table>
+    </div>
 </div>

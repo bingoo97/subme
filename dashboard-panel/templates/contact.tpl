@@ -1,4 +1,4 @@
-<div class="content-box">
+<div class="content-box customer-contact customer-secondary-page">
     <h1><i class="fa fa-envelope-o" style="margin-right: 10px;" aria-hidden="true"></i> {$t.contact_title|default:'Support'}</h1>
     <p>{$t.contact_intro|default:'Use the form below to contact support.'}</p>
 

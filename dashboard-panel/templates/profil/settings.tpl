@@ -1,4 +1,4 @@
-<div class="content-box settings-view">
+<div class="content-box settings-view customer-secondary-page">
     <div class="settings-view__header">
         <h1><a href="/"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.settings_title}</h1>
     </div>
