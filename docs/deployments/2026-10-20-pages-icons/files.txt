@@ -1,0 +1,11 @@
+public_html/assets/css/admin.css
+public_html/assets/css/customer-polish.css
+public_html/assets/js/admin.js
+dashboard-panel/admin/locales/pl.php
+dashboard-panel/admin/locales/en.php
+dashboard-panel/admin/partials/page-tile-settings.php
+dashboard-panel/migrations/046_page_homepage_tile_appearance.sql
+dashboard-panel/bootstrap/application.php
+dashboard-panel/admin/bootstrap.php
+dashboard-panel/templates/homepage.tpl
+dashboard-panel/admin/index.php
