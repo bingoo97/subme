@@ -502,22 +502,10 @@
 .customer-secondary-empty>i{display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:11px;background:#eef3f9;color:#8095af;font-size:20px;}
 .customer-secondary-empty p{margin:0;font-size:12px;line-height:1.75;}
 /* Activity history: readable descriptions, subdued dates and small event badges. */
-.customer-history .history-table-responsive{border-color:#e3e9f0;border-radius:10px;}
 :is(.customer-secondary-page,.customer-content-page) .table{margin:0;border:0;font-size:12px;line-height:1.7;color:#60718a;}
 :is(.customer-secondary-page,.customer-content-page) .table thead :is(th,td){padding:11px 13px;border:0;border-bottom:1px solid #e4eaf1;background:#fafbfd;color:#8a97a8;font-size:10px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;vertical-align:middle;}
 :is(.customer-secondary-page,.customer-content-page) .table tbody td{padding:13px;border:0;border-bottom:1px solid #edf1f5;background:#fff;box-shadow:none;vertical-align:middle;font-size:12px;font-weight:400;overflow-wrap:anywhere;}
 :is(.customer-secondary-page,.customer-content-page) .table tbody tr:last-child td{border-bottom:0;}
-.customer-history .history-table-mobile td:last-child{width:110px;color:#8a97a8;font-size:11px;white-space:nowrap;}
-.customer-history .history-entry{gap:10px;align-items:flex-start;}
-.customer-history .history-entry__badge{flex:none;margin-top:1px;padding:2px 5px;border-radius:4px;font-size:9px;font-weight:500;letter-spacing:0;line-height:1.6;}
-.customer-history .history-entry__title{color:#60718a;font-size:12px;font-weight:400;line-height:1.8;overflow-wrap:anywhere;}
-.customer-history .history-entry__meta{gap:6px;margin-top:6px;font-size:10px;}
-.customer-history .history-entry__meta :is(span,strong){font-size:10px;border-radius:4px;}
-.customer-history .history-entry__badge--activity{background:#eef1f5;color:#7a889b;}
-.customer-history .history-entry__badge--login{background:#eaf5f3;color:#488b83;}
-.customer-history .history-entry__badge--balance,.customer-history .history-entry__badge--payment{background:#edf8f1;color:#39895e;}
-.customer-history .history-entry__badge--crypto,.customer-history .history-entry__badge--bank,.customer-history .history-entry__badge--order{background:#edf3fb;color:#6584aa;}
-.customer-history .history-entry__badge--profile,.customer-history .history-entry__badge--subscription{background:#f1edfb;color:#8b72b3;}
 /* Settings preserve their two-column layout and every existing form action. */
 .settings-view .settings-card{min-width:0;padding:20px;border-color:#e3e9f0;border-radius:10px;box-shadow:none;}
 .settings-view .settings-card__head{gap:8px;align-items:center;margin-bottom:16px;}
@@ -588,12 +576,6 @@
     :is(.customer-contact,.customer-password) .control-label{padding-top:0;margin-bottom:6px;}
     .customer-password form .form-group{margin-bottom:17px;}
 }
-@media(max-width:575px){
-    .customer-history .history-table-mobile tr{padding:13px;}
-    .customer-history .history-table-mobile tbody td{padding:0;border:0;background:transparent;}
-    .customer-history .history-table-mobile td:last-child{width:100%;margin-top:8px;font-size:10px;text-align:left;}
-    .customer-history .history-table-mobile td[data-label]::before{font-size:9px;font-weight:500;letter-spacing:.03em;}
-}
 @media(prefers-reduced-motion:reduce){.settings-view .settings-toggle,.settings-view .settings-toggle__slider,.settings-view .settings-toggle__slider::before{transition:none;}}
 
 .settings-view .settings-avatar-editor{gap:9px;}
@@ -636,4 +618,27 @@
 @media(max-width:767px){
     .orders-view .orders-user-expiry-empty{position:relative;justify-content:center;width:30px;height:30px;padding:0;border-radius:8px;}
     .orders-view .orders-user-expiry-empty>span{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
+}
+
+/* Simple activity history: one description and one date, also on phones. */
+.customer-history .history-table-responsive{border:1px solid #e5eaf0;border-radius:8px;background:#fff;overflow:hidden;}
+.customer-history .customer-history-table{width:100%;table-layout:fixed;}
+.customer-history .customer-history-table thead th{padding:11px 14px;background:#fafbfd;}
+.customer-history .customer-history-table thead th:last-child{width:86px;text-align:right;}
+.customer-history .customer-history-table tbody td{padding:13px 14px;vertical-align:top;background:#fff;}
+.customer-history .customer-history-table tbody td:last-child{width:86px;text-align:right;white-space:nowrap;color:#8995a5;font-size:11px;font-variant-numeric:tabular-nums;}
+.customer-history .history-entry{display:flex;align-items:baseline;gap:10px;}
+.customer-history .history-entry__badge{flex:0 0 44px;justify-content:flex-start;padding:0;margin:0;border:0;border-radius:0;background:transparent;color:#8a97a8;font-size:10px;font-weight:400;letter-spacing:0;line-height:1.8;}
+.customer-history .history-entry__body{flex:1;min-width:0;}
+.customer-history .history-entry__title{color:#60718a;font-size:12px;font-weight:400;line-height:1.8;overflow-wrap:anywhere;}
+.customer-history .history-entry__meta{gap:7px;margin-top:4px;color:#8a97a8;font-size:10px;line-height:1.7;}
+.customer-history .history-entry__meta-item{padding:0;border-radius:0;background:transparent;font-size:10px;}
+.customer-history .history-entry__meta-item--strong{color:#60718a;font-weight:500;}
+.customer-history .history-entry__meta-dot{width:3px;height:3px;background:#bac4d0;}
+@media(max-width:575px){
+    .customer-history .customer-history-table thead th,.customer-history .customer-history-table tbody td{padding:11px 10px;}
+    .customer-history .customer-history-table thead th:last-child,.customer-history .customer-history-table tbody td:last-child{width:58px;font-size:10px;}
+    .customer-history .history-entry{display:block;}
+    .customer-history .history-entry__badge{display:block;margin:0 0 3px;font-size:9px;}
+    .customer-history .history-entry__title{font-size:11px;line-height:1.75;}
 }

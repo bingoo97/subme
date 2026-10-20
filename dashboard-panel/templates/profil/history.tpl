@@ -8,7 +8,7 @@
     <div class="customer-secondary-empty"><i class="fa fa-history" aria-hidden="true"></i><p>{$t.history_empty}</p></div>
 	{else}
     <div class="table-responsive history-table-responsive">
-        <table class="table table-bordered table-striped history-table-mobile">
+        <table class="table customer-history-table">
             <thead>
                 <tr class="center">
                     <th scope="col" class="text-left">{$t.history_column_notification}</th>
@@ -18,8 +18,8 @@
             <tbody>
             {section name=i loop=$history}
                 <tr align="center">
-                    <td class="text-left" data-label="{$t.history_column_notification}">{if $history[i].is_html}{$history[i].desc nofilter}{else}{$history[i].desc|escape}{/if}</td>
-                    <td data-label="{$t.history_column_date}">{$history[i].date}</td>
+                    <td class="text-left">{if $history[i].is_html}{$history[i].desc nofilter}{else}{$history[i].desc|escape}{/if}</td>
+                    <td>{$history[i].date}</td>
                 </tr>
             {/section}
             </tbody>
