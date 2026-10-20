@@ -1,0 +1,5 @@
+dashboard-panel/locales/en.php
+dashboard-panel/locales/pl.php
+dashboard-panel/pages/profil/orders_payment.php
+dashboard-panel/templates/profil/orders_payment.tpl
+public_html/assets/css/customer-polish.css
