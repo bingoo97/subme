@@ -1,0 +1,10 @@
+dashboard-panel/migrations/045_admin_cash_payments.sql
+dashboard-panel/admin/cash_payments.php
+public_html/assets/css/admin.css
+public_html/assets/js/admin-crypto-create.js
+dashboard-panel/admin/locales/pl.php
+dashboard-panel/admin/locales/en.php
+dashboard-panel/admin/crypto_quick.php
+dashboard-panel/admin/bootstrap.php
+dashboard-panel/admin/partials/crypto-create.php
+dashboard-panel/admin/search.php
