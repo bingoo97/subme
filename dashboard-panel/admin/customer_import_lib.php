@@ -4,9 +4,11 @@ declare(strict_types=1);
 /** Parse data only. Imported SQL is never executed. */
 function admin_customer_import_sql_rows(string $raw): array
 {
-    $headers=[];$rows=[];$offset=0;
-    while(preg_match('/\bINSERT\s+(?:IGNORE\s+)?INTO\s+(?:`[^`]+`|[a-zA-Z0-9_.]+)\s*\(([^)]+)\)\s*VALUES\s*/i',$raw,$m,PREG_OFFSET_CAPTURE,$offset)) {
-        $cols=array_map(static fn($v)=>trim($v," \t\n\r`\""),explode(',',$m[1][0]));
+    $headers=[];$rows=[];$offset=0;$target='';
+    while(preg_match('/\bINSERT\s+(?:IGNORE\s+)?INTO\s+(?<table>(?:`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+)(?:\s*\.\s*(?:`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))?)\s*\((?<columns>[^)]+)\)\s*VALUES\s*/i',$raw,$m,PREG_OFFSET_CAPTURE,$offset)) {
+        $current=strtolower(preg_replace('/[`"\s]/','',$m['table'][0]));
+        if($target!==''&&$target!==$current)throw new RuntimeException('Importuj jedną tabelę klientów naraz.');$target=$current;
+        $cols=array_map(static fn($v)=>trim($v," \t\n\r`\""),explode(',',$m['columns'][0]));
         if($headers&&$headers!==$cols)throw new RuntimeException('Importuj jedną tabelę klientów naraz. Kolumny w poleceniach INSERT muszą być takie same.');
         $headers=$cols;$i=$m[0][1]+strlen($m[0][0]);$length=strlen($raw);
         while($i<$length) {
@@ -60,6 +62,7 @@ function admin_customer_import_status(string $value,string $header,string $fallb
 {
     $v=strtolower(trim($value));$h=admin_import_normalize_header_cell($header);
     if($v==='')return [$fallback,false];
+    if($v==='2'&&in_array($h,['status','state','account_status'],true))return ['blocked',false];
     if(in_array($v,['blocked','banned','ban','zablokowany','suspended'],true))return ['blocked',false];
     if(in_array($v,['inactive','disabled','deleted','expired','nieaktywny','nieaktywne'],true))return ['inactive',false];
     if(in_array($v,['active','enabled','aktywny','aktywne','approved'],true))return ['active',false];
@@ -78,19 +81,32 @@ function admin_customer_import_parse(string $raw,array $options=[]): array
         if(str_starts_with($raw,"\xff\xfe")||str_starts_with($raw,"\xfe\xff"))$raw=mb_convert_encoding($raw,'UTF-8',str_starts_with($raw,"\xff\xfe")?'UTF-16LE':'UTF-16BE');
         $raw=preg_replace('/^\xEF\xBB\xBF/','',$raw)??$raw;
         if(!mb_check_encoding($raw,'UTF-8'))$raw=mb_convert_encoding($raw,'UTF-8','Windows-1250');
-        $raw=trim($raw);if($raw==='')throw new RuntimeException('Wklej dane lub wybierz plik.');
+        $raw=trim($raw," \r\n");if($raw==='')throw new RuntimeException('Wklej dane lub wybierz plik.');
         $format='csv';$headers=[];$rows=[];$delimiter=',';$hasHeader=false;
-        if(preg_match('/\bINSERT\s+(?:IGNORE\s+)?INTO\b/i',$raw)||preg_match('/\A(?:--|\/\*|CREATE\s|DROP\s|SET\s)/i',$raw)) {
+        if(preg_match('/\A(?:INSERT\s+(?:IGNORE\s+)?INTO\b|--|\/\*|CREATE\s|DROP\s|SET\s|BEGIN\b|START\s+TRANSACTION\b)/i',$raw)) {
             [$headers,$rows]=admin_customer_import_sql_rows($raw);$hasHeader=true;$format='sql';
         } elseif(preg_match('/<table\b/i',$raw)) {
             if(preg_match_all('/<tr\b/i',$raw)>10001)throw new RuntimeException('Maksymalnie 10 000 kont w jednym imporcie.');
             $doc=new DOMDocument();$previous=libxml_use_internal_errors(true);$doc->loadHTML('<?xml encoding="UTF-8">'.$raw,LIBXML_NONET|LIBXML_NOERROR|LIBXML_NOWARNING);libxml_clear_errors();libxml_use_internal_errors($previous);
-            foreach((new DOMXPath($doc))->query('//table[1]//tr') as $tr){$cells=[];foreach((new DOMXPath($doc))->query('./th|./td',$tr) as $cell)$cells[]=trim($cell->textContent);if($cells)$rows[]=$cells;}
+            foreach((new DOMXPath($doc))->query('(//table)[1]//tr') as $tr){$cells=[];foreach((new DOMXPath($doc))->query('./th|./td',$tr) as $cell)$cells[]=trim($cell->textContent);if($cells)$rows[]=$cells;}
             $format='table';
         } else {
+            // SQL consoles copy tables as pipes or padded columns, not always CSV.
+            $lines=explode("\n",str_replace(["\r\n","\r"],"\n",$raw));
+            $tableLines=array_values(array_filter($lines,static fn($line)=>trim($line)!==''&&!preg_match('/^\s*\+[-+=]+\+\s*$/D',$line)));
+            $tableFirst=trim((string)($tableLines[0]??''));
+            $tableSeparator=str_starts_with($tableFirst,'|')&&str_ends_with($tableFirst,'|')?'pipe':(str_contains($tableFirst,"\t")?'':(preg_match('/\s{2,}/',$tableFirst)?'spaces':''));
+            $tableHeader=$tableSeparator==='pipe'?array_map('trim',explode('|',trim($tableFirst,'| '))):($tableSeparator==='spaces'?preg_split('/\s{2,}/',$tableFirst):[]);
+            $recognized=false;foreach($tableHeader as $cell)if(admin_import_header_is_email($cell))$recognized=true;
+            if($recognized){
+                if(count($tableLines)>10001)throw new RuntimeException('Maksymalnie 10 000 kont w jednym imporcie.');
+                foreach($tableLines as $line){$line=trim($line,' ');$cells=$tableSeparator==='pipe'?array_map('trim',explode('|',trim($line,'| '))):preg_split('/[ ]{2,}/',$line);$rows[]=$cells;}
+                $format='table';
+            } else {
             $stream=fopen('php://temp','r+');fwrite($stream,str_replace(["\r\n","\r"],"\n",$raw));rewind($stream);
             $delimiter=admin_import_detect_delimiter(array_slice(explode("\n",$raw),0,5));
             while(($row=fgetcsv($stream,0,$delimiter,'"',''))!==false){if(count($row)>1||trim((string)($row[0]??''))!=='')$rows[]=$row;if(count($rows)>10001)break;}fclose($stream);
+            }
         }
         if(!$rows)throw new RuntimeException('Nie znaleziono danych klientów.');
         $first=$rows[0];
@@ -107,7 +123,7 @@ function admin_customer_import_parse(string $raw,array $options=[]): array
         foreach($headers as $i=>$header){$h=admin_import_normalize_header_cell($header);
             if(admin_import_header_is_email($header)&&$map['email']<0)$map['email']=$i;
             if(in_array($h,['password','passwd','pass','pwd','user_pass','user_password','password_hash','hashed_password','haslo','has_o'],true)&&$map['password']<0)$map['password']=$i;
-            if(in_array($h,['status','state','active','is_active','enabled','is_enabled','blocked','is_blocked','banned','is_banned','disabled','is_disabled','account_status'],true)&&$map['status']<0)$map['status']=$i;
+            if(in_array($h,['status','state','active','is_active','enabled','is_enabled','blocked','is_blocked','banned','is_banned','disabled','is_disabled','account_status'],true)&&($map['status']<0||(in_array($h,['status','state','account_status'],true)&&!in_array(admin_import_normalize_header_cell($headers[$map['status']]),['status','state','account_status'],true))))$map['status']=$i;
         }
         if($map['email']<0){$scores=array_fill(0,count($headers),0);foreach(array_slice($rows,0,50) as $r)foreach($r as $i=>$v)if(filter_var(trim((string)$v),FILTER_VALIDATE_EMAIL))$scores[$i]=($scores[$i]??0)+1;$best=max($scores);if($best>0)$map['email']=(int)array_search($best,$scores,true);}
         foreach($map as $field=>$column)if(isset($options[$field.'_column'])){$override=(int)$options[$field.'_column'];if($override>=-1&&$override<count($headers))$map[$field]=$override;}
@@ -116,12 +132,13 @@ function admin_customer_import_parse(string $raw,array $options=[]): array
         $items=[];$seen=[];$invalid=0;$duplicates=0;$unknown=0;$modes=['plain'=>0,'hash'=>0,'generated'=>0];
         $fallback=in_array($options['status']??'', ['active','inactive','blocked'],true)?$options['status']:'active';
         foreach($rows as $n=>$row){$email=strtolower(trim((string)($row[$map['email']]??'')));if(strlen($email)>191||!filter_var($email,FILTER_VALIDATE_EMAIL)){$invalid++;continue;}
-            if(isset($seen[$email])){$duplicates++;continue;}$seen[$email]=true;
+            if($hasHeader&&count($row)!==count($headers))throw new RuntimeException('Wiersz '.($n+2).' ma inną liczbę kolumn niż nagłówek. Sprawdź separator i kompletność tabeli.');
+            [$status,$unrecognized]=admin_customer_import_status($map['status']>=0?(string)($row[$map['status']]??''):'',$map['status']>=0?$headers[$map['status']]:'',$fallback,(string)($options['numeric_status']??'auto'));
+            if(isset($seen[$email])){$duplicates++;if($status==='blocked')$items[$seen[$email]]['status']='blocked';continue;}$seen[$email]=count($items);
             $password=$map['password']>=0?(string)($row[$map['password']]??''):'';
             // Hash-labelled columns never treat an unsupported digest as a plain password.
             $credential=admin_customer_import_password($password);
             if($map['password']>=0&&str_contains(admin_import_normalize_header_cell($headers[$map['password']]),'hash')&&$credential['mode']==='plain')$credential=['mode'=>'generated','value'=>''];
-            [$status,$unrecognized]=admin_customer_import_status($map['status']>=0?(string)($row[$map['status']]??''):'',$map['status']>=0?$headers[$map['status']]:'',$fallback,(string)($options['numeric_status']??'auto'));
             $unknown+=(int)$unrecognized;$modes[$credential['mode']]++;
             $items[]=['email'=>$email,'password'=>$credential['value'],'password_mode'=>$credential['mode'],'status'=>$status,'line_number'=>$n+($hasHeader?2:1)];
         }

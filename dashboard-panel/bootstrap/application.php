@@ -13012,17 +13012,13 @@ function app_generate_and_send_customer_password(
 
 function app_activate_customer(Mysql_ks $db, int $customerId): void
 {
+    // Activation must never lift an administrative block, including imported status 2.
+    if ($customerId <= 0) return;
     if (app_uses_v2_schema($db)) {
-        $db->update_using_id(
-            ['status', 'email_verified_at'],
-            ['active', date('Y-m-d H:i:s')],
-            'customers',
-            $customerId
-        );
+        $db->query("UPDATE customers SET status='active',email_verified_at=NOW() WHERE id=".(int)$customerId." AND status='inactive'");
         return;
     }
-
-    $db->update_using_id(['status'], [1], 'users', $customerId);
+    $db->query("UPDATE users SET status=1 WHERE id=".(int)$customerId." AND status=0");
 }
 
 function app_update_customer_locale(Mysql_ks $db, int $customerId, string $localeCode): void

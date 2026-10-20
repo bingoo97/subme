@@ -8,9 +8,9 @@
             <?php foreach(['email'=>'E-mail','password'=>'Hasło','status'=>'Status'] as $field=>$label): ?>
                 <label class="col-sm-4"><?php echo $label; ?><select class="form-select" name="<?php echo $field; ?>_column" data-import-map="<?php echo $field; ?>"><option value="auto">Automatycznie</option></select></label>
             <?php endforeach; ?>
-            <label class="col-sm-8">Status liczbowy<select class="form-select" name="numeric_status"><option value="auto">Automatycznie: 1 = aktywny; dla blocked/disabled odwrotnie</option><option value="one_active">1 = aktywny, 0 = nieaktywny</option><option value="zero_active">0 = aktywny, 1 = nieaktywny</option></select></label>
+            <label class="col-sm-8">Status liczbowy<select class="form-select" name="numeric_status"><option value="auto">Automatycznie: 0 = nieaktywny, 1 = aktywny, status 2 = zablokowany</option><option value="one_active">1 = aktywny, 0 = nieaktywny</option><option value="zero_active">0 = aktywny, 1 = nieaktywny</option></select></label>
         </div>
-        <p>Nieznany status ustawi konto jako nieaktywne. Po zmianie kolumn kliknij ponownie „Sprawdź dane”.</p>
+        <p>Status 2 w kolumnie status/state/account_status oznacza blokadę. Dla blocked/disabled wartości 0/1 interpretujemy odwrotnie. Nieznany status ustawi konto jako nieaktywne. Po zmianie kolumn kliknij ponownie „Sprawdź dane”.</p>
     </details>
     <div class="table-responsive"><table class="table admin-table"><thead><tr><th>E-mail / handle</th><th>Status</th><th>Hasło</th></tr></thead><tbody data-import-sample></tbody></table></div>
     <p class="admin-customer-import__help" data-import-password-help></p>

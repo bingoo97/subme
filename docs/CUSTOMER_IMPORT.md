@@ -8,6 +8,10 @@ Zmiana lokalna, bez migracji bazy. Import dostępny wyłącznie aktywnemu admini
 2. Sprawdź podgląd. E-mail, hasło i status są rozpoznawane automatycznie. W razie potrzeby rozwiń mapowanie kolumn i wybierz interpretację 0/1. Nieznany status oznacza konto nieaktywne; brak kolumny używa statusu wybranego w formularzu.
 3. Wybierz język, typ klienta i widocznych providerów. Uruchom import. Można go wstrzymać i wznowić po odświeżeniu strony w tej samej sesji przeglądarki.
 
+W kolumnach `status`, `state` i `account_status` domyślne mapowanie to **0 = nieaktywny, 1 = aktywny, 2 = zablokowany**. Zmiana interpretacji 0/1 nie zmienia blokady 2. Kolumna status ma pierwszeństwo przed ogólnym polem is_active. Jeśli ten sam adres występuje kilka razy i choć jeden wiersz ma blokadę, nowe konto pozostanie zablokowane. Istniejące konta nadal są pomijane bez modyfikacji.
+
+Obsługiwane są również kopie tabel z konsoli: z pionowymi kreskami albo kolumnami oddzielonymi co najmniej dwiema spacjami, z nagłówkami. SQL może wskazywać tabelę jako `baza`.`users`. Mieszanie tabel i niekompletne wiersze jest odrzucane; nie zgadujemy brakujących statusów. Stary link aktywacyjny nie może podnieść administracyjnej blokady konta.
+
 Listy e-maili obsługują nowe linie, przecinki, średniki i spacje. Wiersze CSV/TSV z hasłami muszą używać normalnego separatora/quotingu; nagłówek pomaga rozpoznać kolumny. Eksport SQL jest odczytywany jako dane, nigdy wykonywany. Funkcje SQL, INSERT bez listy kolumn i mieszanie różnych tabel/układów kolumn są odrzucane. Import nie tworzy zamówień, sald, ról administratora ani portfeli.
 
 ## Hasła i tożsamość
@@ -29,5 +33,7 @@ Podgląd nie zapisuje klientów ani e-maili. Istniejące adresy sprawdzamy w gru
 
 - `python3 dashboard-panel/tests/run_customer_import.py`: jednorazowa pusta baza, 263 asercje, 5000 syntetycznych kont, bez realnej wysyłki.
 - `node dashboard-panel/tests/customer_import_frontend_regression.js`: pauza podczas trwającej partii, wznowienie, utrata odpowiedzi i brak automatycznych powtórzeń.
+- Rozszerzony test `customer_import_bulk_regression.php`: 5000 kont osobno z CSV, SQL, TSV i HTML; po 500 z tabel konsoli, kolumn spacjowanych i TXT. Razem 21 500 zapisanych kont, 6996 zachowanych blokad, 50 462 asercje. Hasła zgodne sprawdzane przez logowanie; pola salda i IP ignorowane. Listy TXT testowane dodatkowo po 5000 adresów z każdym separatorem. Bez realnych e-maili.
+- `customer_import_status_security_regression.php`: 12 asercji mapowania statusów, priorytetu kolumn i ochrony blokady przy logowaniu oraz starym URL aktywacyjnym. Domyślne uruchomienie runnera obejmuje wszystkie trzy testy PHP w osobnej bazie, potem ją usuwa.
 - Rzeczywisty formularz HTTP oraz upload multipart SQL, podgląd i zapis; widoki 390 i 1440 px. E-maile wyłącznie do kolejki w bazie testowej.
 - 67 renderów podstron bez ostrzeżeń PHP; osobno sekcja uprawnień i tożsamości administratorów. Pełny starszy test admin_identity_security_regression zatrzymuje się na nieaktualnym oczekiwaniu kategorii krypto: wygasły ticket z wykrytą wpłatą pozostaje obecnie w Nowe do weryfikacji.

@@ -11,7 +11,9 @@ switch ($site) {
             $activationUserId = (int)$_GET['aktywuj_user'];
             $activationUser = app_find_customer_by_id($db, $activationUserId);
 
-            if (is_array($activationUser) && !app_customer_is_active($activationUser)) {
+            if (is_array($activationUser) && app_customer_is_blocked($activationUser)) {
+                $smarty->assign('alert_error', localization_translate($t, 'login_error_blocked'));
+            } elseif (is_array($activationUser) && !app_customer_is_active($activationUser)) {
                 app_activate_customer($db, $activationUserId);
                 $smarty->assign('alert', 'Account activated successfully.');
             } else {
