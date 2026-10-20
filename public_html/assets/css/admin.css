@@ -21347,7 +21347,8 @@ body.admin-app-page:has(.admin-payment-create-panel.is-creating) .admin-mobile-n
 /* Three compact, consistent rows below the quick payment list. */
 .admin-crypto-quick__footer,.admin-crypto-quick__preferences{height:32px;min-height:32px;padding:5px 16px;line-height:20px;flex-shrink:0;}
 button.admin-crypto-quick__footer{width:100%;margin:0;border:0;border-top:1px solid #e9edf2;border-radius:0;background:#fff;text-align:left;cursor:pointer;}
-.admin-crypto-quick__footer>i{font-size:12px;line-height:1;}
+.admin-crypto-quick__footer>i{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;font-size:12px;line-height:1;}
 .admin-crypto-quick__footer:is(:hover,:focus-visible){background:#f7f9fb;color:#536779;text-decoration:none;}
 .admin-crypto-quick__footer:focus-visible{outline:2px solid #9cb3cc;outline-offset:-2px;}
-.admin-crypto-quick__preferences .form-check-input{margin-bottom:0;}
+.admin-crypto-quick__preferences .form-check{flex:0 0 32px;width:32px;padding:0;justify-content:center;}
+.admin-crypto-quick__preferences .form-check-input{float:none;margin:0;}
