@@ -24,8 +24,15 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                     {if $active_v2_crypto_request.qr_code_url}
                         <img src="{$active_v2_crypto_request.qr_code_url}" alt="QR code" class="payment-request-qr__image" />
                     {/if}
+                    <div
+                        class="payment-request-countdown"
+                        data-payment-countdown="{$active_v2_crypto_request_remaining_seconds|default:0}"
+                        data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment expired'}"
+                    >
+                        <span class="payment-request-countdown__label">{$t.payment_countdown_label|default:'Time left to pay'}</span>
+                        <strong class="payment-request-countdown__value">60:00</strong>
+                    </div>
                 </div>
-
                 <div class="payment-request-main">
                     <div class="payment-request-card__head">
                         <img src="{$active_v2_crypto_request.crypto_logo_path}" alt="{$active_v2_crypto_request.crypto_name}" />
@@ -57,7 +64,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                             <span class="payment-request-label">{$t.payment_fiat_value|default:'Transaction value'}</span>
                             <span class="payment-request-value">{$active_v2_crypto_request.requested_fiat_amount} {$active_v2_crypto_request.currency_symbol|default:$active_v2_crypto_request.currency_code|default:$reseller.currency_symbol}</span>
                         </div>
-                        <div>
+                        <div class="payment-request-full">
                             <span class="payment-request-label">{$t.payment_wallet_address|default:'Deposit address'}</span>
                             <span class="payment-request-value payment-request-value--break">
                                 <button
@@ -106,14 +113,7 @@ window.location.replace('{$payment_redirect_url|escape:'javascript'}');
                         <a href="/instructions" class="btn btn-dark btn-lg" title="{$t.payment_how_to_pay|default:'How to pay'}">
                             <i class="fa fa-question-circle" aria-hidden="true"></i> {$t.payment_how_to_pay|default:'How to pay'}
                         </a>
-                        <div
-                            class="payment-request-countdown"
-                            data-payment-countdown="{$active_v2_crypto_request_remaining_seconds|default:0}"
-                            data-countdown-expired-label="{$t.payment_countdown_expired|default:'Payment expired'}"
-                        >
-                            <span class="payment-request-countdown__label">{$t.payment_countdown_label|default:'Time left to pay'}</span>
-                            <strong class="payment-request-countdown__value">60:00</strong>
-                        </div>
+
                         <form action="" method="post" class="payment-request-cancel-form">
                             <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
                             <input type="hidden" name="del_crypto" value="{$active_v2_crypto_request.id}" />

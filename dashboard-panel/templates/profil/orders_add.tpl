@@ -1,12 +1,12 @@
 	<div class="content-box customer-order-create">
 			<h1><a href="orders"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.order_add_heading|default:'New order'}</h1>
 			{if $providers}
-			<form action="" method="post" class="form-horizontal" onsubmit="this.dataset.submitting='1'; document.getElementById('add_product').disabled = true;" data-choice-label="{$t.order_add_selection_label|default:'Your choice:'}" data-price-label="{$t.order_add_purchase_price_label|default:'Purchase price:'}">
+			<form action="" method="post" class="form-horizontal customer-order-create__form" onsubmit="this.dataset.submitting='1'; document.getElementById('add_product').disabled = true;" data-choice-label="{$t.order_add_selection_label|default:'Your choice:'}" data-price-label="{$t.order_add_purchase_price_label|default:'Purchase price:'}">
                      <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
                      <input type="hidden" name="order_add_token" value="{$order_add_token|default:''}" />
                      <input type="hidden" name="add_product" value="1" />
 
-					<div class="row g-3">
+					<div class="row g-3 customer-order-create__intro">
 									 <div class="col-auto">
 										 <img src="/img/offer.png" alt="Offer" width="45" height="45">
 									 </div>
@@ -31,7 +31,7 @@
 
 					 <div class="form-group">
 							 <div class="col-lg-6">
-								 <label class="form-label mt-3" for="id_provider">{if $order_catalog_has_store_products|default:false}{$t.order_add_provider_label_store|default:'Select shop'}{else}{$t.order_add_provider_label|default:'Select provider'}{/if}:</label>
+								 <label class="form-label mt-3" for="id_provider">{$t.order_add_choose_label|default:'Choose'}:</label>
 
 								 <select class="form-control mb-2 strong" id="id_provider" onchange="check_product(this);">
 												<option value="0" id="select_input">- Select -</option>

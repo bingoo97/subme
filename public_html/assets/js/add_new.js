@@ -61,6 +61,20 @@ function updateProductDescription() {
 	}
 }
 
+var productContinueScrollFrame = 0;
+function revealProductContinue() {
+	window.cancelAnimationFrame(productContinueScrollFrame);
+	productContinueScrollFrame = window.requestAnimationFrame(function () {
+		var next = document.getElementById('add_product');
+		if (!next || next.disabled) return;
+		next.scrollIntoView({
+			behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+			block: 'nearest',
+			inline: 'nearest'
+		});
+	});
+}
+
 function selectProductOption(button) {
 	var option = $(button);
 	var productId = $.trim(option.data('product-id'));
@@ -69,6 +83,7 @@ function selectProductOption(button) {
 	option.addClass('is-active');
 	$('#id_product').val(productId);
 	updateProductDescription();
+	revealProductContinue();
 }
 
 function check_product() {

@@ -44,7 +44,7 @@
     <script type="text/javascript" src="/assets/js/jquery-1.12.4.min.js"></script>
 
 	{if isset($user) && $user.logged}
-    <script src="/assets/js/add_new.js?v={$main_asset_version|default:1}"></script>
+    <script src="/assets/js/add_new.js?v={$customer_ui_asset_version|default:1}"></script>
 	{/if}
 
     <script src="/assets/js/loader.js"></script>

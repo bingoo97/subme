@@ -126,15 +126,21 @@
 			return;
 		}
 
-		if (window.bootstrap && window.bootstrap.Collapse) {
-			window.bootstrap.Collapse.getOrCreateInstance(target, { toggle: true });
+		if (target.classList.contains('collapsing')) {
 			return;
 		}
-
 		var isOpen = target.classList.contains('show') || target.classList.contains('in') || target.style.display === 'block';
-		target.classList.toggle('show', !isOpen);
-		target.classList.toggle('in', !isOpen);
-		target.style.display = isOpen ? 'none' : 'block';
+		if (window.bootstrap && window.bootstrap.Collapse) {
+			// Bootstrap already owns native triggers; this bridge owns legacy data-toggle only.
+			if (trigger.getAttribute('data-bs-toggle') === 'collapse') return;
+			window.bootstrap.Collapse.getOrCreateInstance(target, { toggle: false }).toggle();
+		} else {
+			target.classList.toggle('show', !isOpen);
+			target.classList.toggle('in', !isOpen);
+			target.style.display = isOpen ? 'none' : 'block';
+		}
+		trigger.setAttribute('aria-expanded', String(!isOpen));
+		trigger.classList.toggle('collapsed', isOpen);
 	}
 
 	// jQuery tooltip compatibility for Bootstrap 5

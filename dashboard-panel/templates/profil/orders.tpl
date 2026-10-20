@@ -74,12 +74,12 @@
                                 <div class="orders-user-summary">
                                     <div class="orders-user-summary__title-row">
                                         {if $wygrane[i].extend}
-                                            <button type="button" class="orders-user-summary__history-toggle collapsed" data-toggle="collapse" data-target="#orderExtendInline{$wygrane[i].id}" aria-expanded="false" aria-controls="orderExtendInline{$wygrane[i].id}" title="{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}">
+                                            <button type="button" class="orders-user-summary__history-toggle collapsed" data-order-title-tooltip data-toggle="collapse" data-target="#orderExtendInline{$wygrane[i].id}" aria-expanded="false" aria-controls="orderExtendInline{$wygrane[i].id}" title="{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}">
                                                 <strong>{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}</strong>
                                                 <i class="fa fa-angle-down" aria-hidden="true"></i>
                                             </button>
                                         {else}
-                                            <button type="button" class="orders-user-summary__product-trigger user-order-modal-trigger" data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" title="{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}"><strong>{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}</strong></button>
+                                            <button type="button" class="orders-user-summary__product-trigger user-order-modal-trigger" data-order-title-tooltip data-toggle="modal" data-target="#orderModal{$wygrane[i].id}" data-order-modal-open="#orderModal{$wygrane[i].id}" title="{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}"><strong>{$wygrane[i].provider_name|escape:'html'} {$wygrane[i].name|escape:'html'}</strong></button>
                                         {/if}
                                         {if $wygrane[i].payment_waiting_activation || ($wygrane[i].renewal_paid_pending_activation|default:0)}
                                             <span class="orders-user-new-badge orders-user-new-badge--success">{$t.orders_status_payment_confirmed_short|default:'PAID'}</span>
@@ -180,7 +180,7 @@
         <p>{$t.orders_empty|default:'No available packages.'}</p>
     {/if}
 
-    <div class="alert alert-dismissible alert-info">
+    <div class="alert alert-warning orders-expiry-notice" role="status">
         <i class="fa fa-info-circle" aria-hidden="true"></i> {$t.orders_info_subscription_notice|default:'After your subscription expires, you will receive an email notification.'}
     </div>
     {/if}
@@ -212,22 +212,22 @@
                         <ul class="nav nav-tabs user-order-modal__tabs" role="tablist">
                             {if $has_delivery_access}
                                 <li role="presentation" class="nav-item">
-                                    <a class="nav-link" href="#orderAccess{$wygrane[i].id}" aria-controls="orderAccess{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">{$t.orders_tab_access|default:'Access'}</a>
+                                    <a class="nav-link" href="#orderAccess{$wygrane[i].id}" aria-controls="orderAccess{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab"><i class="fa fa-unlock-alt" aria-hidden="true"></i> {$t.orders_tab_access|default:'Access'}</a>
                                 </li>
                             {/if}
                             <li role="presentation" class="nav-item">
-                                <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">{$t.orders_tab_details|default:'Details'}</a>
+                                <a class="nav-link active" href="#orderInfo{$wygrane[i].id}" aria-controls="orderInfo{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab"><i class="fa fa-list-alt" aria-hidden="true"></i> {$t.orders_tab_details|default:'Details'}</a>
                             </li>
                             {if $order_sales_available && !$wygrane[i].payment_waiting_activation && ($can_pending_payment_actions || $showRenewalPaymentAction)}
                                 <li role="presentation" class="nav-item">
                                     <a class="nav-link" href="#orderActions{$wygrane[i].id}" aria-controls="orderActions{$wygrane[i].id}" role="tab" data-bs-toggle="tab" data-toggle="tab">
                                         {if $can_pending_payment_actions}
-                                            {$t.orders_action_payment|default:'Payment'}
+                                            <i class="fa fa-credit-card-alt" aria-hidden="true"></i> {$t.orders_action_payment|default:'Payment'}
                                         {elseif $wygrane[i].status == 2 && $showRenewalPaymentAction}
-                                            {$t.orders_action_renew|default:'Renew'}
+                                            <i class="fa fa-history" aria-hidden="true"></i> {$t.orders_action_renew|default:'Renew'}
                                             <span class="user-order-modal__tab-badge user-order-modal__tab-badge--danger">!</span>
                                         {else}
-                                            {$t.orders_action_extend|default:'Extend'}
+                                            <i class="fa fa-history" aria-hidden="true"></i> {$t.orders_action_extend|default:'Extend'}
                                             <span class="user-order-modal__tab-badge">!</span>
                                         {/if}
                                     </a>
@@ -240,30 +240,39 @@
                                 <div role="tabpanel" class="tab-pane fade" id="orderAccess{$wygrane[i].id}">
                                     <div class="user-order-modal__stack">
                                         {if $wygrane[i].delivery_show_credentials}
-                                            <div>
-                                                <label class="form-label">{$t.order_delivery_credentials_label|default:'Login details'}</label>
-                                                <p class="user-order-modal__access-copy">
+                                            <div class="user-order-modal__access-section">
+                                                <label class="form-label user-order-modal__access-heading"><i class="fa fa-key" aria-hidden="true"></i> {$t.order_delivery_credentials_label|default:'Login details'}</label>
+                                                <div class="alert alert-info user-order-modal__access-copy">
                                                     {$t.order_delivery_access_copy|default:'Use these login details in a compatible player app on your device. If you need a ready app, open the apps page and choose the version for your platform.'}
                                                     {if $settings.apps_page_enabled} <a href="/apps">{$t.menu_apps|default:'Apps'}</a>.{/if}
-                                                </p>
-                                                <div class="row">
+                                                </div>
+                                                <div class="row user-order-modal__credentials-grid">
                                                     <div class="col-sm-6">
-                                                        <label class="form-label">{$t.order_delivery_login_label|default:'Login'}</label>
-                                                        <input type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].delivery_login}" readonly>
+                                                        <label class="form-label" for="orderAccessLogin{$wygrane[i].id}"><i class="fa fa-user-o" aria-hidden="true"></i> {$t.order_delivery_login_label|default:'Login'}</label>
+                                                        <div class="user-order-modal__copy-row">
+                                                            <input id="orderAccessLogin{$wygrane[i].id}" type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].delivery_login|escape:'html'}" readonly>
+                                                            {include file='partials/order-access-copy-button.tpl' access_copy_target="orderAccessLogin{$wygrane[i].id}" access_copy_label=$t.order_delivery_login_label|default:'Login'}
+                                                        </div>
                                                     </div>
                                                     <div class="col-sm-6">
-                                                        <label class="form-label">{$t.order_delivery_password_label|default:'Password'}</label>
-                                                        <input type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].delivery_password}" readonly>
+                                                        <label class="form-label" for="orderAccessPassword{$wygrane[i].id}"><i class="fa fa-lock" aria-hidden="true"></i> {$t.order_delivery_password_label|default:'Password'}</label>
+                                                        <div class="user-order-modal__copy-row">
+                                                            <input id="orderAccessPassword{$wygrane[i].id}" type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].delivery_password|escape:'html'}" readonly>
+                                                            {include file='partials/order-access-copy-button.tpl' access_copy_target="orderAccessPassword{$wygrane[i].id}" access_copy_label=$t.order_delivery_password_label|default:'Password'}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
                                         {/if}
                                         {if $wygrane[i].link_url neq ''}
-                                            <div>
-                                                <label class="form-label">{$t.order_delivery_link_label|default:'URL link'}</label>
+                                            <div class="user-order-modal__access-section">
+                                                <label class="form-label user-order-modal__access-heading" for="orderAccessUrl{$wygrane[i].id}"><i class="fa fa-link" aria-hidden="true"></i> {$t.order_delivery_link_label|default:'URL link'}</label>
                                                 <div class="user-order-modal__url-row">
-                                                    <input type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].link_url}" readonly>
-                                                    <a href="{$wygrane[i].link_url}" target="_blank" rel="noopener noreferrer" class="btn btn-default">{$t.orders_open_link|default:'Open'}</a>
+                                                    <input id="orderAccessUrl{$wygrane[i].id}" type="text" class="form-control user-order-modal__readonly" value="{$wygrane[i].link_url|escape:'html'}" readonly>
+                                                    <div class="user-order-modal__access-actions">
+                                                        {include file='partials/order-access-copy-button.tpl' access_copy_target="orderAccessUrl{$wygrane[i].id}" access_copy_label=$t.order_delivery_link_label|default:'URL link'}
+                                                        <a href="{$wygrane[i].link_url|escape:'html'}" target="_blank" rel="noopener noreferrer" class="btn btn-default"><i class="fa fa-external-link" aria-hidden="true"></i> {$t.orders_open_link|default:'Open'}</a>
+                                                    </div>
                                                 </div>
                                             </div>
                                         {/if}
@@ -326,9 +335,9 @@
                                 <div role="tabpanel" class="tab-pane fade" id="orderActions{$wygrane[i].id}">
                                     <div class="user-order-modal__actions-stack">
                                         {if $can_pending_payment_actions}
-                                            <p>{$t.orders_action_payment_info|default:'Payment actions:'}</p>
-                                            <a href="order-payment-{$wygrane[i].id}" class="btn btn-dark btn-lg btn-block">
-                                                <i class="fa fa-credit-card" aria-hidden="true"></i> {$t.orders_action_payment|default:'Payment'}
+                                            <div class="alert alert-info user-order-modal__payment-intro">{$t.orders_action_payment_info|default:'Choose payment to pay for this order. You can select a payment method on the next screen.'}</div>
+                                            <a href="order-payment-{$wygrane[i].id}" class="btn btn-success btn-lg btn-block user-order-modal__payment-button">
+                                                <i class="fa fa-credit-card-alt" aria-hidden="true"></i> <span>{$t.orders_action_payment|default:'Payment'}</span><i class="fa fa-angle-double-right" aria-hidden="true"></i>
                                             </a>
                                             {if $wygrane[i].can_delete_order|default:0}
                                             <a href="del-order-{$wygrane[i].id}" class="btn btn-danger btn-lg btn-block remove">
@@ -355,7 +364,7 @@
                                                 <p>{$t.orders_action_renew_intro|default:'This subscription has already expired. Create a new payment request to renew access and restore service.'}</p>
                                             </div>
                                             <a href="/order-payment-{$wygrane[i].id}?renewal=1" class="btn btn-danger btn-lg btn-block">
-                                                <i class="fa fa-refresh" aria-hidden="true"></i> {$t.orders_action_renew|default:'Renew'}
+                                                <i class="fa fa-history" aria-hidden="true"></i> {$t.orders_action_renew|default:'Renew'}
                                             </a>
                                         {/if}
                                         {if $wygrane[i].extend}
@@ -376,3 +385,5 @@
         </div>
     {/section}
 {/if}
+
+<script src="/assets/js/customer-order-access.js?v={$customer_ui_asset_version|default:1}" defer></script>

@@ -59,9 +59,20 @@ if ($chatJsPath !== false && is_file($chatJsPath)) {
     $chatAssetVersion = max($chatAssetVersion, (int)filemtime($chatJsPath));
 }
 $smarty->assign('chat_asset_version', $chatAssetVersion);
+foreach (['/assets/js/orders.js', '/assets/js/bootstrap5-legacy-bridge.js'] as $customerScript) {
+    $customerScriptPath = $publicRootDir ? $publicRootDir . $customerScript : '';
+    if (is_file($customerScriptPath)) $mainAssetVersion = max($mainAssetVersion, (int)filemtime($customerScriptPath));
+}
 $smarty->assign('main_asset_version', $mainAssetVersion);
 $customerUiCssPath = $publicRootDir ? $publicRootDir . '/assets/css/customer-polish.css' : '';
-$smarty->assign('customer_ui_asset_version', is_file($customerUiCssPath) ? (int)filemtime($customerUiCssPath) : 1);
+$customerUiJsPath = $publicRootDir ? $publicRootDir . '/assets/js/customer-order-access.js' : '';
+$customerOrderJsPath = $publicRootDir ? $publicRootDir . '/assets/js/add_new.js' : '';
+$smarty->assign('customer_ui_asset_version', max(
+    $mainAssetVersion,
+    is_file($customerUiCssPath) ? (int)filemtime($customerUiCssPath) : 1,
+    is_file($customerUiJsPath) ? (int)filemtime($customerUiJsPath) : 1,
+    is_file($customerOrderJsPath) ? (int)filemtime($customerOrderJsPath) : 1
+));
 
 $currentTime = date('Y-m-d H:i:s');
 $currentTimestamp = time();

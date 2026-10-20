@@ -1,4 +1,12 @@
 $(function () {
+    if (window.bootstrap && window.bootstrap.Tooltip) {
+        document.querySelectorAll('[data-order-title-tooltip]').forEach(function (button) {
+            window.bootstrap.Tooltip.getOrCreateInstance(button, {
+                container: 'body', placement: 'top', boundary: 'viewport',
+                trigger: 'hover focus', customClass: 'customer-order-title-tooltip', html: false
+            });
+        });
+    }
 	var MODAL_BASE_Z = 12050;
 	var BACKDROP_BASE_Z = 12040;
 	var MODAL_STACK_STEP = 20;
