@@ -2650,7 +2650,7 @@ $pageFormState = [
     'locale_code' => 'pl',
     'title' => '',
     'slug' => '',
-    'menu_section' => 'other',
+    'menu_section' => 'homepage',
     'menu_title' => '',
     'menu_logo_url' => '',
     'menu_sort_order' => 100,
@@ -15321,6 +15321,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-4">
                                                         <label class="form-label" for="content_page_menu_section"><?php echo admin_e(admin_t($messages, 'page_section_label', 'Instruction section')); ?></label>
                                                         <select class="form-select" id="content_page_menu_section" name="menu_section">
+                                                            <option value="homepage"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'homepage' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages,'page_section_homepage','Customer homepage')); ?></option>
                                                             <option value="other"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'other' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_other', 'Other page')); ?></option>
                                                             <option value="payments"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'payments' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_payments', 'Payments - Instructions')); ?></option>
                                                             <option value="applications"<?php echo admin_page_normalize_section((string)($pageDraft['menu_section'] ?? 'other')) === 'applications' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_applications', 'Applications - Instructions')); ?></option>
@@ -15412,6 +15413,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                     <div class="col-md-4">
                                                         <label class="form-label" for="content_page_menu_section"><?php echo admin_e(admin_t($messages, 'page_section_label', 'Instruction section')); ?></label>
                                                         <select class="form-select" id="content_page_menu_section" name="menu_section">
+                                                            <option value="homepage"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'homepage' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages,'page_section_homepage','Customer homepage')); ?></option>
                                                             <option value="other"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'other' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_other', 'Other page')); ?></option>
                                                             <option value="payments"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'payments' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_payments', 'Payments - Instructions')); ?></option>
                                                             <option value="applications"<?php echo admin_page_normalize_section((string)($pageEditor['menu_section'] ?? 'other')) === 'applications' ? ' selected' : ''; ?>><?php echo admin_e(admin_t($messages, 'page_section_applications', 'Applications - Instructions')); ?></option>
@@ -15476,12 +15478,12 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                         <i class="bi bi-floppy" aria-hidden="true"></i>
                                                         <span><?php echo admin_e(admin_t($messages, 'page_save_button', 'Save page')); ?></span>
                                                     </button>
-                                                    <?php if (empty($pageEditor['is_system'])): ?>
+
                                                         <button type="submit" class="btn btn-outline-danger btn-lg" name="admin_delete_page" formnovalidate onclick="return confirm('<?php echo admin_e(admin_t($messages, 'page_delete_confirm', 'Delete this page?')); ?>');">
                                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                                             <span><?php echo admin_e(admin_t($messages, 'page_delete_button', 'Delete page')); ?></span>
                                                         </button>
-                                                    <?php endif; ?>
+
                                                 </div>
                                             </form>
                                         </div>
@@ -15564,7 +15566,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     <a href="/admin/?page=pages&amp;edit_page=<?php echo admin_e((string)$row['id']); ?>&amp;page_list_page=<?php echo admin_e((string)$pageListPage); ?>&amp;page_locale_tab=<?php echo admin_e($pageLocaleTab); ?>" class="btn btn-dark btn-sm">
                                                                         <i class="bi bi-pencil-square" aria-hidden="true"></i>
                                                                     </a>
-                                                                    <?php if (empty($row['is_system'])): ?>
+
                                                                         <form method="post" onsubmit="return confirm('<?php echo admin_e(admin_t($messages, 'page_delete_confirm', 'Delete this page?')); ?>');">
                                                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                                             <input type="hidden" name="page_id" value="<?php echo admin_e((string)$row['id']); ?>">
@@ -15574,7 +15576,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                                 <i class="bi bi-trash" aria-hidden="true"></i>
                                                                             </button>
                                                                         </form>
-                                                                    <?php endif; ?>
+
                                                                 </div>
                                                             </td>
                                                         </tr>

@@ -2,6 +2,176 @@
 
 return [
     'messages' => [
+        'page_guides' => [
+            'default' => [
+                'title' => 'Przydatne wskazówki',
+                'items' => [
+                    'Sprawdź status i komunikaty widoczne na tej stronie.',
+                    'Jeśli potrzebujesz pomocy, podaj obsłudze numer zamówienia lub płatności.',
+                ],
+            ],
+            'homepage_logged' => [
+                'title' => 'Od czego zacząć?',
+                'items' => [
+                    'W Zamówieniach sprawdzisz pakiety, płatności i daty ważności swoich usług.',
+                    'Aby opłacić konkretne zamówienie, wybierz płatność przy nim. Doładowanie zasila saldo konta.',
+                    'Instrukcje i kontakt z obsługą znajdziesz w odpowiednich kafelkach.',
+                ],
+            ],
+            'homepage_guest' => [
+                'title' => 'Pierwsze kroki',
+                'items' => [
+                    'Zaloguj się na swoje konto lub zarejestruj, jeśli korzystasz z serwisu po raz pierwszy.',
+                    'Po zalogowaniu zobaczysz dostępne zamówienia, płatności i ustawienia konta.',
+                    'Masz pytanie przed zakupem? Skorzystaj z formularza kontaktowego.',
+                ],
+            ],
+            'news' => [
+                'title' => 'Warto wiedzieć',
+                'items' => [
+                    'Tutaj znajdziesz komunikaty o zmianach w ofercie i działaniu serwisu.',
+                    'Przed zgłoszeniem problemu sprawdź, czy nie ma informacji o pracach technicznych.',
+                ],
+            ],
+            'apps' => [
+                'title' => 'Wybór aplikacji',
+                'items' => [
+                    'Wybierz aplikację odpowiednią dla swojego urządzenia.',
+                    'Sposób konfiguracji sprawdzisz w instrukcjach. Jeśli czegoś brakuje, zapytaj obsługę.',
+                ],
+            ],
+            'settings' => [
+                'title' => 'Twoje konto',
+                'items' => [
+                    'Tutaj zmienisz dostępne dane i ustawienia swojego profilu.',
+                    'Przed zapisaniem sprawdź poprawność danych, szczególnie adresu e-mail.',
+                ],
+            ],
+            'change-password' => [
+                'title' => 'Bezpieczna zmiana hasła',
+                'items' => [
+                    'Ustaw unikalne hasło, którego nie używasz w innych serwisach.',
+                    'Po zapisaniu korzystaj z nowego hasła przy kolejnym logowaniu.',
+                ],
+            ],
+            'orders' => [
+                'title' => 'Zamówienia krok po kroku',
+                'items' => [
+                    'Otwórz szczegóły zamówienia, aby sprawdzić płatność, datę ważności i dane dostępu.',
+                    'Po zatwierdzeniu wpłaty zamówienie lub przedłużenie może jeszcze czekać na realizację przez obsługę.',
+                    'Przedłużenie rozpocznij przy istniejącym zamówieniu. Jeśli wpłata jest już zatwierdzona, nie płać ponownie.',
+                ],
+            ],
+            'cryptocurrency' => [
+                'title' => 'Przed wpłatą krypto',
+                'items' => [
+                    'Sprawdź kryptowalutę, sieć, adres i dokładną kwotę podaną przy płatności.',
+                    'Jeśli środki zostały już wysłane, zaczekaj na wykrycie i potwierdzenie wpłaty. Nie wysyłaj ich ponownie.',
+                    'Gdy termin minął, sprawdź status przed rozpoczęciem nowej płatności.',
+                ],
+            ],
+            'referrals' => [
+                'title' => 'Twoje polecenia',
+                'items' => [
+                    'Udostępnij swój link osobie, która chce założyć konto.',
+                    'Tutaj sprawdzisz powiązane polecenia i ich status. Warunki programu potwierdź u obsługi.',
+                ],
+            ],
+            'history' => [
+                'title' => 'Historia konta',
+                'items' => [
+                    'Sprawdź datę, rodzaj zdarzenia i jego status, aby odtworzyć wcześniejsze działania.',
+                    'W sprawie konkretnej operacji podaj obsłudze jej datę i numer zamówienia lub płatności.',
+                ],
+            ],
+            'how-to-pay' => [
+                'title' => 'Jak przygotować płatność?',
+                'items' => [
+                    'Wybierz dostępną metodę i postępuj według instrukcji przy swoim zamówieniu.',
+                    'Dane krypto i przelewu bankowego są różne — użyj wyłącznie danych wybranej metody.',
+                    'Po wysłaniu środków sprawdź status płatności zamiast tworzyć kolejną.',
+                ],
+            ],
+            'faq' => [
+                'title' => 'Szybka pomoc',
+                'items' => [
+                    'Sprawdź odpowiedź dotyczącą Twojego pytania.',
+                    'Jeśli nie znajdziesz rozwiązania, skontaktuj się z obsługą i opisz, na którym etapie potrzebujesz pomocy.',
+                ],
+            ],
+            'instructions' => [
+                'title' => 'Konfiguracja krok po kroku',
+                'items' => [
+                    'Wybierz poradnik dla swojej aplikacji lub urządzenia.',
+                    'Wykonuj kroki w podanej kolejności i używaj danych dostępu ze swojego zamówienia.',
+                ],
+            ],
+            'instruction' => [
+                'title' => 'Zanim zaczniesz',
+                'items' => [
+                    'Wykonuj kroki po kolei i porównuj je z widokiem na swoim urządzeniu.',
+                    'Nie udostępniaj innym osobom haseł, danych dostępu ani kluczy do portfela.',
+                    'Jeśli ekran wygląda inaczej, podaj obsłudze nazwę aplikacji i etap, na którym utknąłeś.',
+                ],
+            ],
+            'contact' => [
+                'title' => 'Jak opisać sprawę?',
+                'items' => [
+                    'Napisz, czego dotyczy pytanie, i podaj numer zamówienia lub płatności, jeśli go masz.',
+                    'Możesz dodać datę operacji lub nazwę urządzenia. Nie przesyłaj haseł ani kluczy do portfela.',
+                ],
+            ],
+            'register' => [
+                'title' => 'Zakładanie konta',
+                'items' => [
+                    'Podaj poprawny adres e-mail i ustaw unikalne hasło.',
+                    'Jeśli pojawi się prośba o potwierdzenie adresu, sprawdź pocztę oraz folder spam.',
+                ],
+            ],
+            'password' => [
+                'title' => 'Odzyskiwanie dostępu',
+                'items' => [
+                    'Wpisz adres e-mail przypisany do konta i postępuj zgodnie z wyświetloną instrukcją.',
+                    'Sprawdź skrzynkę odbiorczą i spam. Jeśli nadal nie możesz się zalogować, skontaktuj się z obsługą.',
+                ],
+            ],
+            'login' => [
+                'title' => 'Logowanie do konta',
+                'items' => [
+                    'Użyj danych przypisanych do swojego konta.',
+                    'Nie pamiętasz hasła? Wybierz odzyskiwanie dostępu zamiast zakładać kolejne konto.',
+                ],
+            ],
+        ],
+        'home_service_overview' => [
+            'eyebrow' => 'Twój panel klienta',
+            'title' => 'Zamówienia, płatności i pomoc w jednym miejscu',
+            'intro' => 'Zaloguj się, aby sprawdzić swoje usługi i zarządzać kontem. Każdy etap ma czytelny status — od wyboru pakietu po aktywację i przedłużenie.',
+            'features' => [
+                [
+                    'icon' => 'fa-list-alt',
+                    'title' => 'Zamówienia i przedłużenia',
+                    'text' => 'Sprawdź dostępne pakiety, daty ważności i dane dostępu. Przedłużenie rozpoczniesz przy swoim zamówieniu.',
+                ],
+                [
+                    'icon' => 'fa-credit-card',
+                    'title' => 'Płatności i saldo',
+                    'text' => 'Wybierz dostępną metodę płatności i sprawdzaj jej status. Zatwierdzona wpłata może jeszcze wymagać realizacji zamówienia.',
+                ],
+                [
+                    'icon' => 'fa-comments-o',
+                    'title' => 'Instrukcje i kontakt',
+                    'text' => 'Skorzystaj z poradników, FAQ lub dostępnego kontaktu z obsługą, gdy potrzebujesz pomocy.',
+                ],
+            ],
+            'steps_title' => 'Jak zacząć?',
+            'steps' => [
+                'Utwórz konto lub zaloguj się.',
+                'Wybierz pakiet w Zamówieniach i przejdź do płatności.',
+                'Sprawdź status realizacji i dane dostępu w swoim zamówieniu.',
+            ],
+            'footer' => 'Dostępne pakiety, metody płatności i formy kontaktu zależą od konfiguracji serwisu.',
+        ],
         'payment_purpose_topup' => 'Doładowanie konta',
         'payment_history_latest' => 'Najnowsze płatności',
         'payment_history_older' => 'Starsze płatności',
@@ -85,13 +255,17 @@ return [
         'home_add_to_home_shot_5' => 'Krok 5 - Gotowe',
         'home_account' => 'Przejdź do konta',
         'home_loading' => 'Ładowanie danych użytkownika.',
-        'customer_type_switch_title' => 'Tryb testowy',
-        'customer_type_switch_info' => 'Ten przełącznik służy tylko do testów. OFF pokazuje zwykły widok klienta, a ON przełącza konto w tryb resellera, żeby sprawdzić sekcje dostępne tylko dla resellerów.',
+        'customer_type_switch_test_label' => 'Opcja testowa',
+        'order_expires_at' => 'Ważne do',
+        'order_add_heading' => 'Nowe zamówienie',
+        'order_no_products_available' => 'Obecnie nie ma dostępnych produktów.',
+        'customer_type_switch_title' => 'Widok konta do testów',
+        'customer_type_switch_info' => 'Przełącz konto między widokiem klienta i resellera. To opcja testowa; zmiana dotyczy tylko tego konta.',
         'customer_type_switch_current' => 'Aktualny tryb',
-        'customer_type_switch_mode_client' => 'Client',
+        'customer_type_switch_mode_client' => 'Klient',
         'customer_type_switch_mode_reseller' => 'Reseller',
-        'customer_type_switch_off_label' => 'OFF = Client',
-        'customer_type_switch_on_label' => 'ON = Reseller',
+        'customer_type_switch_off_label' => 'Klient',
+        'customer_type_switch_on_label' => 'Reseller',
         'customer_type_switch_saved' => 'Zmieniono tryb konta na: {mode}.',
         'customer_type_switch_save_error' => 'Nie udało się zmienić trybu konta.',
         'account_balance_label' => 'Stan konta',
@@ -100,8 +274,8 @@ return [
         'balance_topup_modal_intro' => 'Wybierz metodę płatności.',
         'balance_topup_modal_orders_note' => 'Jeśli masz do opłacenia tylko jedną subskrypcję, skorzystaj z płatności w zakładce:',
         'balance_topup_modal_orders_note_link' => 'Zamówienia -> Płatność',
-        'payment_test_mode_notice_title' => 'Tryb testowy płatności',
-        'payment_test_mode_notice_text' => 'Możesz generować requesty płatności ale prosimy teraz nic nie wpłacać.',
+        'payment_test_mode_notice_title' => 'Tryb testowy — nie wysyłaj środków',
+        'payment_test_mode_notice_text' => 'Możesz sprawdzić wybór metody, kwotę i dane płatności. Nie wykonuj przelewu ani nie wysyłaj kryptowalut — to etap testów.',
         'balance_topup_amount_step_title' => 'Wpisz kwotę doładowania',
         'balance_topup_amount_placeholder' => 'Wpisz kwotę',
         'balance_topup_presets_label' => 'Szybki wybór',

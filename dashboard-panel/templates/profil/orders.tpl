@@ -195,7 +195,7 @@
             <div class="modal-dialog modal-lg" role="document">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="{$t.close|default:'Close'}"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title">{$wygrane[i].provider_name} {$wygrane[i].name}</h4>
                         <div class="user-order-modal__summary">
                             <span class="user-order-modal__summary-chip btn-outline-dark">#{$wygrane[i].id}</span>
@@ -290,7 +290,7 @@
                                             <span>{$t[$wygrane[i].status_visual.label_key]|default:$wygrane[i].status_visual.label|default:'Status'}</span>
                                         </div>
                                         {if $wygrane[i].status == 2}
-                                            <span class="badge badge-danger mt-2">Expired</span>
+                                            <span class="badge badge-danger mt-2">{$t.orders_status_expired|default:'Expired'}</span>
                                         {/if}
                                     </div>
                                     <div>

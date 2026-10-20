@@ -1,5 +1,5 @@
-	<div class="content-box">
-			<h1><a href="orders"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> Add new</h1>
+	<div class="content-box customer-order-create">
+			<h1><a href="orders"><i class="fa fa-chevron-circle-left back" aria-hidden="true"></i></a> {$t.order_add_heading|default:'New order'}</h1>
 			{if $providers}
 			<form action="" method="post" class="form-horizontal" onsubmit="this.dataset.submitting='1'; document.getElementById('add_product').disabled = true;" data-choice-label="{$t.order_add_selection_label|default:'Your choice:'}" data-price-label="{$t.order_add_purchase_price_label|default:'Purchase price:'}">
                      <input type="hidden" name="_csrf" value="{$csrf_token|default:''}" />
@@ -53,7 +53,7 @@
 					 <div class="form-group">
 						<div class="col-lg-6">
 						   <button type="button" onclick="history.back();" class="btn btn-default btn-lg">
-                              <i class="fa fa-angle-double-left" aria-hidden="true"></i> Back 
+                              <i class="fa fa-angle-double-left" aria-hidden="true"></i> {$t.back|default:'Back'}
                            </button>
 						   <button type="submit" class="btn btn-dark btn-lg" id="add_product" disabled>
 							  {$t.order_add_continue|default:'Przejdź dalej'} <i class="fa fa-angle-double-right" aria-hidden="true"></i>
@@ -63,7 +63,7 @@
 					 </div>   
 			</form> 
 			{else}
-			<p>No products available.</p>
+			<p>{$t.order_no_products_available|default:'No products are available right now.'}</p>
 			{/if}
  	</div>
     

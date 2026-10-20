@@ -462,7 +462,7 @@ if (!function_exists('app_static_page_normalize_menu_section')) {
     function app_static_page_normalize_menu_section(?string $section): string
     {
         $section = strtolower(trim((string)$section));
-        return in_array($section, ['menu', 'payments', 'applications'], true) ? $section : 'other';
+        return in_array($section, ['menu', 'homepage', 'payments', 'applications'], true) ? $section : 'other';
     }
 }
 
@@ -619,7 +619,7 @@ if (!function_exists('app_instruction_guides_from_static_pages')) {
         );
 
         if (!is_array($rows) || $rows === []) {
-            return $fallback;
+            return [];
         }
 
         $guides = [];
@@ -1154,6 +1154,7 @@ if (!function_exists('app_ensure_system_content_pages_runtime')) {
                 $safeSlug = $db->escape((string)$row['slug']);
                 $existing = $db->select_user(
                     "SELECT id
+                            , page_type
                             , body
                             , menu_section
                             , menu_title
@@ -1165,6 +1166,7 @@ if (!function_exists('app_ensure_system_content_pages_runtime')) {
                 );
 
                 if (is_array($existing) && !empty($existing['id'])) {
+                    if (($existing['page_type'] ?? '') === 'deleted') continue;
                     $updateColumns = [];
                     $updateValues = [];
 
@@ -1269,12 +1271,11 @@ if (!function_exists('app_static_page_find_for_route')) {
                 "SELECT id, slug, title, body, locale_code, menu_section, menu_title, menu_logo_url, menu_sort_order, page_type, is_system, is_active, created_at, updated_at
                  FROM static_pages
                  WHERE slug = '{$safeSlug}'
-                   AND page_type = 'page'
-                   AND is_active = 1
                  LIMIT 1"
             );
 
-            if (is_array($row) && !empty($row['id'])) {
+            if (($row['page_type'] ?? '') === 'deleted') return null;
+            if (is_array($row) && !empty($row['id']) && ($row['page_type'] ?? '') === 'page' && !empty($row['is_active'])) {
                 return $row;
             }
         }
@@ -1312,15 +1313,15 @@ if (!function_exists('app_static_page_route_is_publicly_visible')) {
             $seen[$candidateSlug] = true;
             $safeSlug = $db->escape($candidateSlug);
             $row = $db->select_user(
-                "SELECT id, is_active
+                "SELECT id, is_active, page_type
                  FROM static_pages
                  WHERE slug = '{$safeSlug}'
-                   AND page_type = 'page'
+                   AND page_type IN ('page','deleted')
                  LIMIT 1"
             );
 
             if (is_array($row) && !empty($row['id'])) {
-                return !empty($row['is_active']);
+                return ($row['page_type'] ?? '') !== 'deleted' && !empty($row['is_active']);
             }
         }
 
@@ -10016,272 +10017,39 @@ function app_payment_test_mode_notice_enabled(array $settings): bool
     return false;
 }
 
-function app_page_helper_content(string $site, bool $isLoggedIn = false): array
+function app_page_helper_content(string $site, bool $isLoggedIn = false, array $messages = []): array
 {
+    if (!isset($messages['page_guides'])) {
+        $catalog = require __DIR__ . '/../locales/pl.php';
+        $messages = $catalog['messages'];
+    }
+    $map = $messages['page_guides'];
     $site = trim($site);
-    if ($site === '') {
-        $site = 'homepage';
+    if ($site === '' || $site === 'homepage') $site = $isLoggedIn ? 'homepage_logged' : 'homepage_guest';
+    if ($site === 'payments_crypto') $site = 'cryptocurrency';
+    if (str_starts_with($site, 'instruction-')) $site = 'instruction';
+    return $map[$site] ?? $map['default'];
+}
+
+/** Active pages explicitly placed on the customer homepage; no additional schema. */
+function app_customer_homepage_pages(Mysql_ks $db, string $localeCode): array
+{
+    if (!schema_object_exists($db, 'static_pages')) {
+        return [];
     }
-
-    $default = [
-        'title' => 'Jak korzystać z tej podstrony?',
-        'items' => [
-            'Ta podstrona pokazuje najważniejsze informacje związane z bieżącym etapem pracy w panelu.',
-            'Najlepiej przejdź od góry do dołu i wykonuj tylko te kroki, które pasują do Twojej sytuacji.',
-            'Jeżeli widzisz przycisk akcji, zwykle prowadzi on do następnego logicznego etapu, a nie do dodatkowej konfiguracji technicznej.',
-            'W razie wątpliwości sprawdź komunikaty o statusie, bo to one podpowiadają, czy coś jest aktywne, oczekujące albo wymaga Twojej reakcji.',
-            'Jeśli nie masz pewności co zrobić dalej, wróć do strony głównej albo do zamówień, bo tam najłatwiej zobaczysz cały stan konta.',
-        ],
-    ];
-
-    $map = [
-        'homepage_logged' => [
-            'title' => 'Co możesz zrobić ze strony głównej?',
-            'items' => [
-                'To jest główny pulpit klienta, z którego szybko przejdziesz do zamówień, płatności, historii i ustawień konta.',
-                'W górnej części widzisz stan salda, więc od razu wiesz, czy możesz wykorzystać środki do dalszych zakupów lub odnowień.',
-                'Każdy kafelek prowadzi do konkretnej funkcji, dlatego nie musisz znać technicznych nazw usług, żeby poruszać się po panelu.',
-                'Jeżeli masz sprawę do supportu, z tego miejsca łatwo wejdziesz do wiadomości, instrukcji albo sekcji z aplikacjami.',
-                'Najprościej traktować tę stronę jako centrum sterowania, z którego zaczynasz każdą ważniejszą czynność na koncie.',
-            ],
-        ],
-        'homepage_guest' => [
-            'title' => 'Co może zrobić nowy użytkownik na stronie głównej?',
-            'items' => [
-                'Ta strona pokazuje podstawowe wejścia do serwisu, więc nowa osoba może od razu wybrać logowanie, rejestrację albo kontakt.',
-                'Jeśli nie masz jeszcze konta, najwygodniej zacząć od rejestracji, bo dopiero po zalogowaniu zobaczysz pełny panel klienta.',
-                'Jeżeli chcesz najpierw zadać pytanie, przycisk kontaktu prowadzi do formularza, z którego możesz wysłać wiadomość do obsługi.',
-                'Strona główna nie wymaga wiedzy technicznej, bo jej celem jest szybkie skierowanie Cię do właściwej akcji bez zbędnych kroków.',
-                'W praktyce jest to wizytówka systemu i punkt startowy dla osoby, która chce ocenić, czy panel odpowiada jej potrzebom.',
-            ],
-        ],
-        'news' => [
-            'title' => 'Jak czytać aktualności?',
-            'items' => [
-                'Tutaj pojawiają się ważne komunikaty od operatora, dlatego warto zaglądać w to miejsce przed zgłoszeniem problemu do supportu.',
-                'Możesz sprawdzić informacje o przerwach technicznych, zmianach w ofercie, nowych funkcjach albo planowanych pracach serwisowych.',
-                'Jeśli coś w usłudze działa inaczej niż zwykle, aktualności często wyjaśniają, czy jest to chwilowa sytuacja, czy stała zmiana.',
-                'Treści są podane w prostszej formie niż w systemach administracyjnych, więc mają być zrozumiałe także dla nietechnicznego użytkownika.',
-                'Najlepiej traktować tę sekcję jako oficjalne źródło bieżących informacji dotyczących działania całego serwisu.',
-            ],
-        ],
-        'apps' => [
-            'title' => 'Do czego służy sekcja aplikacji?',
-            'items' => [
-                'Ta podstrona pomaga dobrać aplikację lub środowisko odtwarzania do urządzenia, z którego chcesz korzystać.',
-                'Znajdziesz tu skróty i wskazówki, które ułatwiają przejście od aktywnej usługi do realnego uruchomienia jej na telewizorze, boxie albo telefonie.',
-                'Jeśli nie wiesz, od czego zacząć po zakupie, właśnie tutaj zwykle powinieneś sprawdzić, jaka aplikacja będzie dla Ciebie najwygodniejsza.',
-                'Sekcja nie musi wszystkiego konfigurować automatycznie, ale porządkuje kolejne kroki i ogranicza liczbę pytań do supportu.',
-                'Dla laika to praktyczna mapa, która łączy zakupioną usługę z konkretnym sposobem użycia jej na własnym sprzęcie.',
-            ],
-        ],
-        'settings' => [
-            'title' => 'Co zmienisz w ustawieniach konta?',
-            'items' => [
-                'Tutaj zarządzasz danymi swojego profilu, więc możesz utrzymać konto w aktualnym i bezpiecznym stanie.',
-                'To dobre miejsce do sprawdzenia podstawowych informacji, które wpływają na logowanie, kontakt i wygodę korzystania z panelu.',
-                'Zmiany zapisane w tej sekcji dotyczą Twojego konta, dlatego nie wpływają na innych użytkowników ani na konfigurację całego serwisu.',
-                'Jeżeli chcesz uporządkować sposób otrzymywania informacji albo przygotować konto do dalszych zakupów, zacznij właśnie od ustawień.',
-                'Najprościej mówiąc, jest to panel osobisty, w którym dopasowujesz konto do własnych potrzeb bez ingerowania w ofertę usług.',
-            ],
-        ],
-        'change-password' => [
-            'title' => 'Po co jest zmiana hasła?',
-            'items' => [
-                'Ta podstrona służy do ręcznej zmiany hasła wtedy, gdy chcesz zwiększyć bezpieczeństwo swojego konta.',
-                'Najlepiej ustawić hasło, które jest łatwe do zapamiętania dla Ciebie, ale trudne do odgadnięcia dla innej osoby.',
-                'Po zmianie hasła nowe dane logowania zaczynają obowiązywać od razu, więc warto upewnić się, że zapisujesz je bez literówek.',
-                'Jeżeli z konta korzystasz tylko Ty, regularna zmiana hasła zmniejsza ryzyko nieautoryzowanego dostępu do zamówień i płatności.',
-                'To prosta czynność administracyjna, ale ma duży wpływ na bezpieczeństwo całej historii Twojego konta.',
-            ],
-        ],
-        'orders' => [
-            'title' => 'Jak działa sekcja zamówień?',
-            'items' => [
-                'To najważniejsza podstrona operacyjna, bo właśnie tutaj tworzysz nowe zamówienia, sprawdzasz aktywne usługi i wracasz do płatności.',
-                'Każde zamówienie pokazuje swój status, dzięki czemu od razu widzisz, czy usługa czeka na płatność, jest aktywna, czy wymaga przedłużenia.',
-                'Jeżeli chcesz kupić nową subskrypcję albo odnowić obecną, zwykle cały proces zaczyna się i kończy właśnie w tym miejscu.',
-                'W tej sekcji możesz też wrócić do rozpoczętego zamówienia bez szukania linków w wiadomościach lub historii przeglądarki.',
-                'Dla laika jest to po prostu lista wszystkich spraw zakupowych związanych z kontem, uporządkowana w jednym miejscu.',
-            ],
-        ],
-        'cryptocurrency' => [
-            'title' => 'Jak działa sekcja płatności krypto?',
-            'items' => [
-                'Tutaj tworzysz i śledzisz płatności kryptowalutowe, więc w jednym miejscu widzisz adres portfela, kwotę i czas ważności prośby o płatność.',
-                'Jeśli masz otwarte żądanie płatności, ta strona pozwala wrócić do instrukcji bez generowania wszystkiego od początku.',
-                'Dla osoby nietechnicznej najważniejsze jest to, aby wysłać dokładnie taką kwotę, jaka została pokazana przy aktywnej płatności.',
-                'Sekcja porządkuje też historię rozpoczętych prób płatności, więc łatwiej ustalić, która prośba jest aktualna, a która wygasła.',
-                'Najprościej traktować ją jako centrum obsługi płatności krypto, a nie tylko jednorazowy ekran z adresem portfela.',
-            ],
-        ],
-        'payments_crypto' => [
-            'title' => 'Jak działa sekcja płatności krypto?',
-            'items' => [
-                'Tutaj tworzysz i śledzisz płatności kryptowalutowe, więc w jednym miejscu widzisz adres portfela, kwotę i czas ważności prośby o płatność.',
-                'Jeśli masz otwarte żądanie płatności, ta strona pozwala wrócić do instrukcji bez generowania wszystkiego od początku.',
-                'Dla osoby nietechnicznej najważniejsze jest to, aby wysłać dokładnie taką kwotę, jaka została pokazana przy aktywnej płatności.',
-                'Sekcja porządkuje też historię rozpoczętych prób płatności, więc łatwiej ustalić, która prośba jest aktualna, a która wygasła.',
-                'Najprościej traktować ją jako centrum obsługi płatności krypto, a nie tylko jednorazowy ekran z adresem portfela.',
-            ],
-        ],
-        'referrals' => [
-            'title' => 'Do czego służą polecenia?',
-            'items' => [
-                'Ta podstrona pokazuje funkcję poleceń, czyli możliwość zapraszania nowych osób do serwisu przez własny link lub identyfikator.',
-                'Jeżeli program poleceń jest aktywny, tutaj najłatwiej sprawdzisz, czy ktoś zarejestrował się z Twojego polecenia i jaki ma status.',
-                'Sekcja jest przydatna szczególnie wtedy, gdy chcesz rozwijać bazę klientów albo po prostu polecać usługę znajomym w uporządkowany sposób.',
-                'Dla laika najważniejsze jest to, że wszystko jest spięte z kontem, więc nie musisz ręcznie zapamiętywać, kogo zaprosiłeś.',
-                'To narzędzie marketingowe w prostym wydaniu, które pozwala połączyć promocję serwisu z realnym śledzeniem efektów.',
-            ],
-        ],
-        'history' => [
-            'title' => 'Co sprawdzisz w historii?',
-            'items' => [
-                'Ta sekcja zbiera wcześniejsze działania na koncie, więc pomaga zrozumieć, co i kiedy zostało wykonane.',
-                'Możesz tu wrócić do starszych zdarzeń związanych z zamówieniami, komunikacją albo zmianami statusów bez zgadywania dat.',
-                'Jeżeli próbujesz wyjaśnić, dlaczego usługa ma określony stan, historia często pokazuje kolejność zdarzeń prowadzących do tego efektu.',
-                'Dla laika jest to po prostu dziennik aktywności, który pozwala spokojnie odtworzyć przebieg wcześniejszych działań.',
-                'To dobre miejsce do samodzielnego sprawdzenia kontekstu, zanim napiszesz do supportu z pytaniem o konkretną zmianę.',
-            ],
-        ],
-        'how-to-pay' => [
-            'title' => 'Jak korzystać z instrukcji płatności?',
-            'items' => [
-                'Ta podstrona wyjaśnia dostępne sposoby płatności i pomaga dobrać metodę, która będzie dla Ciebie najwygodniejsza.',
-                'Jeżeli nie jesteś pewien, czym różni się przelew bankowy od płatności krypto, tutaj zobaczysz to w prostszej formie.',
-                'Instrukcje są po to, aby ograniczyć błędy przy płatności, zwłaszcza w sytuacji, gdy liczy się dokładna kwota albo poprawny tytuł operacji.',
-                'Dla początkującej osoby ta sekcja działa jak przewodnik krok po kroku przed wykonaniem realnej płatności.',
-                'W praktyce najlepiej zajrzeć tutaj przed opłaceniem pierwszego zamówienia lub wtedy, gdy chcesz zmienić dotychczasową metodę.',
-            ],
-        ],
-        'faq' => [
-            'title' => 'Jak korzystać z FAQ?',
-            'items' => [
-                'FAQ zbiera najczęstsze pytania i odpowiedzi, więc często pozwala rozwiązać problem bez czekania na odpowiedź supportu.',
-                'To dobre miejsce na szybkie wyjaśnienie podstaw działania serwisu, płatności, aktywacji i sposobu korzystania z usługi.',
-                'Jeżeli dopiero poznajesz panel, ta sekcja oszczędza czas, bo odpowiada na pytania, które zwykle pojawiają się na początku.',
-                'Dla laika FAQ działa jak uporządkowana instrukcja pytań i odpowiedzi, a nie jak techniczna dokumentacja.',
-                'Najwygodniej zaglądać tutaj zawsze wtedy, gdy masz wątpliwość, ale nie chcesz od razu otwierać nowej rozmowy z supportem.',
-            ],
-        ],
-        'instructions' => [
-            'title' => 'Co znajdziesz w instrukcjach?',
-            'items' => [
-                'Ta sekcja porządkuje praktyczne poradniki związane z uruchomieniem usługi na konkretnych aplikacjach i urządzeniach.',
-                'Możesz przejść do wybranego poradnika bez szukania informacji na zewnętrznych stronach lub w przypadkowych filmach.',
-                'Instrukcje są napisane tak, aby osoba bez dużego doświadczenia mogła krok po kroku przejść przez konfigurację.',
-                'Jeśli support prosi Cię o wykonanie określonych działań w aplikacji, zwykle właśnie tutaj znajdziesz potrzebny kontekst.',
-                'Najprościej patrzeć na tę stronę jak na bibliotekę gotowych przewodników do najczęściej używanych scenariuszy.',
-            ],
-        ],
-        'instruction-trust-wallet' => [
-            'title' => 'Jak czytać ten poradnik aplikacji?',
-            'items' => [
-                'Ten ekran skupia się na jednej konkretnej aplikacji lub jednym scenariuszu, żeby nie mieszać wielu metod w jednym miejscu.',
-                'Najlepiej wykonuj kroki dokładnie po kolei, bo poradnik jest ułożony od podstaw do efektu końcowego.',
-                'Jeżeli na którymś etapie pojawi się inny widok niż w instrukcji, warto wrócić do początku i sprawdzić, czy wcześniejszy krok był poprawny.',
-                'Dla laika najważniejsze jest to, że nie trzeba znać całej technologii, wystarczy odwzorować pokazany proces.',
-                'Ta podstrona ma zmniejszyć liczbę pomyłek i skrócić czas potrzebny do samodzielnej konfiguracji usługi.',
-            ],
-        ],
-        'instruction-revolut' => [
-            'title' => 'Jak czytać ten poradnik aplikacji?',
-            'items' => [
-                'Ten ekran skupia się na jednej konkretnej aplikacji lub jednym scenariuszu, żeby nie mieszać wielu metod w jednym miejscu.',
-                'Najlepiej wykonuj kroki dokładnie po kolei, bo poradnik jest ułożony od podstaw do efektu końcowego.',
-                'Jeżeli na którymś etapie pojawi się inny widok niż w instrukcji, warto wrócić do początku i sprawdzić, czy wcześniejszy krok był poprawny.',
-                'Dla laika najważniejsze jest to, że nie trzeba znać całej technologii, wystarczy odwzorować pokazany proces.',
-                'Ta podstrona ma zmniejszyć liczbę pomyłek i skrócić czas potrzebny do samodzielnej konfiguracji usługi.',
-            ],
-        ],
-        'instruction-crypto-exchange' => [
-            'title' => 'Jak czytać ten poradnik aplikacji?',
-            'items' => [
-                'Ten ekran skupia się na jednej konkretnej aplikacji lub jednym scenariuszu, żeby nie mieszać wielu metod w jednym miejscu.',
-                'Najlepiej wykonuj kroki dokładnie po kolei, bo poradnik jest ułożony od podstaw do efektu końcowego.',
-                'Jeżeli na którymś etapie pojawi się inny widok niż w instrukcji, warto wrócić do początku i sprawdzić, czy wcześniejszy krok był poprawny.',
-                'Dla laika najważniejsze jest to, że nie trzeba znać całej technologii, wystarczy odwzorować pokazany proces.',
-                'Ta podstrona ma zmniejszyć liczbę pomyłek i skrócić czas potrzebny do samodzielnej konfiguracji usługi.',
-            ],
-        ],
-        'instruction-smart-iptv' => [
-            'title' => 'Jak czytać ten poradnik aplikacji?',
-            'items' => [
-                'Ten ekran skupia się na jednej konkretnej aplikacji lub jednym scenariuszu, żeby nie mieszać wielu metod w jednym miejscu.',
-                'Najlepiej wykonuj kroki dokładnie po kolei, bo poradnik jest ułożony od podstaw do efektu końcowego.',
-                'Jeżeli na którymś etapie pojawi się inny widok niż w instrukcji, warto wrócić do początku i sprawdzić, czy wcześniejszy krok był poprawny.',
-                'Dla laika najważniejsze jest to, że nie trzeba znać całej technologii, wystarczy odwzorować pokazany proces.',
-                'Ta podstrona ma zmniejszyć liczbę pomyłek i skrócić czas potrzebny do samodzielnej konfiguracji usługi.',
-            ],
-        ],
-        'instruction-ott-player' => [
-            'title' => 'Jak czytać ten poradnik aplikacji?',
-            'items' => [
-                'Ten ekran skupia się na jednej konkretnej aplikacji lub jednym scenariuszu, żeby nie mieszać wielu metod w jednym miejscu.',
-                'Najlepiej wykonuj kroki dokładnie po kolei, bo poradnik jest ułożony od podstaw do efektu końcowego.',
-                'Jeżeli na którymś etapie pojawi się inny widok niż w instrukcji, warto wrócić do początku i sprawdzić, czy wcześniejszy krok był poprawny.',
-                'Dla laika najważniejsze jest to, że nie trzeba znać całej technologii, wystarczy odwzorować pokazany proces.',
-                'Ta podstrona ma zmniejszyć liczbę pomyłek i skrócić czas potrzebny do samodzielnej konfiguracji usługi.',
-            ],
-        ],
-        'instruction-newlook' => [
-            'title' => 'Jak czytać ten poradnik aplikacji?',
-            'items' => [
-                'Ten ekran skupia się na jednej konkretnej aplikacji lub jednym scenariuszu, żeby nie mieszać wielu metod w jednym miejscu.',
-                'Najlepiej wykonuj kroki dokładnie po kolei, bo poradnik jest ułożony od podstaw do efektu końcowego.',
-                'Jeżeli na którymś etapie pojawi się inny widok niż w instrukcji, warto wrócić do początku i sprawdzić, czy wcześniejszy krok był poprawny.',
-                'Dla laika najważniejsze jest to, że nie trzeba znać całej technologii, wystarczy odwzorować pokazany proces.',
-                'Ta podstrona ma zmniejszyć liczbę pomyłek i skrócić czas potrzebny do samodzielnej konfiguracji usługi.',
-            ],
-        ],
-        'contact' => [
-            'title' => 'Jak używać formularza kontaktowego?',
-            'items' => [
-                'Ta podstrona pozwala wysłać wiadomość do obsługi wtedy, gdy potrzebujesz pomocy przed lub po zalogowaniu.',
-                'Najlepiej opisać problem prostymi słowami i dodać konkrety, takie jak adres e-mail, numer zamówienia albo nazwa urządzenia.',
-                'Im dokładniejsza wiadomość, tym szybciej support zrozumie sytuację i ograniczy liczbę pytań zwrotnych.',
-                'Dla laika to zwykły kanał kontaktu, ale dobrze przygotowana treść bardzo przyspiesza otrzymanie właściwej odpowiedzi.',
-                'Jeżeli nie wiesz, od czego zacząć rozmowę z obsługą, ten formularz jest najprostszym i najbardziej uporządkowanym wejściem.',
-            ],
-        ],
-        'register' => [
-            'title' => 'Co zrobić na stronie rejestracji?',
-            'items' => [
-                'Tutaj zakładasz nowe konto klienta, które będzie później używane do zamówień, płatności i kontaktu z supportem.',
-                'Wystarczy podać podstawowe dane i poprawny adres e-mail, bo to on zwykle staje się głównym identyfikatorem konta.',
-                'Po rejestracji możesz zostać poproszony o aktywację albo po prostu przejść do logowania, zależnie od ustawień serwisu.',
-                'Dla osoby początkującej to pierwszy krok do wejścia w pełną funkcjonalność panelu i rozpoczęcia korzystania z oferty.',
-                'Najważniejsze jest, aby używać prawdziwego adresu e-mail, bo późniejsze powiadomienia i odzyskiwanie dostępu będą od niego zależeć.',
-            ],
-        ],
-        'password' => [
-            'title' => 'Do czego służy ta strona hasła?',
-            'items' => [
-                'Ta podstrona pomaga odzyskać dostęp wtedy, gdy nie pamiętasz hasła albo nie możesz zalogować się na konto.',
-                'Proces zwykle opiera się na adresie e-mail, dlatego trzeba podać dokładnie ten sam adres, który był użyty przy rejestracji.',
-                'Po poprawnym przejściu procedury serwis może wysłać nowe hasło lub link do dalszych kroków, zależnie od konfiguracji systemu.',
-                'Dla laika to bezpieczna ścieżka awaryjna, która pozwala wrócić do konta bez zakładania nowego profilu od zera.',
-                'Jeżeli odzyskiwanie nie działa, warto sprawdzić skrzynkę spam albo skontaktować się z supportem z poziomu formularza kontaktowego.',
-            ],
-        ],
-        'login' => [
-            'title' => 'Jak korzystać z logowania?',
-            'items' => [
-                'Ta strona służy do wejścia do panelu klienta, w którym znajdują się zamówienia, płatności, historia i ustawienia konta.',
-                'Do zalogowania potrzebujesz poprawnego adresu e-mail oraz hasła ustawionego przy rejestracji albo wygenerowanego przez system.',
-                'Jeśli dane są poprawne, po zalogowaniu trafisz do własnego panelu i od razu zobaczysz najważniejsze funkcje konta.',
-                'Dla laika to po prostu brama do całego serwisu, więc wszystkie dalsze czynności zaczynają się od poprawnego logowania.',
-                'Jeżeli nie pamiętasz hasła albo nie możesz wejść na konto, skorzystaj z odzyskiwania hasła zamiast próbować tworzyć nowe konto.',
-            ],
-        ],
-    ];
-
-    if ($site === 'homepage') {
-        return $isLoggedIn ? $map['homepage_logged'] : $map['homepage_guest'];
-    }
-
-    return $map[$site] ?? $default;
+    app_ensure_static_pages_runtime_columns($db);
+    $locale = $db->escape(app_static_page_normalize_locale($localeCode));
+    $rows = $db->select_full_user(
+        "SELECT slug, title, menu_title, menu_logo_url FROM static_pages
+         WHERE page_type = 'page' AND is_active = 1
+           AND menu_section = 'homepage' AND locale_code = '{$locale}'
+         ORDER BY menu_sort_order ASC, id ASC"
+    );
+    return array_map(static fn(array $row): array => [
+        'href' => '/' . app_static_page_base_slug((string)$row['slug']),
+        'title' => trim((string)($row['menu_title'] ?? '')) ?: $row['title'],
+        'logo' => (string)($row['menu_logo_url'] ?? ''),
+    ], $rows ?: []);
 }
 
 function app_referral_link(array $settings, int $customerId): string

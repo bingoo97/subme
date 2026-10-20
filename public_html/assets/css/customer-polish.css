@@ -1,0 +1,128 @@
+/* Local customer UI polish. Existing layout and payment behaviour remain unchanged. */
+/* Test-only account view selector. */
+.home-role-switch{padding:0;margin:20px 0;}
+.home-role-switch__card{gap:16px;padding:16px 18px;border:1px solid #e3e9f0;border-radius:10px;background:#fff;box-shadow:none;}
+.home-role-switch__copy{max-width:660px;}
+.home-role-switch__eyebrow{display:inline-flex;align-items:center;gap:5px;margin-bottom:6px;padding:3px 6px;border:1px solid #e1e7f0;border-radius:4px;background:#f4f7fb;color:#6b7e96;font-size:9px;font-weight:500;line-height:1.4;}
+.home-role-switch__copy strong{margin:0 0 5px;font-size:14px;font-weight:600;line-height:1.45;color:#334155;}
+.home-role-switch__copy p{font-size:11px;line-height:1.65;color:#7b8798;}
+.home-role-switch__copy .home-role-switch__description{margin-top:6px;font-size:11px;line-height:1.7;color:#7b8798;}
+.home-role-switch__current{display:inline-flex;padding:1px 5px;border-radius:4px;background:#eef5fc;color:#4274a6;font-size:10px;font-weight:500;}
+.home-role-switch__control{flex:none;cursor:pointer;}
+.home-role-switch__toggle{gap:8px;}
+.home-role-switch__toggle-text{font-size:10px;font-weight:500;}
+.home-role-switch__toggle-track{width:44px;height:26px;box-shadow:none;}
+.home-role-switch__toggle-thumb{top:3px;left:3px;width:20px;height:20px;box-shadow:0 1px 3px rgba(30,45,65,.14);}
+.home-role-switch__control input:checked+.home-role-switch__toggle .home-role-switch__toggle-thumb{transform:translateX(18px);}
+.home-role-switch__control input:checked+.home-role-switch__toggle .home-role-switch__toggle-track{background:#52789f;}
+.home-role-switch__control input:focus-visible+.home-role-switch__toggle .home-role-switch__toggle-track{outline:2px solid #9cb6d1;outline-offset:3px;}
+/* Shared warning in every payment entry point. */
+.customer-test-notice{display:flex;align-items:flex-start;gap:10px;margin:0 0 18px;padding:13px 15px;border:1px solid #f0dfb8;border-radius:9px;background:#fffaf0;color:#8c6d33;}
+.customer-test-notice__icon{display:flex;align-items:center;justify-content:center;flex:0 0 28px;height:28px;border-radius:7px;background:#fff0d2;color:#b1812e;font-size:14px;}
+.customer-test-notice>div{min-width:0;}
+.customer-test-notice strong{display:block;margin:0 0 3px;font-size:12px;font-weight:600;line-height:1.5;color:#916821;}
+.customer-test-notice p{margin:0;font-size:11px;font-weight:400;line-height:1.7;color:#8c7850;}
+/* Short, contextual help underneath a page. */
+.page-guide-alert{margin:20px 0 6px;}
+.page-guide-alert__box{padding:15px 17px;border:1px solid #e2e9f2;border-radius:10px;background:#f8fafd;box-shadow:none;color:#72839a;}
+.page-guide-alert__heading{display:flex;align-items:center;gap:8px;margin-bottom:9px;}
+.page-guide-alert__icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 25px;height:25px;border-radius:6px;background:#edf2f8;color:#6b86a8;font-size:13px;}
+.page-guide-alert__title{margin:0;font-size:12px;font-weight:600;line-height:1.5;color:#536984;}
+.page-guide-alert__list{padding-left:18px;margin:0;}
+.page-guide-alert__list li{margin:0 0 5px;padding-left:2px;font-size:11px;font-weight:400;line-height:1.75;color:#72839a;}
+.page-guide-alert__list li::marker{color:#9aafc6;}
+/* Guest introduction: concise content, same position beneath the entry links. */
+.homepage-service-overview{margin:26px 0 22px;}
+.homepage-service-overview__card{max-width:1100px;padding:25px;border:1px solid #e4eaf1;border-radius:13px;background:#fff;box-shadow:0 4px 18px rgba(30,48,68,.035);color:#53677f;}
+.homepage-service-overview__eyebrow{margin-bottom:10px;padding:4px 7px;border-radius:4px;background:#f1f5fa;color:#7890ab;font-size:9px;font-weight:500;letter-spacing:.03em;}
+.homepage-service-overview__card h2{max-width:650px;margin:0 0 10px;font-size:23px;font-weight:600;letter-spacing:-.45px;line-height:1.4;color:#33465e;}
+.homepage-service-overview__card p{font-size:12px;line-height:1.85;color:#7a889b;}
+.homepage-service-overview__intro{max-width:740px;margin-bottom:18px;}
+.homepage-service-overview__features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}
+.homepage-service-overview__feature{padding:15px;border:1px solid #e8edf3;border-radius:9px;background:#fafbfd;min-width:0;}
+.homepage-service-overview__feature-icon{display:flex;align-items:center;justify-content:center;width:30px;height:30px;margin-bottom:10px;border-radius:7px;background:#edf2f8;color:#7b93b1;font-size:15px;}
+.homepage-service-overview__card h3{margin:0 0 7px;font-size:13px;font-weight:600;letter-spacing:0;line-height:1.5;color:#526a87;}
+.homepage-service-overview__feature p{margin:0;font-size:11px;line-height:1.75;}
+.homepage-service-overview__steps{margin-top:18px;padding-top:17px;border-top:1px solid #edf0f4;}
+.homepage-service-overview__steps ol{margin:0;padding-left:20px;color:#7a889b;}
+.homepage-service-overview__steps li{padding-left:3px;margin:5px 0;font-size:11px;line-height:1.7;}
+.homepage-service-overview__card .homepage-service-overview__footnote{margin:16px 0 0;font-size:10px;color:#97a1af;}
+/* Restrained typography for the existing customer order and checkout layouts. */
+:is(.orders-view,.customer-order-create,.payment-wizard)>h1,
+.orders-view .orders-header h1,.payment-wizard__header :is(h1,h2){font-size:22px;letter-spacing:-.45px;line-height:1.4;}
+.customer-order-create :is(.form-label,.form-control){font-size:12px;font-weight:500;}
+.customer-order-create .form-control{border-color:#e1e7ef;border-radius:7px;box-shadow:none;min-height:42px;}
+.customer-order-create .form-control:focus{border-color:#9cb2cb;outline:2px solid #edf2f8;}
+.customer-order-create .text-muted,.customer-order-create form p{font-size:12px;line-height:1.7;}
+.customer-order-create #selected_product_price_note{font-size:15px!important;border:1px solid #e4e9f0;border-radius:7px;padding:10px;color:#4c617c;}
+.customer-order-create .btn{font-size:12px;padding:10px 13px;border-radius:7px;}
+.payment-wizard__header p{font-size:12px;line-height:1.7;}
+.payment-wizard .form-label{font-size:11px;font-weight:500;}
+.payment-wizard .form-control{font-size:13px;box-shadow:none;}
+.payment-wizard .payment-summary-item__label{font-size:10px;font-weight:500;}
+.payment-wizard .payment-summary-item__value{font-size:13px;font-weight:600;}
+@media(max-width:767px){
+    .home-role-switch__card{padding:13px 14px;gap:12px;}
+    .home-role-switch__copy strong{font-size:13px;}
+    .customer-test-notice{padding:11px 12px;gap:9px;margin-bottom:14px;}
+    .page-guide-alert__box{padding:13px 14px;}
+    .homepage-service-overview__card{padding:18px 15px;border-radius:10px;}
+    .homepage-service-overview__features{grid-template-columns:1fr;gap:9px;}
+    .homepage-service-overview__card h2{font-size:20px;}
+    .homepage-service-overview__feature{padding:13px;}
+    :is(.orders-view,.customer-order-create,.payment-wizard)>h1,.orders-view .orders-header h1,.payment-wizard__header :is(h1,h2){font-size:20px;}
+    .customer-order-create .btn{min-height:42px;}
+}
+@media(prefers-reduced-motion:reduce){.home-role-switch__toggle-track,.home-role-switch__toggle-thumb{transition:none;}}
+/* Customer modals retain their tabs and existing actions. */
+:is(.balance-topup-modal,.user-order-modal) .modal-content{border:1px solid #e3e9f0;border-radius:12px;box-shadow:0 18px 55px rgba(30,48,68,.15);overflow:hidden;}
+:is(.balance-topup-modal,.user-order-modal) .modal-header{padding:18px 20px;border-bottom:1px solid #e9edf3;background:#fff;}
+:is(.balance-topup-modal,.user-order-modal) .modal-title{margin:0;padding-right:30px;border:0;color:#33465e;font-size:18px;font-weight:600;letter-spacing:-.35px;line-height:1.45;text-transform:none;overflow-wrap:anywhere;}
+:is(.balance-topup-modal,.user-order-modal) .modal-header .close{font-size:25px;color:#8591a1;opacity:.8;}
+:is(.balance-topup-modal,.user-order-modal) .modal-body{padding:18px 20px;color:#60718a;font-size:12px;}
+:is(.balance-topup-modal,.user-order-modal) .modal-footer{padding:13px 20px;border-top:1px solid #e9edf3;background:#fafbfd;gap:8px;}
+:is(.balance-topup-modal,.user-order-modal) .btn{padding:9px 13px;border-radius:7px;font-size:12px;font-weight:500;line-height:1.5;box-shadow:none;}
+:is(.balance-topup-modal,.user-order-modal) .form-control{border-color:#e0e7ef;border-radius:7px;font-size:12px;box-shadow:none;}
+:is(.balance-topup-modal,.user-order-modal) :is(label,.form-label){font-size:11px;font-weight:500;}
+.balance-topup-modal :is(.balance-topup-modal__intro,.balance-topup-modal__order-note,.balance-topup-selected){font-size:11px;line-height:1.7;}
+.balance-topup-modal .payment-method-card__title{font-size:13px;}
+.balance-topup-modal .crypto-choice-card__name{font-size:13px;}
+.balance-topup-modal .crypto-choice-card__logo img{max-width:34px;max-height:34px;}
+.balance-topup-modal .crypto-choice-card__network{font-size:9px;margin-top:3px;}
+.balance-topup-modal .balance-topup-amount-input{min-height:44px;height:44px;font-size:16px;}
+.balance-topup-modal .balance-topup-preset{padding:7px 11px;min-width:58px;border-radius:6px;font-size:11px;}
+.balance-topup-modal .balance-topup-submit{min-height:44px;}
+.user-order-modal .user-order-modal__summary{margin-top:9px;gap:5px;}
+.user-order-modal .user-order-modal__summary-chip{padding:3px 6px;border:1px solid #e2e8f0;border-radius:4px;background:#f5f7fa;color:#6b7e96;font-size:10px;font-weight:500;}
+.user-order-modal .user-order-modal__tabs{gap:4px;border-color:#e6ebf2;}
+.user-order-modal .user-order-modal__tabs .nav-link{padding:8px 11px;border-radius:6px 6px 0 0;font-size:11px;font-weight:500;}
+.user-order-modal .user-order-modal__tabs .nav-link.active{background:#f4f7fb;border-color:#e3e9f1;color:#4e6e94;}
+.user-order-modal .user-order-modal__stack{gap:12px;}
+.user-order-modal .user-order-modal__section{border-color:#e5eaf1;border-radius:8px;box-shadow:none;padding:13px;}
+.user-order-modal :is(.user-order-modal__section-title,.user-order-modal__status-value){font-size:12px;letter-spacing:0;}
+.user-order-modal .user-order-modal__readonly{min-height:39px;font-size:12px;background:#fafbfd;}
+.user-order-modal :is(.alert,.user-order-modal__header-alert){padding:11px 13px;border-radius:7px;font-size:11px;font-weight:400;line-height:1.7;}
+@media(max-width:767px){
+    :is(.balance-topup-modal,.user-order-modal) .modal-dialog{margin:10px;max-width:calc(100% - 20px);}
+    :is(.balance-topup-modal,.user-order-modal) .modal-header{padding:15px;}
+    :is(.balance-topup-modal,.user-order-modal) .modal-title{font-size:16px;}
+    :is(.balance-topup-modal,.user-order-modal) .modal-body{padding:15px;}
+    :is(.balance-topup-modal,.user-order-modal) .modal-footer{padding:12px 15px;}
+    :is(.balance-topup-modal,.user-order-modal) .btn{min-height:40px;}
+}
+
+.home_buttons .one_box--custom-page .one_box__page-logo{display:block;width:34px;height:34px;object-fit:contain;margin:0 auto 9px;}
+.home_buttons .one_box--custom-page .title{overflow-wrap:anywhere;}
+
+:is(.balance-topup-modal,.payment-wizard) .payment-step__head h4{margin:4px 0 12px;font-size:15px;font-weight:600;letter-spacing:0;line-height:1.5;text-transform:none;color:#52677f;}
+:is(.balance-topup-modal,.payment-wizard) .payment-step__label{font-size:9px;font-weight:500;letter-spacing:.04em;color:#93a0b1;}
+.balance-topup-modal .payment-method-start__button{min-height:46px;padding:12px 15px;border-radius:8px;font-size:13px;line-height:1.5;box-shadow:none;}
+.balance-topup-modal .balance-topup-step__head{margin-bottom:10px;}
+.balance-topup-modal .payment-step__head h4{margin-bottom:0;}
+.balance-topup-modal .payment-method-start__buttons{margin:0;}
+.balance-topup-modal .payment-method-start__button{margin:0;}
+.balance-topup-modal [data-balance-topup-next="amount"]{scroll-margin-block:20px;}
+.balance-topup-modal .payment-method-hero__image{max-height:68px;object-fit:contain;}
+.balance-topup-modal .balance-topup-modal__order-note{padding:10px 12px;border:1px solid #e6ebf1;border-radius:7px;background:#fafbfd;color:#79879b;font-weight:400;}
+.balance-topup-modal .balance-topup-modal__order-link{color:#557da8;font-weight:500;}
+@media(max-width:767px){:is(.customer-order-create,.payment-wizard,.balance-topup-modal) .form-control:not([readonly]){font-size:16px;}}

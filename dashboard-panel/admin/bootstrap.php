@@ -25971,6 +25971,7 @@ function admin_page_section_options(): array
 {
     return [
         'other' => 'Other',
+        'homepage' => 'Customer homepage',
         'payments' => 'Payments',
         'applications' => 'Applications',
         'menu' => 'Menu',
@@ -26179,6 +26180,7 @@ function admin_page_group_key(array $row): string
 function admin_page_group_title(string $groupKey, array $messages): string
 {
     $titles = [
+        'homepage' => admin_t($messages, 'page_section_homepage', 'Customer homepage'),
         'menu' => admin_t($messages, 'page_group_menu', 'MENU'),
         'applications' => admin_t($messages, 'page_group_applications', 'Applications'),
         'payments' => admin_t($messages, 'page_group_payments', 'Payments'),
@@ -26275,6 +26277,7 @@ function admin_page_sort_rows(array $rows): array
     usort($rows, static function (array $left, array $right): int {
         $groupOrder = [
             'menu' => 10,
+            'homepage' => 15,
             'applications' => 20,
             'payments' => 30,
             'other' => 40,
@@ -26487,11 +26490,10 @@ function admin_delete_page(Mysql_ks $db, int $pageId): array
         return ['ok' => false, 'message' => 'Page not found.'];
     }
 
-    if (!empty($page['is_system'])) {
-        return ['ok' => false, 'message' => 'System pages cannot be deleted.'];
-    }
-
-    $deleted = $db->delete_using_id('static_pages', $pageId);
+    // Keep only a tombstone for seeded pages so runtime seeding cannot resurrect them.
+    $deleted = !empty($page['is_system'])
+        ? $db->update_using_id(['page_type','is_active','title','body','menu_title','menu_logo_url'], ['deleted',0,'','',null,null], 'static_pages', $pageId)
+        : $db->delete_using_id('static_pages', $pageId);
     if ($deleted) {
         admin_delete_page_card_logo_file((string)($page['menu_logo_url'] ?? ''));
     }

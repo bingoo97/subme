@@ -34,6 +34,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <link rel="stylesheet" href="/assets/css/bootstrap5-legacy-bridge.css">
 	<link rel="stylesheet" href="/assets/css/style.css?v={$main_asset_version|default:1}">
+    <link rel="stylesheet" href="/assets/css/customer-polish.css?v={$customer_ui_asset_version|default:1}">
     <link rel="stylesheet" href="/assets/css/animate.css">
     <link rel="stylesheet" href="/assets/css/jquery.cookiebar.css">
     {if isset($user) && $user.logged}

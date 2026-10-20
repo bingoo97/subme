@@ -69,6 +69,10 @@ if(isset($_GET["wybierz"])){
 		$smarty->assign('group_chat_can_create', !empty($groupChatCreationState['allowed']));
 		$smarty->assign('group_chat_creation_state', $groupChatCreationState);
 	
+		$smarty->assign('homepage_instructions_visible', app_static_page_route_is_publicly_visible($db, 'instructions', (string)($currentLocale ?? 'en')));
+		$smarty->assign('homepage_apps_visible', app_static_page_route_is_publicly_visible($db, 'apps', (string)($currentLocale ?? 'en')));
+		$smarty->assign('homepage_balance_label', app_format_money_value((float)($user['balance_amount'] ?? 0), (string)($reseller['currency_symbol'] ?? ''), (string)($reseller['currency_short'] ?? '')));
+		$smarty->assign('homepage_custom_pages', app_customer_homepage_pages($db, (string)($currentLocale ?? 'en')));
 		$smarty->display("homepage.tpl");
 		
 	}else{

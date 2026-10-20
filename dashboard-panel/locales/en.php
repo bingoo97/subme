@@ -2,6 +2,176 @@
 
 return [
     'messages' => [
+        'page_guides' => [
+            'default' => [
+                'title' => 'Useful tips',
+                'items' => [
+                    'Check the status and messages shown on this page.',
+                    'When contacting support, include your order or payment number.',
+                ],
+            ],
+            'homepage_logged' => [
+                'title' => 'Where to start',
+                'items' => [
+                    'Open Orders to check packages, payments and expiry dates.',
+                    'To pay for a specific order, use its payment option. A top-up adds funds to your account balance.',
+                    'Use the relevant shortcuts for setup guides and support.',
+                ],
+            ],
+            'homepage_guest' => [
+                'title' => 'Getting started',
+                'items' => [
+                    'Sign in, or register if this is your first visit.',
+                    'Your orders, payments and account settings are available after sign-in.',
+                    'Have a question before buying? Use the contact form.',
+                ],
+            ],
+            'news' => [
+                'title' => 'Good to know',
+                'items' => [
+                    'Service and offer updates appear here.',
+                    'Check for maintenance announcements before reporting a problem.',
+                ],
+            ],
+            'apps' => [
+                'title' => 'Choosing an app',
+                'items' => [
+                    'Choose an app that supports your device.',
+                    'Check the setup guides for instructions, or contact support if you need help.',
+                ],
+            ],
+            'settings' => [
+                'title' => 'Your account',
+                'items' => [
+                    'Update the available profile details and preferences here.',
+                    'Check your details, especially your email address, before saving.',
+                ],
+            ],
+            'change-password' => [
+                'title' => 'Changing your password',
+                'items' => [
+                    'Choose a unique password that you do not use elsewhere.',
+                    'Use your new password the next time you sign in.',
+                ],
+            ],
+            'orders' => [
+                'title' => 'Managing orders',
+                'items' => [
+                    'Open an order to check its payment, expiry date and access details.',
+                    'After payment approval, an order or renewal may still need to be fulfilled by support.',
+                    'Start renewals from the existing order. Do not pay again if your payment is already approved.',
+                ],
+            ],
+            'cryptocurrency' => [
+                'title' => 'Before sending crypto',
+                'items' => [
+                    'Check the cryptocurrency, network, address and exact amount shown for your payment.',
+                    'If you have sent funds, wait for detection and confirmation. Do not send them again.',
+                    'If the deadline has passed, check the status before starting a new payment.',
+                ],
+            ],
+            'referrals' => [
+                'title' => 'Your referrals',
+                'items' => [
+                    'Share your referral link with someone who wants to register.',
+                    'Review linked referrals and their status here. Ask support about programme terms.',
+                ],
+            ],
+            'history' => [
+                'title' => 'Account history',
+                'items' => [
+                    'Check dates, event types and statuses to review previous actions.',
+                    'For questions about an operation, include its date and order or payment number.',
+                ],
+            ],
+            'how-to-pay' => [
+                'title' => 'Preparing a payment',
+                'items' => [
+                    'Choose an available method and follow the instructions for your order.',
+                    'Crypto and bank transfer details differ. Use only the details for your selected method.',
+                    'After sending funds, check the status instead of creating another payment.',
+                ],
+            ],
+            'faq' => [
+                'title' => 'Quick help',
+                'items' => [
+                    'Find the answer relevant to your question.',
+                    'If you still need help, contact support and describe which step you are on.',
+                ],
+            ],
+            'instructions' => [
+                'title' => 'Step-by-step setup',
+                'items' => [
+                    'Choose a guide for your app or device.',
+                    'Follow the steps in order and use the access details from your own order.',
+                ],
+            ],
+            'instruction' => [
+                'title' => 'Before you start',
+                'items' => [
+                    'Follow each step and compare it with the screen on your device.',
+                    'Keep passwords, access details and wallet keys private.',
+                    'If your screen looks different, tell support the app name and which step you reached.',
+                ],
+            ],
+            'contact' => [
+                'title' => 'Describing your issue',
+                'items' => [
+                    'Explain your question and include the order or payment number if available.',
+                    'An operation date or device name can help. Never send passwords or wallet keys.',
+                ],
+            ],
+            'register' => [
+                'title' => 'Creating an account',
+                'items' => [
+                    'Enter a valid email address and choose a unique password.',
+                    'If email confirmation is requested, check your inbox and spam folder.',
+                ],
+            ],
+            'password' => [
+                'title' => 'Recovering access',
+                'items' => [
+                    'Enter the email address linked to your account and follow the instructions shown.',
+                    'Check your inbox and spam folder. Contact support if you still cannot sign in.',
+                ],
+            ],
+            'login' => [
+                'title' => 'Signing in',
+                'items' => [
+                    'Use the sign-in details linked to your account.',
+                    'Forgot your password? Recover access instead of creating another account.',
+                ],
+            ],
+        ],
+        'home_service_overview' => [
+            'eyebrow' => 'Your customer portal',
+            'title' => 'Orders, payments and support in one place',
+            'intro' => 'Sign in to review your services and manage your account. Clear statuses guide you from choosing a package through activation and renewal.',
+            'features' => [
+                [
+                    'icon' => 'fa-list-alt',
+                    'title' => 'Orders and renewals',
+                    'text' => 'Check available packages, expiry dates and access details. Start renewals from your existing order.',
+                ],
+                [
+                    'icon' => 'fa-credit-card',
+                    'title' => 'Payments and balance',
+                    'text' => 'Choose an available payment method and check its status. An approved payment may still require order fulfilment.',
+                ],
+                [
+                    'icon' => 'fa-comments-o',
+                    'title' => 'Guides and support',
+                    'text' => 'Use setup guides, FAQs or the available support channels when you need help.',
+                ],
+            ],
+            'steps_title' => 'Getting started',
+            'steps' => [
+                'Register or sign in.',
+                'Choose a package in Orders and continue to payment.',
+                'Check fulfilment status and access details in your order.',
+            ],
+            'footer' => 'Available packages, payment methods and support channels depend on the service configuration.',
+        ],
         'payment_purpose_topup' => 'Balance top-up',
         'payment_history_latest' => 'Latest payments',
         'payment_history_older' => 'Older payments',
@@ -86,13 +256,17 @@ return [
         'home_add_to_home_shot_5' => 'Step 5 - Done',
         'home_account' => 'Go to account',
         'home_loading' => 'Loading user data.',
-        'customer_type_switch_title' => 'Client / reseller test mode',
-        'customer_type_switch_info' => 'This switch is for testing only. OFF shows the regular client view, while ON changes your account into reseller mode so you can preview reseller-only sections.',
+        'customer_type_switch_test_label' => 'Test feature',
+        'order_expires_at' => 'Expires at',
+        'order_add_heading' => 'New order',
+        'order_no_products_available' => 'No products are available right now.',
+        'customer_type_switch_title' => 'Test account view',
+        'customer_type_switch_info' => 'Switch this account between client and reseller views. This option is for testing and changes only this account.',
         'customer_type_switch_current' => 'Current mode',
         'customer_type_switch_mode_client' => 'Client',
         'customer_type_switch_mode_reseller' => 'Reseller',
-        'customer_type_switch_off_label' => 'OFF = Client',
-        'customer_type_switch_on_label' => 'ON = Reseller',
+        'customer_type_switch_off_label' => 'Client',
+        'customer_type_switch_on_label' => 'Reseller',
         'customer_type_switch_saved' => 'Account mode changed to: {mode}.',
         'customer_type_switch_save_error' => 'Unable to change the account mode.',
         'account_balance_label' => 'Account balance',
@@ -101,8 +275,8 @@ return [
         'balance_topup_modal_intro' => 'Choose the payment method, cryptocurrency and top-up amount.',
         'balance_topup_modal_orders_note' => 'If you only need to pay for one subscription, use the payment option in:',
         'balance_topup_modal_orders_note_link' => 'Orders -> Payment',
-        'payment_test_mode_notice_title' => 'Payment test mode',
-        'payment_test_mode_notice_text' => 'You can still generate payment requests and test the full flow, but please do not send any money right now. The payment details are displayed for testing only.',
+        'payment_test_mode_notice_title' => 'Test mode — do not send funds',
+        'payment_test_mode_notice_text' => 'You can review the payment method, amount and payment details. Do not make a bank transfer or send cryptocurrency while testing.',
         'balance_topup_amount_step_title' => 'Enter top-up amount',
         'balance_topup_amount_placeholder' => 'Enter amount',
         'balance_topup_presets_label' => 'Quick amounts',

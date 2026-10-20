@@ -8,12 +8,7 @@
                 <h3 class="modal-title">{$t.balance_topup_modal_title|default:'Top up balance'}</h3>
             </div>
             <div class="modal-body">
-                {if $payment_test_mode_notice_enabled|default:false}
-                <div class="alert alert-warning">
-                    <strong>{$t.payment_test_mode_notice_title|default:'Payment test mode'}</strong><br />
-                    {$t.payment_test_mode_notice_text|default:'You can still generate payment requests and test the full flow, but please do not send any money right now. The payment details are displayed for testing only.'}
-                </div>
-                {/if}
+                {include file='partials/payment-test-notice.tpl'}
                 <p class="balance-topup-modal__intro">{$t.balance_topup_modal_intro|default:'Choose the payment method, cryptocurrency and top-up amount.'}</p>
                 <p class="balance-topup-modal__order-note">
                     {$t.balance_topup_modal_orders_note|default:'If you only need to pay for one subscription, use the payment option in:'}
@@ -177,6 +172,20 @@
         $modal.find('[data-balance-topup-selected]').text(label || assetCode || assetName || 'Crypto');
     }
 
+    var selectionScrollFrame = 0;
+    function revealBalanceTopupContinue($modal) {
+        window.cancelAnimationFrame(selectionScrollFrame);
+        selectionScrollFrame = window.requestAnimationFrame(function () {
+            var button = $modal.find('[data-balance-topup-step="crypto"].is-active [data-balance-topup-next="amount"]')[0];
+            if (!button || !$modal.is(':visible')) return;
+            button.scrollIntoView({
+                behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+                block: 'nearest',
+                inline: 'nearest'
+            });
+        });
+    }
+
     function syncBalanceTopupPresetState($modal) {
         var currentValue = parseFloat(String($modal.find('input[name="topup_amount"]').val() || '').replace(',', '.'));
 
@@ -230,9 +239,11 @@
         showBalanceTopupStep($modal, String($(this).attr('data-balance-topup-back') || 'method'));
     });
 
-    $(document).off('change.balanceTopupCrypto', '[data-balance-topup-form] input[name="crypto_wallet_assignment_id"]');
-    $(document).on('change.balanceTopupCrypto', '[data-balance-topup-form] input[name="crypto_wallet_assignment_id"]', function () {
-        syncBalanceTopupSelection($(this).closest('.balance-topup-modal'));
+    $(document).off('click.balanceTopupCrypto change.balanceTopupCrypto', '[data-balance-topup-form] input[name="crypto_wallet_assignment_id"]');
+    $(document).on('click.balanceTopupCrypto change.balanceTopupCrypto', '[data-balance-topup-form] input[name="crypto_wallet_assignment_id"]', function () {
+        var $modal = $(this).closest('.balance-topup-modal');
+        syncBalanceTopupSelection($modal);
+        revealBalanceTopupContinue($modal);
     });
 
     $(document).off('click.balanceTopupPreset', '[data-balance-topup-amount]');

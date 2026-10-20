@@ -6,14 +6,15 @@ if(($argv[1]??'')==='--page') {
     $r=json_decode(base64_decode($argv[2]),true);
     $sessionDir=(string)getenv('APP_CRYPTO_CACHE_DIR').'/sessions';if(!is_dir($sessionDir))mkdir($sessionDir,0700,true);
     session_save_path($sessionDir);session_start();
-    $_SESSION=$r['admin']?['admin_user_id'=>1,'admin_locale'=>'pl','admin_csrf_token'=>'fixture']:['id'=>1,'lang'=>'pl','__csrf_frontend'=>'fixture'];
+    $_SESSION=$r['admin']?['admin_user_id'=>1,'admin_locale'=>'pl','admin_csrf_token'=>'fixture']:['id'=>empty($r['guest'])?1:0,'lang'=>$r['locale']??'pl','__csrf_frontend'=>'fixture'];
     $_SERVER['HTTP_HOST']='localhost';$_SERVER['REQUEST_METHOD']='GET';$_SERVER['REMOTE_ADDR']='127.0.0.1';$_SERVER['REQUEST_URI']=$r['admin']?'/admin/?page='.$r['page']:'/'.$r['page'];
-    $_GET=['site'=>$r['page']];if($r['admin'])parse_str('page='.$r['page'],$_GET);$_POST=[];
+    $_GET=['site'=>$r['page']];if($r['admin'])parse_str('page='.$r['page'],$_GET);$_POST=!empty($r['create_order'])?['order_add'=>1,'_csrf'=>'fixture']:[];
     $GLOBALS['app_crypto_network_budget']=['deadline'=>0,'remaining'=>0];
     $warnings=[];set_error_handler(static function($level,$message,$file,$line)use(&$warnings):bool {if(error_reporting()&$level)$warnings[]=basename($file).':'.$line.' '.$message;return true;},E_WARNING|E_NOTICE|E_USER_WARNING);
-    $started=microtime(true);ob_start();register_shutdown_function(static function()use($started,&$warnings):void {
-        $html=ob_get_clean();$fatal=error_get_last();if(session_status()===PHP_SESSION_ACTIVE)session_destroy();
-        echo json_encode(['status'=>http_response_code()?:200,'queries'=>class_exists('Mysql_ks',false)?Mysql_ks::$licznik:0,'ms'=>round((microtime(true)-$started)*1000,1),'bytes'=>strlen((string)$html),'html'=>strpos((string)$html,'<html')!==false,'payment_type_filters'=>str_contains((string)$html,'admin-payments-filter-group--types'),'orders_guidance_hidden_initial'=>(bool)preg_match('/<body[^>]*class="[^"]*is-admin-orders-guidance-hidden/',(string)$html),'orders_open_heading'=>str_contains((string)$html,'id="adminOrdersOpenHeading"'),'orders_open_help'=>str_contains((string)$html,'id="adminOrdersOpenHelp"'),'orders_open_empty_alert'=>str_contains((string)$html,'Brak otwartych zamówień.'),'warnings'=>$warnings,'fatal'=>$fatal&&in_array($fatal['type'],[E_ERROR,E_PARSE,E_COMPILE_ERROR,E_CORE_ERROR])?$fatal:null]);
+    $started=microtime(true);ob_start();register_shutdown_function(static function()use($started,&$warnings,$r):void {
+        $html=ob_get_clean();$fatal=error_get_last();
+        if(getenv('APP_UI_EXPORT')==='1'&&!$r['admin']){ $dir='/tmp/subme-customer-polish-previews';if(!is_dir($dir))mkdir($dir,0700,true);$name=preg_replace('/[^a-z0-9-]/','-',($r['page']?:'home').'-'.($r['locale']??'pl').'-'.(!empty($r['guest'])?'guest':(!empty($r['create_order'])?'create':'client')));file_put_contents($dir.'/'.$name.'.html',$html); }if(session_status()===PHP_SESSION_ACTIVE)session_destroy();
+        echo json_encode(['status'=>http_response_code()?:200,'queries'=>class_exists('Mysql_ks',false)?Mysql_ks::$licznik:0,'ms'=>round((microtime(true)-$started)*1000,1),'bytes'=>strlen((string)$html),'html'=>strpos((string)$html,'<html')!==false,'client_test_warning'=>str_contains($html,'class="customer-test-notice"'),'client_role_switch'=>str_contains($html,'class="home-role-switch"'),'client_guide'=>str_contains($html,'class="page-guide-alert"'),'guest_overview'=>str_contains($html,'class="homepage-service-overview"'),'client_create_order'=>str_contains($html,'customer-order-create'),'home_custom_tiles'=>substr_count($html,'one_box--custom-page'),'home_tiles_ordered'=>strpos($html,'href="/homepage-fixture-first"')<strpos($html,'href="/homepage-fixture-second"'),'client_polish_css'=>str_contains($html,'/assets/css/customer-polish.css?v='),'payment_type_filters'=>str_contains((string)$html,'admin-payments-filter-group--types'),'orders_guidance_hidden_initial'=>(bool)preg_match('/<body[^>]*class="[^"]*is-admin-orders-guidance-hidden/',(string)$html),'orders_open_heading'=>str_contains((string)$html,'id="adminOrdersOpenHeading"'),'orders_open_help'=>str_contains((string)$html,'id="adminOrdersOpenHelp"'),'orders_open_empty_alert'=>str_contains((string)$html,'Brak otwartych zamówień.'),'warnings'=>$warnings,'fatal'=>$fatal&&in_array($fatal['type'],[E_ERROR,E_PARSE,E_COMPILE_ERROR,E_CORE_ERROR])?$fatal:null]);
     });
     chdir(dirname(__DIR__));require $r['admin']?dirname(__DIR__).'/admin/index.php':dirname(__DIR__,2).'/public_html/index.php';exit;
 }
@@ -50,4 +51,24 @@ sql("UPDATE orders SET status='pending_payment',payment_status='unpaid',fulfillm
 $p=proc_open([PHP_BINARY,__FILE__,'--page',base64_encode(json_encode(['admin'=>true,'page'=>'orders']))],[1=>['pipe','w'],2=>['pipe','w']],$pipes);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $pipe)fclose($pipe);$code=proc_close($p);$r=json_decode($out,true);
 if($code||!is_array($r)||$r['status']!==200||$r['fatal']||$r['warnings']||!$r['orders_open_heading']||!$r['orders_open_help'])throw new RuntimeException('Nonempty open-order block must remain visible: '.$out.$err);
 $checks++;
+
+sql("INSERT INTO static_pages(slug,title,body,page_type,locale_code,menu_section,menu_sort_order,is_active) VALUES('homepage-fixture-first-pl','Tile first','Fixture','page','pl','homepage',10,1),('homepage-fixture-second-pl','Tile second','Fixture','page','pl','homepage',20,1),('homepage-fixture-en','English tile','Fixture','page','en','homepage',10,1),('homepage-disabled-pl','Hidden tile','Fixture','page','pl','homepage',1,0)");
+foreach([0,1] as $enabled){
+ sql("UPDATE app_settings SET crypto_payments_enabled=1,bank_transfers_enabled=1,customer_type_switch_enabled={$enabled},page_guidance_enabled={$enabled},payment_test_mode_notice_enabled={$enabled} WHERE id=1");
+ foreach(['pl','en'] as $locale)foreach([['page'=>''],['page'=>'','guest'=>true],['page'=>'orders'],['page'=>'orders','create_order'=>true],['page'=>'payments_crypto']] as $case){
+  sql("UPDATE customers SET locale_code='{$locale}' WHERE id=1");
+  $request=$case+['admin'=>false,'locale'=>$locale];
+  $p=proc_open([PHP_BINARY,__FILE__,'--page',base64_encode(json_encode($request))],[1=>['pipe','w'],2=>['pipe','w']],$pipes);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);foreach($pipes as $f)fclose($f);$code=proc_close($p);$result=json_decode($out,true);
+  if($code||!$result||$result['status']!==200||$result['warnings']||$result['fatal']||!$result['client_polish_css'])throw new RuntimeException('Client polish render: '.$out.$err);
+  if((bool)$result['client_guide']!==(bool)$enabled)throw new RuntimeException('Guide switch visibility mismatch');
+  if($case['page']===''){
+   if(!empty($case['guest'])){if((bool)$result['guest_overview']!==(bool)$enabled)throw new RuntimeException('Guest overview switch mismatch');}
+   else if((bool)$result['client_role_switch']!==(bool)$enabled||(bool)$result['client_test_warning']!==(bool)$enabled)throw new RuntimeException('Homepage test switches mismatch');
+  }
+  if($case['page']===''&&empty($case['guest'])&&($result['home_custom_tiles']!==($locale==='pl'?2:1)||($locale==='pl'&&!$result['home_tiles_ordered'])))throw new RuntimeException('Homepage custom tiles: '.json_encode([$request,$result['home_custom_tiles'],$result['home_tiles_ordered']]));
+  if(!empty($case['create_order'])&&!$result['client_create_order'])throw new RuntimeException('Create order page did not render');
+  if($case['page']==='payments_crypto'&&(bool)$result['client_test_warning']!==(bool)$enabled)throw new RuntimeException('Crypto payment test notice mismatch');
+  $checks++;
+ }
+}
 echo "PASS {$checks} complete page renders without PHP warnings\n";

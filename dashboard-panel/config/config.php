@@ -60,6 +60,8 @@ if ($chatJsPath !== false && is_file($chatJsPath)) {
 }
 $smarty->assign('chat_asset_version', $chatAssetVersion);
 $smarty->assign('main_asset_version', $mainAssetVersion);
+$customerUiCssPath = $publicRootDir ? $publicRootDir . '/assets/css/customer-polish.css' : '';
+$smarty->assign('customer_ui_asset_version', is_file($customerUiCssPath) ? (int)filemtime($customerUiCssPath) : 1);
 
 $currentTime = date('Y-m-d H:i:s');
 $currentTimestamp = time();
