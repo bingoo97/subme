@@ -11823,7 +11823,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 </h3>
                                                 <div id="adminUsersImportCollapse" class="accordion-collapse collapse" aria-labelledby="adminUsersImportHeading" data-bs-parent="#adminUsersCreateAccordion">
                                                     <div class="accordion-body admin-users-create-card__body">
-                                                        <form method="post" enctype="multipart/form-data" class="admin-editor-form">
+                                                        <form method="post" enctype="multipart/form-data" class="admin-editor-form admin-customer-import" data-customer-import data-admin-id="<?php echo (int)$adminUser['id']; ?>">
                                                             <input type="hidden" name="_csrf" value="<?php echo admin_e($csrfToken); ?>">
                                                             <div class="row g-3">
                                                                 <div class="col-md-4">
@@ -11852,13 +11852,13 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                 </div>
                                                                 <div class="col-md-4">
                                                                     <label class="form-label" for="import_source_file"><?php echo admin_e(admin_t($messages, 'users_import_file_label', 'CSV / TXT file')); ?></label>
-                                                                    <input type="file" class="form-control" id="import_source_file" name="import_source_file" accept=".csv,.txt,text/plain,text/csv">
+                                                                    <input type="file" class="form-control" id="import_source_file" name="import_source_file" accept=".csv,.tsv,.txt,.sql,.html,text/plain,text/csv">
                                                                 </div>
                                                                 <div class="col-md-4">
                                                                     <label class="form-label d-block"><?php echo admin_e(admin_t($messages, 'users_email_password_label', 'Password email')); ?></label>
                                                                     <div class="form-check form-switch mt-2">
                                                                         <input class="form-check-input" type="checkbox" role="switch" id="import_send_password_email" name="import_send_password_email" value="1"<?php echo !array_key_exists('admin_import_customers', $_POST) || !empty($userImportState['send_password_email']) ? ' checked' : ''; ?>>
-                                                                        <label class="form-check-label" for="import_send_password_email"><?php echo admin_e(admin_t($messages, 'users_email_password_send', 'Send login email with password')); ?></label>
+                                                                        <label class="form-check-label" for="import_send_password_email"><?php echo admin_e(admin_t($messages, 'users_import_password_send', 'Send login email with password')); ?></label>
                                                                     </div>
                                                                 </div>
                                                                 <div class="col-12">
@@ -11896,8 +11896,9 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                                     </div>
                                                                 <?php endif; ?>
                                                             </div>
+                                                            <?php require __DIR__.'/partials/customer-import-preview.php'; ?>
                                                             <div class="admin-editor-actions">
-                                                                <button type="submit" class="btn btn-dark" name="admin_import_customers">
+                                                                <button type="submit" class="btn btn-dark" name="admin_import_customers" data-import-prepare>
                                                                     <i class="bi bi-upload" aria-hidden="true"></i>
                                                                     <span><?php echo admin_e(admin_t($messages, 'users_import_button', 'Import users')); ?></span>
                                                                 </button>
@@ -21198,6 +21199,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
     <script src="/assets/vendor/bootstrap5/bootstrap.bundle.min.js?v=<?php echo admin_public_asset_version('assets/vendor/bootstrap5/bootstrap.bundle.min.js'); ?>"></script>
     <script src="/assets/js/admin.js?v=<?php echo $scriptVersion; ?>"></script>
     <?php if (!empty($appSettings['crypto_payments_enabled']) && admin_user_can_access_route($adminUser, 'payments')): ?><script src="/assets/js/admin-crypto-quick.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-quick.js'); ?>"></script><script src="/assets/js/admin-crypto-create.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-create.js'); ?>"></script><script src="/assets/js/admin-crypto-reminder.js?v=<?php echo admin_public_asset_version('assets/js/admin-crypto-reminder.js'); ?>"></script><?php endif; ?>
+    <?php if ($route === 'users'): ?><script src="/assets/js/admin-customer-import.js?v=<?php echo admin_public_asset_version('assets/js/admin-customer-import.js'); ?>"></script><?php endif; ?>
     <script src="/assets/js/provider-browser.js?v=<?php echo admin_public_asset_version('assets/js/provider-browser.js'); ?>"></script>
     <?php if ($route === 'dashboard'): ?>
         <script src="/assets/js/admin-dashboard.js?v=<?php echo admin_public_asset_version('assets/js/admin-dashboard.js'); ?>"></script>

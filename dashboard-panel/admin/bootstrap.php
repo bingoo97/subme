@@ -7747,6 +7747,7 @@ function admin_import_email_header_aliases(): array
 
 function admin_import_header_is_email(string $value): bool
 {
+    if (str_contains($value, '@')) return false;
     $normalized = admin_import_normalize_header_cell($value);
     if ($normalized === '') {
         return false;
@@ -18767,7 +18768,8 @@ function admin_queue_customer_password_email(
     int $customerId,
     string $email,
     string $plainPassword,
-    string $localeCode
+    string $localeCode,
+    bool $deliverNow = true
 ): array {
     $result = app_email_queue_template(
         $db,
@@ -18780,7 +18782,7 @@ function admin_queue_customer_password_email(
         $customerId,
         null,
         0,
-        true,
+        $deliverNow,
         $localeCode
     );
 
@@ -18864,6 +18866,15 @@ function admin_create_customer_account(
         return ['ok' => false, 'message' => (string)($handleResult['message'] ?? 'Unable to generate username.')];
     }
 
+    $storedHash = '';
+    if (!empty($options['import_password_hash']) && !empty($options['imported_account'])) {
+        require_once __DIR__.'/customer_import_lib.php';
+        $importCredential = admin_customer_import_password((string)$options['import_password_hash']);
+        if ($importCredential['mode'] !== 'hash') return ['ok'=>false,'message'=>'Unsupported password hash.'];
+        $storedHash = $importCredential['value'];
+    }
+    if ($storedHash === '') $storedHash = password_hash($plainPassword, PASSWORD_DEFAULT);
+
     $insertFields = [
         'email',
         'public_handle',
@@ -18880,10 +18891,10 @@ function admin_create_customer_account(
     $insertValues = [
         $email,
         (string)($handleResult['handle'] ?? ''),
-        password_hash($plainPassword, PASSWORD_DEFAULT),
+        $storedHash,
         'password_hash',
         $localeCode,
-        $ipAddress !== '' ? $ipAddress : null,
+        empty($options['imported_account']) && $ipAddress !== '' ? $ipAddress : null,
         $status,
         $customerType,
         $currentTime,
@@ -18924,7 +18935,7 @@ function admin_create_customer_account(
 
     $emailResult = ['ok' => false, 'queued' => false];
     if ($sendPasswordEmail) {
-        $emailResult = admin_queue_customer_password_email($db, $customerId, $email, $plainPassword, $localeCode);
+        $emailResult = admin_queue_customer_password_email($db, $customerId, $email, $plainPassword, $localeCode, empty($options['defer_password_email']));
     }
 
     return [
@@ -19126,6 +19137,12 @@ function admin_delete_customer_account(Mysql_ks $db, int $customerId, int $admin
 
 function admin_import_detect_delimiter(array $lines): string
 {
+    // Header structure outweighs incidental commas/semicolons inside passwords.
+    $first=(string)($lines[0]??'');
+    foreach(["\t",';',',','|'] as $candidate){
+        $cells=str_getcsv($first,$candidate,'"','');
+        if(count($cells)>1)foreach($cells as $cell)if(admin_import_header_is_email((string)$cell))return $candidate;
+    }
     $candidates = [",", ";", "\t", "|"];
     $bestDelimiter = ',';
     $bestScore = -1;
@@ -19169,253 +19186,19 @@ function admin_import_extract_email_from_cell(string $value): string
 
 function admin_parse_customer_import_source(string $rawInput): array
 {
-    $rawInput = str_replace(["\r\n", "\r"], "\n", trim($rawInput));
-    $rawInput = preg_replace('/^\xEF\xBB\xBF/', '', $rawInput ?? '') ?? $rawInput;
-    if ($rawInput === '') {
-        return ['ok' => false, 'message' => 'Import source is empty.'];
-    }
-
-    $lines = array_values(array_filter(array_map('trim', explode("\n", $rawInput)), static function (string $line): bool {
-        return $line !== '';
-    }));
-    if (!$lines) {
-        return ['ok' => false, 'message' => 'Import source is empty.'];
-    }
-
-    $delimiter = admin_import_detect_delimiter($lines);
-    $parsedRows = [];
-    $maxColumns = 0;
-
-    foreach ($lines as $lineIndex => $line) {
-        $row = str_getcsv($line, $delimiter);
-        if (count($row) === 1) {
-            $fallbackEmail = admin_import_extract_email_from_cell((string)$row[0]);
-            if ($fallbackEmail !== '' && trim((string)$row[0]) !== $fallbackEmail) {
-                $row = [$fallbackEmail];
-            }
-        }
-
-        $maxColumns = max($maxColumns, count($row));
-        $parsedRows[] = [
-            'line_number' => $lineIndex + 1,
-            'cells' => $row,
-        ];
-    }
-
-    if ($maxColumns <= 0) {
-        return ['ok' => false, 'message' => 'Unable to detect import columns.'];
-    }
-
-    $headerMap = [];
-    $emailColumn = -1;
-    $hasHeader = false;
-    $firstRowCells = isset($parsedRows[0]['cells']) && is_array($parsedRows[0]['cells']) ? $parsedRows[0]['cells'] : [];
-    foreach ($firstRowCells as $cellIndex => $cellValue) {
-        $normalized = admin_import_normalize_header_cell((string)$cellValue);
-        $headerMap[$cellIndex] = $normalized;
-        if (admin_import_header_is_email((string)$cellValue)) {
-            $emailColumn = $cellIndex;
-            $hasHeader = true;
-        }
-    }
-
-    if ($emailColumn < 0) {
-        $columnScores = array_fill(0, $maxColumns, 0);
-        foreach ($parsedRows as $rowIndex => $row) {
-            foreach (($row['cells'] ?? []) as $cellIndex => $cellValue) {
-                if (admin_import_extract_email_from_cell((string)$cellValue) !== '') {
-                    $columnScores[$cellIndex] = (int)($columnScores[$cellIndex] ?? 0) + 1;
-                }
-            }
-            if ($rowIndex >= 15) {
-                break;
-            }
-        }
-
-        $bestScore = 0;
-        foreach ($columnScores as $cellIndex => $score) {
-            if ($score > $bestScore) {
-                $bestScore = $score;
-                $emailColumn = (int)$cellIndex;
-            }
-        }
-    }
-
-    if ($emailColumn < 0) {
-        return ['ok' => false, 'message' => 'Unable to detect the email column automatically.'];
-    }
-
-    $items = [];
-    $seenEmails = [];
-    foreach ($parsedRows as $rowIndex => $row) {
-        if ($hasHeader && $rowIndex === 0) {
-            continue;
-        }
-
-        $cells = is_array($row['cells'] ?? null) ? $row['cells'] : [];
-        $emailCell = isset($cells[$emailColumn]) ? (string)$cells[$emailColumn] : '';
-        $email = admin_import_extract_email_from_cell($emailCell);
-        if ($email === '') {
-            foreach ($cells as $fallbackCell) {
-                $email = admin_import_extract_email_from_cell((string)$fallbackCell);
-                if ($email !== '') {
-                    break;
-                }
-            }
-            if ($email === '') {
-                continue;
-            }
-        }
-
-        if (isset($seenEmails[$email])) {
-            continue;
-        }
-
-        $seenEmails[$email] = true;
-        $items[] = [
-            'email' => $email,
-            'line_number' => (int)($row['line_number'] ?? ($rowIndex + 1)),
-        ];
-    }
-
-    if (!$items) {
-        return ['ok' => false, 'message' => 'No valid email addresses were found in the import source.'];
-    }
-
-    $detectedColumnLabel = $hasHeader && isset($firstRowCells[$emailColumn]) && trim((string)$firstRowCells[$emailColumn]) !== ''
-        ? trim((string)$firstRowCells[$emailColumn])
-        : '#' . ($emailColumn + 1);
-
-    return [
-        'ok' => true,
-        'items' => $items,
-        'detected_email_column' => $emailColumn,
-        'detected_email_column_label' => $detectedColumnLabel,
-        'has_header' => $hasHeader,
-        'delimiter' => $delimiter,
-    ];
+    require_once __DIR__.'/customer_import_lib.php';
+    return admin_customer_import_parse($rawInput);
 }
 
-function admin_import_customer_accounts(
-    Mysql_ks $db,
-    string $rawInput,
-    array $options,
-    int $adminUserId,
-    string $ipAddress = ''
-): array {
-    $parsed = admin_parse_customer_import_source($rawInput);
-    if (empty($parsed['ok'])) {
-        return $parsed;
-    }
-
-    $localeCode = admin_normalize_locale((string)($options['locale_code'] ?? 'en'));
-    $status = strtolower(trim((string)($options['status'] ?? 'active')));
-    if (!in_array($status, admin_customer_status_options($status), true)) {
-        $status = 'active';
-    }
-
-    $createdCount = 0;
-    $skippedCount = 0;
-    $emailSentCount = 0;
-    $emailQueuedCount = 0;
-    $emailFailedCount = 0;
-    $errors = [];
-    $warnings = [];
-
-    $customerType = app_normalize_customer_type((string)($options['customer_type'] ?? 'client'));
-    if ($customerType === '') {
-        $customerType = 'client';
-    }
-    $sendPasswordEmail = !empty($options['send_password_email']);
-    $providerVisibilityFormPresent = !empty($options['provider_visibility_form_present']) ? 1 : 0;
-    $visibleProviderIds = array_map('intval', (array)($options['visible_provider_ids'] ?? []));
-
-    foreach ((array)($parsed['items'] ?? []) as $item) {
-        $email = strtolower(trim((string)($item['email'] ?? '')));
-        if ($email === '') {
-            continue;
-        }
-
-        if (app_find_customer_by_email($db, $email)) {
-            $skippedCount++;
-            continue;
-        }
-
-        $result = admin_create_customer_account(
-            $db,
-            $email,
-            admin_generate_customer_password(),
-            [
-                'locale_code' => $localeCode,
-                'status' => $status,
-                'customer_type' => $customerType,
-                'send_password_email' => $sendPasswordEmail,
-                'provider_visibility_form_present' => $providerVisibilityFormPresent,
-                'visible_provider_ids' => $visibleProviderIds,
-            ],
-            $adminUserId,
-            $ipAddress
-        );
-
-        if (!empty($result['ok'])) {
-            $createdCount++;
-            if ($sendPasswordEmail) {
-                $emailNotification = (array)($result['email_notification'] ?? []);
-                if (!empty($emailNotification['sent'])) {
-                    $emailSentCount++;
-                } elseif (!empty($emailNotification['ok']) || !empty($emailNotification['queued'])) {
-                    $emailQueuedCount++;
-                } else {
-                    $emailFailedCount++;
-                    $failureMessage = trim((string)($emailNotification['last_error'] ?? $emailNotification['message'] ?? ''));
-                    $warnings[] = $email . ': ' . ($failureMessage !== '' ? $failureMessage : 'Password email could not be queued.');
-                }
-            }
-            continue;
-        }
-
-        $errors[] = $email . ': ' . (string)($result['message'] ?? 'Unable to create customer.');
-    }
-
-    $message = $createdCount > 0
-        ? 'Imported ' . $createdCount . ' user(s).'
-        : 'No new users were imported.';
-    if ($skippedCount > 0) {
-        $message .= ' Skipped existing: ' . $skippedCount . '.';
-    }
-    if ($sendPasswordEmail) {
-        if ($emailSentCount > 0) {
-            $message .= ' Password emails sent: ' . $emailSentCount . '.';
-        }
-        if ($emailQueuedCount > 0) {
-            $message .= ' Password emails queued: ' . $emailQueuedCount . '.';
-        }
-        if ($emailFailedCount > 0) {
-            $message .= ' Password emails failed: ' . $emailFailedCount . '.';
-        }
-    }
-    if (!empty($parsed['detected_email_column_label'])) {
-        $message .= ' Email column: ' . (string)$parsed['detected_email_column_label'] . '.';
-    }
-    if ($errors) {
-        $message .= ' Errors: ' . implode(' | ', array_slice($errors, 0, 3));
-    }
-    if ($warnings) {
-        $message .= ' Warnings: ' . implode(' | ', array_slice($warnings, 0, 3));
-    }
-
-    return [
-        'ok' => $createdCount > 0 || $skippedCount > 0,
-        'message' => $message,
-        'created_count' => $createdCount,
-        'skipped_count' => $skippedCount,
-        'email_sent_count' => $emailSentCount,
-        'email_queued_count' => $emailQueuedCount,
-        'email_failed_count' => $emailFailedCount,
-        'errors' => $errors,
-        'warnings' => $warnings,
-        'detected_email_column_label' => (string)($parsed['detected_email_column_label'] ?? ''),
-    ];
+function admin_import_customer_accounts(Mysql_ks $db,string $rawInput,array $options,int $adminUserId,string $ipAddress=''): array
+{
+    require_once __DIR__.'/customer_import_lib.php';
+    $parsed=admin_customer_import_parse($rawInput,$options);
+    if(empty($parsed['ok']))return $parsed;
+    if(count($parsed['items'])>25)return ['ok'=>false,'message'=>'Użyj podglądu i importu partiami, aby wgrać większą listę.'];
+    $counts=['created'=>0,'skipped'=>0,'failed'=>0];
+    foreach($parsed['items'] as $item){$result=admin_customer_import_row($db,$item,$options,$adminUserId,$ipAddress);$counts[$result['kind']]++;}
+    return ['ok'=>$counts['created']+$counts['skipped']>0,'message'=>'Dodano: '.$counts['created'].'. Pominięto istniejące: '.$counts['skipped'].'. Błędy: '.$counts['failed'].'.','created_count'=>$counts['created'],'skipped_count'=>$counts['skipped']];
 }
 
 function admin_customer_active_bank_assignments(Mysql_ks $db, int $customerId): array

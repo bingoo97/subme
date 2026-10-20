@@ -13046,6 +13046,21 @@ function app_update_customer_locale(Mysql_ks $db, int $customerId, string $local
     $db->update_using_id(['lang'], [localization_to_legacy_value($localeCode)], 'users', $customerId);
 }
 
+/** Country lookup is local/server-provided; logging in never calls a third-party API. */
+function app_customer_login_country(string $ip): string
+{
+    if(!filter_var($ip,FILTER_VALIDATE_IP,FILTER_FLAG_NO_PRIV_RANGE|FILTER_FLAG_NO_RES_RANGE))return '';
+    $country=strtoupper(trim((string)($_SERVER['GEOIP_COUNTRY_CODE']??$_SERVER['MM_COUNTRY_CODE']??'')));
+    if(!preg_match('/^[A-Z]{2}$/D',$country)&&function_exists('geoip_country_code_by_name')) {
+        try {$country=strtoupper((string)@geoip_country_code_by_name($ip));}catch(Throwable $e){$country='';}
+    }
+    if(!preg_match('/^[A-Z]{2}$/D',$country)&&class_exists('MaxMind\\Db\\Reader')) {
+        $path=trim((string)getenv('APP_GEOIP_DATABASE'));
+        if($path!==''&&is_readable($path))try{$reader=new \MaxMind\Db\Reader($path);$record=$reader->get($ip);$country=strtoupper((string)($record['country']['iso_code']??''));$reader->close();}catch(Throwable $e){$country='';}
+    }
+    return preg_match('/^[A-Z]{2}$/D',$country)&&!in_array($country,['XX','ZZ','T1'],true)?$country:'';
+}
+
 function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $currentTime, string $clientIp): void
 {
     if (app_uses_v2_schema($db)) {
@@ -13062,6 +13077,10 @@ function app_update_customer_login_state(Mysql_ks $db, int $customerId, string $
         if ($needsLoginSync) {
             $loginFields = ['last_login_at', 'ip_address'];
             $loginValues = [$currentTime, $clientIp];
+            $loginCountry = app_customer_login_country($clientIp);
+            if ($loginCountry !== '' && schema_column_exists($db, 'customers', 'country_code')) {
+                $loginFields[] = 'country_code'; $loginValues[] = $loginCountry;
+            }
             if (schema_column_exists($db, 'customers', 'last_seen_at')) {
                 $loginFields[] = 'last_seen_at';
                 $loginValues[] = $currentTime;
