@@ -670,3 +670,5 @@
 .payment-wizard .payment-method-start__balance-note{display:flex;align-items:baseline;gap:7px;margin:0 0 18px;color:#29805a;font-size:11px;line-height:1.7;}
 .payment-wizard .payment-method-start__balance-note>.bi{flex:none;font-size:14px;}
 .payment-wizard .payment-method-start__balance-note strong{font-weight:600;}
+.payment-wizard .payment-method-start__button--balance{border-color:#2d8d5e;background:#319968;color:#fff;}
+.payment-wizard .payment-method-start__button--balance:is(:hover,:focus-visible){border-color:#23754d;background:#278456;color:#fff;}
