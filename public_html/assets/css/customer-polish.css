@@ -675,4 +675,4 @@
 
 .home_buttons .one_box--custom-page{position:relative;}
 .home_buttons .one_box--custom-page.has-new-badge{padding-right:56px;}
-.home_buttons .one_box--custom-page .one_box__new-badge{position:absolute;top:10px;right:12px;display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:2px;background:#d7182a;color:#fff;font-size:10px;font-weight:600;line-height:18px;letter-spacing:0;}
+.home_buttons .one_box--custom-page .one_box__new-badge{position:absolute;top:50%;right:12px;transform:translateY(-50%);display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:2px;background:#d7182a;color:#fff;font-size:10px;font-weight:600;line-height:18px;letter-spacing:0;}
