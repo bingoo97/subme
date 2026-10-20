@@ -24,3 +24,11 @@ Release backup/stage identifier: `customer-ui-20261020-02`.
 - Dashboard customer browser correctly displayed its verification gate; no customer credentials entered and no gate bypassed. Customer template compilation and public asset verification passed there.
 - Protected configuration fingerprints rechecked after HTTP/browser tests; no newly modified application error_log files after successful deployment completion.
 - Temporary upload archive removed. Private backups retained.
+
+## Dashboard customer follow-up
+
+- After the user completed verification/login in their browser, tested the actual dashboard customer session at CSS viewport widths 320, 390 and 430 px.
+- Orders displayed its empty state without horizontal page overflow. This account had no orders and no crypto payment requests in its payment history.
+- Opened the top-up modal, selected Solana, continued to the amount screen, selected the 25 preset, returned to crypto selection, selected Bitcoin and confirmed the amount remained 25. Selected crypto summary updated correctly.
+- Modal remained within horizontal viewport bounds; editable amount font was 16px. Captured the amount-screen screenshot and closed the modal without submitting its payment-generation form.
+- No order, payment request or deposit created; no existing financial records changed. QR/countdown screen could not be tested on this account because it has no existing ticket, respecting the user's request not to generate test payments.
