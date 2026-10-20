@@ -126,3 +126,44 @@
 .balance-topup-modal .balance-topup-modal__order-note{padding:10px 12px;border:1px solid #e6ebf1;border-radius:7px;background:#fafbfd;color:#79879b;font-weight:400;}
 .balance-topup-modal .balance-topup-modal__order-link{color:#557da8;font-weight:500;}
 @media(max-width:767px){:is(.customer-order-create,.payment-wizard,.balance-topup-modal) .form-control:not([readonly]){font-size:16px;}}
+
+/* News remains a full article feed, with the same content and detail URLs. */
+.customer-news>h1{font-size:22px;line-height:1.4;letter-spacing:-.45px;}
+.customer-news #news{display:grid;gap:18px;margin-top:22px;}
+.customer-news #news .news_inner{min-width:0;margin:0;padding:23px 25px;border:1px solid #e4e9ef;border-radius:10px;background:#fff;box-shadow:none;font-family:inherit;color:#526174;overflow-wrap:anywhere;}
+.customer-news #news .news_inner.active{border-color:#e4e9ef;}
+.customer-news #news .news_title,
+.customer-news #news .news_inner.active .news_title{margin:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;}
+.customer-news__meta{display:flex;align-items:center;flex-wrap:wrap;gap:7px 15px;margin-bottom:10px;color:#8a97a8;font-size:11px;font-weight:400;line-height:1.6;}
+.customer-news__meta :is(.customer-news__date,.customer-news__author){display:inline-flex;align-items:center;gap:6px;min-width:0;}
+.customer-news__meta i{flex:none;color:#9aa8b9;font-size:11px;}
+.customer-news__author span{overflow-wrap:anywhere;}
+.customer-news #news .news-new-badge{margin:0;padding:2px 6px;border:1px solid #f3dfb4;border-radius:4px;background:#fff6e5;color:#a77926;font-size:9px;font-weight:500;line-height:1.5;}
+.customer-news #news .news_title h2{max-width:44em;margin:0;padding:0;border:0;font-size:19px;font-weight:600;letter-spacing:-.35px;line-height:1.45;text-transform:none;}
+.customer-news #news .news_title h2 a{font:inherit;color:#33465e;text-decoration:none;transition:color .15s ease;}
+.customer-news #news .news_title h2 a:hover{color:#557da8;}
+.customer-news #news .news_title h2 a:focus-visible{outline:2px solid #9cb6d1;outline-offset:4px;border-radius:2px;}
+.customer-news #news .news_content{max-width:80ch;margin:14px 0 0;padding:15px 0 0;border-top:1px solid #eef1f5;color:#64748b;font-family:inherit;font-size:12px;line-height:1.85;}
+.customer-news #news .news_content p{margin:0 0 12px;font-size:inherit;line-height:inherit;}
+.customer-news #news .news_content>:first-child{margin-top:0;}
+.customer-news #news .news_content>:last-child{margin-bottom:0;}
+.customer-news #news .news_content :is(h1,h2,h3,h4,h5,h6){margin:20px 0 10px;padding:0;border:0;color:#405672;font-size:16px;font-weight:600;line-height:1.5;letter-spacing:0;text-align:left;text-transform:none;}
+.customer-news #news .news_content :is(ul,ol){margin:0 0 12px;padding-left:22px;}
+.customer-news #news .news_content li{margin-bottom:5px;}
+.customer-news #news .news_content blockquote{margin:16px 0;padding:10px 14px;border-left:3px solid #d9e3ef;border-radius:0 6px 6px 0;background:#f8fafd;color:#74869c;font-size:inherit;}
+.customer-news #news .news_content :is(img,video,iframe){max-width:100%;border-radius:8px;}
+.customer-news #news .news_content iframe{width:100%;aspect-ratio:16/9;height:auto;}
+.customer-news #news .news_content a{color:#557da8;text-underline-offset:3px;}
+.customer-news #news .news_content pre{max-width:100%;overflow:auto;font-size:11px;}
+.customer-news__empty{display:flex;flex-direction:column;align-items:center;gap:12px;margin:22px 0;padding:38px 18px;border:1px solid #e5eaf0;border-radius:10px;background:#fafbfd;text-align:center;color:#8a97a8;}
+.customer-news__empty>i{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:12px;background:#eef3f9;color:#8095af;font-size:21px;}
+.customer-news__empty p{margin:0;font-size:12px;line-height:1.7;}
+@media(max-width:767px){
+    .customer-news>h1{font-size:20px;}
+    .customer-news #news{gap:13px;margin-top:17px;}
+    .customer-news #news .news_inner{padding:17px 16px;border-radius:8px;}
+    .customer-news__meta{gap:6px 12px;font-size:10px;margin-bottom:8px;}
+    .customer-news #news .news_title h2{font-size:16px;letter-spacing:-.2px;line-height:1.5;}
+    .customer-news #news .news_content{margin-top:12px;padding-top:12px;font-size:12px;line-height:1.8;}
+}
+@media(prefers-reduced-motion:reduce){.customer-news #news .news_title h2 a{transition:none;}}

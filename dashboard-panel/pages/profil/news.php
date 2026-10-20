@@ -74,6 +74,7 @@ switch ($site) {
 			for($i=0; $i < count($news); $i++){	
 				$news[$i]["date_s"] = strtotime($news[$i]["news_created_at"]);
 				$news[$i]["date"] = date("d.m.Y H:i", $news[$i]["date_s"]);
+				$news[$i]["date_iso"] = date('c', $news[$i]["date_s"]);
 				$news[$i]["author_label"] = trim((string)($news[$i]["author_handle"] ?? '')) !== ''
 					? trim((string)$news[$i]["author_handle"])
 					: trim((string)($reseller["name"] ?? ''));
