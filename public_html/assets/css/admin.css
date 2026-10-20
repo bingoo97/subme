@@ -21332,3 +21332,14 @@ body.admin-app-page:has(.admin-payment-create-panel.is-creating) .admin-mobile-n
 .admin-crypto-create__renewal-choice>input{width:16px;height:16px;flex:none;margin:2px 0 0;accent-color:#27825b;}
 .admin-crypto-create__renewal-choice strong{display:block;font-size:12px;color:#405971;line-height:1.5;}
 .admin-crypto-create__renewal-choice small{display:block;margin-top:4px;font-size:11px;color:#718399;line-height:1.6;font-weight:400;}
+
+/* Cash receipt: compact confirmation and one clear destination. */
+:is(.admin-crypto-quick__result,.admin-payment-create-panel__result).is-cash{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:start;gap:8px 10px;padding:13px;border-color:#d7e8de;background:#f5faf7;color:#47735c;}
+.admin-cash-receipt__icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid #d9eade;border-radius:8px;background:#eaf5ee;color:#378359;font-size:17px;}
+.admin-cash-receipt__body{min-width:0;}
+.admin-cash-receipt__body>strong{display:block;font-size:12px;font-weight:650;line-height:1.5;color:#286443;}
+.admin-cash-receipt__body>span{display:block;margin-top:3px;font-size:11px;line-height:1.6;color:#64816f;}
+:is(.admin-crypto-quick__result,.admin-payment-create-panel__result).is-cash>.admin-cash-receipt__link{grid-column:2;display:inline-flex;align-items:center;justify-content:center;gap:7px;width:fit-content;max-width:100%;margin:1px 0 0;padding:7px 10px;border:1px solid #cdded3;border-radius:6px;background:#fff;color:#3f7054;font-size:11px;font-weight:600;line-height:1.45;text-decoration:none;box-shadow:none;}
+.admin-cash-receipt__link>i{flex:none;font-size:13px;}.admin-cash-receipt__link>i:last-child{margin-left:3px;font-size:10px;}
+:is(.admin-crypto-quick__result,.admin-payment-create-panel__result).is-cash>.admin-cash-receipt__link:is(:hover,:focus-visible){background:#eaf5ee;border-color:#a8c9b4;color:#235f3c;text-decoration:none;}
+@media(min-width:768px){.admin-payment-create-panel__result.is-cash{grid-template-columns:32px minmax(0,1fr) auto;align-items:center;}.admin-payment-create-panel__result.is-cash>.admin-cash-receipt__link{grid-column:3;grid-row:1;}}

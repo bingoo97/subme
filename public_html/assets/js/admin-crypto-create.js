@@ -51,7 +51,14 @@
         if (pageMode) document.addEventListener('crypto-quick-created', refreshPageList);
         const feedback = (text, tone, requestId = 0, cash = false) => {
             result.replaceChildren();
-            const message = document.createElement('span'); message.textContent = text; result.append(message);
+            result.classList.toggle('is-cash', cash && tone === 'success');
+            const message = document.createElement('span'); message.textContent = text;
+            if (cash && tone === 'success') {
+                const icon=document.createElement('span');icon.className='admin-cash-receipt__icon';icon.setAttribute('aria-hidden','true');
+                const glyph=document.createElement('i');glyph.className='bi bi-cash-stack';icon.append(glyph);
+                const body=document.createElement('div');body.className='admin-cash-receipt__body';
+                const title=document.createElement('strong');title.textContent=copy.cash_receipt_title;body.append(title,message);result.append(icon,body);
+            } else result.append(message);
             if (pageMode && !cash) {
                 if (requestId > 0) {
                     const link = document.createElement('a'); link.className = 'btn btn-outline-dark btn-sm';
@@ -243,9 +250,11 @@
                 notifyCreated(data.crypto_quick);
                 feedback(data.cash ? (data.renewal_applied ? copy.cash_renewed : data.renewal ? copy.cash_renewal_pending : data.order_id ? copy.cash_pending : copy.cash_success) : copy.success,'success',Number(data.request_id)||0,!!data.cash);
                 if(data.cash) {
-                    const link=document.createElement('a');link.className='btn btn-outline-dark btn-sm';
+                    const link=document.createElement('a');link.className='btn btn-sm admin-cash-receipt__link';
                     link.href=data.order_id ? '/admin/?page=orders&order_id='+Number(data.order_id) : '/admin/?page=users&customer_id='+Number(data.customer_id);
-                    link.textContent=data.order_id ? copy.cash_details : copy.customer_details; result.append(link);
+                    const icon=document.createElement('i');icon.className=data.order_id?'bi bi-box-seam':'bi bi-person-vcard';icon.setAttribute('aria-hidden','true');
+                    const label=document.createElement('span');label.textContent=data.order_id ? copy.cash_details : copy.customer_details;
+                    const arrow=document.createElement('i');arrow.className='bi bi-chevron-right';arrow.setAttribute('aria-hidden','true');link.append(icon,label,arrow);result.append(link);
                 }
             }catch(error){
                 if(uncertain){if(assetId==='cash')showNotice(copy.cash_uncertain,true);else{busy=false;hide();notifyCreated();feedback(copy.uncertain,'error');}}
