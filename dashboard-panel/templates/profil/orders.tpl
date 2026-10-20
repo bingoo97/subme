@@ -145,7 +145,7 @@
                                     {if $wygrane[i].payment_waiting_activation}
                                         <span class="orders-user-awaiting"><i class="fa fa-clock-o" aria-hidden="true"></i><span>{$t.orders_waiting_activation_label|default:'Waiting for activation'}</span></span>
                                     {else}
-                                        <span class="orders-user-expiry-empty">{if $wygrane[i].product_type|default:'subscription' neq 'subscription'}—{else}{$t.order_no_expiry|default:'No expiry'}{/if}</span>
+                                        <span class="orders-user-expiry-empty" title="{$t.order_no_expiry|default:'No expiry'|escape:'html'}"><i class="fa fa-calendar-o" aria-hidden="true"></i><span>{if $wygrane[i].product_type|default:'subscription' neq 'subscription'}—{else}{$t.order_no_expiry|default:'No expiry'}{/if}</span></span>
                                     {/if}
                                 {/if}
                             </td>
