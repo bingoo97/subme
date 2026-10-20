@@ -12750,60 +12750,17 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                                 );
                                                 ?>
                                             </span>
-                                            <button
-                                                type="button"
-                                                class="btn btn-dark btn-lg admin-payments-note__create-btn"
-                                                data-admin-payment-customer-toggle
-                                                aria-expanded="false">
-                                                <i class="bi bi-person-plus" aria-hidden="true"></i>
-                                                <span><?php echo admin_e(admin_t($messages, 'payment_customer_search_open', 'Add new payment')); ?></span>
-                                            </button>
-                                            <div class="admin-payments-note__customer-search" data-admin-payment-customer-search hidden>
-                                                <label class="form-label admin-payments-note__customer-label" for="adminPaymentCustomerSearchInput"><?php echo admin_e(admin_t($messages, 'payment_customer_search_label', 'Find user by email or handle')); ?></label>
-                                                <input
-                                                    type="text"
-                                                    id="adminPaymentCustomerSearchInput"
-                                                    class="form-control admin-payments-note__customer-input"
-                                                    data-admin-payment-customer-input
-                                                    data-search-url="/admin/search.php"
-                                                    data-loading-text="<?php echo admin_e(admin_t($messages, 'search_loading', 'Loading results...')); ?>"
-                                                    data-empty-title="<?php echo admin_e(admin_t($messages, 'payment_customer_search_empty_title', 'No matching user')); ?>"
-                                                    data-empty-text="<?php echo admin_e(admin_t($messages, 'payment_customer_search_empty_text', 'There is no user with this email or handle.')); ?>"
-                                                    placeholder="<?php echo admin_e(admin_t($messages, 'payment_customer_search_placeholder', 'Type email or @handle')); ?>"
-                                                    autocomplete="off"
-                                                    data-csrf-token="<?php echo admin_e($csrfToken); ?>">
-                                                <div class="admin-payments-note__customer-results" data-admin-payment-customer-results hidden></div>
-                                                <div
-                                                    class="admin-payments-note__quick-create"
-                                                    data-admin-payment-quick-create
-                                                    data-create-success="<?php echo admin_e(admin_t($messages, 'payment_quick_create_success', 'Payment request created successfully.')); ?>"
-                                                    data-create-error="<?php echo admin_e(admin_t($messages, 'payment_quick_create_error', 'Unable to create payment request.')); ?>"
-                                                    data-create-pending-error="<?php echo admin_e(admin_t($messages, 'payment_quick_create_pending_error', 'User already has a pending crypto payment request.')); ?>"
-                                                    data-create-no-assets="<?php echo admin_e(admin_t($messages, 'payment_quick_create_no_assets', 'No active cryptocurrencies are available for this user.')); ?>"
-                                                    data-open-details-text="<?php echo admin_e(admin_t($messages, 'payment_quick_create_open_details', 'Open payment details')); ?>"
-                                                    data-open-payments-text="<?php echo admin_e(admin_t($messages, 'payment_customer_search_open_payments', 'Open payments')); ?>"
-                                                    hidden>
-                                                    <div class="admin-payments-note__selected-user" data-admin-payment-selected-user></div>
-                                                    <div class="admin-payments-note__quick-alert" data-admin-payment-quick-alert hidden></div>
-                                                        <div class="row g-3">
-                                                            <div class="col-md-6">
-                                                                <label class="form-label" for="adminPaymentQuickCryptoAsset"><?php echo admin_e(admin_t($messages, 'chat_crypto_asset_label', 'Cryptocurrency')); ?></label>
-                                                                <select class="form-select" id="adminPaymentQuickCryptoAsset" data-admin-payment-quick-asset></select>
-                                                            </div>
-                                                            <div class="col-md-6">
-                                                            <label class="form-label" for="adminPaymentQuickProduct"><?php echo admin_e(admin_t($messages, 'col_product', 'Product')); ?></label>
-                                                            <select class="form-select" id="adminPaymentQuickProduct" data-admin-payment-quick-product></select>
-                                                            </div>
-                                                        </div>
-                                                    <div class="admin-payments-note__quick-actions">
-                                                        <button type="button" class="btn btn-dark btn-lg admin-payments-note__quick-submit" data-admin-payment-quick-submit disabled>
-                                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
-                                                            <span><?php echo admin_e(admin_t($messages, 'payment_customer_quick_create_submit', 'Create crypto payment request')); ?></span>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
                                         </div>
+                                        <?php if (!empty($appSettings['crypto_payments_enabled'])): ?>
+                                            <?php require_once __DIR__.'/crypto_quick.php'; ?>
+                                            <section class="admin-payment-create-panel" data-payment-create-panel>
+                                                <div data-payment-create-idle>
+                                                    <button type="button" class="btn btn-dark admin-payments-note__create-btn" data-crypto-create-open aria-expanded="false"><i class="bi bi-plus-lg" aria-hidden="true"></i> <?php echo admin_e(admin_t($messages,'payment_customer_search_open','Add new payment')); ?></button>
+                                                </div>
+                                                <div class="admin-payment-create-panel__result" data-payment-create-result role="status" hidden></div>
+                                                <?php require __DIR__.'/partials/crypto-create.php'; ?>
+                                            </section>
+                                        <?php endif; ?>
 
                                         <?php if ($paymentScope === 'all'): ?>
                                             <div class="mt-3">
@@ -12882,6 +12839,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                             </section>
                                         <?php endif; ?>
 
+                                        <div data-payment-list-results>
                                         <?php if ($paymentRows): ?>
                                             <div class="table-responsive" tabindex="0" role="region" aria-label="<?php echo admin_e(admin_t($messages, 'nav_payments', 'Table')); ?>">
                                                 <table class="table admin-table admin-payments-table align-middle">
@@ -13257,6 +13215,7 @@ function admin_render_table(array $headers, array $rows, array $messages): void
                                         <?php else: ?>
                                             <div class="admin-empty-state"><?php echo admin_e(admin_t($messages, 'empty_state', 'No records to display yet.')); ?></div>
                                         <?php endif; ?>
+                                        </div>
                                     </div>
                                     <?php
                                     break;

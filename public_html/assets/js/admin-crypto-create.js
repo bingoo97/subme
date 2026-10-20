@@ -1,15 +1,65 @@
 (() => {
     'use strict';
-    const init = () => {
-        const panel = document.querySelector('[data-crypto-quick]');
-        const wizard = panel?.querySelector('[data-crypto-create]');
-        if (!wizard) return;
+    const initWizard = (wizard, instance) => {
+        const panel = wizard.closest('[data-payment-create-panel], [data-crypto-quick]');
+        if (!panel) return;
+        const pageMode = panel.hasAttribute('data-payment-create-panel');
         const copy = JSON.parse(wizard.dataset.copy);
         const get = name => wizard.querySelector(`[data-create-${name}]`);
         const search = get('search'), results = get('results'), customer = get('customer');
         const product = get('product'), order = get('order'), amount = get('amount');
         const assets = get('assets'), submit = get('submit'), notice = get('notice');
-        const list = panel.querySelector('[data-crypto-quick-list]');
+        const list = panel.querySelector(pageMode ? '[data-payment-create-idle]' : '[data-crypto-quick-list]');
+        const result = panel.querySelector(pageMode ? '[data-payment-create-result]' : '[data-crypto-quick-result]');
+        const toggle = panel.querySelector('[data-crypto-create-open]');
+        const notifyCreated = detail => {
+            const flyout = pageMode ? document.querySelector('[data-crypto-quick]') : panel;
+            flyout?.dispatchEvent(new CustomEvent('crypto-quick-created', {detail}));
+        };
+        let pageListRequest = null, pageListRevision = 0;
+        const refreshPageList = async () => {
+            if (!pageMode) return;
+            const target = document.querySelector('[data-payment-list-results]');
+            if (!target) return;
+            const url = new URL('/admin/', window.location.origin);
+            url.search = window.location.search;
+            url.searchParams.set('page', 'payments');
+            pageListRequest?.abort();
+            const token = ++pageListRevision;
+            const abort = new AbortController(); pageListRequest = abort;
+            const timeout = setTimeout(() => abort.abort(), 12000);
+            try {
+                const response = await fetch(url, {credentials:'same-origin', signal:abort.signal, headers:{Accept:'text/html'}});
+                if (!response.ok) return;
+                const fresh = new DOMParser().parseFromString(await response.text(), 'text/html');
+                const rows = fresh.querySelector('[data-payment-list-results]');
+                if (!rows || token !== pageListRevision) return;
+                target.innerHTML = rows.innerHTML;
+                target.setAttribute('data-payment-list-refreshed', '');
+                document.querySelectorAll('[data-payment-scope]').forEach(filter => {
+                    let count = filter.querySelector('.admin-payments-filter__count');
+                    const next = fresh.querySelector('[data-payment-scope="' + filter.dataset.paymentScope + '"] .admin-payments-filter__count');
+                    if (next) {
+                        if (!count) { count = document.createElement('span'); count.className = 'admin-payments-filter__count'; filter.append(count); }
+                        count.textContent = next.textContent;
+                    } else count?.remove();
+                });
+            } catch (_) { /* The saved ticket remains available through its details link. */ }
+            finally { clearTimeout(timeout); if (token === pageListRevision) pageListRequest = null; }
+        };
+        const feedback = (text, tone, requestId = 0) => {
+            result.replaceChildren();
+            const message = document.createElement('span'); message.textContent = text; result.append(message);
+            if (pageMode && requestId > 0) {
+                const link = document.createElement('a'); link.className = 'btn btn-outline-dark btn-sm';
+                link.href = '/admin/?page=payments&payment_type=crypto&payment_id=' + requestId;
+                link.textContent = copy.payment_details; result.append(link);
+                const all = document.createElement('a'); all.className = 'btn btn-light btn-sm';
+                all.href = '/admin/?page=payments&payment_type_filter=crypto&payment_scope=new';
+                all.textContent = copy.payment_list; result.append(all);
+            }
+            result.dataset.tone = tone; result.hidden = false;
+        };
         let step = 'user', userId = 0, purpose = '', assetId = '', payload = null;
         let timer = null, reading = null, revision = 0, busy = false;
         const showNotice = (text = '', error = false) => {
@@ -35,11 +85,12 @@
         const hide = () => {
             if (busy) return;
             stopRead(); wizard.hidden = true; list.hidden = false; panel.classList.remove('is-creating');
+            toggle?.setAttribute('aria-expanded', 'false');
         };
         const open = () => {
             stopRead(); userId=0;purpose='';assetId='';payload=null;
             search.value=''; results.replaceChildren(); customer.replaceChildren(); amount.value='';
-            const result=panel.querySelector('[data-crypto-quick-result]'); if(result)result.hidden=true;
+            result.hidden=true;toggle?.setAttribute('aria-expanded','true');
             wizard.hidden=false;list.hidden=true;panel.classList.add('is-creating');get('wallet').hidden=true;showNotice();screen('user');search.focus();
         };
         const read = async params => {
@@ -113,7 +164,7 @@
                 assets.replaceChildren();
                 (data.items||[]).forEach(item=>{
                     const label=document.createElement('label');label.className='admin-crypto-create__asset';
-                    const input=document.createElement('input');input.type='radio';input.name='quick_create_asset';input.value=String(item.id);
+                    const input=document.createElement('input');input.type='radio';input.name='quick_create_asset_'+instance;input.value=String(item.id);
                     const text=document.createElement('span');text.textContent=[item.code,item.network_label||item.name].filter(Boolean).join(' · ')+(item.has_existing_assignment?' · '+copy.assigned:'');
                     label.append(input,text);assets.append(label);
                 });
@@ -138,10 +189,11 @@
                 const data=await response.json();uncertain=false;
                 if(!response.ok||!data.ok)throw new Error(data.message==='pending_crypto_payment'?copy.pending:(data.message||copy.error));
                 busy=false;hide();
-                panel.dispatchEvent(new CustomEvent('crypto-quick-created',{detail:data.crypto_quick}));
-                const result=panel.querySelector('[data-crypto-quick-result]');result.textContent=copy.success;result.dataset.tone='success';result.hidden=false;
+                notifyCreated(data.crypto_quick);
+                feedback(copy.success,'success',Number(data.request_id)||0);
+                refreshPageList();
             }catch(error){
-                if(uncertain){busy=false;hide();panel.dispatchEvent(new CustomEvent('crypto-quick-created'));const result=panel.querySelector('[data-crypto-quick-result]');result.textContent=copy.uncertain;result.dataset.tone='error';result.hidden=false;}
+                if(uncertain){busy=false;hide();notifyCreated();feedback(copy.uncertain,'error');}
                 else showNotice(error.message||copy.error,true);
             }finally {
                 clearTimeout(timeout);busy=false;wizard.removeAttribute('aria-busy');
@@ -149,5 +201,6 @@
             }
         });
     };
+    const init = () => document.querySelectorAll('[data-crypto-create]').forEach(initWizard);
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();

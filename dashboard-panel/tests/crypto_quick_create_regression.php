@@ -14,7 +14,7 @@ if(($argv[1]??'')==='--endpoint') {
 if(($argv[1]??'')==='--preview') {
  $dir=getenv('APP_CRYPTO_CACHE_DIR').'/sessions';if(!is_dir($dir))mkdir($dir,0700,true);session_save_path($dir);session_start();
  $_SESSION=['admin_user_id'=>1,'admin_locale'=>'pl','admin_csrf_token'=>'fixture'];
- $_SERVER['HTTP_HOST']='localhost';$_SERVER['REQUEST_METHOD']='GET';$_SERVER['REMOTE_ADDR']='127.0.0.1';$_SERVER['REQUEST_URI']='/admin/?page=dashboard';$_GET=['page'=>'dashboard'];$_POST=[];
+ $_SERVER['HTTP_HOST']='localhost';$_SERVER['REQUEST_METHOD']='GET';$_SERVER['REMOTE_ADDR']='127.0.0.1';$previewPage=getenv('APP_UI_PAGE')==='payments'?'payments':'dashboard';$_SERVER['REQUEST_URI']='/admin/?page='.$previewPage;$_GET=['page'=>$previewPage];$_POST=[];
  $GLOBALS['app_crypto_network_budget']=['deadline'=>0,'remaining'=>0];
  ob_start();register_shutdown_function(static function(){file_put_contents('/tmp/subme-quick-create-preview/index.html',ob_get_clean());});
  require dirname(__DIR__).'/admin/index.php';exit;

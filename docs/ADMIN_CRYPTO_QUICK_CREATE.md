@@ -33,3 +33,13 @@ The receipt state is independent of the 60-minute sending deadline. A recorded p
 The scanner also revisits expired requests from the last 24 hours, behind current open tickets, using the existing per-run network budget/row limit and 120-second recheck interval. Its transaction-history lookback can cover the request's age, but matching still requires a verified incoming transaction within the original payment window. Delayed discovery is not permission to match unrelated older transfers. OFF only records the receipt and queues manual verification; it never credits the customer. Partial receipts follow the same rule. Already detected OFF receipts are not repeatedly scanned.
 
 Recent expired customer screens retain the existing visible-tab-only 30-second status watcher so a later detection can replace the screen automatically. No chain queries are performed by this customer status endpoint. Extended crypto lifecycle regression suite: 82 assertions, including late discovery, old-deadline repair, partial transfer, no premature credit, category classification, cancellation/deletion guards and preservation days later.
+
+## Kreator na stronie Payments
+
+Strona Payments i okienko krypto używają wspólnego partiala `admin/partials/crypto-create.php` i niezależnych instancji tego samego skryptu. W Payments kreator jest dostępny także na telefonie, poza ukrywanym opisem workflow. Przy wyłączonych płatnościach krypto przycisk nie jest renderowany.
+
+Po zapisie lista Payments jest odświeżana jednym żądaniem GET z zachowaniem aktualnych filtrów; odświeżają się również liczniki filtrów oraz okienko i badge topbara. Potwierdzenie zawiera link do konkretnej płatności i listy Nowe. Niepewny wynik zapisu nie powoduje automatycznej ponownej wysyłki. Odświeżone wiersze nadal obsługują modal akceptacji. Kreator nie dodaje cyklicznego pollingu.
+
+Weryfikacja lokalna: scenariusze doładowania, nowego i istniejącego zamówienia, ponowne otwarcie oraz cofanie kroków; podgląd 320, 390, 768 i 1440 px; testy endpointów na izolowanej bazie oraz pełne renderowanie stron. Bez zmian danych produkcyjnych.
+
+Dodatkowa regresja przeglądarkowego zapisu: `node dashboard-panel/tests/payments_create_frontend_regression.js` — zachowanie filtrów, odrzucanie spóźnionych odpowiedzi, bezpieczne nieudane odświeżenie i modal akceptacji w nowych wierszach.

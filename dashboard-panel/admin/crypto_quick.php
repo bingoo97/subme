@@ -221,7 +221,7 @@ function admin_crypto_create_labels(): array {
         'empty'=>'Brak dostępnych opcji.', 'order_help'=>'Wybierz nieopłacone zamówienie. Przedłużenia opłaconych zamówień wykonasz w zakładce Przedłuż.',
         'topup_help'=>'Wpłata zasili saldo klienta po zatwierdzeniu. Nie tworzy zamówienia.',
         'new_help'=>'Zamówienie zostanie utworzone jako oczekujące na płatność. Realizację potwierdzisz osobno.',
-        'change'=>'Zmień klienta', 'review'=>'Sprawdź wybór i utwórz ticket. Płatność pojawi się na liście Nowe.',
+        'payment_details'=>'Szczegóły płatności', 'payment_list'=>'Lista nowych płatności', 'change'=>'Zmień klienta', 'review'=>'Sprawdź wybór i utwórz ticket. Płatność pojawi się na liście Nowe.',
     ] : [
         'no_wallet'=>'No cryptocurrency with an available or assigned wallet and a current rate. Add a wallet or check rates in settings.', 'add_wallet'=>'Add wallet', 'assigned'=>'Assigned wallet', 'title'=>'New payment','user'=>'Customer','purpose'=>'Purpose','details'=>'Details','search'=>'Search @handle or email…','back'=>'Back','choose'=>'Choose',
         'topup'=>'Balance top-up','order'=>'Order payment','new'=>'New order','existing'=>'Existing order','product'=>'Choose product','asset'=>'Choose cryptocurrency','amount'=>'Top-up amount',
@@ -229,6 +229,6 @@ function admin_crypto_create_labels(): array {
         'pending'=>'This customer already has a pending payment. Review or cancel it first.','error'=>'Unable to complete this action. Please try again.',
         'uncertain'=>'Unable to confirm the result. Check the list before trying again.','empty'=>'No available options.',
         'order_help'=>'Choose an unpaid order. Renew paid orders using the Renew tab.','topup_help'=>'Once approved, the payment credits the customer balance. No order is created.',
-        'new_help'=>'Creates an order awaiting payment. Fulfilment is confirmed separately.','change'=>'Change customer','review'=>'Review your selection and create the ticket. It will appear under New.',
+        'new_help'=>'Creates an order awaiting payment. Fulfilment is confirmed separately.','payment_details'=>'Payment details','payment_list'=>'New payments','change'=>'Change customer','review'=>'Review your selection and create the ticket. It will appear under New.',
     ];
 }
