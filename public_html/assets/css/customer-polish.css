@@ -642,3 +642,7 @@
     .customer-history .history-entry__badge{display:block;margin:0 0 3px;font-size:9px;}
     .customer-history .history-entry__title{font-size:11px;line-height:1.75;}
 }
+
+.balance-topup-modal .balance-topup-modal__pending-payment{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:46px;margin:16px 0 0;animation:customer-topup-pending-pulse 3s ease-in-out infinite;}
+@keyframes customer-topup-pending-pulse{0%,100%{box-shadow:0 0 0 0 rgba(220,53,69,0);}45%{box-shadow:0 0 0 4px rgba(220,53,69,.14);}75%{box-shadow:0 0 0 7px rgba(220,53,69,0);}}
+@media(prefers-reduced-motion:reduce){.balance-topup-modal .balance-topup-modal__pending-payment{animation:none;}}

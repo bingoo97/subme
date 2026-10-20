@@ -21,7 +21,7 @@
                     {$t.balance_topup_order_payment_blocked_text|default:'Complete or cancel the pending payment request for your order before generating a balance top-up payment.'}
                 </div>
 
-                <a href="{$balance_topup_pending_order_payment.payment_url|default:'/orders'}" class="btn btn-danger btn-lg payment-support-button">
+                <a href="{$balance_topup_pending_order_payment.payment_url|default:'/orders'}" class="btn btn-danger btn-lg payment-support-button w-100 balance-topup-modal__pending-payment">
                     <i class="fa fa-search" aria-hidden="true"></i> {$t.balance_topup_order_payment_blocked_button|default:'Go to payment'}
                 </a>
                 {elseif $balance_topup_crypto_assets|@count gt 0}
